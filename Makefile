@@ -55,9 +55,10 @@ fmt: ## gofmt all Go files
 vet: ## go vet
 	go vet ./...
 
-install: build build-daemon ## install CLI and daemon into GOPATH/bin
+install: build build-daemon build-tui ## install CLI, daemon and TUI into GOPATH/bin
 	go install -ldflags='$(LDFLAGS)' ./cmd/gobroom
 	go install -ldflags='$(LDFLAGS)' ./cmd/gobroomd
+	go install -ldflags='$(LDFLAGS)' ./cmd/gobroom-tui
 
 install-all: install ## install binaries and user systemd unit
 	mkdir -p ~/.config/systemd/user
