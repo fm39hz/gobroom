@@ -62,7 +62,10 @@ type Snapshot struct {
 	// RouteGroups expands a logical catalog route into one candidate per
 	// connection. The group key remains the stable model/catalog ID used by
 	// combo members; variant IDs are internal to the data plane.
-	RouteGroups   map[string][]string
+	RouteGroups map[string][]string
+	// WireRoutes maps prefix/model references to route variants. It is only
+	// reachable through a published target or combo member.
+	WireRoutes    map[string][]string
 	LogicalModels map[string]string
 }
 

@@ -33,7 +33,7 @@ func (s *SnapshotStore) Publish(next Snapshot) error {
 }
 
 func ValidateSnapshot(s Snapshot) error {
-	if s.PublicModels == nil || s.Combos == nil || s.Routes == nil || s.LogicalModels == nil {
+	if s.PublicModels == nil || s.Combos == nil || s.Routes == nil || s.RouteGroups == nil || s.WireRoutes == nil || s.LogicalModels == nil {
 		return ErrSnapshotInvalid
 	}
 	for name, public := range s.PublicModels {
@@ -71,6 +71,17 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 		return []Route{route}, nil
 	}
 	if variants, ok := s.RouteGroups[ref]; ok {
+		result := make([]Route, 0, len(variants))
+		for _, variant := range variants {
+			route, exists := s.Routes[variant]
+			if !exists || !route.Enabled {
+				continue
+			}
+			result = append(result, route)
+		}
+		return result, nil
+	}
+	if variants, ok := s.WireRoutes[ref]; ok {
 		result := make([]Route, 0, len(variants))
 		for _, variant := range variants {
 			route, exists := s.Routes[variant]

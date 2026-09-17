@@ -7,6 +7,7 @@ type SnapshotInput struct {
 	Combos        []Combo
 	Routes        []Route
 	RouteGroups   map[string][]string
+	WireRoutes    map[string][]string
 	LogicalModels map[string]string
 }
 
@@ -14,7 +15,7 @@ type SnapshotInput struct {
 // data-plane representation. Storage adapters stay outside the kernel.
 func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 	snapshot := Snapshot{
-		Version: version, PublicModels: map[string]PublicModel{}, Combos: map[string]Combo{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, LogicalModels: map[string]string{},
+		Version: version, PublicModels: map[string]PublicModel{}, Combos: map[string]Combo{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, LogicalModels: map[string]string{},
 	}
 	for _, item := range input.PublicModels {
 		if item.Name == "" {
@@ -46,12 +47,22 @@ func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 		}
 		snapshot.Routes[item.ID] = item
 		snapshot.RouteGroups[item.ID] = []string{item.ID}
+		if item.DisplayPrefix != "" && item.ExternalModel != "" {
+			wireName := item.DisplayPrefix + "/" + item.ExternalModel
+			snapshot.WireRoutes[wireName] = append(snapshot.WireRoutes[wireName], item.ID)
+		}
 	}
 	for group, variants := range input.RouteGroups {
 		if group == "" {
 			return Snapshot{}, fmt.Errorf("route group has empty name")
 		}
 		snapshot.RouteGroups[group] = append([]string(nil), variants...)
+	}
+	for wireName, variants := range input.WireRoutes {
+		if wireName == "" {
+			return Snapshot{}, fmt.Errorf("wire route has empty name")
+		}
+		snapshot.WireRoutes[wireName] = append([]string(nil), variants...)
 	}
 	for name, target := range input.LogicalModels {
 		if name == "" || target == "" {

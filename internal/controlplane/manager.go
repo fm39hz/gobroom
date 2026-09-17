@@ -15,7 +15,7 @@ type Manager struct {
 }
 
 func NewManager(s *store.Store) (*Manager, error) {
-	initial := kernel.Snapshot{PublicModels: map[string]kernel.PublicModel{}, Combos: map[string]kernel.Combo{}, Routes: map[string]kernel.Route{}, LogicalModels: map[string]string{}}
+	initial := kernel.Snapshot{PublicModels: map[string]kernel.PublicModel{}, Combos: map[string]kernel.Combo{}, Routes: map[string]kernel.Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, LogicalModels: map[string]string{}}
 	snapshots, err := kernel.NewSnapshotStore(initial)
 	if err != nil {
 		return nil, err

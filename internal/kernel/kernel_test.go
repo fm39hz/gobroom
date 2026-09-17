@@ -19,6 +19,8 @@ func testSnapshot() Snapshot {
 			"route:glm": {ID: "route:glm", NodeID: "ocg", ExternalModel: "glm-5.3", Protocol: ProtocolOpenAIChat, Enabled: true},
 		},
 		LogicalModels: map[string]string{},
+		RouteGroups:   map[string][]string{},
+		WireRoutes:    map[string][]string{},
 	}
 }
 
@@ -81,6 +83,20 @@ func TestRouteGroupExpandsConnectionCandidates(t *testing.T) {
 	}
 	if resolved.Candidates[0].CredentialID != "a" || resolved.Candidates[1].CredentialID != "b" {
 		t.Fatalf("unexpected connection order: %#v", resolved.Candidates)
+	}
+}
+
+func TestPublishedModelCanTargetOpaqueWireReference(t *testing.T) {
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "public", TargetRef: "g4f/srv_xxx:provider/model"}},
+		Routes:       []Route{{ID: "route", DisplayPrefix: "g4f", ExternalModel: "srv_xxx:provider/model", Enabled: true}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolvePublic(snapshot, "public")
+	if err != nil || len(resolved.Candidates) != 1 || resolved.Candidates[0].ID != "route" {
+		t.Fatalf("resolved=%#v err=%v", resolved, err)
 	}
 }
 
