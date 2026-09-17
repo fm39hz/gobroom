@@ -1,0 +1,44 @@
+package normalize
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestResponsesNormalizesToSemanticMessages(t *testing.T) {
+	result, err := Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "tech-lead", "input": []any{map[string]any{"role": "user", "content": "hello"}}, "stream": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.SourceFormat != FormatOpenAIResponses || len(result.Request.Messages) != 1 || result.Request.Messages[0].Role != "user" {
+		t.Fatalf("unexpected result: %#v", result.Request)
+	}
+}
+
+func TestThinkingToolsAndModalitiesAreCaptured(t *testing.T) {
+	result, err := Map("/v1/chat/completions", http.Header{}, map[string]any{
+		"model": "g4f/model", "messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,x"}}}}, map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"function": map[string]any{"name": "search", "arguments": "{}"}}}}},
+		"tools": []any{map[string]any{"type": "function", "function": map[string]any{"name": "search"}}}, "reasoning_effort": "high",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Request.Modalities.Vision || result.Request.Thinking.Effort != "high" || len(result.Request.Tools) != 1 {
+		t.Fatalf("normalization lost semantics: %#v", result.Request)
+	}
+	if result.Request.Messages[1].ToolCalls[0].ID == "" {
+		t.Fatal("tool call ID was not synthesized")
+	}
+}
+
+func TestEndpointWinsOverBodyHeuristic(t *testing.T) {
+	result, err := Map("/v1/messages", http.Header{}, map[string]any{"model": "claude", "messages": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.SourceFormat != FormatAnthropic {
+		t.Fatalf("got %s", result.Request.SourceFormat)
+	}
+}
