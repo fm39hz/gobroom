@@ -214,6 +214,90 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, item)
+	case "providers.update":
+		var input store.UpdateProviderNodeInput
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		if input.ID == "" {
+			return fail(request, "id is required")
+		}
+		if input.Prefix != "" {
+			if err := d.validatePrefixUpdate(input.ID, input.Prefix); err != nil {
+				return fail(request, err.Error())
+			}
+		}
+		item, err := d.store.UpdateProviderNode(input)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, item)
+	case "providers.delete":
+		id := stringParam(request.Params, "id")
+		if id == "" {
+			return fail(request, "id is required")
+		}
+		if err := d.server.Control().ValidateProviderDelete(id); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.store.DeleteProviderNode(id); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"deleted": id})
+	case "connections.list":
+		nodeID := stringParam(request.Params, "nodeID")
+		items, err := d.store.Connections(nodeID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
+	case "connections.create":
+		var input store.CreateConnectionInput
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		item, err := d.store.CreateConnection(input)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, item)
+	case "connections.update":
+		var input store.UpdateConnectionInput
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		if input.ID == "" {
+			return fail(request, "id is required")
+		}
+		item, err := d.store.UpdateConnection(input)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, item)
+	case "connections.delete":
+		id := stringParam(request.Params, "id")
+		if id == "" {
+			return fail(request, "id is required")
+		}
+		if err := d.store.DeleteConnection(id); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"deleted": id})
 	case "models.list":
 		items, err := d.store.Models()
 		if err != nil {
@@ -231,6 +315,9 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &item); err != nil {
 			return fail(request, err.Error())
 		}
+		if err := d.server.Control().ValidateCombo(item); err != nil {
+			return fail(request, err.Error())
+		}
 		if err := d.store.UpsertCombo(item); err != nil {
 			return fail(request, err.Error())
 		}
@@ -242,6 +329,9 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		name := stringParam(request.Params, "name")
 		if name == "" {
 			return fail(request, "name is required")
+		}
+		if err := d.server.Control().ValidateComboDelete(name); err != nil {
+			return fail(request, err.Error())
 		}
 		if err := d.store.DeleteCombo(name); err != nil {
 			return fail(request, err.Error())
@@ -261,6 +351,9 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &item); err != nil {
 			return fail(request, err.Error())
 		}
+		if err := d.server.Control().ValidateLogicalModel(item); err != nil {
+			return fail(request, err.Error())
+		}
 		if err := d.store.UpsertLogicalModel(item.Name, item.TargetRef); err != nil {
 			return fail(request, err.Error())
 		}
@@ -272,6 +365,9 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		name := stringParam(request.Params, "name")
 		if name == "" {
 			return fail(request, "name is required")
+		}
+		if err := d.server.Control().ValidateLogicalModelDelete(name); err != nil {
+			return fail(request, err.Error())
 		}
 		if err := d.store.DeleteLogicalModel(name); err != nil {
 			return fail(request, err.Error())
@@ -313,6 +409,9 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	case "public_models.upsert":
 		var item store.PublicModel
 		if err := decodeParams(request.Params, &item); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Control().ValidatePublicModel(item); err != nil {
 			return fail(request, err.Error())
 		}
 		if err := d.store.UpsertPublicModel(item); err != nil {
@@ -372,6 +471,23 @@ func (d *Daemon) validatePrefix(prefix string) error {
 		}
 	}
 	return registry.AddCustom(prefix, "pending")
+}
+
+func (d *Daemon) validatePrefixUpdate(id, prefix string) error {
+	registry := provider.NewPrefixRegistry()
+	items, err := d.store.ProviderNodes()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			continue
+		}
+		if err := registry.AddCustom(item.Prefix, item.ID); err != nil {
+			return err
+		}
+	}
+	return registry.AddCustom(prefix, id)
 }
 
 func DefaultConfig() (Config, error) {

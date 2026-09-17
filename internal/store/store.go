@@ -118,6 +118,23 @@ type ProviderNode struct {
 	Enabled                                                   bool
 }
 
+type ConnectionRecord struct {
+	ID, ProviderNodeID, Name, CredentialType string
+	Priority                                 int
+	Enabled                                  bool
+}
+
+type CreateConnectionInput struct {
+	ProviderNodeID, Name, CredentialType, Secret string
+	Priority                                     int
+}
+
+type UpdateConnectionInput struct {
+	ID, Name, CredentialType, Secret string
+	Priority                         int
+	Enabled                          *bool
+}
+
 func (s *Store) ProviderNodes() ([]ProviderNode, error) {
 	rows, err := s.DB.Query(`SELECT id,name,base_url,protocol,prefix,models_path,auth_mode,enabled FROM provider_nodes ORDER BY name`)
 	if err != nil {
@@ -146,6 +163,145 @@ func (s *Store) ProviderNode(id string) (ProviderNode, error) {
 	}
 	n.Enabled = enabled == 1
 	return n, nil
+}
+
+func (s *Store) DeleteProviderNode(id string) error {
+	if id == "" {
+		return fmt.Errorf("provider node ID is required")
+	}
+	result, err := s.DB.Exec(`DELETE FROM provider_nodes WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return fmt.Errorf("provider node %q not found", id)
+	}
+	return nil
+}
+
+func (s *Store) Connections(nodeID string) ([]ConnectionRecord, error) {
+	query := `SELECT id,provider_node_id,name,credential_type,priority,enabled FROM connections ORDER BY provider_node_id,priority,id`
+	args := []any{}
+	if nodeID != "" {
+		query = `SELECT id,provider_node_id,name,credential_type,priority,enabled FROM connections WHERE provider_node_id=? ORDER BY priority,id`
+		args = append(args, nodeID)
+	}
+	rows, err := s.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ConnectionRecord
+	for rows.Next() {
+		var item ConnectionRecord
+		var enabled int
+		if err := rows.Scan(&item.ID, &item.ProviderNodeID, &item.Name, &item.CredentialType, &item.Priority, &enabled); err != nil {
+			return nil, err
+		}
+		item.Enabled = enabled == 1
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) CreateConnection(input CreateConnectionInput) (ConnectionRecord, error) {
+	if input.ProviderNodeID == "" || input.Name == "" || input.CredentialType == "" {
+		return ConnectionRecord{}, fmt.Errorf("provider node ID, name and credential type are required")
+	}
+	if _, err := s.ProviderNode(input.ProviderNodeID); err != nil {
+		return ConnectionRecord{}, fmt.Errorf("provider node: %w", err)
+	}
+	if input.Priority < 0 {
+		input.Priority = 100
+	}
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		return ConnectionRecord{}, err
+	}
+	item := ConnectionRecord{ID: "conn_" + fmt.Sprintf("%x", buf), ProviderNodeID: input.ProviderNodeID, Name: input.Name, CredentialType: input.CredentialType, Priority: input.Priority, Enabled: true}
+	_, err := s.DB.Exec(`INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority,enabled) VALUES(?,?,?,?,?,?,1)`, item.ID, item.ProviderNodeID, item.Name, item.CredentialType, input.Secret, item.Priority)
+	return item, err
+}
+
+func (s *Store) DeleteConnection(id string) error {
+	if id == "" {
+		return fmt.Errorf("connection ID is required")
+	}
+	result, err := s.DB.Exec(`DELETE FROM connections WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return fmt.Errorf("connection %q not found", id)
+	}
+	return nil
+}
+
+func (s *Store) UpdateConnection(input UpdateConnectionInput) (ConnectionRecord, error) {
+	rows, err := s.Connections("")
+	if err != nil {
+		return ConnectionRecord{}, err
+	}
+	var current ConnectionRecord
+	for _, item := range rows {
+		if item.ID == input.ID {
+			current = item
+			break
+		}
+	}
+	if current.ID == "" {
+		return ConnectionRecord{}, fmt.Errorf("connection %q not found", input.ID)
+	}
+	if input.Name != "" {
+		current.Name = input.Name
+	}
+	if input.CredentialType != "" {
+		current.CredentialType = input.CredentialType
+	}
+	if input.Priority > 0 {
+		current.Priority = input.Priority
+	}
+	if input.Enabled != nil {
+		current.Enabled = *input.Enabled
+	}
+	query := `UPDATE connections SET name=?,credential_type=?,priority=?,enabled=?,updated_at=CURRENT_TIMESTAMP`
+	args := []any{current.Name, current.CredentialType, current.Priority, boolInt(current.Enabled)}
+	if input.Secret != "" {
+		query += `,secret_ref=?`
+		args = append(args, input.Secret)
+	}
+	query += ` WHERE id=?`
+	args = append(args, current.ID)
+	if _, err := s.DB.Exec(query, args...); err != nil {
+		return ConnectionRecord{}, err
+	}
+	return current, nil
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func (s *Store) Setting(key string) (string, bool, error) {
+	var value string
+	if err := s.DB.QueryRow(`SELECT value_json FROM settings WHERE key=?`, key).Scan(&value); err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+func (s *Store) SetSetting(key, value string) error {
+	if key == "" {
+		return fmt.Errorf("setting key is required")
+	}
+	_, err := s.DB.Exec(`INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`, key, value)
+	return err
 }
 
 type Credential struct{ Type, Secret string }
@@ -226,6 +382,11 @@ type CreateProviderNodeInput struct {
 	Name, Prefix, BaseURL, Protocol, ModelsPath, AuthMode string
 }
 
+type UpdateProviderNodeInput struct {
+	ID                                                    string
+	Name, Prefix, BaseURL, Protocol, ModelsPath, AuthMode string
+}
+
 func (s *Store) CreateProviderNode(input CreateProviderNodeInput) (ProviderNode, error) {
 	if input.Name == "" || input.Prefix == "" || input.BaseURL == "" || input.Protocol == "" {
 		return ProviderNode{}, fmt.Errorf("name, prefix, base URL and protocol are required")
@@ -243,6 +404,33 @@ func (s *Store) CreateProviderNode(input CreateProviderNodeInput) (ProviderNode,
 	node := ProviderNode{ID: "node_" + fmt.Sprintf("%x", buf), Name: input.Name, Prefix: input.Prefix, BaseURL: input.BaseURL, Protocol: input.Protocol, ModelsPath: input.ModelsPath, AuthMode: input.AuthMode, Enabled: true}
 	_, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix,models_path,auth_mode,enabled) VALUES(?,?,?,?,?,?,?,1)`, node.ID, node.Name, node.BaseURL, node.Protocol, node.Prefix, node.ModelsPath, node.AuthMode)
 	return node, err
+}
+
+func (s *Store) UpdateProviderNode(input UpdateProviderNodeInput) (ProviderNode, error) {
+	current, err := s.ProviderNode(input.ID)
+	if err != nil {
+		return ProviderNode{}, err
+	}
+	if input.Name != "" {
+		current.Name = input.Name
+	}
+	if input.Prefix != "" {
+		current.Prefix = input.Prefix
+	}
+	if input.BaseURL != "" {
+		current.BaseURL = input.BaseURL
+	}
+	if input.Protocol != "" {
+		current.Protocol = input.Protocol
+	}
+	if input.ModelsPath != "" {
+		current.ModelsPath = input.ModelsPath
+	}
+	if input.AuthMode != "" {
+		current.AuthMode = input.AuthMode
+	}
+	_, err = s.DB.Exec(`UPDATE provider_nodes SET name=?,prefix=?,base_url=?,protocol=?,models_path=?,auth_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, current.Name, current.Prefix, current.BaseURL, current.Protocol, current.ModelsPath, current.AuthMode, current.ID)
+	return current, err
 }
 
 type Model struct {

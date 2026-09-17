@@ -49,6 +49,7 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 		r.Get("/api/status", s.status)
 		r.Get("/api/kernel/resolve", s.resolve)
 		r.HandleFunc("/api/providers", s.providerCollection)
+		r.HandleFunc("/api/connections", s.connectionsCollection)
 		r.HandleFunc("/api/models", s.models)
 		r.HandleFunc("/api/combos", s.combos)
 		r.HandleFunc("/api/logical-models", s.logicalModels)
@@ -141,8 +142,66 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 		s.providers(w, r)
 		return
 	}
+	if r.Method == http.MethodDelete {
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		if s.control != nil {
+			if err := s.control.ValidateProviderDelete(id); err != nil {
+				writeError(w, err)
+				return
+			}
+		}
+		if err := s.store.DeleteProviderNode(id); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method == http.MethodPut {
+		var input store.UpdateProviderNodeInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if input.ID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		prefixes := provider.NewPrefixRegistry()
+		for _, node := range mustProviderNodes(s.store) {
+			if node.ID != input.ID {
+				if err := prefixes.AddCustom(node.Prefix, node.ID); err != nil {
+					writeError(w, err)
+					return
+				}
+			}
+		}
+		if input.Prefix != "" {
+			if err := prefixes.AddCustom(input.Prefix, input.ID); err != nil {
+				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		item, err := s.store.UpdateProviderNode(input)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"provider": item})
+		return
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "GET, POST")
+		w.Header().Set("Allow", "GET, POST, DELETE")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -178,6 +237,74 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"provider": node})
 }
 
+func (s *Server) connectionsCollection(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.Connections(r.URL.Query().Get("nodeID"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"connections": items})
+	case http.MethodPost:
+		var input store.CreateConnectionInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		item, err := s.store.CreateConnection(input)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"connection": item})
+	case http.MethodPut:
+		var input store.UpdateConnectionInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if input.ID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		item, err := s.store.UpdateConnection(input)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"connection": item})
+	case http.MethodDelete:
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		if err := s.store.DeleteConnection(id); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, POST, PUT, DELETE")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func mustProviderNodes(s *store.Store) []store.ProviderNode {
+	items, _ := s.ProviderNodes()
+	return items
+}
+
 func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	items, err := s.store.PublicModels()
 	if err != nil {
@@ -206,6 +333,12 @@ func (s *Server) combos(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 			return
 		}
+		if s.control != nil {
+			if err := s.control.ValidateCombo(item); err != nil {
+				writeError(w, err)
+				return
+			}
+		}
 		if err := s.store.UpsertCombo(item); err != nil {
 			writeError(w, err)
 			return
@@ -219,6 +352,12 @@ func (s *Server) combos(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 			return
+		}
+		if s.control != nil {
+			if err := s.control.ValidateComboDelete(name); err != nil {
+				writeError(w, err)
+				return
+			}
 		}
 		if err := s.store.DeleteCombo(name); err != nil {
 			writeError(w, err)
@@ -249,6 +388,12 @@ func (s *Server) logicalModels(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 			return
 		}
+		if s.control != nil {
+			if err := s.control.ValidateLogicalModel(item); err != nil {
+				writeError(w, err)
+				return
+			}
+		}
 		if err := s.store.UpsertLogicalModel(item.Name, item.TargetRef); err != nil {
 			writeError(w, err)
 			return
@@ -262,6 +407,12 @@ func (s *Server) logicalModels(w http.ResponseWriter, r *http.Request) {
 		if name == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
 			return
+		}
+		if s.control != nil {
+			if err := s.control.ValidateLogicalModelDelete(name); err != nil {
+				writeError(w, err)
+				return
+			}
 		}
 		if err := s.store.DeleteLogicalModel(name); err != nil {
 			writeError(w, err)
@@ -341,6 +492,12 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.TargetRef) == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and targetRef are required"})
 			return
+		}
+		if s.control != nil {
+			if err := s.control.ValidatePublicModel(item); err != nil {
+				writeError(w, err)
+				return
+			}
 		}
 		if err := s.store.UpsertPublicModel(item); err != nil {
 			writeError(w, err)
