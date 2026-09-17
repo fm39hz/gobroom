@@ -70,6 +70,17 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 		}
 		return []Route{route}, nil
 	}
+	if variants, ok := s.RouteGroups[ref]; ok {
+		result := make([]Route, 0, len(variants))
+		for _, variant := range variants {
+			route, exists := s.Routes[variant]
+			if !exists || !route.Enabled {
+				continue
+			}
+			result = append(result, route)
+		}
+		return result, nil
+	}
 	if logical, ok := s.LogicalModels[ref]; ok {
 		return resolveRef(s, logical, stack)
 	}

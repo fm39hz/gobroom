@@ -1,668 +1,539 @@
 # GoBroom implementation plan
 
-Status: planning only — no implementation work is authorized by this document.
+Status: active implementation plan.
 
-## 0. Objective
-
-Build a daemon-first replacement for the useful routing and normalization core
-of 9router while preserving its provider breadth and compatibility behavior.
-
-GoBroom must expose ordinary OpenAI-compatible endpoints:
+This plan is based on the actual 9router source under
+`/home/fm39hz/Workspace/Personal/Tools/AI/9router`, not on an idealized
+router architecture. GoBroom keeps useful runtime behavior while changing
+ownership boundaries:
 
 ```text
-/v1/models
-/v1/chat/completions
-/v1/responses
-/v1/messages
+9router behavior                  GoBroom boundary
+----------------------------------------------------------------
+handleChat + handleChatCore       HTTP boundary + kernel pipeline
+localDb model/combos              SQLite control plane + snapshot
+getProviderCredentials            credential manager + candidates
+accountFallback                  scheduler + health/quota policy
+provider executors               protocol/provider adapters
+request translators              normalization + translators
+stream handlers                  normalized response events
+usage/requestDetails             bounded event worker + diagnostics
+dashboard/CLI/MITM/tunnel         frontend or sidecar, outside kernel
 ```
 
-The daemon owns routing state, model normalization, provider execution,
-quota/usage policy and SQLite persistence. CLI/TUI and any future dashboard are
-control clients, not alternate routing implementations.
+Automatic 9router database import is deliberately not part of the plan.
+Migration is manual and must use the control plane or a documented data format.
 
-The target is not a minimal proxy. It is a feature-complete routing daemon with
-a smaller and stricter runtime core.
+## 1. Target and non-target
 
-## 1. 1:1 architecture mapping
+### Target
 
-| 9router subsystem | Current role | GoBroom target | Deliberate change |
-|---|---|---|---|
-| Next.js API routes | data plane + control plane mixed together | `internal/api` data/control surfaces | keep surfaces, separate ownership |
-| `handleChat` | auth, combo entry and account fallback entry | gateway middleware + kernel entry | no provider logic in HTTP handler |
-| `handleChatCore` | normalization, translation, execution and lifecycle | `normalize` + `kernel` + `adapter` pipeline | preserve behavior, split phases |
-| provider registry | provider metadata, models, quirks, auth | provider presets + adapter registry | metadata and behavior separated |
-| provider executors | upstream request execution | protocol/provider adapters | common execution contract |
-| model parser | prefix/model string parsing | prefix registry + typed references | keep wire compatibility, remove stringly internals |
-| model aliases | alias → provider/model | logical model → typed target | no ambiguous KV direction |
-| provider nodes | custom endpoint + user prefix | `ProviderNode` | unique prefix validation |
-| custom models | user-defined model IDs/capabilities | first-class catalog entries | discovery never overwrites custom entries |
-| combos | ordered string list | typed combo graph | cycle detection, explicit strategy |
-| `/v1/models` combo output | all combos/models mixed together | `published_models` projection | expose only selected public models |
-| account selection | DB reads + process-wide mutex | in-memory scheduler + scoped locks | no global request serialization |
-| account fallback | retry another account/provider | kernel route candidate scheduler | one unified fallback policy |
-| token refresh | provider-specific refresh functions | credential manager + adapter refresh hooks | refresh outside global routing lock |
-| model/account locks | fields in connection JSON | runtime health/quota state | durable state only where needed |
-| `accountFallback` | status/error heuristic | adapter error classification + policy | typed error classes |
-| capability detection | request scan + model metadata | normalization modality scan + capability gate | capability affects route selection |
-| request translators | format-specific request conversion | semantic IR translators | direct path or canonical IR pivot |
-| response translators | JSON/SSE conversion | normalized event stream encoders | explicit stream state machine |
-| thinking concerns | capture/apply provider-native thinking | `ThinkingIntent` | semantic intent independent of wire format |
-| tool concerns | repair IDs, tool result reconciliation, cloaking | tool normalization + adapter quirks | preserve mappings outside raw body |
-| session manager | client/provider session metadata | `SessionContext` | not hidden in credential objects |
-| continuity fields | Responses round-trip state | `ContinuityState` | never leak internal fields upstream |
-| image prefetch/modality | content mutation and remote fetch | capability policy + cancellable media stage | explicit strip/reject/fallback policy |
-| RTK/Headroom/PXPIPE | request mutation/token saving | optional post-normalization middleware | cannot change routing identity silently |
-| usage DB | history, stats and dashboard feed | event bus + usage worker + aggregates | usage drives policy, not just UI |
-| quota cache/auto-ping | provider quota visibility and cooldown | quota service + scheduler gate | quota is routing state |
-| request details | raw payload observability | bounded opt-in diagnostic sink | never block stream or grow unbounded |
-| dashboard | configuration and monitoring | CLI/TUI/control API | UI is a consumer of daemon contract |
-| OAuth UI flows | browser onboarding | daemon auth plugins + CLI browser handoff | no routing logic in UI |
-| tunnel/Tailscale | external access | separate optional service | outside kernel |
-| MITM/DNS/IDE | IDE integration | sidecar/plugin boundary | outside daemon core |
-| cloud sync | state replication | optional control-plane backend | never in hot path |
-
-## 2. Target runtime architecture
+Build a daemon-first local gateway that can replace the useful chat-routing
+core of the current 9router setup:
 
 ```text
-                         Clients
-                            │
-                 ┌──────────┴──────────┐
-                 │                     │
-          Data plane              Control plane
-       OpenAI/Claude API        CLI/TUI/local API
-                 │                     │
-                 └──────────┬──────────┘
-                            ▼
-                      gobroomd
- ┌──────────────────────────────────────────────────────────────┐
- │ HTTP boundary                                               │
- │ auth → request body → normalized IR → kernel                │
- │                                                              │
- │ Route kernel                                                 │
- │ public model → snapshot → gates → scheduler → adapter       │
- │                                                              │
- │ Protocol layer                                               │
- │ OpenAI Chat / Responses / Anthropic / Gemini / custom       │
- │                                                              │
- │ Runtime services                                             │
- │ credentials · refresh · quota · usage · health · events     │
- └───────────────┬──────────────────────────────────────────────┘
-                 │
-       ┌─────────┴─────────┐
-       │                   │
- SQLite control plane   upstream providers
+OpenAI/Anthropic client
+  -> gobroomd data plane
+  -> public model
+  -> combo/logical model
+  -> route + connection candidates
+  -> provider adapter
+  -> normalized response stream
 ```
 
-### Control plane
+The daemon must work without CLI/TUI. CLI and TUI are control-plane clients.
 
-Owns:
+### Not part of the first replacement
+
+These remain separate or later:
 
 ```text
-provider nodes
-connections
-model catalog
-custom models
-logical models
-combos
-published models
-settings
-adapter configuration
+MITM/DNS interception
+tunnel/Tailscale/Cloudflare exposure
+IDE credential spoofing
+cloud sync
+full dashboard replacement
+prompt/token saver experiments
+all 9router media endpoints
 ```
 
-It validates mutations, persists them transactionally and publishes a new
-immutable route snapshot.
+They are not allowed to add provider-specific branches to the kernel.
 
-### Data plane
+## 2. Current implementation baseline
 
-Owns:
+Already present:
+
+- daemon process with Unix IPC;
+- optional loopback HTTP data plane;
+- SQLite control plane;
+- provider nodes and connections;
+- discovered and custom model catalog;
+- logical models and nested combo graph;
+- explicit public-model projection;
+- snapshot validation and cycle detection;
+- route expansion per connection;
+- runtime credential resolution by connection ID;
+- OpenAI Chat adapter;
+- OpenAI Responses passthrough adapter;
+- basic Anthropic Messages adapter;
+- basic Anthropic SSE text/tool conversion;
+- health cooldown gate;
+- persisted quota snapshots and basic quota gate;
+- asynchronous usage event persistence;
+- CLI/TUI status and reload;
+- provider `/models` discovery;
+- prefix collision validation.
+
+The current implementation is not yet a drop-in replacement. The largest
+gaps are response event semantics, model/prefix compatibility, credential
+refresh, provider breadth, and provider-specific quota/usage behavior.
+
+## 3. Delivery rules
+
+### Rule A — vertical slices before breadth
+
+Every major phase must end with a real path:
 
 ```text
-request normalization
-public model resolution
-capability/quota/health gates
-route scheduling
-provider translation
-upstream execution
-SSE/JSON response encoding
+manual config
+  -> /v1/models
+  -> client request
+  -> route/account selection
+  -> upstream
+  -> response stream
+  -> usage/health update
 ```
 
-The common path must not query SQLite for static configuration.
+### Rule B — kernel contracts before provider expansion
 
-### Event plane
+Provider-specific behavior may not leak into HTTP handlers, combo resolution,
+or scheduler code.
 
-Consumes compact events from the data plane:
+### Rule C — one source of truth per concern
 
 ```text
-usage event
-quota observation
-route success/failure
-stream lifecycle
-credential refresh
+model graph       snapshot
+credentials       credential manager
+health/quota      runtime policy
+translation       adapter/event layer
+usage             event worker
+configuration     SQLite control plane
 ```
 
-Consumers update SQLite aggregates, quota state, route health and control API
-views asynchronously.
+### Rule D — no automatic importer
 
-## 3. Milestones
+The existing 9router configuration is migrated manually. GoBroom may provide
+validation, export, and control-plane commands, but not a magic importer that
+silently guesses semantics.
 
-### M0 — Contract freeze and compatibility inventory
+## 4. Milestones
 
-Purpose: prevent implementation from drifting into a generic proxy.
+### M0.1 — Source-grounded compatibility inventory
+
+Freeze what 9router actually does before adding more abstractions.
 
 Deliverables:
 
-- typed kernel contract;
-- normalized semantic IR;
-- provider adapter contract;
-- route snapshot contract;
-- public-model contract;
-- quota/usage event contract;
-- error taxonomy;
-- compatibility matrix for all 9router formats/providers currently used.
-
-9router coverage:
-
-```text
-handleChatCore inputs/outputs
-model parser and prefix behavior
-combo strategy behavior
-provider transport selection
-stream fallback boundary
-thinking/tool/session/continuity semantics
-```
+- fixtures for model parsing and aliases;
+- combo fallback and round-robin fixtures;
+- account selection and exclusion fixtures;
+- tool-call repair fixtures;
+- thinking and Responses continuity fixtures;
+- Anthropic content-block fixtures;
+- stream termination and usage fixtures;
+- provider error classification fixtures;
+- compatibility matrix labelled preserve, simplify, or out-of-kernel.
 
 Exit criteria:
 
-- every retained 9router behavior maps to a typed contract;
-- every intentionally removed behavior is documented;
-- no handler is allowed to invent its own model resolution path.
+- every GoBroom contract maps to real source behavior or an explicit design
+  decision;
+- no design document describes intended behavior as existing 9router behavior;
+- fixtures run without real provider credentials.
 
-### M1 — SQLite control plane and snapshot builder
+### M0.2 — Model, prefix and alias contract
 
-Purpose: make configuration durable and data-plane-safe.
-
-Deliverables:
-
-- migrations for nodes, connections, catalog, custom models, aliases,
-  logical models, combos, combo members, published models, settings;
-- provider/node/model/combo CRUD repositories;
-- import/export from the existing 9router database;
-- prefix uniqueness validation;
-- combo cycle validation;
-- snapshot builder and atomic publication;
-- retention/maintenance policy for usage and quota data.
-
-9router mapping:
-
-```text
-localDb
-providerNodes
-aliasRepo
-connectionsRepo
-combosRepo
-settingsRepo
-```
-
-Exit criteria:
-
-- a 9router configuration can be imported without credentials being logged;
-- `tech-lead` can resolve through nested helper combos;
-- only explicitly published models appear in `/v1/models`;
-- invalid prefixes/cycles are rejected transactionally.
-
-### M2 — Public model and prefix compatibility
-
-Purpose: preserve the external model syntax clients already use.
+Make external model syntax compatible before provider expansion.
 
 Deliverables:
 
+- first-slash parser for opaque model IDs;
 - built-in provider aliases;
-- custom provider prefixes;
-- canonical provider/node IDs;
-- first-slash parsing for opaque model IDs;
-- logical aliases;
-- custom model registration;
-- public model publishing;
-- explicit compatibility mode for bare model inference.
+- custom prefix registry;
+- logical alias resolution;
+- upstream model ID mapping;
+- optional bare-model compatibility mode;
+- model-marker stripping where required;
+- collision and round-trip tests.
 
-9router mapping:
+Required cases:
 
 ```text
-provider registry aliases
-custom provider-node prefix
-parseModel
-resolveModelAliasFromMap
-customModels
-v1/models
+provider/model
+alias/model
+model/id/with/slashes
+custom provider prefixes
+bare model inference
+logical alias -> combo
 ```
 
-Exit criteria:
+### M1 — SQLite control plane and immutable snapshot
 
-- `g4f/srv_xxx:provider/model` round-trips without losing slashes or colons;
-- built-in aliases cannot be shadowed by custom prefixes;
-- duplicate custom prefixes are rejected;
-- internal combos are hidden unless published.
-
-### M3 — Normalization IR and request invariants
-
-Purpose: reproduce the strongest part of `handleChatCore` before adding
-provider breadth.
+Make configuration durable without putting SQLite on the hot path.
 
 Deliverables:
 
-- endpoint/body/header format detection;
-- OpenAI Chat normalization;
-- Responses normalization;
-- Anthropic normalization;
-- Gemini content normalization;
-- tool-call ID repair;
-- tool-result reconciliation;
-- thinking intent capture;
-- session and continuity capture;
-- modality detection;
-- extension preservation;
-- cancellation-aware media preprocessing.
+- provider node and connection CRUD;
+- discovered/custom catalog CRUD;
+- logical model, combo, and public-model CRUD;
+- transactional mutation validation;
+- route expansion per connection;
+- atomic snapshot reload;
+- configuration versioning;
+- usage/quota retention hooks.
 
-9router mapping:
+Constraints:
 
-```text
-detectFormat
-detectFormatByEndpoint
-ensureToolCallIds
-fixMissingToolResponses
-captureThinking/applyThinking
-captureSessionId
-stripContinuityFields
-stripUnsupportedModalities
-prefetchRemoteImages
-```
+- snapshots contain connection IDs, never secrets;
+- route candidates are immutable per request;
+- failed reloads do not replace the active snapshot;
+- IPC/API/TUI use the same validation path.
 
-Exit criteria:
+### M2 — TUI/control-plane vertical slice
 
-- equivalent OpenAI/Responses/Anthropic requests produce equivalent IR;
-- provider-specific fields do not leak into the wrong protocol;
-- missing tool-call IDs are repaired deterministically;
-- normalization never silently deletes content without policy output.
-
-### M4 — OpenAI-compatible data plane
-
-Purpose: make GoBroom useful with generic providers first.
+Use TUI as a real control-plane client and integration-test surface.
 
 Deliverables:
 
-- `/v1/models` public projection;
-- `/v1/chat/completions`;
-- OpenAI-compatible Chat adapter;
-- passthrough SSE;
-- JSON response handling;
-- route selection and connection selection;
-- fallback before first response byte;
-- request cancellation;
-- upstream timeout policy.
+- provider/node editor;
+- masked connection editor;
+- model discovery and custom-model editor;
+- logical-model editor;
+- ordered combo editor;
+- public-model publishing;
+- route resolution/test command;
+- daemon reload/status/health view.
 
-9router mapping:
-
-```text
-default executor
-openai-compatible executor
-streamController
-handleStreamingResponse
-handleNonStreamingResponse
-```
+The TUI must not read SQLite directly. Every operation goes through IPC.
 
 Exit criteria:
 
-- a published combo can route to a real OpenAI-compatible endpoint;
-- SSE survives long-lived streams and client disconnects;
-- fallback never happens after client bytes are emitted;
-- route/account failures update runtime health.
+- the current manual configuration can be recreated without SQL;
+- editing a combo publishes a new snapshot;
+- `/v1/models` changes only after valid control-plane mutation;
+- daemon remains usable with TUI stopped.
 
-### M5 — Canonical translation and response events
+### M3 — OpenAI Chat complete vertical slice
 
-Purpose: implement the protocol-independent normalization/translation core.
+Make one end-to-end path reliable before widening protocol coverage.
 
 Deliverables:
 
-- direct translator registry;
-- canonical IR translator path;
-- normalized response event model;
-- event-to-OpenAI Chat encoder;
-- tool-call streaming state machine;
-- usage extraction;
-- finish reason normalization;
-- provider error normalization.
+- OpenAI Chat validation;
+- generic OpenAI-compatible adapter;
+- API-key credential resolution;
+- route/account scheduler;
+- fallback before first byte;
+- timeout and cancellation policy;
+- SSE passthrough;
+- JSON response path;
+- response commit tracking;
+- compact usage event;
+- health feedback.
 
-9router mapping:
+Tests must cover one-route success, pre-header fallback, all-route failure,
+post-first-byte failure, client disconnect, and usage/health completion.
+
+### M4 — Account pool and fallback policy
+
+Reproduce the useful behavior of 9router's account selection without a global
+selection mutex.
+
+Deliverables:
+
+- per-route/per-connection candidates;
+- fill-first selection;
+- round-robin selection;
+- sticky limit;
+- preferred connection;
+- per-request exclusion;
+- account health/cooldown;
+- account-level versus model-level failure scope;
+- Retry-After handling;
+- typed policy for terminal, retry, next-account, next-model, cooldown, and
+  auth-refresh outcomes.
+
+### M5 — Canonical response event layer
+
+Prevent every adapter from inventing its own streaming state machine.
+
+Canonical events:
 
 ```text
-translator/index.js
-request translators
-response translators
-stream initState
-streamHandler
+ResponseStart
+TextDelta
+ReasoningDelta
+ToolCallStart
+ToolCallDelta
+ToolCallEnd
+Usage
+ResponseEnd
+ResponseError
 ```
-
-Exit criteria:
-
-- one provider stream can be emitted as OpenAI Chat;
-- tool calls remain valid across chunk boundaries;
-- reasoning/thinking events do not corrupt text events;
-- usage arrives as a terminal event or explicit incomplete event.
-
-### M6 — OpenAI Responses and Anthropic Messages
-
-Purpose: support the two major non-Chat wire protocols.
 
 Deliverables:
 
-- `/v1/responses`;
-- `/v1/messages`;
-- Responses input/output item mapping;
-- encrypted reasoning continuity handling;
+- provider SSE decoders;
+- event state machine;
+- OpenAI Chat encoder;
+- stream completion/error contract;
+- tool-argument buffering;
+- finish-reason normalization;
+- usage aggregation;
+- cancellation propagation.
+
+### M6 — Responses and Anthropic semantic compatibility
+
+Cover the two non-Chat formats already exposed by GoBroom.
+
+Deliverables:
+
+- Responses input normalization;
+- Responses output-item encoding;
+- response ID and previous-response continuity;
 - Anthropic content blocks;
-- Claude tool schema policy;
-- direct and pivot translation paths.
+- Claude tool-schema policy;
+- thinking/reasoning mapping;
+- Chat/Responses/Anthropic conversions;
+- usage and stop-reason mapping.
 
-9router mapping:
+Tests must include multi-turn Responses, text plus tool call, tool result,
+thinking-heavy output, stream/non-stream variants, and malformed events.
 
-```text
-openai-responses translators
-claude translators
-thinkingUnified
-toolCall concerns
-Claude cache/continuity logic
-```
+### M7 — Runtime credentials and token refresh
 
-Exit criteria:
-
-- multi-turn Responses sessions preserve continuity;
-- Claude tool use/result cycles remain valid;
-- the same upstream route can serve Chat, Responses or Messages according to
-  its transport matrix.
-
-### M7 — Provider presets, discovery and credentials
-
-Purpose: match 9router's provider breadth without contaminating the kernel.
+Add the credential lifecycle that 9router actually uses.
 
 Deliverables:
 
-- generic OpenAI Chat preset;
-- generic OpenAI Responses preset;
-- generic Anthropic preset;
-- `/models` discovery;
-- custom model overrides;
-- provider capability metadata;
-- credential pool;
-- API-key storage abstraction;
-- OAuth/token refresh adapter interface;
-- provider-specific refresh implementations by usage priority.
+- credential manager interface;
+- expiry detection;
+- per-connection refresh lock;
+- proactive refresh;
+- 401/403 refresh-once retry;
+- rotating refresh-token persistence;
+- credential update event;
+- one end-to-end OAuth provider adapter;
+- browser/CLI handoff contract.
 
-9router mapping:
+Security constraints:
 
-```text
-providers/registry
-modelsFetcher
-providerCustomModels
-tokenRefresh
-backgroundTokenRefresh
-getProviderCredentials
-```
+- secrets remain outside snapshots and normal logs;
+- refresh never holds scheduler locks;
+- refresh failure cannot corrupt the last good credential;
+- persistence is atomic per connection.
 
-Exit criteria:
+### M8 — Usage, cost, quota and health services
 
-- discovery failures do not erase custom models;
-- credentials never appear in model/catalog responses;
-- refresh is deduplicated per connection, not globally serialized;
-- one provider adapter can have multiple connections/routes.
+Split this into independently testable parts.
 
-### M8 — Quota, usage, cost and health as routing services
+#### M8a — Usage and aggregates
 
-Purpose: make operational state influence decisions, not merely dashboards.
-
-Deliverables:
-
-- quota snapshot repository;
-- provider quota adapters;
-- response-header/error-body quota observations;
-- reset-aware route gate;
-- usage event worker;
+- bounded usage worker;
 - daily/hourly aggregates;
-- cost calculation;
-- budget policy;
-- route health score;
-- usage/quota control API.
+- reasoning/cache token categories where available;
+- cost calculator;
+- retention/pruning;
+- control API views.
 
-9router mapping:
+#### M8b — Provider-neutral quota contract
 
-```text
-antigravity quota cache
-accountFallback locks
-usageRepo
-usageDaily
-pricing
-quotaAutoPing
-```
+- quota source and timestamp;
+- used/limit/remaining/reset;
+- account/model/window scope;
+- authoritative versus estimated source;
+- reset-aware gate.
 
-Exit criteria:
+#### M8c — Provider quota adapters
 
-- exhausted routes are skipped until reset;
-- usage persistence never blocks first byte or stream completion;
-- cost/budget rules can reject or reroute requests;
-- TUI and scheduler consume the same quota/usage state.
+- response-header observation;
+- error-body observation;
+- provider usage endpoints;
+- reset parsing;
+- refresh throttling.
 
-### M9 — Advanced request middleware
+#### M8d — Routing policy
 
-Purpose: preserve useful optimization features without mixing them into
-semantic normalization.
+- exhausted-route exclusion;
+- remaining-budget preference;
+- budget limits;
+- cost-aware fallback;
+- quota notifications.
+
+### M9 — Provider presets and discovery expansion
+
+Add breadth through reusable adapters, not kernel branches.
+
+Order:
+
+1. generic OpenAI Chat;
+2. generic OpenAI Responses;
+3. generic Anthropic;
+4. generic Gemini;
+5. provider-specific presets based on actual use;
+6. provider-specific OAuth only where needed.
+
+Each adapter owns URL/path, headers/auth, request transform, response decode,
+error classification, usage extraction, and optional quota integration.
+
+### M10 — Capability and modality policies
+
+Match 9router's practical capability behavior.
 
 Deliverables:
 
-- optional tool-result compression;
-- optional external compression proxy;
+- vision/audio/video/PDF detection;
+- hard-capability rejection;
+- soft-capability degradation;
+- explicit strip/placeholder policy;
+- cancellable remote image prefetch;
+- capability-aware combo ordering;
+- model-specific capability overrides;
+- multimodal fixtures.
+
+No modality may be silently deleted without a warning or policy result.
+
+### M11 — Advanced middleware
+
+Add optional optimizers only after semantic correctness is stable:
+
+- tool-result compression;
+- external compression proxy;
 - image context compression;
-- system prompt policies;
+- prompt policy modules;
 - cache anchoring;
 - per-request opt-out;
-- explicit transformation diagnostics.
+- bounded diagnostics.
 
-9router mapping:
+Middleware runs after route identity and semantic normalization are fixed. It
+cannot silently alter model selection or bypass cancellation.
 
-```text
-RTK
-Headroom
-PXPIPE
-Caveman
-Ponytail
-anchorClaudeCache
-```
+### M12 — Secondary APIs and integrations
 
-Exit criteria:
+Only after the chat kernel is stable:
 
-- middleware runs after IR/translation policy is established;
-- every mutation is measurable and attributable;
-- middleware can be disabled per request;
-- no middleware bypasses cancellation or size limits.
+- embeddings;
+- image generation;
+- video generation;
+- TTS/STT;
+- search/fetch;
+- provider usage APIs;
+- tunnel/Tailscale/Cloudflare;
+- MITM/DNS sidecar;
+- IDE integrations;
+- cloud sync.
 
-### M10 — CLI/TUI control plane
+Each belongs to a separate service or adapter package.
 
-Purpose: make the daemon usable without the 9router dashboard.
-
-Deliverables:
-
-- provider node management;
-- connection management;
-- model discovery and custom models;
-- alias/logical model editor;
-- combo graph editor;
-- public-model publishing;
-- route test;
-- quota/usage/health views;
-- daemon reload/status/logs.
-
-9router mapping:
-
-```text
-dashboard providers
-dashboard models
-dashboard combos
-usage stats
-request logs
-OAuth modals
-```
-
-Exit criteria:
-
-- every control-plane action is available through typed local API;
-- TUI never reads SQLite directly while daemon is running;
-- config mutation produces a new snapshot without restarting daemon.
-
-### M11 — Compatibility expansion
-
-Purpose: add high-value provider/client ecosystems incrementally.
-
-Provider order should be driven by actual usage and adapter reuse:
-
-```text
-OpenAI-compatible generic
-Anthropic-compatible generic
-OpenAI Responses
-Gemini
-Codex
-OpenCode
-Kiro
-Cursor
-Ollama
-provider-specific OAuth adapters
-```
-
-Each provider must ship with:
-
-- request fixtures;
-- response fixtures;
-- SSE fixtures;
-- error classification tests;
-- tool/thinking tests;
-- quota/usage behavior;
-- cancellation test.
-
-### M12 — Optional integrations outside the kernel
-
-Only after the daemon core is stable:
-
-```text
-cloud sync
-tunnel/Tailscale
-MITM sidecar
-DNS integration
-IDE credential spoofing
-MCP bridge
-```
-
-These must communicate with the daemon through explicit APIs or plugin
-contracts. They must not add provider logic to the kernel.
-
-## 4. Test strategy
+## 5. Testing strategy
 
 ### Contract tests
 
-Every provider adapter must pass common tests for:
+Every adapter covers:
 
 ```text
 prepare
-auth headers
+auth
 model mapping
+request cancellation
+status/body error classification
 stream decode
 tool calls
 thinking
 usage
-error classes
-cancel
+completion/error lifecycle
 ```
 
 ### Golden normalization tests
 
-Store fixtures for:
-
-```text
-OpenAI Chat
-OpenAI Responses
-Anthropic Messages
-Gemini
-Claude Code
-Codex CLI
-```
-
-Each fixture is tested as:
-
-```text
-wire input → IR → target wire format → expected semantic equivalence
-```
+Fixtures cover OpenAI Chat, OpenAI Responses, Anthropic Messages, Gemini,
+Claude Code, Codex-style continuity, tool-call repair, and multimodal content.
 
 ### Route tests
 
-Cover:
-
 ```text
-public model only
-hidden internal combo
+public versus hidden model
 nested combo
 cycle
-duplicate route
 prefix collision
-quota exhausted
-route cooldown
+multiple connections
 round-robin
+sticky limit
+weighted ordering
+quota exhausted
+auth refresh
 fallback before first byte
 no fallback after first byte
 ```
 
+### Integration tests
+
+Use local `httptest` upstreams to verify:
+
+```text
+config -> /v1/models -> request -> upstream -> stream -> usage
+```
+
+The base suite must not require real credentials.
+
 ### Load tests
 
-Measure separately:
+Measure normalization CPU, translation CPU, SSE memory per stream, connection
+selection contention, SQLite usage queue, quota refresh pressure, and config
+reload under traffic.
+
+## 6. Manual migration strategy
+
+There is no automatic 9router importer.
+
+Manual migration order:
 
 ```text
-normalization CPU
-translation CPU
-SSE memory per stream
-SQLite write queue behavior
-quota refresh pressure
-concurrent route selection
+1. provider nodes
+2. connections
+3. custom models
+4. model aliases as logical models
+5. combos
+6. selected public models
+7. quota snapshots if useful
+8. usage history only if explicitly needed
 ```
 
-## 5. Data migration strategy
+Migration notes must record semantic changes, especially:
 
-Import from 9router in this order:
+- 9router flat combo names versus GoBroom nested combo graph;
+- provider aliases versus provider-node prefixes;
+- account/model locks versus runtime health/quota state;
+- mixed 9router `/models` behavior versus explicit GoBroom publication.
 
-```text
-provider nodes
-connections (secrets redacted in export logs)
-custom models
-model aliases
-combos
-settings
-selected public models
-usage aggregates (optional)
-```
+## 7. Definition of done
 
-9router's mixed combo/model `/v1/models` behavior must not be imported as
-publication automatically. The migration tool should offer:
+### Core replacement
 
-```text
-publish all combos
-publish selected combos
-publish none
-```
+GoBroom is a practical replacement for the current chat use case when M0.2–M8
+are complete and:
 
-## 6. Definition of done
+1. manual configuration recreates the active provider/account/model setup;
+2. `/v1/models` exposes exactly the selected public models;
+3. OpenAI Chat, Responses, and Anthropic fixtures pass;
+4. combo and account fallback are deterministic;
+5. OAuth refresh is per-connection and concurrency-safe;
+6. quota/usage influence routing and survive restart;
+7. long-lived SSE does not block control operations;
+8. TUI manages the complete core control plane.
 
-GoBroom can be considered a practical 9router replacement when:
+### Broader parity
 
-1. M0–M8 are complete.
-2. OpenAI Chat, Responses and Anthropic compatibility pass golden tests.
-3. A real 9router configuration imports successfully.
-4. Public model exposure is explicit and stable.
-5. Combo/fallback/round-robin behavior matches expected outcomes.
-6. Quota and usage influence routing and survive daemon restart.
-7. Long-lived SSE streams do not block or grow unbounded memory.
-8. TUI can manage the complete control plane.
-9. IDE/tunnel integrations remain optional and isolated.
+M9–M12 are feature expansion, not prerequisites for the core replacement. They
+must be added only through stable daemon contracts and must not re-couple TUI,
+dashboard, provider quirks, or integrations to the hot path.

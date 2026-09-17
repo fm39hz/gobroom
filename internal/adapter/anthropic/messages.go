@@ -57,10 +57,7 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("anthropic-version", "2023-06-01")
-	secret := route.CredentialSecret
-	if secret == "" {
-		secret = credential.Secret
-	}
+	secret := credential.Secret
 	if secret != "" {
 		headers.Set("x-api-key", secret)
 	}
@@ -84,11 +81,12 @@ func (a Messages) Execute(ctx context.Context, request kernel.UpstreamRequest) (
 	return kernel.UpstreamResponse{Status: response.StatusCode, Headers: response.Header, Body: response.Body}, nil
 }
 
-func (Messages) ClassifyError(status int, _ []byte) kernel.ErrorClass {
-	if status == 401 || status == 403 {
+func (Messages) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	lower := strings.ToLower(string(body))
+	if status == 401 || status == 403 || strings.Contains(lower, "authentication") || strings.Contains(lower, "api key") {
 		return kernel.ErrorAuth
 	}
-	if status == 408 || status == 409 || status == 429 || status >= 500 {
+	if status == 408 || status == 409 || status == 429 || status >= 500 || strings.Contains(lower, "rate limit") || strings.Contains(lower, "quota") {
 		return kernel.ErrorCooldown
 	}
 	if status >= 400 {
@@ -100,7 +98,16 @@ func (a Messages) TranslateStream(_ context.Context, response kernel.UpstreamRes
 	if source == normalize.FormatAnthropic {
 		copyHeaders(writer, response.Headers)
 		writer.WriteHeader(response.Status)
+		if hooks.OnFirstByte != nil {
+			hooks.OnFirstByte(time.Now())
+		}
 		_, err := io.Copy(writer, response.Body)
+		if err == nil && hooks.OnComplete != nil {
+			hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
+		}
+		if err != nil && hooks.OnError != nil {
+			hooks.OnError(err)
+		}
 		return err
 	}
 	contentType := strings.ToLower(response.Headers.Get("content-type"))
@@ -117,7 +124,14 @@ func (a Messages) TranslateStream(_ context.Context, response kernel.UpstreamRes
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return err
 	}
-	return writeOpenAIJSON(writer, response.Status, payload)
+	err = writeOpenAIJSON(writer, response.Status, payload)
+	if err == nil && hooks.OnComplete != nil {
+		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
+	}
+	if err != nil && hooks.OnError != nil {
+		hooks.OnError(err)
+	}
+	return err
 }
 
 func copyHeaders(writer http.ResponseWriter, headers http.Header) {
@@ -199,6 +213,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 				hooks.OnComplete(kernel.UsageEvent{Status: "ok", InputTokens: inputTokens, OutputTokens: outputTokens})
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil && hooks.OnError != nil {
+		hooks.OnError(err)
 	}
 	return scanner.Err()
 }

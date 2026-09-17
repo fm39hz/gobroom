@@ -383,7 +383,8 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	requestModel := normalized.Request.Model
 	if s.executor != nil {
-		if err := s.executor(r.Context(), normalized.Request, w); err != nil {
+		tracked := &trackingWriter{ResponseWriter: w}
+		if err := s.executor(r.Context(), normalized.Request, tracked); err != nil && !tracked.committed {
 			status := http.StatusBadGateway
 			if errors.Is(err, kernel.ErrModelNotPublished) {
 				status = http.StatusNotFound
@@ -407,6 +408,30 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"message": "model is not published", "model": requestModel}})
+}
+
+type trackingWriter struct {
+	http.ResponseWriter
+	committed bool
+}
+
+func (w *trackingWriter) WriteHeader(status int) {
+	w.committed = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *trackingWriter) Write(data []byte) (int, error) {
+	if !w.committed {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *trackingWriter) Flush() {
+	w.committed = true
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 func (s *Server) notImplemented(w http.ResponseWriter, _ *http.Request) {

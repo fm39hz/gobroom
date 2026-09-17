@@ -3,7 +3,9 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -11,11 +13,12 @@ import (
 )
 
 type Kernel struct {
-	Snapshots *SnapshotStore
-	Scheduler *Scheduler
-	Adapters  map[Protocol]ProviderAdapter
-	Events    chan UsageEvent
-	closed    atomic.Bool
+	Snapshots         *SnapshotStore
+	Scheduler         *Scheduler
+	Adapters          map[Protocol]ProviderAdapter
+	Events            chan UsageEvent
+	ResolveCredential CredentialResolver
+	closed            atomic.Bool
 }
 
 type FeedbackGate interface {
@@ -70,12 +73,13 @@ func (k *Kernel) Close() {
 // Execute is the single data-plane orchestration boundary. Provider adapters
 // own protocol details; the kernel owns public-model resolution and selection.
 func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential Credential, writer http.ResponseWriter) error {
+	started := time.Now()
 	model, err := k.Resolve(req.Model)
 	if err != nil {
 		return err
 	}
-	for _, candidate := range model.Candidates {
-		if !candidate.Enabled || !k.Scheduler.gate.Usable(candidate, time.Now()) {
+	for _, candidate := range k.Scheduler.Order(model, time.Now()) {
+		if !supportsRequest(candidate, req) {
 			continue
 		}
 		if !protocolMatchesRequest(req.SourceFormat, candidate.Protocol) {
@@ -85,7 +89,17 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		if adapter == nil {
 			continue
 		}
-		upstream, err := adapter.Prepare(ctx, req, candidate, credential)
+		selectedCredential := credential
+		if selectedCredential.Secret == "" && k.ResolveCredential != nil {
+			selectedCredential, err = k.ResolveCredential(ctx, candidate)
+			if err != nil {
+				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+					feedback.MarkFailure(candidate, ErrorAuth, err)
+				}
+				continue
+			}
+		}
+		upstream, err := adapter.Prepare(ctx, req, candidate, selectedCredential)
 		if err != nil {
 			continue
 		}
@@ -97,18 +111,27 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 			continue
 		}
 		if response.Status >= 400 {
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-				feedback.MarkFailure(candidate, adapter.ClassifyError(response.Status, nil), fmt.Errorf("upstream status %d", response.Status))
+				feedback.MarkFailure(candidate, adapter.ClassifyError(response.Status, body), fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))))
 			}
 			_ = response.Body.Close()
 			continue
 		}
-		if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-			feedback.MarkSuccess(candidate)
-		}
-		return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnComplete: func(event UsageEvent) {
+		defer response.Body.Close()
+		return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnError: func(streamErr error) {
+			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+				feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
+			}
+		}, OnComplete: func(event UsageEvent) {
+			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+				feedback.MarkSuccess(candidate)
+			}
 			if event.At.IsZero() {
 				event.At = time.Now()
+			}
+			if event.Latency == 0 {
+				event.Latency = time.Since(started)
 			}
 			if event.LogicalModel == "" {
 				event.LogicalModel = req.Model
@@ -126,6 +149,24 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		}})
 	}
 	return ErrNoRoute
+}
+
+func supportsRequest(route Route, req NormalizedRequest) bool {
+	if len(route.Capabilities) == 0 {
+		return true
+	}
+	checks := map[string]bool{
+		"vision": req.Modalities.Vision,
+		"audio":  req.Modalities.AudioInput,
+		"video":  req.Modalities.VideoInput,
+		"pdf":    req.Modalities.PDF,
+	}
+	for capability, needed := range checks {
+		if needed && !route.Capabilities[capability] {
+			return false
+		}
+	}
+	return true
 }
 
 func kernelErrorClass(err error) ErrorClass {

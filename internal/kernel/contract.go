@@ -41,25 +41,28 @@ type Combo struct {
 }
 
 type Route struct {
-	ID               string
-	NodeID           string
-	DisplayPrefix    string
-	ExternalModel    string
-	Protocol         Protocol
-	Capabilities     map[string]bool
-	Weight           int
-	Enabled          bool
-	BaseURL          string
-	CredentialID     string
-	CredentialType   string
-	CredentialSecret string `json:"-"`
+	ID             string
+	NodeID         string
+	DisplayPrefix  string
+	ExternalModel  string
+	Protocol       Protocol
+	Capabilities   map[string]bool
+	Weight         int
+	Enabled        bool
+	BaseURL        string
+	CredentialID   string
+	CredentialType string
 }
 
 type Snapshot struct {
-	Version       uint64
-	PublicModels  map[string]PublicModel
-	Combos        map[string]Combo
-	Routes        map[string]Route
+	Version      uint64
+	PublicModels map[string]PublicModel
+	Combos       map[string]Combo
+	Routes       map[string]Route
+	// RouteGroups expands a logical catalog route into one candidate per
+	// connection. The group key remains the stable model/catalog ID used by
+	// combo members; variant IDs are internal to the data plane.
+	RouteGroups   map[string][]string
 	LogicalModels map[string]string
 }
 
@@ -111,6 +114,8 @@ type Credential struct {
 	Type         string
 	Secret       string
 }
+
+type CredentialResolver func(context.Context, Route) (Credential, error)
 
 type StreamHooks struct {
 	OnFirstByte func(time.Time)

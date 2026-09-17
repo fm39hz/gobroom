@@ -12,11 +12,12 @@ directly.
 - OpenAI Chat, OpenAI Responses and Anthropic Messages adapters;
 - basic Anthropic-to-OpenAI Chat text/tool SSE conversion;
 - provider prefixes and /models discovery;
-- custom model catalog entries;
+- custom model catalog entries with capability filtering;
 - logical models and nested combos;
 - explicit public-model publishing;
 - snapshot validation and cycle detection;
 - SQLite control plane and Unix IPC;
+- per-connection route candidates, health cooldowns and basic persisted quota gates;
 - optional HTTP control API;
 - status TUI;
 - Makefile build/test/install targets.
@@ -24,9 +25,9 @@ directly.
 ## Status
 
 GoBroom is under active development. The daemon, control plane, normalization
-IR and initial provider adapters are implemented. Provider-specific OAuth,
-advanced quota/usage policies, full cross-protocol event translation and the
-complete TUI are not finished yet.
+IR, connection-aware fallback and initial provider adapters are implemented.
+Provider-specific OAuth, advanced quota accounting, full cross-protocol event
+translation and the complete TUI are not finished yet.
 
 ## Build
 
@@ -91,4 +92,3 @@ plan (docs/IMPLEMENTATION_PLAN.md).
     make build-all
 
 The daemon remains usable without any frontend running.
-

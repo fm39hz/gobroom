@@ -43,10 +43,7 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	secret := route.CredentialSecret
-	if secret == "" {
-		secret = credential.Secret
-	}
+	secret := credential.Secret
 	if secret != "" {
 		headers.Set("Authorization", "Bearer "+secret)
 	}
@@ -70,11 +67,14 @@ func (a Chat) Execute(ctx context.Context, request kernel.UpstreamRequest) (kern
 	return kernel.UpstreamResponse{Status: response.StatusCode, Headers: response.Header, Body: response.Body}, nil
 }
 
-func (Chat) ClassifyError(status int, _ []byte) kernel.ErrorClass {
+func (Chat) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	lower := strings.ToLower(string(body))
 	switch {
 	case status == 401 || status == 403:
 		return kernel.ErrorAuth
-	case status == 408 || status == 409 || status == 429 || status >= 500:
+	case strings.Contains(lower, "invalid api key"), strings.Contains(lower, "authentication"), strings.Contains(lower, "unauthorized"):
+		return kernel.ErrorAuth
+	case status == 408 || status == 409 || status == 429 || status >= 500, strings.Contains(lower, "rate limit"), strings.Contains(lower, "quota"):
 		return kernel.ErrorCooldown
 	case status >= 400:
 		return kernel.ErrorTerminal

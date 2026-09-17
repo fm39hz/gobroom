@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -38,10 +39,7 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	secret := route.CredentialSecret
-	if secret == "" {
-		secret = credential.Secret
-	}
+	secret := credential.Secret
 	if secret != "" {
 		headers.Set("Authorization", "Bearer "+secret)
 	}
@@ -65,17 +63,8 @@ func (a Responses) Execute(ctx context.Context, request kernel.UpstreamRequest) 
 	return kernel.UpstreamResponse{Status: response.StatusCode, Headers: response.Header, Body: response.Body}, nil
 }
 
-func (Responses) ClassifyError(status int, _ []byte) kernel.ErrorClass {
-	if status == 401 || status == 403 {
-		return kernel.ErrorAuth
-	}
-	if status == 408 || status == 409 || status == 429 || status >= 500 {
-		return kernel.ErrorCooldown
-	}
-	if status >= 400 {
-		return kernel.ErrorTerminal
-	}
-	return ""
+func (Responses) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	return Chat{}.ClassifyError(status, body)
 }
 func (a Responses) TranslateStream(_ context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
 	for key, values := range response.Headers {
@@ -84,9 +73,15 @@ func (a Responses) TranslateStream(_ context.Context, response kernel.UpstreamRe
 		}
 	}
 	writer.WriteHeader(response.Status)
+	if hooks.OnFirstByte != nil {
+		hooks.OnFirstByte(time.Now())
+	}
 	_, err := io.Copy(writer, response.Body)
 	if err != nil && hooks.OnError != nil {
 		hooks.OnError(err)
+	}
+	if err == nil && hooks.OnComplete != nil {
+		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
 	}
 	return err
 }

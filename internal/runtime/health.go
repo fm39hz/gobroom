@@ -31,7 +31,9 @@ func (g *HealthGate) MarkFailure(route kernel.Route, class kernel.ErrorClass, er
 	state := g.routes[route.ID]
 	state.Failures++
 	delay := time.Duration(5*state.Failures) * time.Second
-	if class == kernel.ErrorAuth || class == kernel.ErrorCooldown {
+	if class == kernel.ErrorAuth {
+		delay = 5 * time.Minute
+	} else if class == kernel.ErrorCooldown {
 		delay = time.Duration(30*state.Failures) * time.Second
 	}
 	if delay > 10*time.Minute {

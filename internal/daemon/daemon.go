@@ -72,6 +72,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.kernel.Adapters[kernel.ProtocolOpenAIChat] = openai.Chat{}
 	d.kernel.Adapters[kernel.ProtocolOpenAIResponses] = openai.Responses{}
 	d.kernel.Adapters[kernel.ProtocolAnthropic] = anthropic.Messages{}
+	d.kernel.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
+		credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
+		if !ok {
+			return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
+		}
+		return kernel.Credential{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret}, nil
+	}
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})

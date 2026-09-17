@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/store"
@@ -30,7 +31,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		return kernel.Snapshot{}, err
 	}
 
-	input := kernel.SnapshotInput{LogicalModels: map[string]string{}}
+	input := kernel.SnapshotInput{LogicalModels: map[string]string{}, RouteGroups: map[string][]string{}}
 	for _, row := range publicRows {
 		input.PublicModels = append(input.PublicModels, kernel.PublicModel{Name: row.Name, TargetRef: row.TargetRef, OwnedBy: row.OwnedBy})
 	}
@@ -52,7 +53,12 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if protocol == "" {
 			protocol = kernel.ProtocolOpenAIChat
 		}
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType, CredentialSecret: row.CredentialSecret})
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, Capabilities: row.Capabilities, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
+		baseID := row.ID
+		if at := strings.IndexByte(baseID, '@'); at >= 0 {
+			baseID = baseID[:at]
+		}
+		input.RouteGroups[baseID] = append(input.RouteGroups[baseID], row.ID)
 	}
 	for _, row := range logicalRows {
 		input.LogicalModels[row.Name] = row.TargetRef

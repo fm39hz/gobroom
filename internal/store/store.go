@@ -159,6 +159,15 @@ func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
 	return c, true
 }
 
+func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
+	row := s.DB.QueryRow(`SELECT credential_type,secret_ref FROM connections WHERE id=? AND enabled=1`, id)
+	var c Credential
+	if err := row.Scan(&c.Type, &c.Secret); err != nil {
+		return Credential{}, false
+	}
+	return c, true
+}
+
 func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
 	_, err := s.DB.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens) VALUES(?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens)
 	return err
@@ -328,18 +337,18 @@ func (s *Store) DeletePublicModel(name string) error {
 }
 
 type RouteRecord struct {
-	ID, NodeID, Prefix, ExternalModel, Protocol                       string
-	BaseURL, AuthMode, CredentialID, CredentialType, CredentialSecret string
-	Enabled                                                           bool
+	ID, NodeID, Prefix, ExternalModel, Protocol     string
+	BaseURL, AuthMode, CredentialID, CredentialType string
+	Capabilities                                    map[string]bool
+	Enabled                                         bool
 }
 
 func (s *Store) Routes() ([]RouteRecord, error) {
 	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),m.external_id,m.enabled,
-COALESCE((SELECT id FROM connections c WHERE c.provider_node_id=m.provider_node_id AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1),''),
-COALESCE((SELECT credential_type FROM connections c WHERE c.provider_node_id=m.provider_node_id AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1),''),
-COALESCE((SELECT secret_ref FROM connections c WHERE c.provider_node_id=m.provider_node_id AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1),'')
+	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
-WHERE m.enabled=1 ORDER BY m.id`)
+LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
+WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -348,13 +357,20 @@ WHERE m.enabled=1 ORDER BY m.id`)
 	for rows.Next() {
 		var r RouteRecord
 		var enabled int
-		if err := rows.Scan(&r.ID, &r.NodeID, &r.Prefix, &r.Protocol, &r.BaseURL, &r.AuthMode, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &r.CredentialSecret); err != nil {
+		var capabilities string
+		var credentialSecret string
+		if err := rows.Scan(&r.ID, &r.NodeID, &r.Prefix, &r.Protocol, &r.BaseURL, &r.AuthMode, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities); err != nil {
 			return nil, err
 		}
 		if r.Protocol == "" {
 			r.Protocol = "chat"
 		}
 		r.Enabled = enabled == 1
+		r.Capabilities = map[string]bool{}
+		_ = json.Unmarshal([]byte(capabilities), &r.Capabilities)
+		if r.CredentialID != "" {
+			r.ID = r.ID + "@" + r.CredentialID
+		}
 		result = append(result, r)
 	}
 	return result, rows.Err()

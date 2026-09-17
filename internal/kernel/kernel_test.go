@@ -61,3 +61,43 @@ func TestDuplicateComboRouteIsRemoved(t *testing.T) {
 		t.Fatalf("expected deduplication, got %d", len(resolved.Candidates))
 	}
 }
+
+func TestRouteGroupExpandsConnectionCandidates(t *testing.T) {
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "public", TargetRef: "combo"}},
+		Combos:       []Combo{{Name: "combo", Members: []string{"catalog:model"}}},
+		Routes: []Route{
+			{ID: "catalog:model@a", NodeID: "node", CredentialID: "a", Enabled: true},
+			{ID: "catalog:model@b", NodeID: "node", CredentialID: "b", Enabled: true},
+		},
+		RouteGroups: map[string][]string{"catalog:model": {"catalog:model@a", "catalog:model@b"}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ResolvePublic(snapshot, "public")
+	if err != nil || len(resolved.Candidates) != 2 {
+		t.Fatalf("resolved=%#v err=%v", resolved, err)
+	}
+	if resolved.Candidates[0].CredentialID != "a" || resolved.Candidates[1].CredentialID != "b" {
+		t.Fatalf("unexpected connection order: %#v", resolved.Candidates)
+	}
+}
+
+func TestSchedulerRoundRobinOrdersFallbackCandidates(t *testing.T) {
+	s := NewScheduler(nil)
+	model := ResolvedModel{PublicName: "public", Strategy: StrategyFallback, Candidates: []Route{
+		{ID: "a", Enabled: true}, {ID: "b", Enabled: true}, {ID: "c", Enabled: true},
+	}}
+	first := s.Order(model, time.Unix(0, 0))
+	second := s.Order(model, time.Unix(0, 0))
+	if first[0].ID != "a" || second[0].ID != "a" {
+		t.Fatalf("fallback order must remain stable: first=%v second=%v", CandidatesByID(first), CandidatesByID(second))
+	}
+	model.Strategy = StrategyRoundRobin
+	first = s.Order(model, time.Unix(0, 0))
+	second = s.Order(model, time.Unix(0, 0))
+	if first[0].ID == second[0].ID {
+		t.Fatalf("round robin did not advance: first=%v second=%v", CandidatesByID(first), CandidatesByID(second))
+	}
+}
