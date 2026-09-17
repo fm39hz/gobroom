@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/gorouter/gorouter/internal/normalize"
 )
 
 type Kernel struct {
@@ -69,6 +71,9 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		if !candidate.Enabled || !k.Scheduler.gate.Usable(candidate, time.Now()) {
 			continue
 		}
+		if !protocolMatchesRequest(req.SourceFormat, candidate.Protocol) {
+			continue
+		}
 		adapter := k.Adapters[candidate.Protocol]
 		if adapter == nil {
 			continue
@@ -82,10 +87,23 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 			continue
 		}
 		if response.Status >= 400 {
-			response.Body.Close()
+			_ = response.Body.Close()
 			continue
 		}
-		return adapter.TranslateStream(ctx, response, writer, StreamHooks{OnComplete: func(event UsageEvent) { k.EmitUsage(event) }})
+		return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnComplete: func(event UsageEvent) { k.EmitUsage(event) }})
 	}
 	return ErrNoRoute
+}
+
+func protocolMatchesRequest(format normalize.Format, protocol Protocol) bool {
+	switch format {
+	case normalize.FormatAnthropic:
+		return protocol == ProtocolAnthropic
+	case normalize.FormatOpenAIResponses:
+		return protocol == ProtocolOpenAIResponses
+	case normalize.FormatOpenAIChat:
+		return protocol == ProtocolOpenAIChat || protocol == ProtocolAnthropic
+	default:
+		return protocol == ProtocolOpenAIChat
+	}
 }

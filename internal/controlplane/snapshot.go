@@ -52,7 +52,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if protocol == "" {
 			protocol = kernel.ProtocolOpenAIChat
 		}
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, Enabled: row.Enabled})
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType, CredentialSecret: row.CredentialSecret})
 	}
 	for _, row := range logicalRows {
 		input.LogicalModels[row.Name] = row.TargetRef

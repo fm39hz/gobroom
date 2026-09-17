@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,15 +12,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorouter/gorouter/internal/controlplane"
+	"github.com/gorouter/gorouter/internal/kernel"
 	"github.com/gorouter/gorouter/internal/normalize"
 	"github.com/gorouter/gorouter/internal/provider"
 	"github.com/gorouter/gorouter/internal/store"
 )
 
 type Server struct {
-	store   *store.Store
-	control *controlplane.Manager
-	started time.Time
+	store      *store.Store
+	control    *controlplane.Manager
+	started    time.Time
+	executor   func(context.Context, normalize.Request, http.ResponseWriter) error
+	reloadHook func() error
 }
 
 type HandlerOptions struct {
@@ -53,8 +58,8 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 	if options.DataPlane {
 		r.Get("/v1/models", s.models)
 		r.Post("/v1/chat/completions", s.chatCompletions)
-		r.HandleFunc("/v1/responses", s.notImplemented)
-		r.HandleFunc("/v1/messages", s.notImplemented)
+		r.Post("/v1/responses", s.chatCompletions)
+		r.Post("/v1/messages", s.chatCompletions)
 	}
 	return logging(r)
 }
@@ -67,11 +72,21 @@ func (s *Server) Status() map[string]any {
 	return map[string]any{"name": "gorouterd", "status": "ok", "snapshotVersion": version}
 }
 func (s *Server) Control() *controlplane.Manager { return s.control }
+func (s *Server) SetExecutor(executor func(context.Context, normalize.Request, http.ResponseWriter) error) {
+	s.executor = executor
+}
+func (s *Server) SetReloadHook(hook func() error) { s.reloadHook = hook }
 func (s *Server) Reload() error {
 	if s.control == nil {
 		return fmt.Errorf("control plane unavailable")
 	}
-	return s.control.Reload()
+	if err := s.control.Reload(); err != nil {
+		return err
+	}
+	if s.reloadHook != nil {
+		return s.reloadHook()
+	}
+	return nil
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
@@ -367,6 +382,19 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requestModel := normalized.Request.Model
+	if s.executor != nil {
+		if err := s.executor(r.Context(), normalized.Request, w); err != nil {
+			status := http.StatusBadGateway
+			if errors.Is(err, kernel.ErrModelNotPublished) {
+				status = http.StatusNotFound
+			}
+			if errors.Is(err, kernel.ErrNoRoute) {
+				status = http.StatusServiceUnavailable
+			}
+			writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error(), "model": requestModel}})
+		}
+		return
+	}
 	items, err := s.store.PublicModels()
 	if err != nil {
 		writeError(w, err)

@@ -1,0 +1,92 @@
+package openai
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/gorouter/gorouter/internal/kernel"
+	"github.com/gorouter/gorouter/internal/normalize"
+)
+
+type Responses struct{ Client *http.Client }
+
+func (Responses) ID() string                { return "openai-responses" }
+func (Responses) Protocol() kernel.Protocol { return kernel.ProtocolOpenAIResponses }
+
+func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	if route.BaseURL == "" {
+		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)
+	}
+	url := strings.TrimRight(route.BaseURL, "/")
+	if !strings.HasSuffix(url, "/responses") {
+		url += "/responses"
+	}
+	body := map[string]any{}
+	for key, value := range request.Raw {
+		body[key] = value
+	}
+	body["model"] = route.ExternalModel
+	body["stream"] = request.Stream
+	data, err := json.Marshal(body)
+	if err != nil {
+		return kernel.UpstreamRequest{}, err
+	}
+	headers := make(http.Header)
+	headers.Set("Content-Type", "application/json")
+	secret := route.CredentialSecret
+	if secret == "" {
+		secret = credential.Secret
+	}
+	if secret != "" {
+		headers.Set("Authorization", "Bearer "+secret)
+	}
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+}
+
+func (a Responses) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	client := a.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req, err := http.NewRequestWithContext(ctx, request.Method, request.URL, request.Body)
+	if err != nil {
+		return kernel.UpstreamResponse{}, err
+	}
+	req.Header = request.Headers
+	response, err := client.Do(req)
+	if err != nil {
+		return kernel.UpstreamResponse{}, err
+	}
+	return kernel.UpstreamResponse{Status: response.StatusCode, Headers: response.Header, Body: response.Body}, nil
+}
+
+func (Responses) ClassifyError(status int, _ []byte) kernel.ErrorClass {
+	if status == 401 || status == 403 {
+		return kernel.ErrorAuth
+	}
+	if status == 408 || status == 409 || status == 429 || status >= 500 {
+		return kernel.ErrorCooldown
+	}
+	if status >= 400 {
+		return kernel.ErrorTerminal
+	}
+	return ""
+}
+func (a Responses) TranslateStream(_ context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
+	for key, values := range response.Headers {
+		for _, value := range values {
+			writer.Header().Add(key, value)
+		}
+	}
+	writer.WriteHeader(response.Status)
+	_, err := io.Copy(writer, response.Body)
+	if err != nil && hooks.OnError != nil {
+		hooks.OnError(err)
+	}
+	return err
+}

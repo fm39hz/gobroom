@@ -10,7 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorouter/gorouter/internal/adapter/anthropic"
+	openai "github.com/gorouter/gorouter/internal/adapter/openai"
 	"github.com/gorouter/gorouter/internal/api"
+	"github.com/gorouter/gorouter/internal/discovery"
+	"github.com/gorouter/gorouter/internal/kernel"
+	"github.com/gorouter/gorouter/internal/normalize"
 	"github.com/gorouter/gorouter/internal/provider"
 	"github.com/gorouter/gorouter/internal/store"
 )
@@ -29,6 +34,7 @@ type Daemon struct {
 	server *api.Server
 	ipc    *IPCServer
 	http   *http.Server
+	kernel *kernel.Kernel
 	mu     sync.Mutex
 	stop   func()
 }
@@ -42,6 +48,22 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.store = s
 	d.server = api.NewServer(s)
+	if d.server.Control() == nil {
+		_ = s.Close()
+		return fmt.Errorf("cannot initialize control plane")
+	}
+	d.kernel, err = kernel.New(d.server.Control().Snapshot(), nil, 256)
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
+	d.kernel.Adapters[kernel.ProtocolOpenAIChat] = openai.Chat{}
+	d.kernel.Adapters[kernel.ProtocolOpenAIResponses] = openai.Responses{}
+	d.kernel.Adapters[kernel.ProtocolAnthropic] = anthropic.Messages{}
+	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
+		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
+	})
+	d.server.SetReloadHook(func() error { return d.kernel.PublishSnapshot(d.server.Control().Snapshot()) })
 
 	ctx, cancel := context.WithCancel(ctx)
 	d.stop = func() { cancel(); _ = d.store.Close() }
@@ -110,6 +132,19 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "providers.refresh_models":
+		nodeID := stringParam(request.Params, "nodeID")
+		if nodeID == "" {
+			return fail(request, "nodeID is required")
+		}
+		result, err := (discovery.Service{Store: d.store}).RefreshNode(ctx, nodeID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
 	case "providers.create":
 		var input store.CreateProviderNodeInput
 		if err := decodeParams(request.Params, &input); err != nil {
