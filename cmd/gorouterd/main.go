@@ -12,6 +12,8 @@ import (
 	"github.com/gorouter/gorouter/internal/daemon"
 )
 
+var version = "dev"
+
 func main() {
 	defaultDir, err := os.UserConfigDir()
 	if err != nil {

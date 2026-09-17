@@ -1,0 +1,12 @@
+[Unit]
+Description=GoRouter daemon
+After=network.target
+
+[Service]
+ExecStart=%h/go/bin/gorouterd
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
