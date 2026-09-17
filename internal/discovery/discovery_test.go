@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

@@ -151,7 +151,7 @@ func normalizeToolCalls(r *Request) {
 		for j := range r.Messages[i].ToolCalls {
 			if r.Messages[i].ToolCalls[j].ID == "" {
 				sequence++
-				r.Messages[i].ToolCalls[j].ID = fmt.Sprintf("call_gorouter_%d", sequence)
+				r.Messages[i].ToolCalls[j].ID = fmt.Sprintf("call_gobroom_%d", sequence)
 			}
 		}
 	}

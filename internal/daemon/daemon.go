@@ -10,14 +10,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gorouter/gorouter/internal/adapter/anthropic"
-	openai "github.com/gorouter/gorouter/internal/adapter/openai"
-	"github.com/gorouter/gorouter/internal/api"
-	"github.com/gorouter/gorouter/internal/discovery"
-	"github.com/gorouter/gorouter/internal/kernel"
-	"github.com/gorouter/gorouter/internal/normalize"
-	"github.com/gorouter/gorouter/internal/provider"
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/adapter/anthropic"
+	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
+	"github.com/fm39hz/gobroom/internal/api"
+	"github.com/fm39hz/gobroom/internal/discovery"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 type Config struct {
@@ -78,7 +78,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.http = &http.Server{Addr: d.config.HTTPAddr, Handler: d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: d.config.HTTPControl, DataPlane: true})}
 		go func() {
 			if err := d.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "[gorouterd] HTTP: %v\n", err)
+				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP: %v\n", err)
 			}
 		}()
 	}
@@ -328,9 +328,9 @@ func DefaultConfig() (Config, error) {
 	}
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
-		runtimeDir = filepath.Join(os.TempDir(), "gorouter")
+		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gorouter", "gorouter.db"), IPCPath: filepath.Join(runtimeDir, "gorouter.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:20127", HTTPControl: false}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:20127", HTTPControl: false}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }

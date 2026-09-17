@@ -1,8 +1,8 @@
-# GoRouter Architecture
+# GoBroom Architecture
 
 Status: initial design
 
-GoRouter is a daemon-first replacement for the routing and configuration core
+GoBroom is a daemon-first replacement for the routing and configuration core
 that is useful in 9router. It is not a line-by-line port. The target is a
 feature-complete local gateway whose configuration is convenient to manage
 from a CLI/TUI. “Small” applies to runtime boundaries and the request path,
@@ -62,7 +62,7 @@ selects credentials. Current selection is protected by a process-wide promise
 mutex. It also reads connections/settings and may write round-robin state before
 the upstream request has started.
 
-GoRouter must preserve selection correctness but use short, scoped state
+GoBroom must preserve selection correctness but use short, scoped state
 operations. No lock may be held while doing DB I/O, token refresh, proxy
 resolution or an upstream request.
 
@@ -73,7 +73,7 @@ shape, thinking/reasoning shape and streaming mode. It then translates the body
 and dispatches through a provider executor.
 
 This is the main semantic complexity. It should become an adapter boundary in
-GoRouter, not logic spread throughout the router:
+GoBroom, not logic spread throughout the router:
 
 ```text
 normalized request
@@ -102,16 +102,16 @@ sent to the client.
 
 The current process writes usage history and request details alongside the hot
 request path. Raw request details can be large and SQLite has accumulated a
-large freelist in the current installation. GoRouter should keep usage writes
+large freelist in the current installation. GoBroom should keep usage writes
 compact and asynchronous. Raw payload logging is an explicit debug mode, not a
 normal request feature.
 
-## 3. GoRouter target architecture
+## 3. GoBroom target architecture
 
 ```text
                          +----------------+
 OpenAI/Anthropic client ->|                |-> provider adapter -> upstream
-                         |  gorouterd     |
+                         |  gobroomd     |
 CLI/TUI ---------------->|                |<-
                          +--------+-------+
                                   |
@@ -128,8 +128,8 @@ control client and does not independently resolve or execute requests.
 ### Components
 
 ```text
-cmd/gorouterd       daemon entrypoint
-cmd/gorouter        CLI/TUI entrypoint
+cmd/gobroomd       daemon entrypoint
+cmd/gobroom        CLI/TUI entrypoint
 internal/api        public gateway and local control API
 internal/router     request lifecycle and fallback
 internal/resolve    aliases, combos and route expansion
@@ -442,7 +442,7 @@ usable without a terminal and avoids duplicating business rules.
 ### Phase 1: skeleton
 
 - Go module.
-- `gorouterd` process.
+- `gobroomd` process.
 - SQLite migrations.
 - local control API.
 - provider node CRUD.
@@ -482,7 +482,7 @@ usable without a terminal and avoids duplicating business rules.
 
 ## 13. Optional feature modules
 
-GoRouter should retain advanced routing features as independently enabled
+GoBroom should retain advanced routing features as independently enabled
 modules rather than removing them because they are not needed in every
 deployment:
 

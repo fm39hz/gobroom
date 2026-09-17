@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorouter/gorouter/internal/kernel"
-	"github.com/gorouter/gorouter/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type Messages struct{ Client *http.Client }
@@ -42,7 +42,7 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 			body["tools"] = anthropicTools(request.Tools)
 		}
 		if request.Thinking.Effort != "" {
-			body["metadata"] = map[string]any{"gorouter_reasoning_effort": request.Thinking.Effort}
+			body["metadata"] = map[string]any{"gobroom_reasoning_effort": request.Thinking.Effort}
 		}
 	}
 	body["model"] = route.ExternalModel
@@ -255,7 +255,7 @@ func writeOpenAIJSON(writer http.ResponseWriter, status int, payload map[string]
 			}
 		}
 	}
-	result := map[string]any{"id": "chatcmpl-gorouter", "object": "chat.completion", "created": time.Now().Unix(), "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": payload["stop_reason"]}}}
+	result := map[string]any{"id": "chatcmpl-gobroom", "object": "chat.completion", "created": time.Now().Unix(), "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": payload["stop_reason"]}}}
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return err

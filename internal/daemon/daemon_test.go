@@ -3,8 +3,8 @@ package daemon
 import (
 	"testing"
 
-	"github.com/gorouter/gorouter/internal/api"
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/api"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {

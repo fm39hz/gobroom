@@ -7,7 +7,7 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/gorouter/gorouter/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/daemon"
 )
 
 var version = "dev"
@@ -27,7 +27,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m model) View() tea.View {
-	content := fmt.Sprintf("GoRouter TUI (%s)\n\nIPC: %s\n\n%s\n\n[r] reload  [q] quit\n", version, m.ipcPath, m.status)
+	content := fmt.Sprintf("GoBroom TUI (%s)\n\nIPC: %s\n\n%s\n\n[r] reload  [q] quit\n", version, m.ipcPath, m.status)
 	if m.err != nil { content += "\nerror: " + m.err.Error() + "\n" }
 	return tea.NewView(content)
 }

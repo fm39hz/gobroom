@@ -1,6 +1,6 @@
 # Normalization pipeline
 
-GoRouter follows the useful design of 9router's `handleChatCore`, but makes the
+GoBroom follows the useful design of 9router's `handleChatCore`, but makes the
 semantic intermediate representation explicit and typed.
 
 ```text
@@ -63,7 +63,7 @@ The normalizer is responsible for invariants shared across providers:
 ## Translation policy
 
 Adapters may use a direct source-to-target translation when it is more lossless.
-Otherwise they may pivot through the normalized IR. GoRouter must not force an
+Otherwise they may pivot through the normalized IR. GoBroom must not force an
 OpenAI wire body to be the internal semantic model.
 
 Optional optimizers such as compression or prompt injection run after semantic

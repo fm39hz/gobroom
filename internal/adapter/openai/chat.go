@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorouter/gorouter/internal/kernel"
-	"github.com/gorouter/gorouter/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type Chat struct{ Client *http.Client }

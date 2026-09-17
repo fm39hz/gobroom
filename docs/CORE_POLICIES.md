@@ -1,6 +1,6 @@
-# GoRouter core policies
+# GoBroom core policies
 
-GoRouter keeps useful 9router techniques in the routing core, but removes the
+GoBroom keeps useful 9router techniques in the routing core, but removes the
 coupling and weak points that made the original process heavy.
 
 ## Retain and improve

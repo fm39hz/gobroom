@@ -1,0 +1,41 @@
+# Binaries built by Makefile/go build
+/gobroom
+/gobroomd
+/gobroom-tui
+
+# Go build/test output
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+/.cache/
+
+# Runtime state and local databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+/.gobroom/
+/data/
+/logs/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Tool/editor/OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go workspace/tool caches
+go.work
+go.work.sum
+/vendor/

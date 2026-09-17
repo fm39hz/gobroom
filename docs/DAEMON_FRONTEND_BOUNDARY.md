@@ -1,9 +1,9 @@
 # Daemon/frontend boundary
 
-`gorouterd` is the backend. CLI and TUI are replaceable frontend clients.
+`gobroomd` is the backend. CLI and TUI are replaceable frontend clients.
 
 ```text
-gorouterd
+gobroomd
   ├── data plane: /v1/*
   ├── control plane: /api/*
   ├── SQLite
@@ -12,7 +12,7 @@ gorouterd
   ├── quota/usage/health workers
   └── no terminal/UI dependency
 
-gorouter CLI/TUI
+gobroom CLI/TUI
   ├── call local control API
   ├── render state
   ├── submit mutations
@@ -34,10 +34,10 @@ replaced without changing routing logic.
 ## Dependency rule
 
 ```text
-gorouterd → runtime dependencies only
-gorouter CLI → CLI client dependencies
-gorouter TUI → TUI dependencies, later separate module
+gobroomd → runtime dependencies only
+gobroom CLI → CLI client dependencies
+gobroom TUI → TUI dependencies, later separate module
 tools/ → sqlc/migration tooling only
 ```
 
-No UI package may be imported by `internal/*` or `cmd/gorouterd`.
+No UI package may be imported by `internal/*` or `cmd/gobroomd`.

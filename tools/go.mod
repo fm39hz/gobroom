@@ -1,4 +1,4 @@
-module github.com/gorouter/gorouter/tools
+module github.com/fm39hz/gobroom/tools
 
 go 1.27
 

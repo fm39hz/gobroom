@@ -1,9 +1,9 @@
 [Unit]
-Description=GoRouter daemon
+Description=GoBroom daemon
 After=network.target
 
 [Service]
-ExecStart=%h/go/bin/gorouterd
+ExecStart=%h/go/bin/gobroomd
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true

@@ -1,9 +1,9 @@
-# GoRouter dependency policy
+# GoBroom dependency policy
 
 Snapshot checked: 2026-09-17.
 
 The goal is to reduce handwritten infrastructure code without turning
-GoRouter into a dependency-heavy framework. The standard library remains the
+GoBroom into a dependency-heavy framework. The standard library remains the
 default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 
 ## Adopt
@@ -14,7 +14,7 @@ default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 | SQL generation | `github.com/sqlc-dev/sqlc` | `v1.31.1` | adopt as separate build tool | generates typed repositories from SQL and removes repetitive scan/row mapping code |
 | HTTP routing | `github.com/go-chi/chi/v5` | `v5.3.2` | adopt when API surface grows | small middleware/router layer on top of `net/http`; avoids a custom route framework |
 | OAuth | `golang.org/x/oauth2` | `v0.37.0` | adopt | standard OAuth2/token transport, PKCE and device/auth helpers |
-| CLI | `github.com/spf13/cobra` | `v1.10.2` | adopt for `gorouter` | command tree, flags, help and completion without custom CLI plumbing |
+| CLI | `github.com/spf13/cobra` | `v1.10.2` | adopt for `gobroom` | command tree, flags, help and completion without custom CLI plumbing |
 | TUI | `charm.land/bubbletea/v2` | `v2.0.9` | adopt later at M10 | Elm-style state/update/view model; keeps TUI state separate from daemon |
 
 The official repositories report the current `chi` v5.3.2 release, `sqlc`
@@ -34,7 +34,7 @@ date. These should be rechecked immediately before pinning a release.
 | UUID | `github.com/google/uuid` | `v1.6.0` | avoid initially; use `crypto/rand` IDs or database IDs |
 | Assertions | `github.com/stretchr/testify` | `v1.12.1` | optional; standard `testing` is sufficient for core contracts |
 
-Zerolog is technically suitable for high-volume structured logs, but GoRouter
+Zerolog is technically suitable for high-volume structured logs, but GoBroom
 should first use `log/slog` to avoid maintaining two logging APIs. The zerolog
 repository documents low-allocation structured logging and slog integration,
 but that is not enough benefit to justify it in the first runtime.
@@ -55,7 +55,7 @@ removes the current inline `CREATE TABLE`/best-effort `ALTER TABLE` pattern and
 makes database changes reviewable and reversible.
 
 The TUI will likewise be a separate frontend package/module. Bubble Tea must
-never become a dependency of `gorouterd`.
+never become a dependency of `gobroomd`.
 
 ## Explicit non-adoptions
 

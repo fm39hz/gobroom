@@ -1,4 +1,4 @@
-# GoRouter implementation plan
+# GoBroom implementation plan
 
 Status: planning only — no implementation work is authorized by this document.
 
@@ -7,7 +7,7 @@ Status: planning only — no implementation work is authorized by this document.
 Build a daemon-first replacement for the useful routing and normalization core
 of 9router while preserving its provider breadth and compatibility behavior.
 
-GoRouter must expose ordinary OpenAI-compatible endpoints:
+GoBroom must expose ordinary OpenAI-compatible endpoints:
 
 ```text
 /v1/models
@@ -25,7 +25,7 @@ a smaller and stricter runtime core.
 
 ## 1. 1:1 architecture mapping
 
-| 9router subsystem | Current role | GoRouter target | Deliberate change |
+| 9router subsystem | Current role | GoBroom target | Deliberate change |
 |---|---|---|---|
 | Next.js API routes | data plane + control plane mixed together | `internal/api` data/control surfaces | keep surfaces, separate ownership |
 | `handleChat` | auth, combo entry and account fallback entry | gateway middleware + kernel entry | no provider logic in HTTP handler |
@@ -73,7 +73,7 @@ a smaller and stricter runtime core.
                  │                     │
                  └──────────┬──────────┘
                             ▼
-                      gorouterd
+                      gobroomd
  ┌──────────────────────────────────────────────────────────────┐
  │ HTTP boundary                                               │
  │ auth → request body → normalized IR → kernel                │
@@ -286,7 +286,7 @@ Exit criteria:
 
 ### M4 — OpenAI-compatible data plane
 
-Purpose: make GoRouter useful with generic providers first.
+Purpose: make GoBroom useful with generic providers first.
 
 Deliverables:
 
@@ -655,7 +655,7 @@ publish none
 
 ## 6. Definition of done
 
-GoRouter can be considered a practical 9router replacement when:
+GoBroom can be considered a practical 9router replacement when:
 
 1. M0–M8 are complete.
 2. OpenAI Chat, Responses and Anthropic compatibility pass golden tests.

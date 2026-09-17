@@ -1,0 +1,33 @@
+# Repository-wide defaults
+* text=auto
+
+# Go source and project files
+*.go text eol=lf diff=golang
+*.mod text eol=lf
+*.sum text eol=lf
+Makefile text eol=lf
+*.mk text eol=lf
+
+# Documentation/configuration
+*.md text eol=lf diff=markdown
+*.yml text eol=lf diff
+*.yaml text eol=lf diff
+*.json text eol=lf diff
+*.toml text eol=lf diff
+*.service text eol=lf diff
+
+# Shell/scripts
+*.sh text eol=lf
+
+# Common binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary

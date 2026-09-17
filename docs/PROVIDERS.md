@@ -1,6 +1,6 @@
 # Provider presets and adapters
 
-GoRouter will continue to support prebuilt providers like 9router does. The
+GoBroom will continue to support prebuilt providers like 9router does. The
 difference is that a prebuilt provider is split into two pieces:
 
 ```text

@@ -1,16 +1,94 @@
-# GoRouter
+# GoBroom
 
-GoRouter is a lightweight local AI routing daemon with a CLI/TUI client.
+GoBroom is a local AI provider daemon with an OpenAI-compatible data plane.
 
-The project is intended to provide the useful core of 9router:
+It manages provider nodes, model routes, fallback combos and public models. The
+CLI and TUI are frontend clients of the daemon; they do not read SQLite
+directly.
 
-- multiple provider nodes and credentials;
-- automatic model discovery from provider `/models` endpoints;
-- logical model names and nested fallback combos;
-- explicit public-model publishing so internal combos can stay hidden;
-- round-robin, priority and fallback routing;
-- OpenAI-compatible API endpoints with provider adapters;
-- SQLite-backed configuration and runtime state;
-- a local daemon controlled by CLI/TUI instead of a web dashboard.
+## Current capabilities
 
-Architecture notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- OpenAI-compatible /v1/models, /v1/chat/completions, /v1/responses and /v1/messages;
+- OpenAI Chat, OpenAI Responses and Anthropic Messages adapters;
+- basic Anthropic-to-OpenAI Chat text/tool SSE conversion;
+- provider prefixes and /models discovery;
+- custom model catalog entries;
+- logical models and nested combos;
+- explicit public-model publishing;
+- snapshot validation and cycle detection;
+- SQLite control plane and Unix IPC;
+- optional HTTP control API;
+- status TUI;
+- Makefile build/test/install targets.
+
+## Status
+
+GoBroom is under active development. The daemon, control plane, normalization
+IR and initial provider adapters are implemented. Provider-specific OAuth,
+advanced quota/usage policies, full cross-protocol event translation and the
+complete TUI are not finished yet.
+
+## Build
+
+Requirements: Go 1.27 or newer and Unix domain sockets on Unix-like systems.
+
+    make build-all
+    make test
+
+## Run
+
+    make run-daemon
+
+By default the daemon stores SQLite state under the user config directory,
+creates a Unix IPC socket under the runtime directory, exposes the provider data
+plane on 127.0.0.1:20127, and keeps HTTP control disabled.
+
+## Provider API
+
+    http://127.0.0.1:20127/v1/models
+    http://127.0.0.1:20127/v1/chat/completions
+    http://127.0.0.1:20127/v1/responses
+    http://127.0.0.1:20127/v1/messages
+
+## IPC control plane
+
+    gobroom status
+    gobroom reload
+
+The IPC layer supports daemon lifecycle, provider/model/combo/public-model
+operations, route resolution and model refresh. The TUI currently displays
+daemon status and supports reload.
+
+## Optional HTTP control API
+
+    gobroomd -http-control=true
+
+## Project layout
+
+    cmd/gobroomd       daemon entrypoint
+    cmd/gobroom        CLI IPC client
+    cmd/gobroom-tui    TUI IPC client
+    internal/api        HTTP gateway
+    internal/daemon     lifecycle and IPC server
+    internal/kernel     route snapshot and adapter contract
+    internal/normalize  semantic request normalization
+    internal/adapter    provider protocol adapters
+    internal/controlplane SQLite-to-snapshot loading
+    internal/discovery  provider /models discovery
+    internal/store      SQLite repositories
+
+Architecture docs: daemon (docs/DAEMON_ARCHITECTURE.md),
+kernel (docs/KERNEL_CONTRACT.md),
+normalization (docs/NORMALIZATION.md),
+plan (docs/IMPLEMENTATION_PLAN.md).
+
+## Development
+
+    make fmt
+    make test
+    make race
+    make vet
+    make build-all
+
+The daemon remains usable without any frontend running.
+

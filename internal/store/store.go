@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS combo_members (
 );
 CREATE TABLE IF NOT EXISTS published_models (
   name TEXT PRIMARY KEY, target_ref TEXT NOT NULL,
-  owned_by TEXT NOT NULL DEFAULT 'gorouter',
+  owned_by TEXT NOT NULL DEFAULT 'gobroom',
   metadata_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -255,7 +255,7 @@ func (s *Store) UpsertPublicModel(m PublicModel) error {
 		return err
 	}
 	if m.OwnedBy == "" {
-		m.OwnedBy = "gorouter"
+		m.OwnedBy = "gobroom"
 	}
 	_, err = s.DB.Exec(`INSERT INTO published_models(name,target_ref,owned_by,metadata_json,enabled,updated_at)
 VALUES(?,?,?,?,1,CURRENT_TIMESTAMP)

@@ -1,12 +1,12 @@
-# GoRouter daemon architecture
+# GoBroom daemon architecture
 
 ## 1. Core decision
 
-`gorouterd` is not an HTTP server with a background loop. It is a daemon
+`gobroomd` is not an HTTP server with a background loop. It is a daemon
 process with a core runtime and optional gateways.
 
 ```text
-gorouterd process
+gobroomd process
   ├── daemon lifecycle/supervisor
   ├── routing kernel
   ├── SQLite/control plane
@@ -26,7 +26,7 @@ The daemon must work when no HTTP port is exposed and no TUI is running.
 Default for a local machine:
 
 ```text
-gorouterd
+gobroomd
   └── Unix socket / Windows named pipe
         ├── status
         ├── start/stop/reload
@@ -44,7 +44,7 @@ full-control channel for CLI/TUI/admin clients.
 For OpenAI-compatible clients that only understand HTTP:
 
 ```text
-gorouterd
+gobroomd
   ├── IPC socket                 (full control)
   └── HTTP on 127.0.0.1:20127   (provider/data plane)
 ```
@@ -57,7 +57,7 @@ second router or second configuration path.
 For a server or container:
 
 ```text
-gorouterd
+gobroomd
   ├── IPC socket (optional/restricted)
   └── HTTP/TLS data gateway on configured address
         └── /v1/* data plane
@@ -117,7 +117,7 @@ state outside the control service.
 ## 5. Process structure
 
 ```text
-cmd/gorouterd
+cmd/gobroomd
   -> internal/daemon
        -> internal/app
             -> controlplane/kernel/providers/usage/quota
@@ -125,10 +125,10 @@ cmd/gorouterd
        -> internal/gateway/http
        -> internal/gateway/ipc
 
-cmd/gorouter
+cmd/gobroom
   -> IPC client
 
-cmd/gorouter-tui
+cmd/gobroom-tui
   -> IPC client
 ```
 
@@ -158,7 +158,7 @@ individual routes or move the daemon to `degraded`.
 daemon:
   ipc:
     enabled: true
-    path: "${runtime_dir}/gorouter.sock"
+    path: "${runtime_dir}/gobroom.sock"
   http:
     enabled: true
     address: "127.0.0.1:20127"
@@ -170,12 +170,12 @@ daemon:
 Useful commands:
 
 ```text
-gorouter daemon start
-gorouter daemon stop
-gorouter daemon status
-gorouter daemon reload
-gorouter daemon http enable
-gorouter daemon http disable
+gobroom daemon start
+gobroom daemon stop
+gobroom daemon status
+gobroom daemon reload
+gobroom daemon http enable
+gobroom daemon http disable
 ```
 
 The command client talks to IPC even when HTTP is disabled.
@@ -192,7 +192,7 @@ to expose a remotely reachable management API.
 
 ## 9. Relation to the current implementation
 
-The current `cmd/gorouterd` starts `http.ListenAndServe` directly. That is a
+The current `cmd/gobroomd` starts `http.ListenAndServe` directly. That is a
 temporary bootstrap, not the final daemon architecture:
 
 ```text
@@ -216,7 +216,7 @@ crashing the process.
 
 ## 11. Comparison with 9router
 
-| Concern | 9router | GoRouter target |
+| Concern | 9router | GoBroom target |
 |---|---|---|
 | Default interaction | dashboard + HTTP | IPC daemon protocol |
 | HTTP | central runtime surface | optional gateway |

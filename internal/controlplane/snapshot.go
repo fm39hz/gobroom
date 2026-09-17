@@ -3,8 +3,8 @@ package controlplane
 import (
 	"fmt"
 
-	"github.com/gorouter/gorouter/internal/kernel"
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 type Loader struct{ Store *store.Store }

@@ -3,7 +3,7 @@ package controlplane
 import (
 	"testing"
 
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 func TestLoaderBuildsSnapshotFromSQLite(t *testing.T) {

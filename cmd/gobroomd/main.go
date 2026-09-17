@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/gorouter/gorouter/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/daemon"
 )
 
 var version = "dev"
@@ -19,7 +19,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defaultDB := filepath.Join(defaultDir, "gorouter", "gorouter.db")
+	defaultDB := filepath.Join(defaultDir, "gobroom", "gobroom.db")
 
 	defaults, err := daemon.DefaultConfig()
 	if err != nil {
@@ -38,7 +38,7 @@ func main() {
 	if err := d.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("gorouterd ready: ipc=%s http=%v addr=%s", *ipcPath, *httpEnabled, *addr)
+	log.Printf("gobroomd ready: ipc=%s http=%v addr=%s", *ipcPath, *httpEnabled, *addr)
 	if err := d.Wait(ctx); err != nil {
 		log.Fatal(err)
 	}

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gorouter/gorouter/internal/kernel"
-	"github.com/gorouter/gorouter/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {

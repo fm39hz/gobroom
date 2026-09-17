@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gorouter/gorouter/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type Kernel struct {

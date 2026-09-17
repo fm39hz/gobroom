@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/gorouter/gorouter/internal/controlplane"
-	"github.com/gorouter/gorouter/internal/kernel"
-	"github.com/gorouter/gorouter/internal/normalize"
-	"github.com/gorouter/gorouter/internal/provider"
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/controlplane"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 type Server struct {
@@ -69,7 +69,7 @@ func (s *Server) Status() map[string]any {
 	if s.control != nil {
 		version = s.control.Version()
 	}
-	return map[string]any{"name": "gorouterd", "status": "ok", "snapshotVersion": version}
+	return map[string]any{"name": "gobroomd", "status": "ok", "snapshotVersion": version}
 }
 func (s *Server) Control() *controlplane.Manager { return s.control }
 func (s *Server) SetExecutor(executor func(context.Context, normalize.Request, http.ResponseWriter) error) {
@@ -94,7 +94,7 @@ func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
 	if s.control != nil {
 		version = s.control.Version()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": "gorouterd", "status": "ok", "uptimeSeconds": int(time.Since(s.started).Seconds()), "snapshotVersion": version})
+	writeJSON(w, http.StatusOK, map[string]any{"name": "gobroomd", "status": "ok", "uptimeSeconds": int(time.Since(s.started).Seconds()), "snapshotVersion": version})
 }
 
 func (s *Server) reloadSnapshot(w http.ResponseWriter) bool {
@@ -186,7 +186,7 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	}
 	data := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		data = append(data, map[string]any{"id": item.Name, "object": "model", "created": 0, "owned_by": item.OwnedBy, "gorouter_target": item.TargetRef})
+		data = append(data, map[string]any{"id": item.Name, "object": "model", "created": 0, "owned_by": item.OwnedBy, "gobroom_target": item.TargetRef})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }

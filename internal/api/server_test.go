@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 func TestModelsOnlyExposePublishedReferences(t *testing.T) {

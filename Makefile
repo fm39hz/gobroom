@@ -1,6 +1,6 @@
-BIN      := gorouter
-DAEMON   := gorouterd
-TUI      := gorouter-tui
+BIN      := gobroom
+DAEMON   := gobroomd
+TUI      := gobroom-tui
 VERSION  := $(shell git describe --tags --long --dirty --match 'v*' 2>/dev/null | sed -E 's/^v//; s/-([0-9]+)-g/.r\1.g/; s/-/./g')
 LDFLAGS  := -s -w $(if $(VERSION),-X main.version=$(VERSION))
 REMOTE   := origin
@@ -12,30 +12,30 @@ help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
 
 build: ## build CLI
-	go build -ldflags='$(LDFLAGS)' -o $(BIN) ./cmd/gorouter
+	go build -ldflags='$(LDFLAGS)' -o $(BIN) ./cmd/gobroom
 
 build-daemon: ## build daemon
-	go build -ldflags='$(LDFLAGS)' -o $(DAEMON) ./cmd/gorouterd
+	go build -ldflags='$(LDFLAGS)' -o $(DAEMON) ./cmd/gobroomd
 
 build-tui: ## build TUI frontend
-	go build -ldflags='$(LDFLAGS)' -o $(TUI) ./cmd/gorouter-tui
+	go build -ldflags='$(LDFLAGS)' -o $(TUI) ./cmd/gobroom-tui
 
 build-all: build build-daemon build-tui ## build CLI, daemon and TUI
 
 run: ## run CLI (ARGS='status')
-	go run -ldflags='$(LDFLAGS)' ./cmd/gorouter $(ARGS)
+	go run -ldflags='$(LDFLAGS)' ./cmd/gobroom $(ARGS)
 
 run-daemon: ## run daemon in foreground
-	go run -ldflags='$(LDFLAGS)' ./cmd/gorouterd $(ARGS)
+	go run -ldflags='$(LDFLAGS)' ./cmd/gobroomd $(ARGS)
 
 tui: ## run TUI
-	go run -ldflags='$(LDFLAGS)' ./cmd/gorouter-tui
+	go run -ldflags='$(LDFLAGS)' ./cmd/gobroom-tui
 
 status: ## query daemon status over IPC
-	go run ./cmd/gorouter status
+	go run ./cmd/gobroom status
 
 reload: ## reload daemon snapshot over IPC
-	go run ./cmd/gorouter reload
+	go run ./cmd/gobroom reload
 
 test: ## unit and integration tests
 	go test ./...
@@ -56,15 +56,15 @@ vet: ## go vet
 	go vet ./...
 
 install: build build-daemon ## install CLI and daemon into GOPATH/bin
-	go install -ldflags='$(LDFLAGS)' ./cmd/gorouter
-	go install -ldflags='$(LDFLAGS)' ./cmd/gorouterd
+	go install -ldflags='$(LDFLAGS)' ./cmd/gobroom
+	go install -ldflags='$(LDFLAGS)' ./cmd/gobroomd
 
 install-all: install ## install binaries and user systemd unit
 	mkdir -p ~/.config/systemd/user
-	cp dist/gorouterd.service ~/.config/systemd/user/gorouterd.service
+	cp dist/gobroomd.service ~/.config/systemd/user/gobroomd.service
 	systemctl --user daemon-reload
-	systemctl --user enable gorouterd 2>/dev/null || true
-	systemctl --user restart gorouterd
+	systemctl --user enable gobroomd 2>/dev/null || true
+	systemctl --user restart gobroomd
 
 clean: ## remove local binaries
 	rm -f $(BIN) $(DAEMON) $(TUI)

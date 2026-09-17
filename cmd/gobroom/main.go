@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/gorouter/gorouter/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -18,12 +18,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	root := &cobra.Command{Use: "gorouter", Short: "GoRouter control client"}
+	root := &cobra.Command{Use: "gobroom", Short: "GoBroom control client"}
 	root.Version = version
 	status := &cobra.Command{Use: "status", Short: "show daemon status", RunE: func(cmd *cobra.Command, _ []string) error {
 		response, err := daemon.CallIPC(context.Background(), defaults.IPCPath, daemon.IPCRequest{ID: "status", Method: "status"})
 		if err != nil {
-			return fmt.Errorf("gorouterd is unreachable via IPC: %w", err)
+			return fmt.Errorf("gobroomd is unreachable via IPC: %w", err)
 		}
 		value := response.Result
 		enc := json.NewEncoder(os.Stdout)
