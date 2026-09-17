@@ -1,14 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
-	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
-	"github.com/gorouter/gorouter/internal/api"
-	"github.com/gorouter/gorouter/internal/store"
+	"github.com/gorouter/gorouter/internal/daemon"
 )
 
 func main() {
@@ -18,19 +19,25 @@ func main() {
 	}
 	defaultDB := filepath.Join(defaultDir, "gorouter", "gorouter.db")
 
-	dbPath := flag.String("db", defaultDB, "SQLite database path")
-	addr := flag.String("addr", "127.0.0.1:20127", "control/data plane listen address")
-	flag.Parse()
-
-	db, err := store.Open(*dbPath)
+	defaults, err := daemon.DefaultConfig()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer db.Close()
-
-	server := api.NewServer(db)
-	log.Printf("gorouterd listening on %s", *addr)
-	if err := http.ListenAndServe(*addr, server.Handler()); err != nil {
+	defaults.DBPath = defaultDB
+	dbPath := flag.String("db", defaults.DBPath, "SQLite database path")
+	ipcPath := flag.String("ipc", defaults.IPCPath, "Unix socket path")
+	addr := flag.String("addr", defaults.HTTPAddr, "HTTP data plane listen address")
+	httpEnabled := flag.Bool("http", true, "enable HTTP data plane")
+	httpControl := flag.Bool("http-control", false, "expose HTTP control plane")
+	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl})
+	if err := d.Start(ctx); err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("gorouterd ready: ipc=%s http=%v addr=%s", *ipcPath, *httpEnabled, *addr)
+	if err := d.Wait(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -53,3 +53,26 @@ func TestModelsOnlyExposePublishedReferences(t *testing.T) {
 		t.Fatalf("published model status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestProviderPrefixCollisionIsRejected(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	server := NewServer(s)
+	body := bytes.NewBufferString(`{"name":"First","prefix":"g4f","baseUrl":"https://example.test/v1","protocol":"openai_chat"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/providers", body)
+	rec := httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body = bytes.NewBufferString(`{"name":"Second","prefix":"g4f","baseUrl":"https://example.test/v1","protocol":"openai_chat"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/providers", body)
+	rec = httptest.NewRecorder()
+	server.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("collision status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

@@ -2,38 +2,114 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/gorouter/gorouter/internal/controlplane"
 	"github.com/gorouter/gorouter/internal/normalize"
+	"github.com/gorouter/gorouter/internal/provider"
 	"github.com/gorouter/gorouter/internal/store"
 )
 
 type Server struct {
 	store   *store.Store
+	control *controlplane.Manager
 	started time.Time
 }
 
-func NewServer(s *store.Store) *Server { return &Server{store: s, started: time.Now()} }
+type HandlerOptions struct {
+	ControlPlane bool
+	DataPlane    bool
+}
+
+func NewServer(s *store.Store) *Server {
+	manager, err := controlplane.NewManager(s)
+	if err != nil {
+		manager = nil
+	}
+	return &Server{store: s, control: manager, started: time.Now()}
+}
 
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/status", s.status)
-	mux.HandleFunc("/api/providers", s.providers)
-	mux.HandleFunc("/api/models", s.models)
-	mux.HandleFunc("/api/combos", s.combos)
-	mux.HandleFunc("/api/public-models", s.publicModels)
-	mux.HandleFunc("/v1/models", s.models)
-	mux.HandleFunc("/v1/chat/completions", s.chatCompletions)
-	mux.HandleFunc("/v1/responses", s.notImplemented)
-	mux.HandleFunc("/v1/messages", s.notImplemented)
-	return logging(mux)
+	return s.HandlerWithOptions(HandlerOptions{ControlPlane: true, DataPlane: true})
+}
+
+func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
+	r := chi.NewRouter()
+	if options.ControlPlane {
+		r.Get("/api/status", s.status)
+		r.Get("/api/kernel/resolve", s.resolve)
+		r.HandleFunc("/api/providers", s.providerCollection)
+		r.HandleFunc("/api/models", s.models)
+		r.HandleFunc("/api/combos", s.combos)
+		r.HandleFunc("/api/logical-models", s.logicalModels)
+		r.HandleFunc("/api/custom-models", s.customModels)
+		r.HandleFunc("/api/public-models", s.publicModels)
+	}
+	if options.DataPlane {
+		r.Get("/v1/models", s.models)
+		r.Post("/v1/chat/completions", s.chatCompletions)
+		r.HandleFunc("/v1/responses", s.notImplemented)
+		r.HandleFunc("/v1/messages", s.notImplemented)
+	}
+	return logging(r)
+}
+
+func (s *Server) Status() map[string]any {
+	version := uint64(0)
+	if s.control != nil {
+		version = s.control.Version()
+	}
+	return map[string]any{"name": "gorouterd", "status": "ok", "snapshotVersion": version}
+}
+func (s *Server) Control() *controlplane.Manager { return s.control }
+func (s *Server) Reload() error {
+	if s.control == nil {
+		return fmt.Errorf("control plane unavailable")
+	}
+	return s.control.Reload()
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"name": "gorouterd", "status": "ok", "uptimeSeconds": int(time.Since(s.started).Seconds())})
+	version := uint64(0)
+	if s.control != nil {
+		version = s.control.Version()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": "gorouterd", "status": "ok", "uptimeSeconds": int(time.Since(s.started).Seconds()), "snapshotVersion": version})
+}
+
+func (s *Server) reloadSnapshot(w http.ResponseWriter) bool {
+	if s.control == nil {
+		writeError(w, fmt.Errorf("control plane unavailable"))
+		return false
+	}
+	if err := s.control.Reload(); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return false
+	}
+	return true
+}
+
+func (s *Server) resolve(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("model")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model is required"})
+		return
+	}
+	if s.control == nil {
+		writeError(w, fmt.Errorf("control plane unavailable"))
+		return
+	}
+	resolved, err := s.control.Resolve(name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, resolved)
 }
 
 func (s *Server) providers(w http.ResponseWriter, _ *http.Request) {
@@ -43,6 +119,48 @@ func (s *Server) providers(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"providers": items})
+}
+
+func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.providers(w, r)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var input store.CreateProviderNodeInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	prefixes := provider.NewPrefixRegistry()
+	existing, err := s.store.ProviderNodes()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	for _, node := range existing {
+		if err := prefixes.AddCustom(node.Prefix, node.ID); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if err := prefixes.AddCustom(input.Prefix, "pending"); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	node, err := s.store.CreateProviderNode(input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !s.reloadSnapshot(w) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"provider": node})
 }
 
 func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
@@ -58,13 +176,136 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
 
-func (s *Server) combos(w http.ResponseWriter, _ *http.Request) {
-	items, err := s.store.Combos()
-	if err != nil {
-		writeError(w, err)
-		return
+func (s *Server) combos(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.ComboDetails()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"combos": items})
+	case http.MethodPost, http.MethodPut:
+		var item store.ComboRecord
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if err := s.store.UpsertCombo(item); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case http.MethodDelete:
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+		if err := s.store.DeleteCombo(name); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, POST, PUT, DELETE")
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"combos": items})
+}
+
+func (s *Server) logicalModels(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.LogicalModels()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": items})
+	case http.MethodPut:
+		var item store.LogicalModelRecord
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if err := s.store.UpsertLogicalModel(item.Name, item.TargetRef); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case http.MethodDelete:
+		name := r.URL.Query().Get("name")
+		if name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+			return
+		}
+		if err := s.store.DeleteLogicalModel(name); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) customModels(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		items, err := s.store.Models()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": items})
+	case http.MethodPut:
+		var item store.UpsertCatalogModelInput
+		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+			return
+		}
+		if item.Kind == "" {
+			item.Kind = "custom"
+		}
+		if err := s.store.UpsertCatalogModel(item); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+	case http.MethodDelete:
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
+			return
+		}
+		if err := s.store.DeleteCatalogModel(id); err != nil {
+			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
@@ -90,6 +331,9 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
+		if !s.reloadSnapshot(w) {
+			return
+		}
 		writeJSON(w, http.StatusOK, item)
 	case http.MethodDelete:
 		name := r.URL.Query().Get("name")
@@ -99,6 +343,9 @@ func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.store.DeletePublicModel(name); err != nil {
 			writeError(w, err)
+			return
+		}
+		if !s.reloadSnapshot(w) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
