@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/quota"
 	_ "modernc.org/sqlite"
 )
 
@@ -154,6 +157,60 @@ func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
 		return Credential{}, false
 	}
 	return c, true
+}
+
+func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
+	_, err := s.DB.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens) VALUES(?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens)
+	return err
+}
+
+func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
+	metadata := "{}"
+	_, err := s.DB.Exec(`INSERT INTO quota_snapshots(id,provider_node_id,connection_id,model_ref,window_name,used,limit_value,remaining,reset_at,source,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET used=excluded.used,limit_value=excluded.limit_value,remaining=excluded.remaining,reset_at=excluded.reset_at,source=excluded.source,updated_at=CURRENT_TIMESTAMP`, quotaID(snapshot), snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.Used, snapshot.Limit, snapshot.Remaining, timeString(snapshot.ResetAt), snapshot.Source, metadata)
+	return err
+}
+
+func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
+	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,used,limit_value,remaining,reset_at,source FROM quota_snapshots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []quota.Snapshot
+	for rows.Next() {
+		var p quota.Snapshot
+		var limit, remaining sql.NullFloat64
+		var reset, source string
+		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Used, &limit, &remaining, &reset, &source); err != nil {
+			return nil, err
+		}
+		if limit.Valid {
+			v := limit.Float64
+			p.Limit = &v
+		}
+		if remaining.Valid {
+			v := remaining.Float64
+			p.Remaining = &v
+		}
+		if reset != "" {
+			if t, e := time.Parse(time.RFC3339, reset); e == nil {
+				p.ResetAt = &t
+			}
+		}
+		p.Source = source
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
+func quotaID(s quota.Snapshot) string {
+	return s.ProviderNodeID + "|" + s.ConnectionID + "|" + s.ModelRef + "|" + s.WindowName
+}
+func timeString(value *time.Time) any {
+	if value == nil {
+		return nil
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 type CreateProviderNodeInput struct {

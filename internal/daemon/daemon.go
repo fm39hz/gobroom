@@ -17,7 +17,10 @@ import (
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/quota"
+	runtimehealth "github.com/fm39hz/gobroom/internal/runtime"
 	"github.com/fm39hz/gobroom/internal/store"
+	usageworker "github.com/fm39hz/gobroom/internal/usage"
 )
 
 type Config struct {
@@ -29,14 +32,16 @@ type Config struct {
 }
 
 type Daemon struct {
-	config Config
-	store  *store.Store
-	server *api.Server
-	ipc    *IPCServer
-	http   *http.Server
-	kernel *kernel.Kernel
-	mu     sync.Mutex
-	stop   func()
+	config      Config
+	store       *store.Store
+	server      *api.Server
+	ipc         *IPCServer
+	http        *http.Server
+	kernel      *kernel.Kernel
+	policy      *runtimehealth.PolicyGate
+	usageCancel context.CancelFunc
+	mu          sync.Mutex
+	stop        func()
 }
 
 func New(config Config) *Daemon { return &Daemon{config: config} }
@@ -48,11 +53,18 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.store = s
 	d.server = api.NewServer(s)
+	ctx, cancel := context.WithCancel(ctx)
 	if d.server.Control() == nil {
 		_ = s.Close()
 		return fmt.Errorf("cannot initialize control plane")
 	}
-	d.kernel, err = kernel.New(d.server.Control().Snapshot(), nil, 256)
+	d.policy = runtimehealth.NewPolicyGate()
+	if snapshots, loadErr := d.store.QuotaSnapshots(); loadErr == nil {
+		for _, snapshot := range snapshots {
+			d.policy.SetQuota(snapshot)
+		}
+	}
+	d.kernel, err = kernel.New(d.server.Control().Snapshot(), d.policy, 256)
 	if err != nil {
 		_ = s.Close()
 		return err
@@ -64,9 +76,20 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})
 	d.server.SetReloadHook(func() error { return d.kernel.PublishSnapshot(d.server.Control().Snapshot()) })
+	usageCtx, usageCancel := context.WithCancel(ctx)
+	d.usageCancel = usageCancel
+	go (usageworker.Worker{Store: s, Events: d.kernel.Events}).Run(usageCtx)
 
-	ctx, cancel := context.WithCancel(ctx)
-	d.stop = func() { cancel(); _ = d.store.Close() }
+	d.stop = func() {
+		cancel()
+		if d.usageCancel != nil {
+			d.usageCancel()
+		}
+		if d.kernel != nil {
+			d.kernel.Close()
+		}
+		_ = d.store.Close()
+	}
 
 	d.ipc = NewIPCServer(d.config.IPCPath, d.handleIPC)
 	if err := d.ipc.Start(ctx); err != nil {
@@ -145,6 +168,29 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, result)
+	case "health.list":
+		if d.policy == nil {
+			return fail(request, "runtime policy unavailable")
+		}
+		return success(request, d.policy.Health.Snapshot())
+	case "quota.list":
+		if d.policy == nil {
+			return fail(request, "runtime policy unavailable")
+		}
+		return success(request, d.policy.Quotas())
+	case "quota.set":
+		if d.policy == nil {
+			return fail(request, "runtime policy unavailable")
+		}
+		var snapshot quota.Snapshot
+		if err := decodeParams(request.Params, &snapshot); err != nil {
+			return fail(request, err.Error())
+		}
+		d.policy.SetQuota(snapshot)
+		if err := d.store.SaveQuotaSnapshot(snapshot); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, snapshot)
 	case "providers.create":
 		var input store.CreateProviderNodeInput
 		if err := decodeParams(request.Params, &input); err != nil {

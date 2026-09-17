@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,12 @@ type Kernel struct {
 	Adapters  map[Protocol]ProviderAdapter
 	Events    chan UsageEvent
 	closed    atomic.Bool
+}
+
+type FeedbackGate interface {
+	Gate
+	MarkFailure(Route, ErrorClass, error)
+	MarkSuccess(Route)
 }
 
 func New(initial Snapshot, gate Gate, buffer int) (*Kernel, error) {
@@ -84,15 +91,48 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		}
 		response, err := adapter.Execute(ctx, upstream)
 		if err != nil {
+			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+				feedback.MarkFailure(candidate, kernelErrorClass(err), err)
+			}
 			continue
 		}
 		if response.Status >= 400 {
+			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+				feedback.MarkFailure(candidate, adapter.ClassifyError(response.Status, nil), fmt.Errorf("upstream status %d", response.Status))
+			}
 			_ = response.Body.Close()
 			continue
 		}
-		return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnComplete: func(event UsageEvent) { k.EmitUsage(event) }})
+		if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+			feedback.MarkSuccess(candidate)
+		}
+		return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnComplete: func(event UsageEvent) {
+			if event.At.IsZero() {
+				event.At = time.Now()
+			}
+			if event.LogicalModel == "" {
+				event.LogicalModel = req.Model
+			}
+			if event.ProviderNodeID == "" {
+				event.ProviderNodeID = candidate.NodeID
+			}
+			if event.ExternalModel == "" {
+				event.ExternalModel = candidate.ExternalModel
+			}
+			if event.ConnectionID == "" {
+				event.ConnectionID = candidate.CredentialID
+			}
+			k.EmitUsage(event)
+		}})
 	}
 	return ErrNoRoute
+}
+
+func kernelErrorClass(err error) ErrorClass {
+	if err == nil {
+		return ErrorRetryable
+	}
+	return ErrorCooldown
 }
 
 func protocolMatchesRequest(format normalize.Format, protocol Protocol) bool {

@@ -33,7 +33,9 @@ func main() {
 	root.AddCommand(status)
 	reload := &cobra.Command{Use: "reload", Short: "reload daemon snapshot", RunE: func(cmd *cobra.Command, _ []string) error {
 		response, err := daemon.CallIPC(context.Background(), defaults.IPCPath, daemon.IPCRequest{ID: "reload", Method: "reload"})
-		if err != nil { return err }
+		if err != nil {
+			return err
+		}
 		return json.NewEncoder(os.Stdout).Encode(response.Result)
 	}}
 	root.AddCommand(reload)
