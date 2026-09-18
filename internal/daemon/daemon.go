@@ -44,6 +44,11 @@ type Daemon struct {
 	stop        func()
 }
 
+type healthEvent struct {
+	route kernel.Route
+	state runtimehealth.RouteHealth
+}
+
 func New(config Config) *Daemon { return &Daemon{config: config} }
 
 func (d *Daemon) Start(ctx context.Context) error {
@@ -79,6 +84,47 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 		return kernel.Credential{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret}, nil
 	}
+	healthEvents := make(chan healthEvent, 256)
+	d.policy.Health.SetObserver(func(route kernel.Route, state runtimehealth.RouteHealth) {
+		select {
+		case healthEvents <- healthEvent{route: route, state: state}:
+		default:
+		}
+	})
+	runtimeRows, _ := d.store.ConnectionRuntimes()
+	for _, item := range runtimeRows {
+		for _, route := range d.kernel.Snapshots.Load().Routes {
+			if route.CredentialID != item.ConnectionID {
+				continue
+			}
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError})
+		}
+	}
+	availabilityRows, _ := d.store.ModelAvailabilities()
+	for _, item := range availabilityRows {
+		blockedUntil := parseTime(item.BlockedUntil)
+		if blockedUntil.IsZero() || !blockedUntil.After(time.Now()) {
+			continue
+		}
+		for _, route := range d.kernel.Snapshots.Load().Routes {
+			if route.CredentialID != item.ConnectionID || route.ExternalModel != item.ModelRef {
+				continue
+			}
+			state := runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: blockedUntil, LastError: item.LastError}
+			d.policy.Health.Restore(route, state)
+		}
+	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event := <-healthEvents:
+				_ = d.store.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: event.route.CredentialID, Status: healthStatus(event.state), ConsecutiveFailures: event.state.Failures, CooldownUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError})
+				_ = d.store.SaveModelAvailability(store.ModelAvailability{ConnectionID: event.route.CredentialID, ModelRef: event.route.ExternalModel, Status: healthStatus(event.state), BlockedUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError, ConsecutiveFailures: event.state.Failures})
+			}
+		}
+	}()
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})
@@ -503,3 +549,28 @@ func DefaultConfig() (Config, error) {
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }
+
+func parseTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func formatTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func healthStatus(state runtimehealth.RouteHealth) string {
+	if !state.CooldownUntil.IsZero() && state.CooldownUntil.After(time.Now()) {
+		return "cooldown"
+	}
+	return "available"
+}

@@ -16,6 +16,8 @@ import (
 
 type Responses struct{ Client *http.Client }
 
+const responsesUpstreamTimeout = 2 * time.Minute
+
 func (Responses) ID() string                { return "openai-responses" }
 func (Responses) Protocol() kernel.Protocol { return kernel.ProtocolOpenAIResponses }
 
@@ -49,7 +51,7 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 func (a Responses) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
 	client := a.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: responsesUpstreamTimeout}
 	}
 	req, err := http.NewRequestWithContext(ctx, request.Method, request.URL, request.Body)
 	if err != nil {

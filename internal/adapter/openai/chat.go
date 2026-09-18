@@ -16,6 +16,8 @@ import (
 
 type Chat struct{ Client *http.Client }
 
+const defaultUpstreamTimeout = 2 * time.Minute
+
 func (Chat) ID() string                { return "openai-chat" }
 func (Chat) Protocol() kernel.Protocol { return kernel.ProtocolOpenAIChat }
 
@@ -53,7 +55,7 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 func (a Chat) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
 	client := a.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: defaultUpstreamTimeout}
 	}
 	req, err := http.NewRequestWithContext(ctx, request.Method, request.URL, request.Body)
 	if err != nil {

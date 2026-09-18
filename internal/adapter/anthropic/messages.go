@@ -17,6 +17,8 @@ import (
 
 type Messages struct{ Client *http.Client }
 
+const defaultUpstreamTimeout = 2 * time.Minute
+
 func (Messages) ID() string                { return "anthropic-messages" }
 func (Messages) Protocol() kernel.Protocol { return kernel.ProtocolAnthropic }
 
@@ -67,7 +69,7 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 func (a Messages) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
 	client := a.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: defaultUpstreamTimeout}
 	}
 	req, err := http.NewRequestWithContext(ctx, request.Method, request.URL, request.Body)
 	if err != nil {

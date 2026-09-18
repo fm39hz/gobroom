@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS provider_nodes (
 );
 CREATE TABLE IF NOT EXISTS connections (
   id TEXT PRIMARY KEY, provider_node_id TEXT NOT NULL REFERENCES provider_nodes(id) ON DELETE CASCADE,
-  name TEXT NOT NULL, credential_type TEXT NOT NULL, secret_ref TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', credential_type TEXT NOT NULL, secret_ref TEXT NOT NULL DEFAULT '',
   priority INTEGER NOT NULL DEFAULT 100, enabled INTEGER NOT NULL DEFAULT 1,
   state_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
   status TEXT, latency_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0
+  output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost REAL NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
 CREATE TABLE IF NOT EXISTS quota_snapshots (
@@ -106,10 +106,59 @@ CREATE TABLE IF NOT EXISTS quota_snapshots (
   metadata_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_quota_lookup ON quota_snapshots(provider_node_id,connection_id,model_ref,window_name);
+CREATE TABLE IF NOT EXISTS connection_runtime (
+  connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'active', consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  cooldown_until TEXT, rate_limited_until TEXT, backoff_level INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT, error_code TEXT, last_used_at TEXT, consecutive_use_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS model_availability (
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  model_ref TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available',
+  blocked_until TEXT, reason TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  backoff_level INTEGER NOT NULL DEFAULT 0, last_error TEXT, error_code TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(connection_id, model_ref)
+);
+CREATE INDEX IF NOT EXISTS idx_model_availability_until ON model_availability(blocked_until);
+CREATE TABLE IF NOT EXISTS proxy_pools (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'http',
+  endpoint TEXT NOT NULL DEFAULT '', no_proxy TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1, health TEXT NOT NULL DEFAULT 'unknown',
+  config_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS connection_transports (
+  connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+  proxy_pool_id TEXT REFERENCES proxy_pools(id) ON DELETE SET NULL,
+  proxy_url TEXT NOT NULL DEFAULT '', no_proxy TEXT NOT NULL DEFAULT '',
+  relay_url TEXT NOT NULL DEFAULT '', config_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS provider_extensions (
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  namespace TEXT NOT NULL, data_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(connection_id, namespace)
+);
+CREATE TABLE IF NOT EXISTS provider_sessions (
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  namespace TEXT NOT NULL, session_key TEXT NOT NULL, state_json TEXT NOT NULL DEFAULT '{}',
+  expires_at TEXT, last_used_at TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(connection_id, namespace, session_key)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_sessions_expiry ON provider_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS usage_daily (
+  date_key TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0,
+  prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
+  estimated_cost REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 `)
 	// Additive migration for databases created before prefix became a first-class field.
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN prefix TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE connections ADD COLUMN email TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN estimated_cost REAL NOT NULL DEFAULT 0`)
 	return err
 }
 
@@ -119,9 +168,9 @@ type ProviderNode struct {
 }
 
 type ConnectionRecord struct {
-	ID, ProviderNodeID, Name, CredentialType string
-	Priority                                 int
-	Enabled                                  bool
+	ID, ProviderNodeID, Name, Email, CredentialType string
+	Priority                                        int
+	Enabled                                         bool
 }
 
 type CreateConnectionInput struct {
@@ -180,10 +229,10 @@ func (s *Store) DeleteProviderNode(id string) error {
 }
 
 func (s *Store) Connections(nodeID string) ([]ConnectionRecord, error) {
-	query := `SELECT id,provider_node_id,name,credential_type,priority,enabled FROM connections ORDER BY provider_node_id,priority,id`
+	query := `SELECT id,provider_node_id,name,email,credential_type,priority,enabled FROM connections ORDER BY provider_node_id,priority,id`
 	args := []any{}
 	if nodeID != "" {
-		query = `SELECT id,provider_node_id,name,credential_type,priority,enabled FROM connections WHERE provider_node_id=? ORDER BY priority,id`
+		query = `SELECT id,provider_node_id,name,email,credential_type,priority,enabled FROM connections WHERE provider_node_id=? ORDER BY priority,id`
 		args = append(args, nodeID)
 	}
 	rows, err := s.DB.Query(query, args...)
@@ -195,7 +244,7 @@ func (s *Store) Connections(nodeID string) ([]ConnectionRecord, error) {
 	for rows.Next() {
 		var item ConnectionRecord
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.ProviderNodeID, &item.Name, &item.CredentialType, &item.Priority, &enabled); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProviderNodeID, &item.Name, &item.Email, &item.CredentialType, &item.Priority, &enabled); err != nil {
 			return nil, err
 		}
 		item.Enabled = enabled == 1
@@ -219,7 +268,7 @@ func (s *Store) CreateConnection(input CreateConnectionInput) (ConnectionRecord,
 		return ConnectionRecord{}, err
 	}
 	item := ConnectionRecord{ID: "conn_" + fmt.Sprintf("%x", buf), ProviderNodeID: input.ProviderNodeID, Name: input.Name, CredentialType: input.CredentialType, Priority: input.Priority, Enabled: true}
-	_, err := s.DB.Exec(`INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority,enabled) VALUES(?,?,?,?,?,?,1)`, item.ID, item.ProviderNodeID, item.Name, item.CredentialType, input.Secret, item.Priority)
+	_, err := s.DB.Exec(`INSERT INTO connections(id,provider_node_id,name,email,credential_type,secret_ref,priority,enabled) VALUES(?,?,?,?,?,?,?,1)`, item.ID, item.ProviderNodeID, item.Name, item.Email, item.CredentialType, input.Secret, item.Priority)
 	return item, err
 }
 
@@ -285,6 +334,164 @@ func boolInt(value bool) int {
 	return 0
 }
 
+type ConnectionRuntime struct {
+	ConnectionID, Status, CooldownUntil, RateLimitedUntil  string
+	ConsecutiveFailures, BackoffLevel, ConsecutiveUseCount int
+	LastError, ErrorCode, LastUsedAt                       string
+}
+
+func (s *Store) ConnectionRuntimes() ([]ConnectionRuntime, error) {
+	rows, err := s.DB.Query(`SELECT connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,last_used_at,consecutive_use_count FROM connection_runtime`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ConnectionRuntime
+	for rows.Next() {
+		var item ConnectionRuntime
+		var cooldown, limited, lastError, errorCode, lastUsed sql.NullString
+		if err := rows.Scan(&item.ConnectionID, &item.Status, &item.ConsecutiveFailures, &cooldown, &limited, &item.BackoffLevel, &lastError, &errorCode, &lastUsed, &item.ConsecutiveUseCount); err != nil {
+			return nil, err
+		}
+		item.CooldownUntil, item.RateLimitedUntil, item.LastError, item.ErrorCode, item.LastUsedAt = nullString(cooldown), nullString(limited), nullString(lastError), nullString(errorCode), nullString(lastUsed)
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+type ModelAvailability struct {
+	ConnectionID, ModelRef, Status, BlockedUntil, Reason string
+	ConsecutiveFailures, BackoffLevel                    int
+	LastError, ErrorCode                                 string
+}
+
+func (s *Store) ModelAvailabilities() ([]ModelAvailability, error) {
+	rows, err := s.DB.Query(`SELECT connection_id,model_ref,status,COALESCE(blocked_until,''),COALESCE(reason,''),consecutive_failures,backoff_level,COALESCE(last_error,''),COALESCE(error_code,'') FROM model_availability`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ModelAvailability
+	for rows.Next() {
+		var item ModelAvailability
+		if err := rows.Scan(&item.ConnectionID, &item.ModelRef, &item.Status, &item.BlockedUntil, &item.Reason, &item.ConsecutiveFailures, &item.BackoffLevel, &item.LastError, &item.ErrorCode); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+type ProxyPool struct {
+	ID, Name, Kind, Endpoint, NoProxy, Health string
+	Enabled                                   bool
+	Config                                    map[string]any
+}
+
+type ConnectionTransport struct {
+	ConnectionID, ProxyPoolID, ProxyURL, NoProxy, RelayURL string
+	Config                                                 map[string]any
+}
+
+type ProviderExtension struct {
+	ConnectionID, Namespace string
+	Data                    map[string]any
+}
+
+type ProviderSession struct {
+	ConnectionID, Namespace, SessionKey, ExpiresAt, LastUsedAt string
+	State                                                      map[string]any
+}
+
+func (s *Store) ConnectionRuntime(id string) (ConnectionRuntime, bool, error) {
+	var item ConnectionRuntime
+	var cooldown, limited, lastUsed, lastError, errorCode sql.NullString
+	row := s.DB.QueryRow(`SELECT connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,last_used_at,consecutive_use_count FROM connection_runtime WHERE connection_id=?`, id)
+	if err := row.Scan(&item.ConnectionID, &item.Status, &item.ConsecutiveFailures, &cooldown, &limited, &item.BackoffLevel, &lastError, &errorCode, &lastUsed, &item.ConsecutiveUseCount); err != nil {
+		if err == sql.ErrNoRows {
+			return ConnectionRuntime{}, false, nil
+		}
+		return ConnectionRuntime{}, false, err
+	}
+	item.CooldownUntil, item.RateLimitedUntil, item.LastError, item.ErrorCode, item.LastUsedAt = nullString(cooldown), nullString(limited), nullString(lastError), nullString(errorCode), nullString(lastUsed)
+	return item, true, nil
+}
+
+func (s *Store) SaveConnectionRuntime(item ConnectionRuntime) error {
+	if item.ConnectionID == "" {
+		return fmt.Errorf("connection ID is required")
+	}
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	_, err := s.DB.Exec(`INSERT INTO connection_runtime(connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,last_used_at,consecutive_use_count,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id) DO UPDATE SET status=excluded.status,consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,rate_limited_until=excluded.rate_limited_until,backoff_level=excluded.backoff_level,last_error=excluded.last_error,error_code=excluded.error_code,last_used_at=excluded.last_used_at,consecutive_use_count=excluded.consecutive_use_count,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Status, item.ConsecutiveFailures, nullable(item.CooldownUntil), nullable(item.RateLimitedUntil), item.BackoffLevel, nullable(item.LastError), nullable(item.ErrorCode), nullable(item.LastUsedAt), item.ConsecutiveUseCount)
+	return err
+}
+
+func (s *Store) SaveModelAvailability(item ModelAvailability) error {
+	if item.ConnectionID == "" || item.ModelRef == "" {
+		return fmt.Errorf("connection ID and model reference are required")
+	}
+	if item.Status == "" {
+		item.Status = "available"
+	}
+	_, err := s.DB.Exec(`INSERT INTO model_availability(connection_id,model_ref,status,blocked_until,reason,consecutive_failures,backoff_level,last_error,error_code,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,model_ref) DO UPDATE SET status=excluded.status,blocked_until=excluded.blocked_until,reason=excluded.reason,consecutive_failures=excluded.consecutive_failures,backoff_level=excluded.backoff_level,last_error=excluded.last_error,error_code=excluded.error_code,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.ModelRef, item.Status, nullable(item.BlockedUntil), nullable(item.Reason), item.ConsecutiveFailures, item.BackoffLevel, nullable(item.LastError), nullable(item.ErrorCode))
+	return err
+}
+
+func (s *Store) SaveConnectionTransport(item ConnectionTransport) error {
+	config, err := json.Marshal(item.Config)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`INSERT INTO connection_transports(connection_id,proxy_pool_id,proxy_url,no_proxy,relay_url,config_json,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id) DO UPDATE SET proxy_pool_id=excluded.proxy_pool_id,proxy_url=excluded.proxy_url,no_proxy=excluded.no_proxy,relay_url=excluded.relay_url,config_json=excluded.config_json,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, nullable(item.ProxyPoolID), item.ProxyURL, item.NoProxy, item.RelayURL, string(config))
+	return err
+}
+
+func (s *Store) SaveProxyPool(item ProxyPool) error {
+	config, err := json.Marshal(item.Config)
+	if err != nil {
+		return err
+	}
+	if item.Kind == "" {
+		item.Kind = "http"
+	}
+	_, err = s.DB.Exec(`INSERT INTO proxy_pools(id,name,kind,endpoint,no_proxy,enabled,health,config_json,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,kind=excluded.kind,endpoint=excluded.endpoint,no_proxy=excluded.no_proxy,enabled=excluded.enabled,health=excluded.health,config_json=excluded.config_json,updated_at=CURRENT_TIMESTAMP`, item.ID, item.Name, item.Kind, item.Endpoint, item.NoProxy, boolInt(item.Enabled), item.Health, string(config))
+	return err
+}
+
+func (s *Store) SaveProviderExtension(item ProviderExtension) error {
+	data, err := json.Marshal(item.Data)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`INSERT INTO provider_extensions(connection_id,namespace,data_json,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,namespace) DO UPDATE SET data_json=excluded.data_json,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Namespace, string(data))
+	return err
+}
+
+func (s *Store) SaveProviderSession(item ProviderSession) error {
+	state, err := json.Marshal(item.State)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`INSERT INTO provider_sessions(connection_id,namespace,session_key,state_json,expires_at,last_used_at,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,namespace,session_key) DO UPDATE SET state_json=excluded.state_json,expires_at=excluded.expires_at,last_used_at=excluded.last_used_at,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Namespace, item.SessionKey, string(state), nullable(item.ExpiresAt), nullable(item.LastUsedAt))
+	return err
+}
+
+func nullString(value sql.NullString) string {
+	if value.Valid {
+		return value.String
+	}
+	return ""
+}
+
+func nullable(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func (s *Store) Setting(key string) (string, bool, error) {
 	var value string
 	if err := s.DB.QueryRow(`SELECT value_json FROM settings WHERE key=?`, key).Scan(&value); err != nil {
@@ -325,8 +532,19 @@ func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
 }
 
 func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
-	_, err := s.DB.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens) VALUES(?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens)
-	return err
+	dateKey := event.At.UTC().Format("2006-01-02")
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens,estimated_cost) VALUES(?,?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT INTO usage_daily(date_key,requests,prompt_tokens,completion_tokens,estimated_cost,updated_at) VALUES(?,1,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(date_key) DO UPDATE SET requests=requests+1,prompt_tokens=prompt_tokens+excluded.prompt_tokens,completion_tokens=completion_tokens+excluded.completion_tokens,estimated_cost=estimated_cost+excluded.estimated_cost,updated_at=CURRENT_TIMESTAMP`, dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {

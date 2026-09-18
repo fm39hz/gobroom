@@ -58,6 +58,9 @@ func simpleCommand(use, short, method string, flags map[string]*string) *cobra.C
 		}
 		return invoke(method, params)
 	}}
+	for name, ptr := range flags {
+		cmd.Flags().StringVar(ptr, name, "", name)
+	}
 	return cmd
 }
 
@@ -89,7 +92,7 @@ func resourceCommands() []*cobra.Command {
 	var priority int
 	connections.AddCommand(listCommand("list", "connections.list", map[string]*string{"nodeID": &nodeID}))
 	createConn := &cobra.Command{Use: "create", Short: "create connection", RunE: func(*cobra.Command, []string) error {
-		return invoke("connections.create", map[string]any{"nodeID": nodeID, "name": connName, "credentialType": credentialType, "secret": secret, "priority": priority})
+		return invoke("connections.create", map[string]any{"providerNodeID": nodeID, "name": connName, "credentialType": credentialType, "secret": secret, "priority": priority})
 	}}
 	createConn.Flags().StringVar(&nodeID, "node-id", "", "provider node ID")
 	createConn.Flags().StringVar(&connName, "name", "", "connection name")

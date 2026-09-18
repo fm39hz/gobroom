@@ -231,7 +231,7 @@ func formParams(f *form) (map[string]any, error) {
 			}
 			priority = value
 		}
-		params["nodeID"], params["name"], params["credentialType"], params["secret"], params["priority"] = f.values[0], f.values[1], f.values[2], f.values[3], priority
+		params["providerNodeID"], params["name"], params["credentialType"], params["secret"], params["priority"] = f.values[0], f.values[1], f.values[2], f.values[3], priority
 	case "combos.upsert":
 		members := make([]string, 0)
 		for _, member := range strings.Split(f.values[2], ",") {
