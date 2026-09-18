@@ -16,7 +16,7 @@ type ModelRef struct {
 	CanonicalID string
 }
 
-// ParseModel preserves the 9router model syntax: prefix/model is split at the
+// ParseModel preserves the compatible model syntax: prefix/model is split at the
 // first slash, while a bare model remains opaque for compatibility inference.
 func ParseModel(raw string) (ModelRef, error) {
 	raw = strings.TrimSpace(raw)
@@ -48,8 +48,8 @@ func ResolvePrefix(ref ModelRef, registry *PrefixRegistry) (ModelRef, error) {
 	return ref, nil
 }
 
-// InferProvider returns the deliberately small compatibility fallback used by
-// 9router for bare model names. It is not used by the strict snapshot resolver
+// InferProvider returns the deliberately small bare-model compatibility
+// fallback. It is not used by the strict snapshot resolver
 // unless a caller explicitly opts into inference.
 func InferProvider(model string) string {
 	lower := strings.ToLower(model)
@@ -67,7 +67,7 @@ func InferProvider(model string) string {
 	}
 }
 
-// ResolveAlias resolves the string form used by 9router's modelAliases map.
+// ResolveAlias resolves the string form used by a provider alias map.
 // The first slash rule is shared with ParseModel, so upstream IDs remain
 // opaque after the provider prefix.
 func ResolveAlias(alias string, aliases map[string]string) (ModelRef, bool, error) {

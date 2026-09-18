@@ -1,7 +1,7 @@
 [
   {
     "id": "openai",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "OpenAI",
     "aliases": ["openai"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -14,7 +14,7 @@
   },
   {
     "id": "openrouter",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "OpenRouter",
     "aliases": ["openrouter"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -27,7 +27,7 @@
   },
   {
     "id": "deepseek",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "DeepSeek",
     "aliases": ["deepseek"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -40,7 +40,7 @@
   },
   {
     "id": "anthropic",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Anthropic",
     "aliases": ["anthropic"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -52,7 +52,7 @@
   },
   {
     "id": "groq",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Groq",
     "aliases": ["groq"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -62,7 +62,7 @@
   },
   {
     "id": "mistral",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Mistral",
     "aliases": ["mistral"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -72,7 +72,7 @@
   },
   {
     "id": "together",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Together",
     "aliases": ["together"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -82,7 +82,7 @@
   },
   {
     "id": "fireworks",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Fireworks AI",
     "aliases": ["fireworks"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -92,7 +92,7 @@
   },
   {
     "id": "cerebras",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Cerebras",
     "aliases": ["cerebras"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -102,7 +102,7 @@
   },
   {
     "id": "nvidia",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "NVIDIA NIM",
     "aliases": ["nvidia"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -112,7 +112,7 @@
   },
   {
     "id": "siliconflow",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "SiliconFlow",
     "aliases": ["siliconflow"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -122,7 +122,7 @@
   },
   {
     "id": "glm",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "GLM International",
     "aliases": ["glm"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -132,7 +132,7 @@
   },
   {
     "id": "glm-cn",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "GLM China",
     "aliases": ["glm-cn"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -142,7 +142,7 @@
   },
   {
     "id": "perplexity-agent",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Perplexity Agent",
     "aliases": ["perplexity-agent"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -152,7 +152,7 @@
   },
   {
     "id": "vercel-ai-gateway",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "Vercel AI Gateway",
     "aliases": ["vercel-ai-gateway"],
     "auth": {"kind": "auth", "id": "static-secret"},
@@ -162,7 +162,7 @@
   },
   {
     "id": "tokenrouter",
-    "version": "9router-source-1",
+    "version": "builtin-generic-1",
     "displayName": "TokenRouter",
     "aliases": ["tokenrouter"],
     "auth": {"kind": "auth", "id": "static-secret"},
