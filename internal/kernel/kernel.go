@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,7 @@ type Kernel struct {
 type FeedbackGate interface {
 	Gate
 	MarkFailure(Route, ErrorClass, error)
+	MarkFailureAfter(Route, ErrorClass, error, time.Duration)
 	MarkSuccess(Route)
 }
 
@@ -78,7 +80,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if err != nil {
 		return err
 	}
-	for _, candidate := range k.Scheduler.Order(model, time.Now()) {
+	for _, candidate := range k.Scheduler.OrderWithPreferred(model, time.Now(), req.Transport.PreferredConnectionID) {
 		if !supportsRequest(candidate, req) {
 			continue
 		}
@@ -112,10 +114,15 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		}
 		if response.Status >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+			class := adapter.ClassifyError(response.Status, body)
+			retryAfter := retryAfterDuration(response.Headers.Get("Retry-After"))
 			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-				feedback.MarkFailure(candidate, adapter.ClassifyError(response.Status, body), fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))))
+				feedback.MarkFailureAfter(candidate, class, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))), retryAfter)
 			}
 			_ = response.Body.Close()
+			if class == ErrorTerminal {
+				return fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body)))
+			}
 			continue
 		}
 		defer response.Body.Close()
@@ -149,6 +156,14 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		}})
 	}
 	return ErrNoRoute
+}
+
+func retryAfterDuration(value string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func supportsRequest(route Route, req NormalizedRequest) bool {

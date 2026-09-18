@@ -88,10 +88,11 @@ type Modalities struct {
 }
 
 type TransportHints struct {
-	AcceptJSON   bool
-	AcceptSSE    bool
-	ForceStream  bool
-	TargetFormat Format
+	AcceptJSON            bool
+	AcceptSSE             bool
+	ForceStream           bool
+	TargetFormat          Format
+	PreferredConnectionID string
 }
 
 type Result struct {

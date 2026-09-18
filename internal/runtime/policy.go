@@ -33,6 +33,9 @@ func (g *PolicyGate) Usable(route kernel.Route, now time.Time) bool {
 func (g *PolicyGate) MarkFailure(route kernel.Route, class kernel.ErrorClass, err error) {
 	g.Health.MarkFailure(route, class, err)
 }
+func (g *PolicyGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClass, err error, delay time.Duration) {
+	g.Health.MarkFailureAfter(route, class, err, delay)
+}
 func (g *PolicyGate) MarkSuccess(route kernel.Route) { g.Health.MarkSuccess(route) }
 func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
 	g.mu.Lock()

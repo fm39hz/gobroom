@@ -26,7 +26,7 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	r := Request{
 		Model: model, SourceFormat: format, Stream: boolValue(body["stream"], true),
 		Tools: normalizeTools(body["tools"]), Extensions: map[string]any{}, Raw: body,
-		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream")},
+		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id")},
 	}
 	r.Messages = normalizeMessages(body, format)
 	r.Thinking = normalizeThinking(body)

@@ -117,3 +117,21 @@ func TestSchedulerRoundRobinOrdersFallbackCandidates(t *testing.T) {
 		t.Fatalf("round robin did not advance: first=%v second=%v", CandidatesByID(first), CandidatesByID(second))
 	}
 }
+
+func TestSchedulerHonorsStickyLimitAndPreferredConnection(t *testing.T) {
+	s := NewScheduler(nil)
+	model := ResolvedModel{PublicName: "public-sticky", Strategy: StrategyRoundRobin, StickyLimit: 2, Candidates: []Route{
+		{ID: "a", CredentialID: "account-a", Enabled: true},
+		{ID: "b", CredentialID: "account-b", Enabled: true},
+	}}
+	first := s.Order(model, time.Unix(0, 0))
+	second := s.Order(model, time.Unix(0, 0))
+	third := s.Order(model, time.Unix(0, 0))
+	if first[0].ID != "a" || second[0].ID != "a" || third[0].ID != "b" {
+		t.Fatalf("unexpected sticky order: %v %v %v", first[0].ID, second[0].ID, third[0].ID)
+	}
+	preferred := s.OrderWithPreferred(model, time.Unix(0, 0), "account-a")
+	if preferred[0].CredentialID != "account-a" {
+		t.Fatalf("preferred account was not first: %#v", preferred)
+	}
+}

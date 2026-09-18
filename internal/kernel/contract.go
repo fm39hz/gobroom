@@ -70,10 +70,11 @@ type Snapshot struct {
 }
 
 type ResolvedModel struct {
-	PublicName string
-	TargetRef  string
-	Strategy   Strategy
-	Candidates []Route
+	PublicName  string
+	TargetRef   string
+	Strategy    Strategy
+	StickyLimit int
+	Candidates  []Route
 }
 
 type NormalizedRequest = normalize.Request

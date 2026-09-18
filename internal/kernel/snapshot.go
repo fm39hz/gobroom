@@ -57,10 +57,12 @@ func ResolvePublic(s Snapshot, name string) (ResolvedModel, error) {
 		return ResolvedModel{}, err
 	}
 	strategy := StrategyFallback
+	stickyLimit := 1
 	if combo, ok := s.Combos[public.TargetRef]; ok && combo.Strategy != "" {
 		strategy = combo.Strategy
+		stickyLimit = combo.StickyLimit
 	}
-	return ResolvedModel{PublicName: name, TargetRef: public.TargetRef, Strategy: strategy, Candidates: items}, nil
+	return ResolvedModel{PublicName: name, TargetRef: public.TargetRef, Strategy: strategy, StickyLimit: stickyLimit, Candidates: items}, nil
 }
 
 func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) {

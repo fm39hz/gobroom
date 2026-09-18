@@ -28,6 +28,10 @@ func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 	return state.CooldownUntil.IsZero() || !state.CooldownUntil.After(now)
 }
 func (g *HealthGate) MarkFailure(route kernel.Route, class kernel.ErrorClass, err error) {
+	g.MarkFailureAfter(route, class, err, 0)
+}
+
+func (g *HealthGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClass, err error, override time.Duration) {
 	g.mu.Lock()
 	state := g.routes[route.ID]
 	state.Failures++
@@ -39,6 +43,9 @@ func (g *HealthGate) MarkFailure(route kernel.Route, class kernel.ErrorClass, er
 	}
 	if delay > 10*time.Minute {
 		delay = 10 * time.Minute
+	}
+	if override > delay {
+		delay = override
 	}
 	state.CooldownUntil = time.Now().Add(delay)
 	if err != nil {

@@ -42,3 +42,14 @@ func TestEndpointWinsOverBodyHeuristic(t *testing.T) {
 		t.Fatalf("got %s", result.Request.SourceFormat)
 	}
 }
+
+func TestPreferredConnectionHeaderIsCaptured(t *testing.T) {
+	headers := http.Header{"X-Connection-Id": []string{"conn-b"}}
+	result, err := Map("/v1/chat/completions", headers, map[string]any{"model": "public", "messages": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.Transport.PreferredConnectionID != "conn-b" {
+		t.Fatalf("preferred connection=%q", result.Request.Transport.PreferredConnectionID)
+	}
+}
