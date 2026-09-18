@@ -42,14 +42,15 @@ Requirements: Go 1.27 or newer and Unix domain sockets on Unix-like systems.
 
 By default the daemon stores SQLite state under the user config directory,
 creates a Unix IPC socket under the runtime directory, exposes the provider data
-plane on 127.0.0.1:20127, and keeps HTTP control disabled.
+plane on 127.0.0.1:2712, and keeps HTTP control disabled. If enabled, the
+separate HTTP control plane listens on 127.0.0.1:2713.
 
 ## Provider API
 
-    http://127.0.0.1:20127/v1/models
-    http://127.0.0.1:20127/v1/chat/completions
-    http://127.0.0.1:20127/v1/responses
-    http://127.0.0.1:20127/v1/messages
+    http://127.0.0.1:2712/v1/models
+    http://127.0.0.1:2712/v1/chat/completions
+    http://127.0.0.1:2712/v1/responses
+    http://127.0.0.1:2712/v1/messages
 
 ## IPC control plane
 

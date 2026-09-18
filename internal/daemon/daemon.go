@@ -27,6 +27,7 @@ type Config struct {
 	HTTPEnabled         bool
 	HTTPAddr            string
 	HTTPControl         bool
+	HTTPControlAddr     string
 	ProviderManifestDir string
 }
 
@@ -36,6 +37,7 @@ type Daemon struct {
 	server      *api.Server
 	ipc         *IPCServer
 	http        *http.Server
+	httpControl *http.Server
 	kernel      *kernel.Kernel
 	policy      *runtimehealth.PolicyGate
 	usageCancel context.CancelFunc
@@ -187,10 +189,22 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	if d.config.HTTPEnabled {
-		d.http = &http.Server{Addr: d.config.HTTPAddr, Handler: d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: d.config.HTTPControl, DataPlane: true})}
+		d.http = &http.Server{Addr: d.config.HTTPAddr, Handler: d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true})}
 		go func() {
 			if err := d.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP: %v\n", err)
+			}
+		}()
+	}
+	if d.config.HTTPControl {
+		controlAddr := d.config.HTTPControlAddr
+		if controlAddr == "" {
+			controlAddr = "127.0.0.1:2713"
+		}
+		d.httpControl = &http.Server{Addr: controlAddr, Handler: d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true})}
+		go func() {
+			if err := d.httpControl.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP control: %v\n", err)
 			}
 		}()
 	}
@@ -207,6 +221,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.http != nil {
 		_ = d.http.Shutdown(ctx)
+	}
+	if d.httpControl != nil {
+		_ = d.httpControl.Shutdown(ctx)
 	}
 	if d.ipc != nil {
 		_ = d.ipc.Close()
@@ -587,7 +604,7 @@ func DefaultConfig() (Config, error) {
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:20127", HTTPControl: false}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713"}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }

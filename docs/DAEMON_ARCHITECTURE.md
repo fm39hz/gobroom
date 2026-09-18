@@ -46,7 +46,7 @@ For OpenAI-compatible clients that only understand HTTP:
 ```text
 gobroomd
   ├── IPC socket                 (full control)
-  └── HTTP on 127.0.0.1:20127   (provider/data plane)
+  └── HTTP on 127.0.0.1:2712    (provider/data plane)
 ```
 
 The HTTP listener is a gateway over the same kernel. It does not implement a
@@ -161,7 +161,7 @@ daemon:
     path: "${runtime_dir}/gobroom.sock"
   http:
     enabled: true
-    address: "127.0.0.1:20127"
+    address: "127.0.0.1:2712"
     tls: false
     data_plane: true
     control_plane: false
