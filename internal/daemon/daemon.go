@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fm39hz/gobroom/internal/adapter/anthropic"
-	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/discovery"
 	"github.com/fm39hz/gobroom/internal/kernel"
@@ -24,11 +22,12 @@ import (
 )
 
 type Config struct {
-	DBPath      string
-	IPCPath     string
-	HTTPEnabled bool
-	HTTPAddr    string
-	HTTPControl bool
+	DBPath              string
+	IPCPath             string
+	HTTPEnabled         bool
+	HTTPAddr            string
+	HTTPControl         bool
+	ProviderManifestDir string
 }
 
 type Daemon struct {
@@ -74,15 +73,52 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return err
 	}
-	d.kernel.Adapters[kernel.ProtocolOpenAIChat] = openai.Chat{}
-	d.kernel.Adapters[kernel.ProtocolOpenAIResponses] = openai.Responses{}
-	d.kernel.Adapters[kernel.ProtocolAnthropic] = anthropic.Messages{}
+	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
+	if d.config.ProviderManifestDir != "" {
+		if err := runtimeRegistry.LoadDefinitionDir(d.config.ProviderManifestDir); err != nil {
+			_ = s.Close()
+			return fmt.Errorf("load provider manifests: %w", err)
+		}
+	}
+	if _, err := runtimeRegistry.BuildBindings(); err != nil {
+		_ = s.Close()
+		return err
+	}
+	d.kernel.Adapters = runtimeRegistry.Adapters()
+	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiers()
+	go (runtimehealth.QuotaPoller{
+		Sources:  runtimeRegistry.QuotaSources(),
+		Snapshot: func() kernel.Snapshot { return d.kernel.Snapshots.Load() },
+		Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
+			credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
+			if !ok {
+				return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
+			}
+			flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(credential.Type))
+			if !ok {
+				return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", credential.Type)
+			}
+			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
+		},
+		Record: func(snapshot quota.Snapshot) {
+			d.policy.SetQuota(snapshot)
+			_ = d.store.SaveQuotaSnapshot(snapshot)
+		},
+	}).Run(ctx)
 	d.kernel.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
 		credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
 		if !ok {
 			return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
 		}
-		return kernel.Credential{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret}, nil
+		flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(credential.Type))
+		if !ok {
+			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", credential.Type)
+		}
+		return flow.Resolve(context.Background(), provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 	}
 	healthEvents := make(chan healthEvent, 256)
 	d.policy.Health.SetObserver(func(route kernel.Route, state runtimehealth.RouteHealth) {
@@ -249,7 +285,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &input); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.validatePrefix(input.Prefix); err != nil {
+		if err := d.validatePrefix(input.Prefix, input.DefinitionID); err != nil {
 			return fail(request, err.Error())
 		}
 		item, err := d.store.CreateProviderNode(input)
@@ -269,7 +305,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, "id is required")
 		}
 		if input.Prefix != "" {
-			if err := d.validatePrefixUpdate(input.ID, input.Prefix); err != nil {
+			if err := d.validatePrefixUpdate(input.ID, input.Prefix, input.DefinitionID); err != nil {
 				return fail(request, err.Error())
 			}
 		}
@@ -505,7 +541,7 @@ func stringParam(params map[string]any, key string) string {
 	return value
 }
 
-func (d *Daemon) validatePrefix(prefix string) error {
+func (d *Daemon) validatePrefix(prefix, definitionID string) error {
 	registry := provider.NewPrefixRegistry()
 	items, err := d.store.ProviderNodes()
 	if err != nil {
@@ -516,10 +552,13 @@ func (d *Daemon) validatePrefix(prefix string) error {
 			return err
 		}
 	}
-	return registry.AddCustom(prefix, "pending")
+	if definitionID == "" {
+		definitionID = "openai-compatible-chat"
+	}
+	return registry.AddNode(prefix, definitionID)
 }
 
-func (d *Daemon) validatePrefixUpdate(id, prefix string) error {
+func (d *Daemon) validatePrefixUpdate(id, prefix, definitionID string) error {
 	registry := provider.NewPrefixRegistry()
 	items, err := d.store.ProviderNodes()
 	if err != nil {
@@ -533,7 +572,10 @@ func (d *Daemon) validatePrefixUpdate(id, prefix string) error {
 			return err
 		}
 	}
-	return registry.AddCustom(prefix, id)
+	if definitionID == "" {
+		definitionID = "openai-compatible-chat"
+	}
+	return registry.AddNode(prefix, definitionID)
 }
 
 func DefaultConfig() (Config, error) {
@@ -573,4 +615,13 @@ func healthStatus(state runtimehealth.RouteHealth) string {
 		return "cooldown"
 	}
 	return "available"
+}
+
+func authFlowID(credentialType string) string {
+	switch credentialType {
+	case "api_key", "apikey", "bearer", "access_token", "static-secret":
+		return "static-secret"
+	default:
+		return credentialType
+	}
 }

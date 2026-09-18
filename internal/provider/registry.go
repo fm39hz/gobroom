@@ -81,6 +81,31 @@ func (r *PrefixRegistry) AddCustom(prefix, canonical string) error {
 	return nil
 }
 
+// AddNode registers a configured provider node. A node can reuse a built-in
+// prefix when its generic definition is compatible with that prefix.
+func (r *PrefixRegistry) AddNode(prefix, definitionID string) error {
+	prefix = strings.TrimSpace(prefix)
+	definitionID = strings.TrimSpace(definitionID)
+	if prefix == "" || definitionID == "" {
+		return fmt.Errorf("prefix and definition ID are required")
+	}
+	if existing, ok := r.entries[prefix]; ok {
+		if existing.Kind == PrefixBuiltIn && compatibleNodeDefinition(existing.Canonical, definitionID) {
+			return nil
+		}
+		return fmt.Errorf("prefix %q already belongs to %s (%s)", prefix, existing.Canonical, existing.Kind)
+	}
+	r.entries[prefix] = PrefixEntry{Prefix: prefix, Canonical: definitionID, Kind: PrefixCustom}
+	return nil
+}
+
+func compatibleNodeDefinition(canonical, definitionID string) bool {
+	if canonical == definitionID {
+		return true
+	}
+	return definitionID == "openai-compatible-chat" && canonical != "anthropic" && canonical != "responses"
+}
+
 func (r *PrefixRegistry) Resolve(prefix string) (PrefixEntry, bool) {
 	entry, ok := r.entries[prefix]
 	return entry, ok

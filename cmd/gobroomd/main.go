@@ -31,10 +31,11 @@ func main() {
 	addr := flag.String("addr", defaults.HTTPAddr, "HTTP data plane listen address")
 	httpEnabled := flag.Bool("http", true, "enable HTTP data plane")
 	httpControl := flag.Bool("http-control", false, "expose HTTP control plane")
+	providerManifestDir := flag.String("provider-manifests", "", "directory containing provider definition JSON files")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl})
+	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl, ProviderManifestDir: *providerManifestDir})
 	if err := d.Start(ctx); err != nil {
 		log.Fatal(err)
 	}

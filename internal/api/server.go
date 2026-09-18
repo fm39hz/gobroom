@@ -174,6 +174,9 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id is required"})
 			return
 		}
+		if input.DefinitionID == "" {
+			input.DefinitionID = "openai-compatible-chat"
+		}
 		prefixes := provider.NewPrefixRegistry()
 		for _, node := range mustProviderNodes(s.store) {
 			if node.ID != input.ID {
@@ -184,7 +187,7 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if input.Prefix != "" {
-			if err := prefixes.AddCustom(input.Prefix, input.ID); err != nil {
+			if err := prefixes.AddNode(input.Prefix, input.DefinitionID); err != nil {
 				writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 				return
 			}
@@ -210,6 +213,9 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
 		return
 	}
+	if input.DefinitionID == "" {
+		input.DefinitionID = "openai-compatible-chat"
+	}
 	prefixes := provider.NewPrefixRegistry()
 	existing, err := s.store.ProviderNodes()
 	if err != nil {
@@ -222,7 +228,7 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := prefixes.AddCustom(input.Prefix, "pending"); err != nil {
+	if err := prefixes.AddNode(input.Prefix, input.DefinitionID); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}

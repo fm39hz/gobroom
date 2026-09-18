@@ -125,7 +125,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 		t.Fatal(err)
 	}
 	defer k.Close()
-	k.Adapters[kernel.ProtocolOpenAIChat] = openai.Chat{}
+	k.Adapters["openai-chat"] = openai.Chat{}
 	k.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
 		credential, ok := s.ConnectionCredentialByID(route.CredentialID)
 		if !ok {

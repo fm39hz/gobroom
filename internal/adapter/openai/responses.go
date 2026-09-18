@@ -21,6 +21,28 @@ const responsesUpstreamTimeout = 2 * time.Minute
 func (Responses) ID() string                { return "openai-responses" }
 func (Responses) Protocol() kernel.Protocol { return kernel.ProtocolOpenAIResponses }
 
+type responsesRequestCodec struct{ adapter Responses }
+
+func (c responsesRequestCodec) ID() string { return "openai-responses-json" }
+func (c responsesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	return c.adapter.Prepare(ctx, request, route, credential)
+}
+
+type responsesResponseCodec struct{ adapter Responses }
+
+func (c responsesResponseCodec) ID() string { return "openai-responses-sse" }
+func (c responsesResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	return c.adapter.ClassifyError(status, body)
+}
+func (c responsesResponseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
+	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+}
+
+func NewResponsesAdapter() kernel.ProviderAdapter {
+	adapter := Responses{}
+	return kernel.ComposedAdapter{AdapterID: "openai-responses", AdapterProtocol: kernel.ProtocolOpenAIResponses, Request: responsesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: responsesResponseCodec{adapter}}
+}
+
 func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	if route.BaseURL == "" {
 		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)

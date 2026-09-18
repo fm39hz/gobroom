@@ -41,17 +41,21 @@ type Combo struct {
 }
 
 type Route struct {
-	ID             string
-	NodeID         string
-	DisplayPrefix  string
-	ExternalModel  string
-	Protocol       Protocol
-	Capabilities   map[string]bool
-	Weight         int
-	Enabled        bool
-	BaseURL        string
-	CredentialID   string
-	CredentialType string
+	ID                string
+	NodeID            string
+	DisplayPrefix     string
+	ExternalModel     string
+	Protocol          Protocol
+	AdapterID         string
+	DefinitionID      string
+	ErrorClassifierID string
+	QuotaSourceID     string
+	Capabilities      map[string]bool
+	Weight            int
+	Enabled           bool
+	BaseURL           string
+	CredentialID      string
+	CredentialType    string
 }
 
 type Snapshot struct {
@@ -111,6 +115,10 @@ type ProviderAdapter interface {
 	Execute(context.Context, UpstreamRequest) (UpstreamResponse, error)
 	ClassifyError(status int, body []byte) ErrorClass
 	TranslateStream(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error
+}
+
+type ErrorClassifier interface {
+	ClassifyError(status int, body []byte) ErrorClass
 }
 
 type Credential struct {

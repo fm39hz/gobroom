@@ -1,0 +1,173 @@
+[
+  {
+    "id": "openai",
+    "version": "9router-source-1",
+    "displayName": "OpenAI",
+    "aliases": ["openai"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.openai.com/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {
+      "chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}
+    },
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "openrouter",
+    "version": "9router-source-1",
+    "displayName": "OpenRouter",
+    "aliases": ["openrouter"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://openrouter.ai/api/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {
+      "chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}
+    },
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "deepseek",
+    "version": "9router-source-1",
+    "displayName": "DeepSeek",
+    "aliases": ["deepseek"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.deepseek.com", "modelsPath": "/models"},
+    "operations": {
+      "chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}
+    },
+    "capabilities": {"chat": true, "messages": true, "streaming": true, "tools": true, "thinking": true}
+  },
+  {
+    "id": "anthropic",
+    "version": "9router-source-1",
+    "displayName": "Anthropic",
+    "aliases": ["anthropic"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.anthropic.com/v1", "modelsPath": "/models", "format": "claude"},
+    "operations": {
+      "messages": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "anthropic-messages", "requestCodec": {"kind": "request_codec", "id": "anthropic-messages-json"}, "responseCodec": {"kind": "response_codec", "id": "anthropic-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}
+    },
+    "capabilities": {"messages": true, "streaming": true, "tools": true, "thinking": true}
+  },
+  {
+    "id": "groq",
+    "version": "9router-source-1",
+    "displayName": "Groq",
+    "aliases": ["groq"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.groq.com/openai/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "mistral",
+    "version": "9router-source-1",
+    "displayName": "Mistral",
+    "aliases": ["mistral"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.mistral.ai/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "together",
+    "version": "9router-source-1",
+    "displayName": "Together",
+    "aliases": ["together"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.together.xyz/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "fireworks",
+    "version": "9router-source-1",
+    "displayName": "Fireworks AI",
+    "aliases": ["fireworks"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.fireworks.ai/inference/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "cerebras",
+    "version": "9router-source-1",
+    "displayName": "Cerebras",
+    "aliases": ["cerebras"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.cerebras.ai/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "nvidia",
+    "version": "9router-source-1",
+    "displayName": "NVIDIA NIM",
+    "aliases": ["nvidia"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://integrate.api.nvidia.com/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "siliconflow",
+    "version": "9router-source-1",
+    "displayName": "SiliconFlow",
+    "aliases": ["siliconflow"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.siliconflow.com/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "glm",
+    "version": "9router-source-1",
+    "displayName": "GLM International",
+    "aliases": ["glm"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.z.ai/api/anthropic/v1", "modelsPath": "/models", "format": "claude"},
+    "operations": {"messages": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "anthropic-messages", "requestCodec": {"kind": "request_codec", "id": "anthropic-messages-json"}, "responseCodec": {"kind": "response_codec", "id": "anthropic-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}},
+    "capabilities": {"messages": true, "streaming": true, "tools": true, "thinking": true}
+  },
+  {
+    "id": "glm-cn",
+    "version": "9router-source-1",
+    "displayName": "GLM China",
+    "aliases": ["glm-cn"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true, "thinking": true}
+  },
+  {
+    "id": "perplexity-agent",
+    "version": "9router-source-1",
+    "displayName": "Perplexity Agent",
+    "aliases": ["perplexity-agent"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.perplexity.ai/v1", "modelsPath": "/models", "format": "openai-responses"},
+    "operations": {"responses": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-responses", "requestCodec": {"kind": "request_codec", "id": "openai-responses-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-responses-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"responses": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "vercel-ai-gateway",
+    "version": "9router-source-1",
+    "displayName": "Vercel AI Gateway",
+    "aliases": ["vercel-ai-gateway"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://ai-gateway.vercel.sh/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  },
+  {
+    "id": "tokenrouter",
+    "version": "9router-source-1",
+    "displayName": "TokenRouter",
+    "aliases": ["tokenrouter"],
+    "auth": {"kind": "auth", "id": "static-secret"},
+    "defaults": {"baseUrl": "https://api.tokenrouter.com/v1", "modelsPath": "/models", "format": "openai"},
+    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "runtimeAdapterId": "openai-chat", "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "capabilities": {"chat": true, "streaming": true, "tools": true}
+  }
+]

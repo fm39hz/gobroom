@@ -21,6 +21,28 @@ const defaultUpstreamTimeout = 2 * time.Minute
 func (Chat) ID() string                { return "openai-chat" }
 func (Chat) Protocol() kernel.Protocol { return kernel.ProtocolOpenAIChat }
 
+type chatRequestCodec struct{ adapter Chat }
+
+func (c chatRequestCodec) ID() string { return "openai-chat-json" }
+func (c chatRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	return c.adapter.Prepare(ctx, request, route, credential)
+}
+
+type chatResponseCodec struct{ adapter Chat }
+
+func (c chatResponseCodec) ID() string { return "openai-sse" }
+func (c chatResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	return c.adapter.ClassifyError(status, body)
+}
+func (c chatResponseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
+	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+}
+
+func NewAdapter() kernel.ProviderAdapter {
+	adapter := Chat{}
+	return kernel.ComposedAdapter{AdapterID: "openai-chat", AdapterProtocol: kernel.ProtocolOpenAIChat, Request: chatRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: chatResponseCodec{adapter}}
+}
+
 func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	if route.BaseURL == "" {
 		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)

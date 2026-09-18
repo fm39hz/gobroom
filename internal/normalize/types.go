@@ -15,50 +15,50 @@ const (
 )
 
 type Request struct {
-	Model        string
-	SourceFormat Format
-	Stream       bool
-	Messages     []Message
-	Tools        []Tool
-	Thinking     ThinkingIntent
-	Session      SessionContext
-	Continuity   ContinuityState
-	Modalities   Modalities
-	Transport    TransportHints
-	Extensions   map[string]any
-	Raw          map[string]any
+	Model        string          `json:"model"`
+	SourceFormat Format          `json:"-"`
+	Stream       bool            `json:"stream,omitempty"`
+	Messages     []Message       `json:"messages,omitempty"`
+	Tools        []Tool          `json:"tools,omitempty"`
+	Thinking     ThinkingIntent  `json:"thinking,omitempty"`
+	Session      SessionContext  `json:"-"`
+	Continuity   ContinuityState `json:"-"`
+	Modalities   Modalities      `json:"-"`
+	Transport    TransportHints  `json:"-"`
+	Extensions   map[string]any  `json:"-"`
+	Raw          map[string]any  `json:"-"`
 }
 
 type Message struct {
-	Role       string
-	Content    any
-	Name       string
-	ToolCallID string
-	ToolCalls  []ToolCall
-	Metadata   map[string]any
+	Role       string         `json:"role"`
+	Content    any            `json:"content,omitempty"`
+	Name       string         `json:"name,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
+	Metadata   map[string]any `json:"-"`
 }
 
 type ContentPart struct {
-	Type      string
-	Text      string
-	URL       string
-	MediaType string
-	Data      string
-	Metadata  map[string]any
+	Type      string         `json:"type"`
+	Text      string         `json:"text,omitempty"`
+	URL       string         `json:"url,omitempty"`
+	MediaType string         `json:"media_type,omitempty"`
+	Data      string         `json:"data,omitempty"`
+	Metadata  map[string]any `json:"-"`
 }
 
 type ToolCall struct {
-	ID        string
-	Type      string
-	Name      string
-	Arguments any
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Name      string `json:"name,omitempty"`
+	Arguments any    `json:"arguments,omitempty"`
 }
 
 type Tool struct {
-	Type     string
-	Name     string
-	Function map[string]any
-	Metadata map[string]any
+	Type     string         `json:"type"`
+	Name     string         `json:"name,omitempty"`
+	Function map[string]any `json:"function,omitempty"`
+	Metadata map[string]any `json:"-"`
 }
 
 type ThinkingIntent struct {

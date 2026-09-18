@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
@@ -53,7 +54,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if protocol == "" {
 			protocol = kernel.ProtocolOpenAIChat
 		}
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, Capabilities: row.Capabilities, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, AdapterID: provider.RuntimeAdapterIDForProtocol(protocol), ErrorClassifierID: "http-json", Capabilities: row.Capabilities, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
 		baseID := row.ID
 		if at := strings.IndexByte(baseID, '@'); at >= 0 {
 			baseID = baseID[:at]

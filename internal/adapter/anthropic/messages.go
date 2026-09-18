@@ -22,6 +22,28 @@ const defaultUpstreamTimeout = 2 * time.Minute
 func (Messages) ID() string                { return "anthropic-messages" }
 func (Messages) Protocol() kernel.Protocol { return kernel.ProtocolAnthropic }
 
+type messagesRequestCodec struct{ adapter Messages }
+
+func (c messagesRequestCodec) ID() string { return "anthropic-messages-json" }
+func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	return c.adapter.Prepare(ctx, request, route, credential)
+}
+
+type messagesResponseCodec struct{ adapter Messages }
+
+func (c messagesResponseCodec) ID() string { return "anthropic-sse" }
+func (c messagesResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	return c.adapter.ClassifyError(status, body)
+}
+func (c messagesResponseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
+	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+}
+
+func NewAdapter() kernel.ProviderAdapter {
+	adapter := Messages{}
+	return kernel.ComposedAdapter{AdapterID: "anthropic-messages", AdapterProtocol: kernel.ProtocolAnthropic, Request: messagesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: messagesResponseCodec{adapter}}
+}
+
 func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	if route.BaseURL == "" {
 		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)

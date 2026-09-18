@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/spf13/cobra"
@@ -67,21 +66,22 @@ func simpleCommand(use, short, method string, flags map[string]*string) *cobra.C
 func resourceCommands() []*cobra.Command {
 	providers := &cobra.Command{Use: "providers", Short: "manage provider nodes"}
 	providers.AddCommand(listCommand("list", "providers.list", nil))
-	var name, prefix, baseURL, protocol, modelsPath, authMode, providerID string
+	var name, prefix, baseURL, protocol, definitionID, modelsPath, authMode, providerID string
 	create := &cobra.Command{Use: "create", Short: "create provider node", RunE: func(*cobra.Command, []string) error {
-		return invoke("providers.create", map[string]any{"name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "modelsPath": modelsPath, "authMode": authMode})
+		return invoke("providers.create", map[string]any{"name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "modelsPath": modelsPath, "authMode": authMode})
 	}}
 	create.Flags().StringVar(&name, "name", "", "display name")
 	create.Flags().StringVar(&prefix, "prefix", "", "wire prefix")
 	create.Flags().StringVar(&baseURL, "base-url", "", "provider base URL")
 	create.Flags().StringVar(&protocol, "protocol", "openai_chat", "protocol")
+	create.Flags().StringVar(&definitionID, "definition-id", "", "provider definition ID")
 	create.Flags().StringVar(&modelsPath, "models-path", "/models", "models endpoint path")
 	create.Flags().StringVar(&authMode, "auth-mode", "api_key", "authentication mode")
 	providers.AddCommand(create)
 	update := &cobra.Command{Use: "update", Short: "update provider node", RunE: func(*cobra.Command, []string) error {
-		return invoke("providers.update", map[string]any{"id": providerID, "name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "modelsPath": modelsPath, "authMode": authMode})
+		return invoke("providers.update", map[string]any{"id": providerID, "name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "modelsPath": modelsPath, "authMode": authMode})
 	}}
-	bindProviderFlags(update, &providerID, &name, &prefix, &baseURL, &protocol, &modelsPath, &authMode)
+	bindProviderFlags(update, &providerID, &name, &prefix, &baseURL, &protocol, &definitionID, &modelsPath, &authMode)
 	providers.AddCommand(update)
 	providers.AddCommand(idCommand("delete", "delete provider node", "providers.delete", "id", &providerID))
 	refresh := idCommand("refresh-models", "refresh provider model catalog", "providers.refresh_models", "nodeID", &providerID)
@@ -135,14 +135,15 @@ func resourceCommands() []*cobra.Command {
 	logical.AddCommand(logicalUpsert, idCommand("delete", "delete logical model", "logical_models.delete", "name", &logicalName))
 
 	combos := &cobra.Command{Use: "combos", Short: "manage fallback combos"}
-	var comboName, comboStrategy, comboMembers string
+	var comboName, comboStrategy string
+	var comboMembers []string
 	combos.AddCommand(listCommand("list", "combos.list", nil))
 	comboUpsert := &cobra.Command{Use: "upsert", Short: "upsert combo", RunE: func(*cobra.Command, []string) error {
-		return invoke("combos.upsert", map[string]any{"name": comboName, "strategy": comboStrategy, "members": splitCSV(comboMembers)})
+		return invoke("combos.upsert", map[string]any{"name": comboName, "strategy": comboStrategy, "members": comboMembers})
 	}}
 	comboUpsert.Flags().StringVar(&comboName, "name", "", "combo name")
 	comboUpsert.Flags().StringVar(&comboStrategy, "strategy", "fallback", "fallback, round_robin, round_robin_fallback or weighted")
-	comboUpsert.Flags().StringVar(&comboMembers, "members", "", "comma-separated members")
+	comboUpsert.Flags().StringArrayVar(&comboMembers, "member", nil, "combo member reference (repeat for multiple members)")
 	combos.AddCommand(comboUpsert, idCommand("delete", "delete combo", "combos.delete", "name", &comboName))
 
 	public := &cobra.Command{Use: "public-models", Short: "manage published models"}
@@ -176,24 +177,15 @@ func idCommand(use, short, method, flag string, value *string) *cobra.Command {
 	return cmd
 }
 
-func bindProviderFlags(cmd *cobra.Command, id, name, prefix, baseURL, protocol, modelsPath, authMode *string) {
+func bindProviderFlags(cmd *cobra.Command, id, name, prefix, baseURL, protocol, definitionID, modelsPath, authMode *string) {
 	cmd.Flags().StringVar(id, "id", "", "provider node ID")
 	cmd.Flags().StringVar(name, "name", "", "display name")
 	cmd.Flags().StringVar(prefix, "prefix", "", "wire prefix")
 	cmd.Flags().StringVar(baseURL, "base-url", "", "provider base URL")
 	cmd.Flags().StringVar(protocol, "protocol", "", "protocol")
+	cmd.Flags().StringVar(definitionID, "definition-id", "", "provider definition ID")
 	cmd.Flags().StringVar(modelsPath, "models-path", "", "models endpoint path")
 	cmd.Flags().StringVar(authMode, "auth-mode", "", "authentication mode")
-}
-
-func splitCSV(value string) []string {
-	var result []string
-	for _, item := range strings.Split(value, ",") {
-		if item = strings.TrimSpace(item); item != "" {
-			result = append(result, item)
-		}
-	}
-	return result
 }
 
 func invoke(method string, params map[string]any) error {

@@ -16,7 +16,8 @@ import (
 type Kernel struct {
 	Snapshots         *SnapshotStore
 	Scheduler         *Scheduler
-	Adapters          map[Protocol]ProviderAdapter
+	Adapters          map[string]ProviderAdapter
+	ErrorClassifiers  map[string]ErrorClassifier
 	Events            chan UsageEvent
 	ResolveCredential CredentialResolver
 	closed            atomic.Bool
@@ -37,7 +38,7 @@ func New(initial Snapshot, gate Gate, buffer int) (*Kernel, error) {
 	if buffer < 1 {
 		buffer = 256
 	}
-	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[Protocol]ProviderAdapter{}, Events: make(chan UsageEvent, buffer)}, nil
+	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[string]ErrorClassifier{}, Events: make(chan UsageEvent, buffer)}, nil
 }
 
 func (k *Kernel) Resolve(name string) (ResolvedModel, error) {
@@ -87,7 +88,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		if !protocolMatchesRequest(req.SourceFormat, candidate.Protocol) {
 			continue
 		}
-		adapter := k.Adapters[candidate.Protocol]
+		adapter := k.Adapters[candidate.AdapterID]
 		if adapter == nil {
 			continue
 		}
@@ -115,6 +116,9 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		if response.Status >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 			class := adapter.ClassifyError(response.Status, body)
+			if classifier, ok := k.ErrorClassifiers[candidate.ErrorClassifierID]; ok {
+				class = classifier.ClassifyError(response.Status, body)
+			}
 			retryAfter := retryAfterDuration(response.Headers.Get("Retry-After"))
 			if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 				feedback.MarkFailureAfter(candidate, class, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))), retryAfter)

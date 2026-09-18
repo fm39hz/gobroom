@@ -177,7 +177,7 @@ func newForm(index int) *form {
 	case 2:
 		return &form{title: "create connection", method: "connections.create", fields: []string{"nodeID", "name", "credentialType", "secret", "priority"}, values: make([]string, 5)}
 	case 4:
-		return &form{title: "upsert combo", method: "combos.upsert", fields: []string{"name", "strategy", "members(comma-separated)"}, values: []string{"", "fallback", ""}}
+		return &form{title: "upsert combo", method: "combos.upsert", fields: []string{"name", "strategy", "members(JSON array)"}, values: []string{"", "fallback", "[]"}}
 	case 5:
 		return &form{title: "publish model", method: "public_models.upsert", fields: []string{"name", "targetRef", "ownedBy"}, values: []string{"", "", "gobroom"}}
 	default:
@@ -233,11 +233,9 @@ func formParams(f *form) (map[string]any, error) {
 		}
 		params["providerNodeID"], params["name"], params["credentialType"], params["secret"], params["priority"] = f.values[0], f.values[1], f.values[2], f.values[3], priority
 	case "combos.upsert":
-		members := make([]string, 0)
-		for _, member := range strings.Split(f.values[2], ",") {
-			if value := strings.TrimSpace(member); value != "" {
-				members = append(members, value)
-			}
+		var members []string
+		if err := json.Unmarshal([]byte(f.values[2]), &members); err != nil {
+			return nil, fmt.Errorf("members must be a JSON string array: %w", err)
 		}
 		params["name"], params["strategy"], params["members"] = f.values[0], f.values[1], members
 	case "public_models.upsert":
