@@ -1,95 +1,94 @@
 # GoBroom
 
-GoBroom is a local AI provider daemon with an OpenAI-compatible data plane.
+GoBroom is a local AI gateway daemon with an OpenAI-compatible HTTP data plane
+and a separate local control plane. The daemon owns configuration, routing,
+provider execution and runtime state; the CLI and TUI are clients and are not
+required while serving requests.
 
-It manages provider nodes, model routes, fallback combos and public models. The
-CLI and TUI are frontend clients of the daemon; they do not read SQLite
-directly.
+The product vision is a lightweight, portable gateway that makes provider
+connections, discovered routes, physical models and combo models easy to
+manage without conflating those layers.
+SQLite, stdout/journal logging and loopback-only serving are simple defaults,
+not assumptions the domain is built around. See [the vision](docs/VISION.md)
+and [roadmap](docs/IMPLEMENTATION_PLAN.md) for boundaries and current gaps.
 
-## Current capabilities
+The project focuses on the useful provider/model-routing workflow: configure a
+provider node and its connections, discover provider routes, group equivalent
+routes into physical models, compose role/use-case combos, then expose the
+model names clients may discover and use.
 
-- OpenAI-compatible /v1/models, /v1/chat/completions, /v1/responses and /v1/messages;
-- OpenAI Chat, OpenAI Responses and Anthropic Messages adapters;
-- basic Anthropic-to-OpenAI Chat text/tool SSE conversion;
-- provider prefixes and /models discovery;
-- custom model catalog entries with capability filtering;
-- logical models and nested combos;
-- explicit public-model publishing;
-- snapshot validation and cycle detection;
-- SQLite control plane and Unix IPC;
-- per-connection route candidates, health cooldowns and basic persisted quota gates;
-- optional HTTP control API;
-- status TUI;
-- Makefile build/test/install targets.
+## Implemented today
 
-## Status
+- Go daemon, SQLite state, Unix-domain-socket IPC and optional HTTP control API;
+- loopback HTTP data plane, default `127.0.0.1:2712`;
+- `/v1/models`, `/v1/chat/completions`, `/v1/responses` and `/v1/messages` routes;
+- provider nodes, multiple credential connections, model discovery and custom
+  catalog entries;
+- logical model references, nested combos and explicit public-model publishing;
+- JSON provider manifests composed from registered endpoint, auth, codec,
+  discovery, quota and error-classification primitives;
+- OpenAI Chat, OpenAI Responses and Anthropic Messages adapters, with the
+  protocol/streaming limits described in the compatibility matrix;
+- immutable route snapshots, connection-aware scheduling, health cooldowns,
+  persisted quota snapshots, and asynchronous compact usage events;
+- Cobra CLI and an alternate-screen Bubble Tea dashboard with independently
+  framed panes, basic filtering/editors and daemon-only IPC access. This is an
+  early UX slice: the target Models workspace will manage Discovered, Physical
+  and Combos as separate tabs, with LazyGit-style block/item/tab/depth
+  navigation. See [the TUI UX contract](docs/TUI_UX.md).
 
-GoBroom is under active development. The daemon, control plane, normalization
-IR, connection-aware fallback and initial provider adapters are implemented.
-Provider-specific OAuth, advanced quota accounting, full cross-protocol event
-translation and the complete TUI are not finished yet.
+The existence of an endpoint or an adapter does not imply complete protocol
+parity. In particular, OAuth refresh flows, comprehensive cross-protocol SSE
+semantics, provider-specific quota integrations and a finished interactive TUI
+remain unfinished; see [current status](docs/IMPLEMENTATION_PLAN.md).
 
-## Build
+## Build and run
 
-Requirements: Go 1.27 or newer and Unix domain sockets on Unix-like systems.
+Requirements: Go 1.27+ and Unix domain sockets on Unix-like systems.
 
-    make build-all
-    make test
+```sh
+make test
+make build-all
+make run-daemon
+```
 
-## Run
+The daemon stores state in the user configuration directory, serves the data
+plane on loopback port `2712`, and uses a Unix socket for control IPC. The HTTP
+control API is optional and defaults to loopback port `2713` when enabled.
 
-    make run-daemon
+```sh
+gobroom status
+gobroom providers list
+gobroom models list
+gobroom-tui
+```
 
-By default the daemon stores SQLite state under the user config directory,
-creates a Unix IPC socket under the runtime directory, exposes the provider data
-plane on 127.0.0.1:2712, and keeps HTTP control disabled. If enabled, the
-separate HTTP control plane listens on 127.0.0.1:2713.
+The HTTP control API and provider data plane are separate surfaces. A frontend
+is never responsible for keeping the daemon alive or maintaining its SQLite
+state.
 
-## Provider API
+## Project map
 
-    http://127.0.0.1:2712/v1/models
-    http://127.0.0.1:2712/v1/chat/completions
-    http://127.0.0.1:2712/v1/responses
-    http://127.0.0.1:2712/v1/messages
+```text
+cmd/gobroomd        daemon entry point
+cmd/gobroom         CLI control client
+cmd/gobroom-tui     TUI control client
+internal/api        HTTP data/control handlers
+internal/daemon     lifecycle, IPC and service wiring
+internal/kernel     immutable route snapshot, scheduler and execution contract
+internal/normalize  inbound semantic request normalization
+internal/adapter    protocol adapters
+internal/provider   provider primitives, manifests and registries
+internal/controlplane snapshot construction and resolution
+internal/store      SQLite persistence
+internal/runtime    health and quota runtime policy
+internal/usage      bounded asynchronous usage events
+manifests/builtin   built-in provider definitions
+docs/               architecture, contracts, status and decisions
+```
 
-## IPC control plane
+## Documentation
 
-    gobroom status
-    gobroom reload
-
-The IPC layer supports daemon lifecycle, provider/model/combo/public-model
-operations, route resolution and model refresh. The TUI currently displays
-daemon status and supports reload.
-
-## Optional HTTP control API
-
-    gobroomd -http-control=true
-
-## Project layout
-
-    cmd/gobroomd       daemon entrypoint
-    cmd/gobroom        CLI IPC client
-    cmd/gobroom-tui    TUI IPC client
-    internal/api        HTTP gateway
-    internal/daemon     lifecycle and IPC server
-    internal/kernel     route snapshot and adapter contract
-    internal/normalize  semantic request normalization
-    internal/adapter    provider protocol adapters
-    internal/controlplane SQLite-to-snapshot loading
-    internal/discovery  provider /models discovery
-    internal/store      SQLite repositories
-
-Architecture docs: daemon (docs/DAEMON_ARCHITECTURE.md),
-kernel (docs/KERNEL_CONTRACT.md),
-normalization (docs/NORMALIZATION.md),
-plan (docs/IMPLEMENTATION_PLAN.md).
-
-## Development
-
-    make fmt
-    make test
-    make race
-    make vet
-    make build-all
-
-The daemon remains usable without any frontend running.
+Start at [the documentation index](docs/README.md). The implementation plan is
+the status source of truth; design documents define intended contracts and
+must not be read as a claim of complete feature parity.

@@ -15,7 +15,7 @@ default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 | HTTP routing | `github.com/go-chi/chi/v5` | `v5.3.2` | adopt when API surface grows | small middleware/router layer on top of `net/http`; avoids a custom route framework |
 | OAuth | `golang.org/x/oauth2` | `v0.37.0` | adopt | standard OAuth2/token transport, PKCE and device/auth helpers |
 | CLI | `github.com/spf13/cobra` | `v1.10.2` | adopt for `gobroom` | command tree, flags, help and completion without custom CLI plumbing |
-| TUI | `charm.land/bubbletea/v2` | `v2.0.9` | adopt later at M10 | Elm-style state/update/view model; keeps TUI state separate from daemon |
+| TUI | `charm.land/bubbletea/v2` | `v2.0.9` | adopted | Elm-style state/update/view model; used by the separate `gobroom-tui` executable |
 
 The official repositories report the current `chi` v5.3.2 release, `sqlc`
 v1.31.1, Cobra v1.10.2 and Bubble Tea v2.0.9. [chi releases](https://github.com/go-chi/chi/releases), [sqlc releases](https://github.com/sqlc-dev/sqlc/releases), [Cobra releases](https://github.com/spf13/cobra/releases), [Bubble Tea releases](https://github.com/charmbracelet/bubbletea/releases)
@@ -54,8 +54,14 @@ The project supports SQLite and versioned `v4` imports. [Official migrate reposi
 removes the current inline `CREATE TABLE`/best-effort `ALTER TABLE` pattern and
 makes database changes reviewable and reversible.
 
-The TUI will likewise be a separate frontend package/module. Bubble Tea must
-never become a dependency of `gobroomd`.
+The TUI is a separate executable in the current Go module, not a separate Go
+module. Bubble Tea is imported only by `cmd/gobroom-tui` and must never become a
+dependency of `gobroomd`'s runtime package graph.
+
+Migration and SQL generation tools are pinned in `tools/go.mod`, but the
+current store still owns its schema setup/repository SQL directly. The pinned
+tools are not evidence that generated repositories or versioned migrations are
+already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 

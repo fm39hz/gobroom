@@ -1,101 +1,94 @@
-# Daemon kernel contract
+# Data-plane kernel contract
 
-The kernel is the only owner of data-plane routing decisions. HTTP handlers,
-CLI/TUI and background jobs call this contract; they do not parse model names,
-walk combos or choose accounts themselves.
+Status: implemented execution boundary with a known graph/policy mismatch. The
+current resolver flattens nested combos into routes; hierarchical execution
+below is the target contract tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md).
 
-## Inputs
+## Ownership
 
-```text
-NormalizedRequest
-  model: public model ID
-  messages/tools: normalized conversation
-  stream: client stream preference
-  extensions: provider-neutral extensions
+The kernel owns public model resolution, route candidate ordering, request
+eligibility, adapter dispatch, fallback boundary and compact usage emission.
+HTTP handlers normalize inbound requests and translate kernel errors to HTTP;
+they do not walk combos or choose provider credentials. Provider adapters own
+wire protocol behavior.
 
-Credential
-  connection ID/type/secret supplied by the credential manager
-```
+## Snapshot and resolution
 
-The model field is a public model name. Internal combo names are not accepted
-by the data plane unless explicitly published.
+The target snapshot contains discovered routes, physical models, combo models
+and exposure flags. A request resolves only through this snapshot. Internal
+models remain valid graph members but are absent from `/v1/models` unless their
+exposure property is enabled.
 
-## Resolution
+Resolution must retain typed model nodes and their policy boundaries. A role
+combo selects a model member; that physical or nested combo then applies its own
+source/member policy. The current `resolveRef` route expansion loses this
+boundary and must not be treated as the final contract.
 
-```text
-Resolve(publicName) -> ResolvedModel
+Snapshots carry connection identifiers and routing metadata, never connection
+secrets. Credentials are resolved for the selected route at execution time.
 
-ResolvedModel
-  public name
-  target reference
-  strategy
-  ordered route candidates
-```
-
-Resolution is performed against an immutable `Snapshot`. A snapshot contains
-public models, logical references, combos and physical routes. It is validated
-before atomic publication, including nested-combo cycle detection.
-
-## Scheduling
+## Execution sequence
 
 ```text
-Select(resolvedModel, now) -> Route
+normalized request
+  -> resolve exposed model name
+  -> enter physical/combo model node
+  -> apply eligibility filters
+  -> ask the node's strategy for an execution plan
+  -> recursively execute the selected member
+  -> resolve route credential
+  -> adapter Prepare
+  -> adapter Execute
+  -> classify upstream status
+  -> translate response
+  -> update runtime policy and emit usage event
 ```
 
-The scheduler applies capability, cooldown and quota gates before selecting a
-route. Round-robin cursor changes are in-memory and scoped to a public model;
-they never require a SQLite write in the request path.
+The current kernel contract is represented by `ProviderAdapter` in
+`internal/kernel/contract.go`; provider execution is wired by the daemon.
 
-## Provider adapter
+## Scheduling and fallback
+
+Health and quota gates remove unavailable members before selection. Strategy is
+a primitive contract, with implementations such as ordered fallback, rotating
+fallback and weighted fallback. Resolution does not choose or erase strategy.
+Exact policy semantics and concurrency behavior require contract tests. No
+scheduler lock may span credential refresh or network I/O.
+
+Fallback is permitted only before response commitment. If an adapter has
+written/flushed response bytes, subsequent errors cannot transparently move to
+another candidate. A terminal error stops candidate fallback; retryable and
+cooldown outcomes may continue according to policy.
+
+## Adapter boundary
+
+```go
+Prepare(ctx, normalizedRequest, route, credential) -> upstream request
+Execute(ctx, upstream request) -> upstream response
+ClassifyError(status, body) -> stable error class
+TranslateStream(ctx, upstream response, writer, client format, hooks) -> error
+```
+
+The adapter interface currently combines several protocol responsibilities.
+M5 tracks extracting a shared canonical response-event layer without removing
+the ability to use a lossless passthrough path.
+
+## Runtime events
+
+Adapters report completion/error through hooks. The kernel enriches successful
+usage with logical model, route, connection and elapsed time, then attempts a
+non-blocking send to a bounded event channel. Runtime health updates and
+persistent usage workers consume events independently of response delivery.
+
+## Stable error classes
 
 ```text
-Prepare(normalizedRequest, route, credential) -> UpstreamRequest
-Execute(ctx, upstreamRequest) -> UpstreamResponse
-ClassifyError(status, body) -> ErrorClass
-TranslateStream(ctx, response, writer, hooks) -> error
+terminal   do not retry another route
+retryable  route may be retried/fallback may continue
+cooldown   suppress route for a policy interval
+auth       credential/authentication failure policy
 ```
 
-Adapters own protocol semantics. The kernel owns candidate selection,
-retry/fallback boundaries and event emission.
-
-## Fallback boundary
-
-The kernel may try another candidate when:
-
-- preparation fails before an upstream request is sent;
-- the upstream request fails before bytes reach the client;
-- the adapter classifies the response as retryable/cooldown/auth.
-
-It must not silently switch candidates after the client has received the first
-response byte.
-
-## Events
-
-The kernel emits compact usage events after a request. Consumers include:
-
-```text
-usage persistence
-quota estimation
-cost/budget policy
-route health
-control API metrics
-```
-
-Event delivery is bounded and non-blocking from the streaming path.
-
-## Errors
-
-The kernel exposes stable error classes rather than provider-specific error
-strings:
-
-```text
-model_not_published
-no_route
-auth
-cooldown
-retryable
-terminal
-cancelled
-```
-
-Provider-specific status codes and message heuristics stay inside adapters.
+Provider-specific status/body heuristics belong in classifier primitives, not
+kernel branches. Exact precedence, 401 refresh and post-commit behavior remain
+explicit test obligations.

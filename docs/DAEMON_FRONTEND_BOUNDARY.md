@@ -1,43 +1,38 @@
-# Daemon/frontend boundary
+# Daemon and frontend boundary
 
-`gobroomd` is the backend. CLI and TUI are replaceable frontend clients.
+Status: enforced architectural boundary; see [roadmap](IMPLEMENTATION_PLAN.md)
+for completeness of individual frontend workflows.
 
 ```text
 gobroomd
-  ├── data plane: /v1/*
-  ├── control plane: /api/*
-  ├── SQLite
-  ├── route snapshot
-  ├── provider adapters
-  ├── quota/usage/health workers
-  └── no terminal/UI dependency
+  ├── owns SQLite, routing snapshots, provider execution and runtime workers
+  ├── exposes local control IPC
+  ├── optionally exposes HTTP control
+  └── exposes the configured HTTP provider data plane
 
-gobroom CLI/TUI
-  ├── call local control API
-  ├── render state
-  ├── submit mutations
-  └── no direct SQLite access
+gobroom / gobroom-tui / future frontend
+  ├── sends typed control requests to the daemon
+  ├── renders returned state
+  └── never owns routing state or accesses SQLite directly
 ```
 
-The daemon must remain fully usable when:
+The daemon must serve requests when no CLI or TUI is installed or running.
+Frontends can be replaced independently; their control contract is IPC (and,
+when explicitly enabled, the HTTP control API), not direct Go imports into
+kernel/store packages.
 
-- no CLI is installed;
-- no TUI is running;
-- a different frontend is used;
-- configuration is edited through HTTP/API automation;
-- the daemon runs headless under a service manager.
+The current CLI already exposes management operations over IPC. The current
+Bubble Tea program is a basic control UI, not the final keyboard-first
+management experience. UX completion is tracked under M2 in the roadmap.
 
-The frontend contract is the control API, not Go package imports. This keeps
-the backend deployable as a standalone binary and lets the TUI evolve or be
-replaced without changing routing logic.
-
-## Dependency rule
+Dependency direction:
 
 ```text
-gobroomd → runtime dependencies only
-gobroom CLI → CLI client dependencies
-gobroom TUI → TUI dependencies, later separate module
-tools/ → sqlc/migration tooling only
+daemon -> runtime/control dependencies
+CLI    -> IPC client + Cobra
+TUI    -> IPC client + Bubble Tea
 ```
 
-No UI package may be imported by `internal/*` or `cmd/gobroomd`.
+No UI package may be imported by `internal/*` or `cmd/gobroomd`. Shared request
+and response payloads should live in a UI-independent control contract as that
+surface matures.

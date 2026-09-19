@@ -1,93 +1,93 @@
-# Provider presets and adapters
+# Provider definitions and runtime primitives
 
-GoBroom will continue to support prebuilt providers like 9router does. The
-difference is that a prebuilt provider is split into two pieces:
+Status: manifest/primitives foundation implemented; see M9 in the
+[implementation roadmap](IMPLEMENTATION_PLAN.md) for gaps.
 
-```text
-Provider preset = defaults and metadata
-Provider adapter = protocol/auth/translation behavior
-```
+## Goal
 
-## Preset
+Built-in and user-defined providers use the same configuration contract.
+Provider identity is data, not a switch statement in the routing kernel. Adding
+a provider should be a manifest composition of reusable primitives; if a new
+behavior is required, add one reusable primitive implementation and bind it in
+manifests rather than duplicating another provider.
 
-A preset provides convenient defaults:
+## Provider definition
 
-```text
-id
-display name
-default protocol
-default models endpoint
-auth mode
-default headers
-default timeout
-capability hints
-```
-
-Examples:
+A JSON provider definition identifies a provider and binds operations to typed
+primitive references. Relevant contract types are in
+`internal/provider/primitives.go`.
 
 ```text
-openai
-anthropic
-gemini
-codex
-openrouter
-g4f
-openai-compatible-chat
-openai-compatible-responses
+provider definition
+  ├── aliases and capabilities
+  ├── auth/session references
+  ├── defaults
+  └── operation bindings
+       ├── endpoint
+       ├── runtime adapter and request/response codec
+       ├── model source
+       ├── usage/quota source
+       └── error classifier
 ```
 
-The preset must never own user credentials, discovered model state or combo
-membership. Those remain in SQLite.
+An operation is optional when the provider does not support it. Capabilities
+describe behavior; they are not inferred solely from a marketing model name.
+Bindings are validated at load/startup, not by ad-hoc string edits while
+serving a request.
 
-## Adapter
+## Primitive responsibilities
 
-An adapter owns behavior that cannot be represented as configuration:
+| Primitive | Responsibility |
+|---|---|
+| Endpoint | Build operation URL, path and provider headers from typed configuration |
+| Auth | Resolve static credentials or an auth-flow contract into request credentials |
+| Request codec | Map normalized semantic input into upstream wire format |
+| Response codec | Decode JSON/SSE and emit the selected client format |
+| Model source | Discover and normalize the provider model catalog |
+| Usage source | Extract or query usage data |
+| Quota source | Read quota snapshots and reset information |
+| Error classifier | Convert upstream errors to stable retry/cooldown/terminal classes |
+| Session store | Persist protocol continuity/session state when an operation needs it |
+| Extension | Optional, typed behavior outside the common operation contract |
 
-- token exchange or refresh;
-- request body translation;
-- SSE event translation;
-- usage extraction;
-- provider error classification;
-- provider-specific project/session metadata.
+Providers may share any primitive. A provider definition composes them; it
+does not copy their implementation.
 
-Generic compatible providers use reusable adapters:
+## Resolution precedence
 
-```text
-OpenAI Chat adapter
-OpenAI Responses adapter
-Anthropic Messages adapter
-Gemini-compatible adapter
-passthrough adapter
-```
+Explicit node/connection settings override provider-definition defaults.
+Defaults provide convenience only and must not overwrite user configuration.
+Credential material belongs to a connection, never to a provider manifest or
+route snapshot.
 
-Provider-specific adapters are added only where the generic adapter cannot
-handle the service. This keeps the built-in provider list extensible without
-making the router core aware of every provider.
+## Current support and limits
 
-## Resolution order
+The runtime registry currently includes OpenAI Chat, OpenAI Responses and
+Anthropic Messages adapters; OpenAI-style model discovery; static model source;
+generic HTTP/JSON error classification; generic HTTP/JSON quota source; and
+static-secret authentication aliases. Built-in JSON definitions compose these
+primitives for compatible provider presets.
 
-When adding a provider:
+This is not yet a universal plugin system. OAuth flows, arbitrary provider
+specific endpoint parsing, all quota APIs, embeddings/media operations and
+every possible codec are not implemented. Adding a wholly new runtime behavior
+may currently require registering a shared primitive in Go; the architectural
+requirement is that this registration is generic and not a provider-specific
+kernel branch. Manifest-only addition is the target for providers whose needs
+fit the existing primitive vocabulary.
 
-```text
-1. User selects a preset or custom-compatible provider.
-2. User supplies base URL and credentials.
-3. Daemon selects the adapter from protocol/preset.
-4. Daemon calls the configured models endpoint.
-5. Discovered and custom models enter the shared catalog.
-6. Combos reference catalog entries or explicit custom routes.
-```
+## Adding a provider
 
-An explicit user setting always overrides a preset default:
+1. Identify the operations and protocol semantics from authoritative provider
+   docs or a captured fixture.
+2. Compose existing typed primitives in a JSON manifest if they fit.
+3. If they do not, define a reusable primitive contract/implementation and
+   tests; do not add a provider-name case to the kernel.
+4. Add manifest fixtures for auth binding, model discovery, request/response,
+   errors and optional quota/usage.
+5. Test the provider through the same connection/configuration path as a custom
+   provider.
 
-```text
-user protocol > preset protocol > generic inference
-user models path > preset models path
-user timeout > preset timeout
-user capability declaration > discovered capability hint
-```
-
-## Why this is better than hard-coding providers into combos
-
-Combos should refer to stable logical references, not provider implementation
-details. A provider can be replaced or reconfigured without rewriting every
-combo. Physical route expansion happens when the route snapshot is rebuilt.
+Prebuilt definitions are convenience defaults, not a separate provider class.
+Users must be able to change endpoint/auth/options and add custom models without
+forking a built-in implementation.

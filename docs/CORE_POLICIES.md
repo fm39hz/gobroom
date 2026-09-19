@@ -1,81 +1,67 @@
-# GoBroom core policies
+# Core runtime policies
 
-GoBroom keeps useful 9router techniques in the routing core, but removes the
-coupling and weak points that made the original process heavy.
+Status: design constraints for implementation. Implemented portions are marked
+in the [roadmap](IMPLEMENTATION_PLAN.md); this document does not imply that
+every listed policy is already complete.
 
-## Retain and improve
+## Routing policy
 
-```text
-provider presets and adapters
-model discovery and custom models
-logical names and nested combos
-public model publishing
-capability-aware routing
-account pools and token refresh
-route/account cooldowns
-provider quota tracking
-usage and cost accounting
-OpenAI/Responses/Anthropic compatibility
-SSE translation and cancellation
-round-robin, fallback and weighted policies
-```
+Keep static routing configuration in a validated immutable snapshot. The
+request path should avoid SQLite reads for model graphs and must never hold a
+global selection lock over database, credential or network I/O. Candidate
+selection is per request and may consult narrow mutable runtime gates such as
+health and quota.
 
-## Remove from the core request path
+Useful policy inputs include:
 
-```text
-global selection mutex
-per-request SQLite reads for static config
-synchronous raw payload persistence
-dashboard-driven state
-implicit prefix collisions
-implicit unknown-model fallback to OpenAI
-IDE MITM/DNS integration
-```
+- published-model target and combo order;
+- connection selection strategy and per-request exclusions;
+- model/connection capability compatibility;
+- cooldown, quota/reset and explicit preference;
+- upstream error classification and response commitment state.
 
-## Quota is routing state
+The implemented scheduler covers a subset of these; precedence and complete
+round-robin/sticky semantics remain test obligations.
 
-Quota snapshots are associated with provider node, connection, model and
-window. A scheduler can use them to:
+## Provider extensibility
 
-- exclude an exhausted route until its reset time;
-- select the route with the most remaining budget;
-- distinguish account-wide and model-specific limits;
-- apply provider `Retry-After` or provider-specific reset timestamps;
-- expose quota to CLI/TUI and the control API.
+Provider names must not appear as branches in the kernel. Manifests compose
+typed endpoint, authentication, codec, model-source, classifier, usage and
+quota primitives. Provider-specific behavior should be added as a reusable
+primitive or configuration binding. Do not duplicate one provider's code for
+another provider when their behavior is expressible by the same primitive.
 
-Quota sources may be:
+## Health, quota and usage
 
-```text
-provider quota API
-upstream response headers
-429/402/409 error bodies
-local usage estimation
-```
+Quota/usage state is useful only when it can influence routing or policy, not
+merely populate a dashboard. Quota snapshots should identify scope, source,
+observation time and reset time. Authoritative upstream observations must remain
+distinguishable from local estimates. Expired or unknown data must have explicit
+policy semantics.
 
-Each snapshot records its source and timestamp. Local estimates never silently
-override an authoritative provider snapshot.
+The data plane emits compact usage events into a bounded asynchronous path.
+Persistence, aggregation and display must not delay response delivery. Under
+backpressure, preserve aggregate/counter correctness where possible and drop or
+sample optional detail according to a documented policy. Raw payload logging is
+opt-in, bounded and separate from normal operation.
 
-## Usage is an event stream
+## Security and failure policy
 
-The data plane emits compact usage events after a request. A bounded worker
-consumes those events to update:
+- credentials belong to connections, not provider manifests or snapshots;
+- secrets must not appear in logs or ordinary list/status responses;
+- refresh/update is atomic and must preserve the last good credential on error;
+- retry/fallback is allowed only before response commitment;
+- cancellation propagates through provider calls and stream translation;
+- external HTTP exposure is explicit; control-plane exposure is independently
+  configurable from the provider data plane.
+
+## Keep out of the hot path
 
 ```text
-usage history
-daily/period aggregates
-cost and budget policies
-quota estimates
-route health scores
-control API metrics
+dashboard/TUI availability
+per-request SQLite reads for static model configuration
+synchronous verbose request-detail writes
+provider-name branching in kernel code
+IDE interception, MITM/DNS or tunnel lifecycle
+unbounded queues, retries or background polling
 ```
-
-Usage persistence must never delay the first response byte or block an SSE
-stream. If the queue is full, the daemon applies an explicit policy: retain
-aggregates and counters first, sample or drop verbose event details second.
-
-## Retention and data safety
-
-The normal database stores metadata and token counts, not full request/response
-payloads. Raw payload capture is a bounded, opt-in diagnostic sink with a
-retention limit. SQLite maintenance and usage retention are daemon jobs, not
-dashboard side effects.

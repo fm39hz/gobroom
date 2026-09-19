@@ -1,134 +1,87 @@
-# 9router compatibility matrix
+# Behavior comparison and compatibility evidence
 
-This document records behavior verified from the checked-out 9router source at
-`/home/fm39hz/Workspace/Personal/Tools/AI/9router`.
+This is a behavior-by-behavior comparison, not a promise of drop-in parity.
+The 9router column is based on source checked in the adjacent local checkout at
+`/home/fm39hz/Workspace/Personal/Tools/AI/9router`; source paths below are
+orientation, not a substitute for executable fixtures. GoBroom status reflects
+the current repository and tests inspected on 2026-09-20.
 
-Labels:
+## Status legend
 
-- `preserve`: required for the GoBroom core replacement;
-- `simplify`: keep the useful behavior with a smaller contract;
-- `out-of-kernel`: not part of `gobroomd` request routing;
-- `pending`: important behavior not implemented yet.
+- **Implemented** — GoBroom has the stated behavior and focused tests.
+- **Partial** — a useful slice exists; limits below remain.
+- **Planned** — not complete.
+- **Out of core** — intentionally belongs outside the daemon kernel.
+- **Needs verification** — source behavior or edge semantics need fixtures; do
+  not claim compatibility yet.
 
-## Request entry and model resolution
+## Model and route configuration
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| OpenAI Chat, Responses, Anthropic and Gemini-family detection | `open-sse/services/provider.js`, `open-sse/translator/formats.js`, `open-sse/handlers/chatCore.js` | Keep endpoint/header/body detection as a typed normalizer | pending |
-| `provider/model` parsing using the first slash | `open-sse/services/model.js:parseModel` | Preserve opaque model IDs after the first slash | pending |
-| Provider aliases to canonical IDs | `open-sse/services/model.js`, `open-sse/providers/registry` | Preserve through one prefix registry | partial |
-| Bare model inference | `open-sse/services/model.js:inferProviderFromModelName` | Keep as explicit compatibility mode | pending |
-| User model alias to `provider/model` | `open-sse/services/model.js:resolveModelAliasFromMap` | Preserve as a logical model reference | partial |
-| Custom model entries | `src/lib/db/migrate.js`, `open-sse/config/providerModels.js` | Preserve as first-class catalog entries | partial |
-| Upstream model ID rewrite | `open-sse/config/providerModels.js`, `chatCore.js` | Preserve as route/model override | pending |
+| Behavior in 9router | GoBroom contract/status | Notes |
+|---|---|---|
+| Provider prefixes and provider aliases (`open-sse/services/model.js`, provider registry) | Partial | Prefix registry, provider definitions and collision handling exist; edge-case compatibility fixtures are incomplete. |
+| Opaque `provider/model` names and model-ID rewriting | Partial | Typed model references and route mappings exist; verify first-slash, nested slash and marker behavior against source. |
+| Models discovered from provider `/models` plus custom models | Partial | OpenAI-style discovery and custom catalog entries exist; UI import/review workflow is incomplete. |
+| Model aliases, physical abstractions and role combos | Partial; redesign required | Logical models, nested combos and ordered members exist, but persistence/UI do not yet expose the target Discovered/Physical/Combos layers. |
+| Only selected models exposed to clients | Implemented | Explicit public-model projection drives `/v1/models`. |
+| Connection pools per provider/model | Partial | Route expansion per connection and multiple selection strategies exist; full policy parity needs fixtures. |
 
-## Combos and fallback
+## Routing and fallback
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| Combo is an ordered JSON list of model strings | `src/lib/db/repos/combosRepo.js` | Accept old flat semantics through manual migration | partial |
-| Fallback through combo members | `open-sse/services/combo.js:handleComboChat` | Preserve in kernel scheduler | partial |
-| Round-robin combo strategy | `open-sse/services/combo.js:getRotatedModels` | Preserve with in-memory scheduler state | partial |
-| Sticky round-robin limit | `open-sse/services/combo.js:normalizeStickyLimit` | Preserve as combo policy | partial |
-| Fusion strategy | `open-sse/handlers/chatCore.js`, `open-sse/services/combo.js` | Keep outside first core replacement | out-of-kernel |
-| Capability-based combo reordering | `open-sse/services/combo.js:reorderByCapabilities` | Preserve after capability policy | pending |
-| Recursive combo handling | `src/sse/handlers/chat.js` | Represent explicitly as validated graph | simplify |
-| Status/error-text fallback rules | `open-sse/services/accountFallback.js`, `combo.js` | Preserve as typed error policy | partial |
-| Retry-After aggregation | `open-sse/services/combo.js` | Preserve in response policy | pending |
+| Behavior in 9router | GoBroom contract/status | Notes |
+|---|---|---|
+| Combo order/fallback (`open-sse/services/combo.js`) | Partial; redesign required | References and cycle validation exist, but the current resolver flattens nested combos to routes and loses inner strategy boundaries. Hierarchical strategy execution and exact retry precedence remain. |
+| Round-robin and sticky limits | Partial | Round-robin scheduler exists; sticky-limit equivalence and concurrent ordering are not yet certified. |
+| Account selection, exclusion and preferred account (`src/sse/services/auth.js`, `accountFallback.js`) | Partial | Fill-first, rotation, preferred connection and health cooldown paths exist; policy precedence remains. |
+| Cooldown and `Retry-After` | Partial | Health state and Retry-After cooldown plumbing exist; provider-specific status mapping and reset behavior need fixtures. |
+| Quota affects candidate eligibility | Partial | Persisted snapshots and quota gate/poller plumbing exist; generic source parsing and concrete provider binding are limited. |
+| No switch after response bytes are sent | Partial | HTTP tracks response commitment and kernel execution returns after stream dispatch; expand integration tests across adapters. |
 
-## Account and credential behavior
+## Protocol normalization and streaming
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| Active connections per provider | `src/sse/services/auth.js:getProviderCredentials` | Preserve through connection candidates | partial |
-| Fill-first account strategy | `src/sse/services/auth.js` | Preserve | partial |
-| Round-robin account strategy | `src/sse/services/auth.js` | Preserve without global mutex | partial |
-| Sticky account usage count | `src/sse/services/auth.js` | Preserve as scoped scheduler state | pending |
-| Preferred/pinned connection | `src/sse/services/auth.js` | Preserve | pending |
-| Per-model account lock | `open-sse/services/accountFallback.js` | Preserve as runtime policy state | pending |
-| Account exclusion after failure | `src/sse/handlers/chat.js` | Preserve | partial |
-| Proactive token refresh | `src/sse/services/tokenRefresh.js`, `open-sse/services/oauthCredentialManager.js` | Preserve through credential manager | pending |
-| Refresh-on-401/403 and retry | `open-sse/handlers/chatCore.js` | Preserve once per request | pending |
-| Provider-specific OAuth | `src/sse/services/tokenRefresh.js`, `src/lib/oauth` | Add by usage priority, not in kernel | pending |
-| Per-connection proxy settings | `open-sse/handlers/chatCore.js`, `src/lib/network/connectionProxy.js` | Keep in transport/credential layer | pending |
+| Behavior in 9router | GoBroom contract/status | Notes |
+|---|---|---|
+| Shared `handleChatCore` normalization and provider dispatch | Partial | Typed inbound normalization, kernel and adapters exist; common semantic coverage is not complete. |
+| OpenAI Chat endpoint | Partial | Adapter and live calls exist; broaden SSE, cancellation, tool and failure-boundary conformance. |
+| OpenAI Responses endpoint/continuity | Partial | Adapter route exists; continuity and output-item compatibility need fixtures. |
+| Anthropic Messages | Partial | Basic adapter and text/tool SSE conversion exist; content blocks, thinking, stop reasons and usage parity are incomplete. |
+| Cross-protocol canonical events | Planned | Shared normalized response-event layer is M5. |
+| Tool calls split across SSE chunks | Needs verification | Add fixture suite before claiming compatibility. |
+| Multimodal messages and capability routing | Partial | Typed capability fields and route filtering exist; broad detection/degradation behavior is missing. |
+| Native passthrough and format inference | Needs verification | Define and test when passthrough is lossless and how endpoint/header/body evidence is prioritized. |
 
-## Normalization and translation
+## Credentials, quota and observability
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| Source/target format selection | `open-sse/handlers/chatCore.js`, `open-sse/services/provider.js` | Preserve as normalizer + adapter selection | partial |
-| Native passthrough | `chatCore.js`, `open-sse/utils/clientDetector.js` | Preserve as explicit fast path | pending |
-| Tool-call ID repair | `open-sse/translator/concerns/toolCall.js` | Preserve deterministically | partial |
-| Missing tool-result reconciliation | translator concerns/tests | Preserve in normalization invariants | pending |
-| Thinking/reasoning mapping | `open-sse/translator/concerns/thinkingUnified.js` | Semantic IR, wire mapping in adapter | partial |
-| Responses continuity fields | `chatCore.js:stripContinuityFields` | Preserve without leaking internals | partial |
-| Content blocks and multimodal input | `open-sse/translator`, `combo.js` | Preserve after capability policy | partial |
-| Remote image prefetch | `open-sse/translator/concerns/prefetch.js` | Optional cancellable middleware | pending |
-| Tool deduplication | `chatCore.js`, `open-sse/utils/toolDeduper.js` | Optional middleware | simplify |
-| RTK/Headroom/Caveman/Ponytail/PXPIPE | `chatCore.js`, `open-sse/rtk` | Post-normalization middleware | out-of-kernel |
+| Behavior in 9router | GoBroom contract/status | Notes |
+|---|---|---|
+| Static API-key/Bearer credentials | Partial | Credentials resolve per connection through daemon control/runtime path; more auth aliases and redaction tests required. |
+| OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | OAuth library is selected; generic auth registry exists, but a complete end-to-end provider flow is not implemented. |
+| Per-connection proxy settings | Planned | Keep in transport/connection configuration, not kernel routing branches. |
+| Usage history and request detail | Partial | Compact event channel/worker exists; aggregates, cost, retention and bounded diagnostics remain. |
+| Provider quota APIs and reset-aware policy | Partial | Generic HTTP/JSON source and poller exist; provider bindings and authoritative-source semantics remain. |
+| Quota/usage only as dashboard data | Not the target | Runtime policy should consume the same state; current coverage is partial. |
 
-## Streaming and response lifecycle
+## Secondary product features
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| Passthrough streaming | `open-sse/utils/stream.js` | Preserve | partial |
-| Provider SSE to client format | `open-sse/handlers/chatCore/streamingHandler.js` | Canonical response events | pending |
-| Tool-call streaming across chunks | stream handler and translator tests | Preserve | pending |
-| Usage extraction/estimation | `open-sse/utils/usageTracking.js` | Compact usage events | partial |
-| Client disconnect propagation | `open-sse/utils/streamHandler.js` | Preserve | partial |
-| No fallback after response bytes | chat/combo stream flow | Kernel invariant | partial |
-| Non-streaming conversion | `open-sse/handlers/chatCore/nonStreamingHandler.js` | Preserve for core formats | partial |
+| 9router area | GoBroom decision |
+|---|---|
+| Embeddings, image/video, TTS/STT, search/fetch | Out of core; add separate services only when needed |
+| Dashboard | Replaceable frontend, not daemon authority |
+| MITM/DNS, IDE interception, tunnels | Out of core; sidecar/integration if ever required |
+| Cloud sync and prompt-mutating optimizers | Not in current core scope |
 
-## Quota, usage and health
+## Evidence still required
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| Persistent usage history | `src/lib/db`, `open-sse/utils/usageTracking.js` | Preserve compactly | partial |
-| Request detail logging | `open-sse/handlers/chatCore/requestDetail.js`, `usageDb` | Bounded opt-in diagnostics | simplify |
-| Daily usage aggregates | `src/lib/db/migrations`, usage repositories | Preserve | pending |
-| Cost/pricing data | `open-sse/providers/pricing.js` | Preserve after usage contract | pending |
-| Account/model cooldown locks | `open-sse/services/accountFallback.js` | Runtime policy | partial |
-| Provider-specific quota endpoints | `open-sse/services/usage`, `src/shared/services/quotaAutoPing.js` | Quota adapters | pending |
-| Antigravity quota cache/strikes | `src/sse/services/antigravityQuota.js` | Provider-specific service | pending |
-| Quota affects routing | `src/sse/services/auth.js`, combo fallback | Preserve | partial |
+Before calling GoBroom a drop-in replacement, add deterministic fixtures for:
 
-## Secondary APIs and integrations
+- exact model parsing/alias precedence and model-ID rewrites;
+- combo and account strategy order under concurrency;
+- error-class precedence across provider, connection, combo and model scopes;
+- OAuth refresh races and one-retry behavior;
+- Responses continuity, Anthropic content blocks, thinking and tool streams;
+- cancellation, disconnect and errors before/after first response byte;
+- quota window/reset parsing and its effect on route selection;
+- every built-in manifest operation and declared capability.
 
-| 9router behavior | Source evidence | GoBroom decision | Status |
-|---|---|---|---|
-| Embeddings | `open-sse/handlers/embeddings.js` | Later service | out-of-kernel |
-| Image/video generation | `open-sse/handlers/imageGeneration.js`, `src/sse/handlers/videoGeneration.js` | Later service | out-of-kernel |
-| TTS/STT | `src/sse/handlers/tts.js`, `stt.js` | Later service | out-of-kernel |
-| Search/fetch | `src/sse/handlers/search.js`, `fetch.js` | Later service | out-of-kernel |
-| Dashboard | `src/app` | TUI/control clients | out-of-kernel |
-| CLI/tray | `cli/src/cli` | TUI/CLI frontend | simplify |
-| MITM/DNS | `src/mitm` | Sidecar/plugin | out-of-kernel |
-| Tunnels | `src/lib/tunnel` | Optional sidecar | out-of-kernel |
-
-## Deliberately not copied into the kernel
-
-```text
-global account-selection mutex
-per-request SQLite reads for static model configuration
-synchronous raw request-detail persistence
-dashboard-driven routing state
-provider-specific branches in the core kernel
-MITM/DNS interception
-tunnel lifecycle
-token saver prompt mutations
-fusion/panel orchestration
-media endpoints
-```
-
-## Evidence gaps
-
-The following require runtime fixtures before being called compatible:
-
-- exact round-robin behavior under concurrency;
-- precedence between provider, combo, model, and account cooldowns;
-- all provider-specific error rules;
-- every `supportedFormats`/transport combination;
-- whether every dashboard quota control affects request routing;
-- stream behavior for every specialized executor.
-
-These are `pending`, not assumed to be implemented by either project.
+See [implementation roadmap](IMPLEMENTATION_PLAN.md) for sequencing and the
+[normalization contract](NORMALIZATION.md) for protocol boundaries.

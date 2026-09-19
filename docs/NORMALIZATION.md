@@ -1,71 +1,62 @@
-# Normalization pipeline
+# Request normalization and protocol translation
 
-GoBroom follows the useful design of 9router's `handleChatCore`, but makes the
-semantic intermediate representation explicit and typed.
+Status: typed inbound normalization and initial adapters are implemented; the
+canonical response-event layer and broad cross-protocol semantics remain
+planned/partial (M5–M6 in the [roadmap](IMPLEMENTATION_PLAN.md)).
+
+## Pipeline
 
 ```text
-HTTP body + endpoint + headers
-  -> format detector
-  -> semantic normalizer
-  -> conversation invariant repair
-  -> target transport selection
-  -> protocol translator
-  -> provider adapter
+HTTP path + headers + JSON body
+  -> source-format detection
+  -> typed semantic request
+  -> shared invariant repair/metadata capture
+  -> route capability check
+  -> provider request codec/adapter
   -> upstream
+  -> provider response handling
+  -> client-format response
 ```
 
-The reverse path is an event pipeline:
+The normalized request is not an OpenAI wire body. It carries model, source
+format, messages/content, tools, thinking intent, modality flags, transport
+hints, provider-neutral extensions and original fields needed for compatibility.
+See `internal/normalize/types.go` for the implemented contract.
 
-```text
-upstream JSON/SSE
-  -> provider event decoder
-  -> normalized response events
-  -> client format encoder
-  -> client
-```
+## Normalization responsibilities
 
-## Semantic IR
+- detect source format using endpoint and request evidence;
+- require and preserve the requested public model name;
+- normalize common message/tool structures without assuming all protocols are
+  equivalent;
+- capture continuity/session and modality hints before envelope conversion;
+- preserve unknown data where the current typed contract supports it.
 
-The IR in `internal/normalize` deliberately contains more than an OpenAI chat
-body:
-
-```text
-Request
-  model
-  source format
-  messages/content
-  tools/tool calls
-  thinking intent
-  session context
-  continuity state
-  modalities
-  transport hints
-  provider-neutral extensions
-  original raw map
-```
-
-The raw map is retained for compatibility and diagnostics, but provider
-adapters must consume the typed semantic fields first.
-
-## Invariants
-
-The normalizer is responsible for invariants shared across providers:
-
-- model is present;
-- source format is explicit;
-- tool calls have IDs;
-- thinking intent is represented independently of provider fields;
-- session/continuity metadata is captured before envelope conversion;
-- modalities are detected before capability routing;
-- unknown fields survive in extensions;
-- endpoint-level format takes precedence over body heuristics.
+Unknown-field preservation is not a guarantee of lossless cross-protocol
+translation. Adapters must not silently claim semantics they cannot represent.
 
 ## Translation policy
 
-Adapters may use a direct source-to-target translation when it is more lossless.
-Otherwise they may pivot through the normalized IR. GoBroom must not force an
-OpenAI wire body to be the internal semantic model.
+An adapter may translate directly between source and target formats where that
+is more lossless, or use semantic fields as an intermediate representation.
+The protocol contract must define how tools, reasoning, content blocks, finish
+reasons, usage and stream lifecycle map. Information that cannot be represented
+must be preserved as an extension, rejected clearly, or handled under an
+explicit degradation policy—not silently discarded.
 
-Optional optimizers such as compression or prompt injection run after semantic
-translation and before dispatch. They cannot change routing identity or
-silently delete content without an explicit policy.
+The present adapters include OpenAI Chat, OpenAI Responses and Anthropic
+Messages paths. Their supported subsets differ. Anthropic text/tool SSE
+conversion exists, but this is not full event parity. The exact tested subset
+belongs in the compatibility matrix and adapter fixtures.
+
+## Streaming invariants
+
+- client cancellation propagates to upstream context/body reads;
+- a response is considered committed at first write/flush;
+- no route fallback occurs after commitment;
+- stream errors after commitment terminate/report the stream, not restart it;
+- usage and health reporting cannot block first byte or stream writes;
+- tool-call state must remain correct when arguments arrive across chunks.
+
+The first four are kernel/adapter contract requirements. Complete shared event
+types, cross-adapter fixtures and conformance tests are M5 work.
