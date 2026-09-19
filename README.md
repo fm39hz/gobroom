@@ -32,10 +32,11 @@ model names clients may discover and use.
 - immutable route snapshots, connection-aware scheduling, health cooldowns,
   persisted quota snapshots, and asynchronous compact usage events;
 - Cobra CLI and an alternate-screen Bubble Tea dashboard with independently
-  framed panes, basic filtering/editors and daemon-only IPC access. This is an
-  early UX slice: the target Models workspace will manage Discovered, Physical
-  and Combos as separate tabs, with LazyGit-style block/item/tab/depth
-  navigation. See [the TUI UX contract](docs/TUI_UX.md).
+  framed blocks and daemon-only IPC access. The Models workspace manages
+  Discovered, Physical and Combos as separate tabs, with typed CRUD, inline
+  exposure, context-local filtering and LazyGit-style block/item/tab/depth
+  navigation. The split member/candidate editor and some operational views are
+  still incomplete; see [the TUI UX contract](docs/TUI_UX.md).
 
 The existence of an endpoint or an adapter does not imply complete protocol
 parity. In particular, OAuth refresh flows, comprehensive cross-protocol SSE
@@ -57,11 +58,14 @@ plane on loopback port `2712`, and uses a Unix socket for control IPC. The HTTP
 control API is optional and defaults to loopback port `2713` when enabled.
 
 ```sh
+gobroom
 gobroom status
 gobroom providers list
 gobroom models list
-gobroom-tui
 ```
+
+Running `gobroom` without a subcommand opens the bundled TUI. Existing CLI
+subcommands, persistent flags, `--help` and `--version` remain available.
 
 The HTTP control API and provider data plane are separate surfaces. A frontend
 is never responsible for keeping the daemon alive or maintaining its SQLite
@@ -71,8 +75,8 @@ state.
 
 ```text
 cmd/gobroomd        daemon entry point
-cmd/gobroom         CLI control client
-cmd/gobroom-tui     TUI control client
+cmd/gobroom         bundled TUI and CLI control client
+internal/tui        Bubble Tea control frontend
 internal/api        HTTP data/control handlers
 internal/daemon     lifecycle, IPC and service wiring
 internal/kernel     immutable route snapshot, scheduler and execution contract

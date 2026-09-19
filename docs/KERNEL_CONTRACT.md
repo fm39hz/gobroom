@@ -1,8 +1,9 @@
 # Data-plane kernel contract
 
-Status: implemented execution boundary with a known graph/policy mismatch. The
-current resolver flattens nested combos into routes; hierarchical execution
-below is the target contract tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md).
+Status: hierarchical execution boundary implemented, with remaining policy
+semantics tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md). A flattened
+resolver remains for legacy callers, but the request execution path traverses
+typed model nodes and preserves nested policy boundaries.
 
 ## Ownership
 
@@ -19,10 +20,10 @@ and exposure flags. A request resolves only through this snapshot. Internal
 models remain valid graph members but are absent from `/v1/models` unless their
 exposure property is enabled.
 
-Resolution must retain typed model nodes and their policy boundaries. A role
+Request execution retains typed model nodes and their policy boundaries. A role
 combo selects a model member; that physical or nested combo then applies its own
-source/member policy. The current `resolveRef` route expansion loses this
-boundary and must not be treated as the final contract.
+source/member policy. The legacy `resolveRef` route expansion remains a
+compatibility/read API and must not be used as the hierarchical execution plan.
 
 Snapshots carry connection identifiers and routing metadata, never connection
 secrets. Credentials are resolved for the selected route at execution time.

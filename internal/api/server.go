@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -312,13 +313,29 @@ func mustProviderNodes(s *store.Store) []store.ProviderNode {
 }
 
 func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
-	items, err := s.store.PublicModels()
-	if err != nil {
-		writeError(w, err)
-		return
+	public := map[string]kernel.PublicModel{}
+	if s.control != nil {
+		public = s.control.Snapshot().PublicModels
+	} else {
+		// Keep the catalog endpoint available for diagnosing legacy/invalid
+		// configurations even when a routing snapshot cannot be built.
+		items, err := s.store.PublicModels()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for _, item := range items {
+			public[item.Name] = kernel.PublicModel{Name: item.Name, TargetRef: item.TargetRef, OwnedBy: item.OwnedBy}
+		}
 	}
-	data := make([]map[string]any, 0, len(items))
-	for _, item := range items {
+	names := make([]string, 0, len(public))
+	for name := range public {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	data := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		item := public[name]
 		data = append(data, map[string]any{"id": item.Name, "object": "model", "created": 0, "owned_by": item.OwnedBy, "gobroom_target": item.TargetRef})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})

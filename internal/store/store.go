@@ -154,6 +154,31 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   estimated_cost REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
+-- Additive typed model graph. Legacy logical_models/combos/published_models
+-- remain intact for existing daemon and control-plane readers.
+CREATE TABLE IF NOT EXISTS physical_models (
+  name TEXT PRIMARY KEY, policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
+  capabilities_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS physical_model_sources (
+  physical_name TEXT NOT NULL REFERENCES physical_models(name) ON DELETE CASCADE,
+  position INTEGER NOT NULL, route_id TEXT NOT NULL REFERENCES model_catalog(id) ON DELETE RESTRICT,
+  PRIMARY KEY (physical_name, position), UNIQUE (physical_name, route_id)
+);
+CREATE INDEX IF NOT EXISTS idx_physical_sources_route ON physical_model_sources(route_id);
+CREATE TABLE IF NOT EXISTS combo_models (
+  name TEXT PRIMARY KEY, strategy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
+  discoverable INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS combo_model_members (
+  combo_name TEXT NOT NULL REFERENCES combo_models(name) ON DELETE CASCADE,
+  position INTEGER NOT NULL, ref_kind TEXT NOT NULL CHECK(ref_kind IN ('physical','combo')),
+  ref_id TEXT NOT NULL, options_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (combo_name, position)
+);
+CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(ref_kind, ref_id);
 `)
 	// Additive migration for databases created before prefix became a first-class field.
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN prefix TEXT NOT NULL DEFAULT ''`)

@@ -22,6 +22,7 @@ type Strategy string
 
 const (
 	StrategyFallback           Strategy = "fallback"
+	StrategyRotatingFallback   Strategy = "rotating_fallback"
 	StrategyRoundRobin         Strategy = "round_robin"
 	StrategyRoundRobinFallback Strategy = "round_robin_fallback"
 	StrategyWeighted           Strategy = "weighted"
@@ -71,6 +72,9 @@ type Snapshot struct {
 	// reachable through a published target or combo member.
 	WireRoutes    map[string][]string
 	LogicalModels map[string]string
+	// Nodes is the typed execution graph. Combos remains as a compatibility
+	// input for existing snapshot producers; execution normalizes it to Nodes.
+	Nodes map[string]ModelNode
 }
 
 type ResolvedModel struct {
@@ -80,6 +84,63 @@ type ResolvedModel struct {
 	StickyLimit int
 	Candidates  []Route
 }
+
+type MemberKind string
+
+const (
+	MemberModel      MemberKind = "model"
+	MemberRoute      MemberKind = "route"
+	MemberRouteGroup MemberKind = "route_group"
+)
+
+// MemberRef keeps model-policy boundaries distinct from provider routes.
+type MemberRef struct {
+	Kind   MemberKind
+	ID     string
+	Weight int
+}
+
+type ModelNodeKind string
+
+const (
+	ModelPhysical ModelNodeKind = "physical"
+	ModelCombo    ModelNodeKind = "combo"
+)
+
+type ModelNode struct {
+	ID          string
+	Kind        ModelNodeKind
+	Strategy    Strategy
+	StickyLimit int
+	Members     []MemberRef
+}
+
+// StrategyPrimitive plans members at exactly one node boundary. Mutable
+// state is scoped by the scheduler to that node ID.
+type StrategyPrimitive interface {
+	Plan(nodeID string, members []MemberRef, state *StrategyState) []MemberRef
+	OnFailure(StrategyFailure, *StrategyState) FailureAction
+}
+
+type StrategyState struct {
+	Cursor      int
+	StickyIndex int
+	StickyCount int
+}
+
+type StrategyFailure struct {
+	NodeID string
+	Member MemberRef
+	Class  ErrorClass
+	Err    error
+}
+
+type FailureAction uint8
+
+const (
+	FailureContinue FailureAction = iota
+	FailureStop
+)
 
 type NormalizedRequest = normalize.Request
 type Message = normalize.Message

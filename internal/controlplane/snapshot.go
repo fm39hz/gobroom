@@ -31,10 +31,20 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	if err != nil {
 		return kernel.Snapshot{}, err
 	}
+	physicalRows, err := l.Store.PhysicalModels()
+	if err != nil {
+		return kernel.Snapshot{}, err
+	}
+	typedComboRows, err := l.Store.ComboModels()
+	if err != nil {
+		return kernel.Snapshot{}, err
+	}
 
 	input := kernel.SnapshotInput{LogicalModels: map[string]string{}, RouteGroups: map[string][]string{}}
+	publicNames := make(map[string]bool, len(publicRows)+len(physicalRows)+len(typedComboRows))
 	for _, row := range publicRows {
 		input.PublicModels = append(input.PublicModels, kernel.PublicModel{Name: row.Name, TargetRef: row.TargetRef, OwnedBy: row.OwnedBy})
+		publicNames[row.Name] = true
 	}
 	for _, row := range comboRows {
 		strategy := kernel.Strategy(row.Strategy)
@@ -64,5 +74,56 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	for _, row := range logicalRows {
 		input.LogicalModels[row.Name] = row.TargetRef
 	}
+	for _, row := range physicalRows {
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: kernelStrategy(row.Policy.ID), StickyLimit: strategyInt(row.Policy.Config, "stickyLimit", 1)}
+		for _, source := range row.Sources {
+			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberRouteGroup, ID: source.RouteID})
+		}
+		input.Nodes = append(input.Nodes, node)
+		if row.Discoverable && !publicNames[row.Name] {
+			input.PublicModels = append(input.PublicModels, kernel.PublicModel{Name: row.Name, TargetRef: row.Name, OwnedBy: "gobroom"})
+			publicNames[row.Name] = true
+		}
+	}
+	for _, row := range typedComboRows {
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelCombo, Strategy: kernelStrategy(row.Strategy.ID), StickyLimit: strategyInt(row.Strategy.Config, "stickyLimit", 1)}
+		for _, member := range row.Members {
+			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberModel, ID: member.ID, Weight: strategyInt(row.Strategy.Config, "weight:"+member.ID, 0)})
+		}
+		input.Nodes = append(input.Nodes, node)
+		if row.Discoverable && !publicNames[row.Name] {
+			input.PublicModels = append(input.PublicModels, kernel.PublicModel{Name: row.Name, TargetRef: row.Name, OwnedBy: "gobroom"})
+			publicNames[row.Name] = true
+		}
+	}
 	return kernel.BuildSnapshot(input, version)
+}
+
+func kernelStrategy(id string) kernel.Strategy {
+	switch id {
+	case "", "ordered-fallback", "fallback":
+		return kernel.StrategyFallback
+	case "rotating-fallback", "rotating_fallback":
+		return kernel.StrategyRotatingFallback
+	case "round-robin", "round_robin":
+		return kernel.StrategyRoundRobin
+	case "round-robin-fallback", "round_robin_fallback":
+		return kernel.StrategyRoundRobinFallback
+	case "weighted-fallback", "weighted":
+		return kernel.StrategyWeighted
+	default:
+		return kernel.Strategy(id)
+	}
+}
+
+func strategyInt(config map[string]any, key string, fallback int) int {
+	if value, ok := config[key]; ok {
+		switch number := value.(type) {
+		case float64:
+			return int(number)
+		case int:
+			return number
+		}
+	}
+	return fallback
 }

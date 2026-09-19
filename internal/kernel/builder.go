@@ -9,13 +9,14 @@ type SnapshotInput struct {
 	RouteGroups   map[string][]string
 	WireRoutes    map[string][]string
 	LogicalModels map[string]string
+	Nodes         []ModelNode
 }
 
 // BuildSnapshot converts durable control-plane records into the immutable
 // data-plane representation. Storage adapters stay outside the kernel.
 func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 	snapshot := Snapshot{
-		Version: version, PublicModels: map[string]PublicModel{}, Combos: map[string]Combo{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, LogicalModels: map[string]string{},
+		Version: version, PublicModels: map[string]PublicModel{}, Combos: map[string]Combo{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, LogicalModels: map[string]string{}, Nodes: map[string]ModelNode{},
 	}
 	for _, item := range input.PublicModels {
 		if item.Name == "" {
@@ -69,6 +70,18 @@ func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("invalid logical model %q", name)
 		}
 		snapshot.LogicalModels[name] = target
+	}
+	for _, node := range input.Nodes {
+		if node.ID == "" {
+			return Snapshot{}, fmt.Errorf("model node has empty ID")
+		}
+		if _, exists := snapshot.Nodes[node.ID]; exists {
+			return Snapshot{}, fmt.Errorf("duplicate model node %q", node.ID)
+		}
+		snapshot.Nodes[node.ID] = cloneNode(node)
+	}
+	if err := ensureModelNodes(&snapshot); err != nil {
+		return Snapshot{}, err
 	}
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return Snapshot{}, err

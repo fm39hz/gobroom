@@ -60,6 +60,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.store = s
 	d.server = api.NewServer(s)
 	ctx, cancel := context.WithCancel(ctx)
+	started := false
+	defer func() {
+		if !started {
+			cancel()
+		}
+	}()
 	if d.server.Control() == nil {
 		_ = s.Close()
 		return fmt.Errorf("cannot initialize control plane")
@@ -208,6 +214,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			}
 		}()
 	}
+	started = true
 	return nil
 }
 
@@ -403,6 +410,72 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "discovered_models.list":
+		items, err := d.store.DiscoveredRoutes(stringParam(request.Params, "providerNodeID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
+	case "physical_models.list":
+		items, err := d.store.PhysicalModels()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
+	case "physical_models.upsert":
+		var item store.PhysicalModel
+		if err := decodeParams(request.Params, &item); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.store.UpsertPhysicalModel(item); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, item)
+	case "physical_models.delete":
+		name := stringParam(request.Params, "name")
+		if name == "" {
+			return fail(request, "name is required")
+		}
+		if err := d.store.DeletePhysicalModel(name); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"deleted": name})
+	case "combo_models.list":
+		items, err := d.store.ComboModels()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
+	case "combo_models.upsert":
+		var item store.ComboModel
+		if err := decodeParams(request.Params, &item); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.store.UpsertComboModel(item); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, item)
+	case "combo_models.delete":
+		name := stringParam(request.Params, "name")
+		if name == "" {
+			return fail(request, "name is required")
+		}
+		if err := d.store.DeleteComboModel(name); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"deleted": name})
 	case "combos.list":
 		items, err := d.store.ComboDetails()
 		if err != nil {

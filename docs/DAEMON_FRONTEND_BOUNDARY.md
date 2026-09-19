@@ -10,7 +10,7 @@ gobroomd
   ├── optionally exposes HTTP control
   └── exposes the configured HTTP provider data plane
 
-gobroom / gobroom-tui / future frontend
+gobroom (bundled CLI/TUI) / future frontend
   ├── sends typed control requests to the daemon
   ├── renders returned state
   └── never owns routing state or accesses SQLite directly
@@ -29,8 +29,8 @@ Dependency direction:
 
 ```text
 daemon -> runtime/control dependencies
-CLI    -> IPC client + Cobra
-TUI    -> IPC client + Bubble Tea
+gobroom CLI mode -> IPC client + Cobra
+gobroom TUI mode -> IPC client + Bubble Tea
 ```
 
 No UI package may be imported by `internal/*` or `cmd/gobroomd`. Shared request

@@ -145,6 +145,18 @@ func snapshotInput(s kernel.Snapshot) kernel.SnapshotInput {
 	for _, item := range s.Routes {
 		input.Routes = append(input.Routes, item)
 	}
+	for id, item := range s.Nodes {
+		// Legacy combos and aliases are compatibility projections rebuilt from
+		// their authoritative fields. Copying them into Nodes would shadow edits
+		// made through the legacy control API.
+		if _, legacy := s.Combos[id]; legacy {
+			continue
+		}
+		if _, legacy := s.LogicalModels[id]; legacy {
+			continue
+		}
+		input.Nodes = append(input.Nodes, item)
+	}
 	for name, target := range s.LogicalModels {
 		input.LogicalModels[name] = target
 	}

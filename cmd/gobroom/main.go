@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/fm39hz/gobroom/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -23,9 +24,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	ipcPath = defaults.IPCPath
+	root := newRootCommand(defaults.IPCPath, tui.Run)
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 
-	root := &cobra.Command{Use: "gobroom", Short: "GoBroom control client", Version: version}
+type tuiRunner func(ipcPath, appVersion string) error
+
+func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
+	ipcPath = defaultIPC
+	root := &cobra.Command{
+		Use:     "gobroom",
+		Short:   "GoBroom control client",
+		Version: version,
+		Args:    cobra.NoArgs,
+		RunE: func(*cobra.Command, []string) error {
+			return runTUI(ipcPath, version)
+		},
+	}
 	root.PersistentFlags().StringVar(&ipcPath, "ipc", ipcPath, "daemon IPC socket")
 	root.PersistentFlags().BoolVar(&outputJSON, "json", true, "print JSON output")
 
@@ -39,10 +57,7 @@ func main() {
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
 	root.AddCommand(healthCommand(), quotaCommand())
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	return root
 }
 
 func simpleCommand(use, short, method string, flags map[string]*string) *cobra.Command {
@@ -124,6 +139,52 @@ func resourceCommands() []*cobra.Command {
 	custom.Flags().StringVar(&displayName, "display-name", "", "display name")
 	models.AddCommand(custom, idCommand("delete", "delete catalog model", "custom_models.delete", "id", &modelID))
 
+	physical := &cobra.Command{Use: "physical-models", Short: "manage physical model identities"}
+	var physicalName, physicalPolicy string
+	var physicalSources []string
+	var physicalDiscoverable bool
+	physical.AddCommand(listCommand("list", "physical_models.list", nil))
+	physicalUpsert := &cobra.Command{Use: "upsert", Short: "create or update a physical model", RunE: func(*cobra.Command, []string) error {
+		sources := make([]map[string]any, 0, len(physicalSources))
+		for _, source := range physicalSources {
+			sources = append(sources, map[string]any{"routeId": source})
+		}
+		return invoke("physical_models.upsert", map[string]any{"name": physicalName, "sources": sources, "policy": map[string]any{"id": physicalPolicy}, "discoverable": physicalDiscoverable, "enabled": true})
+	}}
+	physicalUpsert.Flags().StringVar(&physicalName, "name", "", "physical model name")
+	physicalUpsert.Flags().StringArrayVar(&physicalSources, "source", nil, "discovered route ID (repeat for multiple sources)")
+	physicalUpsert.Flags().StringVar(&physicalPolicy, "policy", "ordered-fallback", "source policy primitive ID")
+	physicalUpsert.Flags().BoolVar(&physicalDiscoverable, "discoverable", false, "include this model in /v1/models")
+	physical.AddCommand(physicalUpsert, idCommand("delete", "delete physical model", "physical_models.delete", "name", &physicalName))
+
+	typedCombos := &cobra.Command{Use: "combo-models", Short: "manage typed combo models"}
+	var typedComboName, typedComboStrategy string
+	var typedMembers []string
+	var comboDiscoverable bool
+	typedCombos.AddCommand(listCommand("list", "combo_models.list", nil))
+	typedComboUpsert := &cobra.Command{Use: "upsert", Short: "create or update a combo model", RunE: func(*cobra.Command, []string) error {
+		members := make([]map[string]string, 0, len(typedMembers))
+		for index, raw := range typedMembers {
+			var member struct {
+				Kind string `json:"kind"`
+				ID   string `json:"id"`
+			}
+			if err := json.Unmarshal([]byte(raw), &member); err != nil {
+				return fmt.Errorf("member %d: invalid JSON: %w", index+1, err)
+			}
+			if (member.Kind != "physical" && member.Kind != "combo") || member.ID == "" {
+				return fmt.Errorf("member %d: kind must be physical or combo and id is required", index+1)
+			}
+			members = append(members, map[string]string{"kind": member.Kind, "id": member.ID})
+		}
+		return invoke("combo_models.upsert", map[string]any{"name": typedComboName, "members": members, "strategy": map[string]any{"id": typedComboStrategy}, "discoverable": comboDiscoverable, "enabled": true})
+	}}
+	typedComboUpsert.Flags().StringVar(&typedComboName, "name", "", "combo model name")
+	typedComboUpsert.Flags().StringArrayVar(&typedMembers, "member", nil, `ordered typed member JSON, e.g. {"kind":"physical","id":"qwen-3.7-max"}`)
+	typedComboUpsert.Flags().StringVar(&typedComboStrategy, "strategy", "ordered-fallback", "execution strategy primitive ID")
+	typedComboUpsert.Flags().BoolVar(&comboDiscoverable, "discoverable", false, "include this combo in /v1/models")
+	typedCombos.AddCommand(typedComboUpsert, idCommand("delete", "delete combo model", "combo_models.delete", "name", &typedComboName))
+
 	logical := &cobra.Command{Use: "logical-models", Short: "manage logical model aliases"}
 	var logicalName, targetRef string
 	logical.AddCommand(listCommand("list", "logical_models.list", nil))
@@ -157,7 +218,7 @@ func resourceCommands() []*cobra.Command {
 	publicUpsert.Flags().StringVar(&ownedBy, "owned-by", "gobroom", "owner label")
 	public.AddCommand(publicUpsert, idCommand("delete", "unpublish model", "public_models.delete", "name", &publicName))
 
-	return []*cobra.Command{providers, connections, models, logical, combos, public}
+	return []*cobra.Command{providers, connections, models, physical, typedCombos, logical, combos, public}
 }
 
 func healthCommand() *cobra.Command {

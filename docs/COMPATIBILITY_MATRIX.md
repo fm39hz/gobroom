@@ -22,7 +22,7 @@ the current repository and tests inspected on 2026-09-20.
 | Provider prefixes and provider aliases (`open-sse/services/model.js`, provider registry) | Partial | Prefix registry, provider definitions and collision handling exist; edge-case compatibility fixtures are incomplete. |
 | Opaque `provider/model` names and model-ID rewriting | Partial | Typed model references and route mappings exist; verify first-slash, nested slash and marker behavior against source. |
 | Models discovered from provider `/models` plus custom models | Partial | OpenAI-style discovery and custom catalog entries exist; UI import/review workflow is incomplete. |
-| Model aliases, physical abstractions and role combos | Partial; redesign required | Logical models, nested combos and ordered members exist, but persistence/UI do not yet expose the target Discovered/Physical/Combos layers. |
+| Model aliases, physical abstractions and role combos | Partial | Additive typed persistence, IPC/CLI and separate Discovered/Physical/Combos TUI tabs exist. Automatic legacy-to-typed migration and full editor polish remain. |
 | Only selected models exposed to clients | Implemented | Explicit public-model projection drives `/v1/models`. |
 | Connection pools per provider/model | Partial | Route expansion per connection and multiple selection strategies exist; full policy parity needs fixtures. |
 
@@ -30,7 +30,7 @@ the current repository and tests inspected on 2026-09-20.
 
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
-| Combo order/fallback (`open-sse/services/combo.js`) | Partial; redesign required | References and cycle validation exist, but the current resolver flattens nested combos to routes and loses inner strategy boundaries. Hierarchical strategy execution and exact retry precedence remain. |
+| Combo order/fallback (`open-sse/services/combo.js`) | Partial | The execution path traverses typed nodes and preserves inner/outer strategy boundaries with cycle guards. Sticky semantics, fusion and exact retry precedence still need broader fixtures. |
 | Round-robin and sticky limits | Partial | Round-robin scheduler exists; sticky-limit equivalence and concurrent ordering are not yet certified. |
 | Account selection, exclusion and preferred account (`src/sse/services/auth.js`, `accountFallback.js`) | Partial | Fill-first, rotation, preferred connection and health cooldown paths exist; policy precedence remains. |
 | Cooldown and `Retry-After` | Partial | Health state and Retry-After cooldown plumbing exist; provider-specific status mapping and reset behavior need fixtures. |

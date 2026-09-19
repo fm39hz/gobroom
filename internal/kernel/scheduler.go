@@ -12,10 +12,13 @@ type AlwaysOpenGate struct{}
 func (AlwaysOpenGate) Usable(Route, time.Time) bool { return true }
 
 type Scheduler struct {
-	mu      sync.Mutex
-	cursors map[string]int
-	sticky  map[string]stickyState
-	gate    Gate
+	mu         sync.Mutex
+	cursors    map[string]int
+	sticky     map[string]stickyState
+	strategies map[Strategy]StrategyPrimitive
+	modelState map[string]*StrategyState
+	stateLocks map[string]*sync.Mutex
+	gate       Gate
 }
 
 type stickyState struct {
@@ -27,7 +30,57 @@ func NewScheduler(gate Gate) *Scheduler {
 	if gate == nil {
 		gate = AlwaysOpenGate{}
 	}
-	return &Scheduler{cursors: map[string]int{}, sticky: map[string]stickyState{}, gate: gate}
+	return &Scheduler{cursors: map[string]int{}, sticky: map[string]stickyState{}, gate: gate,
+		strategies: map[Strategy]StrategyPrimitive{StrategyFallback: OrderedFallback{}, StrategyRotatingFallback: RotatingFallback{}, StrategyRoundRobin: RotatingFallback{}, StrategyRoundRobinFallback: RotatingFallback{}, StrategyWeighted: WeightedFallback{}}, modelState: map[string]*StrategyState{}, stateLocks: map[string]*sync.Mutex{}}
+}
+
+func (s *Scheduler) RegisterStrategy(name Strategy, primitive StrategyPrimitive) {
+	if name == "" || primitive == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.strategies[name] = primitive
+}
+
+func (s *Scheduler) Plan(node ModelNode) []MemberRef {
+	s.mu.Lock()
+	primitive, state, stateLock := s.strategyState(node)
+	s.mu.Unlock()
+	stateLock.Lock()
+	planned := primitive.Plan(node.ID, append([]MemberRef(nil), node.Members...), state)
+	stateLock.Unlock()
+	return planned
+}
+
+func (s *Scheduler) OnFailure(node ModelNode, failure StrategyFailure) FailureAction {
+	s.mu.Lock()
+	primitive, state, stateLock := s.strategyState(node)
+	s.mu.Unlock()
+	stateLock.Lock()
+	action := primitive.OnFailure(failure, state)
+	stateLock.Unlock()
+	return action
+}
+
+// strategyState must be called with s.mu held. Per-node locks let unrelated
+// model policies plan concurrently while preserving each policy's state.
+func (s *Scheduler) strategyState(node ModelNode) (StrategyPrimitive, *StrategyState, *sync.Mutex) {
+	primitive := s.strategies[node.Strategy]
+	if primitive == nil {
+		primitive = s.strategies[StrategyFallback]
+	}
+	state := s.modelState[node.ID]
+	if state == nil {
+		state = &StrategyState{}
+		s.modelState[node.ID] = state
+	}
+	stateLock := s.stateLocks[node.ID]
+	if stateLock == nil {
+		stateLock = &sync.Mutex{}
+		s.stateLocks[node.ID] = stateLock
+	}
+	return primitive, state, stateLock
 }
 
 func (s *Scheduler) Select(model ResolvedModel, now time.Time) (Route, error) {

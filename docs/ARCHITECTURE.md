@@ -139,8 +139,8 @@ gaps are tracked in [provider documentation](PROVIDERS.md) and the roadmap.
 
 ```text
 cmd/gobroomd          daemon wiring and lifecycle
-cmd/gobroom           IPC control client
-cmd/gobroom-tui       Bubble Tea IPC client
+cmd/gobroom           bundled CLI/TUI control entrypoint
+internal/tui          Bubble Tea IPC frontend
 internal/api          HTTP protocol boundary
 internal/daemon       IPC, lifecycle, service wiring and background loops
 internal/controlplane DB-to-snapshot construction and model resolution

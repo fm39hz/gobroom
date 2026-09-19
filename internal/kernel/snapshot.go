@@ -9,6 +9,9 @@ import (
 type SnapshotStore struct{ current atomic.Pointer[Snapshot] }
 
 func NewSnapshotStore(initial Snapshot) (*SnapshotStore, error) {
+	if err := ensureModelNodes(&initial); err != nil {
+		return nil, err
+	}
 	if err := ValidateSnapshot(initial); err != nil {
 		return nil, err
 	}
@@ -25,6 +28,9 @@ func (s *SnapshotStore) Load() Snapshot {
 }
 
 func (s *SnapshotStore) Publish(next Snapshot) error {
+	if err := ensureModelNodes(&next); err != nil {
+		return err
+	}
 	if err := ValidateSnapshot(next); err != nil {
 		return err
 	}
@@ -44,7 +50,11 @@ func ValidateSnapshot(s Snapshot) error {
 			return fmt.Errorf("public model %q: %w", name, err)
 		}
 	}
-	return nil
+	return validateModelGraph(s)
+}
+
+func ResolvePublicNode(s Snapshot, name string) (ModelNode, error) {
+	return ResolveModelNode(s, name)
 }
 
 func ResolvePublic(s Snapshot, name string) (ResolvedModel, error) {
@@ -96,6 +106,34 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 	}
 	if logical, ok := s.LogicalModels[ref]; ok {
 		return resolveRef(s, logical, stack)
+	}
+	if node, ok := s.Nodes[ref]; ok {
+		if stack[ref] {
+			return nil, fmt.Errorf("model cycle at %q", ref)
+		}
+		stack[ref] = true
+		defer delete(stack, ref)
+		seen := map[string]bool{}
+		result := make([]Route, 0)
+		for _, member := range node.Members {
+			var items []Route
+			var err error
+			if member.Kind == MemberRouteGroup {
+				items = resolveRouteMember(s, member)
+			} else {
+				items, err = resolveRef(s, member.ID, stack)
+			}
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range items {
+				if !seen[item.ID] {
+					seen[item.ID] = true
+					result = append(result, item)
+				}
+			}
+		}
+		return result, nil
 	}
 	combo, ok := s.Combos[ref]
 	if !ok {

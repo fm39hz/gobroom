@@ -1,6 +1,6 @@
 # GoBroom dependency policy
 
-Snapshot checked: 2026-09-17.
+Snapshot checked: 2026-09-19.
 
 The goal is to reduce handwritten infrastructure code without turning
 GoBroom into a dependency-heavy framework. The standard library remains the
@@ -15,10 +15,17 @@ default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 | HTTP routing | `github.com/go-chi/chi/v5` | `v5.3.2` | adopt when API surface grows | small middleware/router layer on top of `net/http`; avoids a custom route framework |
 | OAuth | `golang.org/x/oauth2` | `v0.37.0` | adopt | standard OAuth2/token transport, PKCE and device/auth helpers |
 | CLI | `github.com/spf13/cobra` | `v1.10.2` | adopt for `gobroom` | command tree, flags, help and completion without custom CLI plumbing |
-| TUI | `charm.land/bubbletea/v2` | `v2.0.9` | adopted | Elm-style state/update/view model; used by the separate `gobroom-tui` executable |
+| TUI runtime | `charm.land/bubbletea/v2` | `v2.0.9` | adopted | Elm-style state/update/view model; bundled into the `gobroom` control client |
+| TUI components | `charm.land/bubbles/v2` | `v2.2.1` | adopted | Official fuzzy list, text input, viewport and help components; avoids custom terminal input/filter machinery |
+| TUI layout | `charm.land/lipgloss/v2` | `v2.0.5` | adopted | Terminal-cell-aware panel/layout styling; palette stays deliberately restrained |
 
-The official repositories report the current `chi` v5.3.2 release, `sqlc`
-v1.31.1, Cobra v1.10.2 and Bubble Tea v2.0.9. [chi releases](https://github.com/go-chi/chi/releases), [sqlc releases](https://github.com/sqlc-dev/sqlc/releases), [Cobra releases](https://github.com/spf13/cobra/releases), [Bubble Tea releases](https://github.com/charmbracelet/bubbletea/releases)
+The official repositories report the versions above for the checked date:
+[chi](https://github.com/go-chi/chi/releases),
+[sqlc](https://github.com/sqlc-dev/sqlc/releases),
+[Cobra](https://github.com/spf13/cobra/releases),
+[Bubble Tea](https://github.com/charmbracelet/bubbletea/releases),
+[Bubbles](https://github.com/charmbracelet/bubbles/releases), and
+[Lip Gloss](https://github.com/charmbracelet/lipgloss/releases).
 
 The Go module proxy currently lists `modernc.org/sqlite` v1.59.0 and
 `golang.org/x/oauth2` v0.37.0 as the newest versions available at the check
@@ -54,9 +61,11 @@ The project supports SQLite and versioned `v4` imports. [Official migrate reposi
 removes the current inline `CREATE TABLE`/best-effort `ALTER TABLE` pattern and
 makes database changes reviewable and reversible.
 
-The TUI is a separate executable in the current Go module, not a separate Go
-module. Bubble Tea is imported only by `cmd/gobroom-tui` and must never become a
-dependency of `gobroomd`'s runtime package graph.
+The TUI is bundled into the `gobroom` control client through `internal/tui`;
+running `gobroom` without a subcommand opens it. Bubble Tea, Bubbles and Lip
+Gloss must never become dependencies of `gobroomd`'s runtime package graph.
+Huh was not added: the TUI needs inline, domain-aware editors (including
+ordered combo membership), not standalone full-screen prompt flows.
 
 Migration and SQL generation tools are pinned in `tools/go.mod`, but the
 current store still owns its schema setup/repository SQL directly. The pinned
