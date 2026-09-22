@@ -56,16 +56,16 @@ but must not introduce provider-specific branches into the kernel.
 | Milestone | Scope | Status | Remaining work / exit condition |
 |---|---|---|---|
 | M0 | Source-grounded behavior inventory and model/prefix contracts | Partial | Keep compatibility claims evidence-based; finish fixtures that affect intended Chat/model workflows. Exhaustive recreation of unrelated behavior is not a prerequisite. |
-| M1 | SQLite control plane and immutable routing snapshot | Done (core) | Config CRUD, validation/reload, route expansion, IPC and explicit publication exist. Harden schema/lifecycle; storage portability is separate. |
-| M2 | Provider onboarding and model-management UX | Partial | The TUI implements the LazyGit-style block/tab/context skeleton: `h/l` blocks, `j/k` items, `[/]` tabs, Enter/Esc depth, Space selection and context-local `/` filtering. Discovered, Physical and Combos are separately managed tabs with typed CRUD and inline exposure. Usage IPC/CLI/TUI is now available; split member/candidate editor, reverse references, richer capability filters and Logs remain. See [TUI UX](TUI_UX.md). |
-| M3 | OpenAI Chat request vertical slice | Partial | Kernel/adapters and live provider calls exist. Close cancellation, error/commit boundaries, load behavior and end-to-end usage/health tests. |
-| M4 | Hierarchical model execution, connection pool and policy primitives | Partial | Typed Physical/Combo nodes preserve policy boundaries. Replace coarse route gates with typed eligibility, passive outcome feedback and explicit ranking; finish sticky/fusion behavior, scoped failure transitions and deterministic concurrency. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
-| M5 | Canonical response-event contract | Planned | Introduce shared response events/fixtures where they remove duplicated stream logic; preserve lossless passthrough paths. Scope this to intended protocols. |
+| M1 | SQLite control plane and immutable routing snapshot | Done | Typed config CRUD, validation/reload, route expansion, IPC and immutable snapshots are authoritative. Legacy publication/alias tables and APIs were removed; storage portability is separate. |
+| M2 | Provider onboarding and model-management UX | Partial | The TUI implements the LazyGit-style block/tab/context skeleton: `h/l` blocks, `j/k` items, `[/]` tabs, Enter/Esc depth, Space selection and context-local `/` filtering. Discovered, Physical and Combos are separately managed typed tabs with inline `discoverable` exposure. Usage IPC/CLI/TUI is available; split member/candidate editor, reverse references, richer capability filters, effective-order explanation and Logs remain. See [TUI UX](TUI_UX.md). |
+| M3 | OpenAI Chat request vertical slice | Partial | Kernel/adapters and live provider calls exist. Close cancellation, pre/post-commit error fixtures, load behavior and end-to-end usage/health certification. |
+| M4 | Hierarchical model execution, connection pool and policy primitives | Partial; runtime core done | Typed Physical/Combo nodes preserve policy boundaries; scoped passive feedback, adaptive ranking, session affinity and half-open admission are implemented. Finish typed eligibility, sticky/fusion semantics, retry precedence and deterministic concurrency fixtures. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
+| M5 | Canonical response-event contract | Planned; next protocol foundation | Introduce shared response events for lifecycle, content blocks, tools, thinking and usage while preserving lossless passthrough. Build this before broadening Responses/Anthropic semantics. |
 | M6 | Responses/Anthropic semantic compatibility | Partial | Basic adapters and Anthropic text/tool SSE conversion exist. Implement the normalized reasoning intent and real OpenAI/Anthropic/Gemini dialect translators; remove metadata-only effort handling. Define and test continuity, content-block, tool, thinking, usage and malformed-stream behavior. |
 | M7 | Upstream credential lifecycle and OAuth | Partial | Static API-key/Bearer resolution exists and OAuth dependency is selected. Add typed flow bindings, refresh/token persistence and refresh-once behavior for needed providers. This is distinct from client auth to hosted GoBroom. |
-| M8 | Passive health, limits, performance and usage | Partial | Typed classified outcomes, scoped passive route/connection/provider evidence, reset-aware cooldowns, bounded feedback ranking, completion TTFT/throughput, request-class EWMA selection, half-open single trials, session affinity, durable health/usage IPC/TUI and opt-in quota polling now run in the kernel path. Opportunistic quota enrichment is singleflight/cooldowned after quota evidence. Remaining: richer aggregate status projections and log streaming. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
+| M8 | Passive health, limits, performance and usage | Partial; runtime core done | Typed outcomes, scoped route/connection/provider evidence, reset-aware cooldowns, bounded feedback ranking, TTFT/throughput, request-class EWMA, half-open trials, session affinity, durable health/usage IPC/TUI, opt-in quota polling and opportunistic enrichment are implemented. Remaining: aggregate Physical/provider projections, effective-order explanation, usage aggregation/retention and log streaming. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
 | M9 | Provider presets and discovery expansion | Partial | JSON manifests and reusable primitives support generic compositions. Add desired providers/operations; avoid provider-specific kernel code or breadth-only checklists. |
-| M10 | Physical identity, capability and modality policies | Partial | Physical/route separation and basic hard filtering exist, but capabilities are still boolean maps. Implement typed support states, identity/revision and source fidelity, token limits, evidence, route-effective profiles, request requirements and declared/guaranteed/available projections. Never silently strip or downgrade user intent. See [Physical models](PHYSICAL_MODELS.md). |
+| M10 | Physical identity, capability and modality policies | Partial; next kernel foundation | Physical/route separation and basic hard filtering exist, but capabilities are still boolean maps. Implement typed support states, identity/revision and source fidelity, token limits, evidence, route-effective profiles, request requirements and declared/guaranteed/available projections. Never silently strip or downgrade user intent. See [Physical models](PHYSICAL_MODELS.md). |
 | M11 | Optional middleware | Planned/deferred | Not on the critical path. Revisit only for demonstrated need; keep opt-in, bounded and unable to mutate route identity or bypass cancellation. |
 | M12 | Secondary APIs and integrations | Out of core | Embeddings/media/search, tunnels, MITM/DNS and IDE integrations remain separate services/sidecars, not kernel milestones. |
 | M13 | Canonical configuration bundle and sync | Planned | Define a versioned typed representation for provider nodes/connections, discovered routes, physical models, combo models and inline exposure. Add validate/diff/dry-run and atomic apply/export/import; keep secrets separate. Start single-writer; do not imply conflict-free multi-master sync. |
@@ -79,24 +79,26 @@ calls for a user-workflow-first sequence:
 1. **M10 Physical contract first:** implement identity/fidelity, typed profiles,
    evidence, effective route profiles and request requirement compilation. Do
    not build adaptive routing on boolean capability maps.
-2. **M6 reasoning semantics:** parse and translate Codex/OpenCode/Antigravity/
+2. **M5 canonical response events:** establish one lifecycle/content/usage
+   event stream before adding protocol-specific semantics.
+3. **M6 reasoning semantics:** parse and translate Codex/OpenCode/Antigravity/
    Claude Code intent without duplicating Physical models or silently clamping.
-3. **M3 + M5 lifecycle boundaries:** make cancellation, first byte, stream
+4. **M3 lifecycle boundaries:** make cancellation, first byte, stream
    completion and post-commit errors observable and deterministic.
-4. **M8 passive runtime:** replace polling/coarse cooldowns with real-call
-   outcomes, scoped limits/breakers, performance evidence and session affinity.
 5. **M4 policy completion:** apply explainable ranking and strategy only after
    eligibility; finish sticky/fusion/concurrency behavior.
-6. **M2 management UX:** complete Physical comparison, runtime evidence,
+6. **M8 projection/operations:** finish aggregate status, effective-order
+   explanation, retention and logs on top of the runtime core.
+7. **M2 management UX:** complete Physical comparison, runtime evidence,
    effective-order explanations, filters and split member/candidate editors.
-7. **M13:** establish the canonical versioned config contract before promising
+8. **M7:** finish upstream OAuth for providers the user actually configures.
+9. **M9:** grow provider manifests by demand. Keep M11 deferred and M12
+   outside the core.
+10. **M13:** establish the canonical versioned config contract before promising
    portability or sync. Do not copy database tables as the sync format.
-8. **M14:** make local service operation and protected remote serving explicit.
+11. **M14:** make local service operation and protected remote serving explicit.
    Structured logs to stdout/journal are the first path; remote log vendors
    should use a standard collector/export protocol.
-9. **M7:** finish upstream OAuth for providers the user actually configures.
-10. **M9:** grow provider manifests by demand. Keep
-   M11 deferred and M12 outside the core.
 
 M13/M14 are architecture-enabling work, not reasons to delay usable local
 SQLite, IPC and journald defaults. A second database or remote log sink should
@@ -145,6 +147,10 @@ be implemented only against a named need and testable contract.
    apply the same versioned domain model; exports exclude secrets by default.
 16. **Defaults stay simple.** SQLite, local IPC, loopback serving and
     stdout/journal logging work without external services.
+17. **Typed-only model configuration.** Discovered routes, Physical models and
+    Combo models are the only model-management primitives. Exposure is the
+    `discoverable` field on those nodes; no separate alias/publication layer,
+    compatibility table or fallback configuration path may be introduced.
 
 ## Delivery sequence
 
@@ -165,6 +171,7 @@ verified against the user's intended workflows:
 - connection setup can test auth/endpoint, import `/models`, and add custom
   entries without SQL;
 - `/v1/models` returns only models whose exposure flag is enabled;
+- no model configuration is read from a second legacy or compatibility store;
 - supported Chat, Responses and Anthropic formats have documented limits and
   passing fixtures, including streaming and tool calls;
 - connection and combo ordering/fallback behavior is deterministic and
