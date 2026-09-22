@@ -65,7 +65,9 @@ For example, three discovered routes with different prefixes or upstream
 spellings can implement the physical model `qwen-3.7-max`. The combo `junior`
 can then reference that physical model alongside other physical/combo models.
 `/models` discovery supplies source candidates; it does not dictate the model
-graph.
+graph. Physical identity, typed profiles, source fidelity, reasoning and
+consumption semantics are defined in the
+[Physical model contract](PHYSICAL_MODELS.md).
 
 ## Request-path design
 
@@ -77,11 +79,10 @@ nested combo applies its own policy. Pre-flattening the complete graph into one
 route list destroys those semantics. Requests read the immutable snapshot and
 do not query SQLite for static routing data.
 
-The current implementation still represents logical models, combos and
-published models in separate persistence/contracts and recursively flattens
-nested combo members during resolution. That is an implementation gap, not the
-target architecture. Migration must preserve existing data while introducing
-typed Discovered, Physical and Combo management layers.
+The request execution path preserves typed Physical/Combo boundaries. Legacy
+logical/combo/publication tables and flattened read APIs remain compatibility
+representations while migration proceeds. Migration must preserve existing
+data and must not turn provider routes into Physical identities implicitly.
 
 ## Policy primitives
 
@@ -135,6 +136,11 @@ gaps are tracked in [provider documentation](PROVIDERS.md) and the roadmap.
   block response delivery.
 - Health and quota gates are runtime policy inputs, not dashboard-only data.
 
+The target runtime is passive and evidence-driven: real attempts update typed
+outcomes, limit windows, scoped breakers and performance summaries; no network
+healthcheck runs by default. See
+[Passive health and adaptive routing](PASSIVE_HEALTH_ROUTING.md).
+
 ## Repository boundaries
 
 ```text
@@ -148,7 +154,7 @@ internal/kernel       immutable routing contract, scheduler and execution
 internal/normalize    typed inbound request representation
 internal/adapter      protocol adapters
 internal/provider     manifests, primitive registries and auth/discovery
-internal/runtime      health/quota policy and polling
+internal/runtime      passive outcomes, limits, breakers and ranking state
 internal/store        SQLite schema and repositories
 internal/usage        compact usage events and worker
 ```

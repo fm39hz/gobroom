@@ -24,6 +24,8 @@ Request execution retains typed model nodes and their policy boundaries. A role
 combo selects a model member; that physical or nested combo then applies its own
 source/member policy. The legacy `resolveRef` route expansion remains a
 compatibility/read API and must not be used as the hierarchical execution plan.
+Physical route eligibility and reasoning translation follow the typed profile
+and request-requirement rules in [the Physical model contract](PHYSICAL_MODELS.md).
 
 Snapshots carry connection identifiers and routing metadata, never connection
 secrets. Credentials are resolved for the selected route at execution time.
@@ -50,11 +52,11 @@ The current kernel contract is represented by `ProviderAdapter` in
 
 ## Scheduling and fallback
 
-Health and quota gates remove unavailable members before selection. Strategy is
-a primitive contract, with implementations such as ordered fallback, rotating
-fallback and weighted fallback. Resolution does not choose or erase strategy.
-Exact policy semantics and concurrency behavior require contract tests. No
-scheduler lock may span credential refresh or network I/O.
+Typed eligibility removes incompatible or runtime-blocked members before
+selection. Ranking combines static order with passive runtime evidence under an
+explicit policy; strategy then plans fallback, rotation or fusion. See the
+[passive health contract](PASSIVE_HEALTH_ROUTING.md). No scheduler lock may
+span credential refresh or network I/O.
 
 Fallback is permitted only before response commitment. If an adapter has
 written/flushed response bytes, subsequent errors cannot transparently move to
@@ -76,12 +78,17 @@ the ability to use a lossless passthrough path.
 
 ## Runtime events
 
-Adapters report completion/error through hooks. The kernel enriches successful
-usage with logical model, route, connection and elapsed time, then attempts a
+Adapters report lifecycle completion/error through hooks. A 2xx header is not
+success until the adapter's response/stream completion boundary, and client
+cancellation is neutral health evidence. The kernel enriches successful usage
+with logical model, route, connection and elapsed time, then attempts a
 non-blocking send to a bounded event channel. Runtime health updates and
 persistent usage workers consume events independently of response delivery.
 
 ## Stable error classes
+
+The following are current migration-era classes, not the target passive outcome
+taxonomy:
 
 ```text
 terminal   do not retry another route
@@ -91,5 +98,7 @@ auth       credential/authentication failure policy
 ```
 
 Provider-specific status/body heuristics belong in classifier primitives, not
-kernel branches. Exact precedence, 401 refresh and post-commit behavior remain
-explicit test obligations.
+kernel branches. They will be replaced by cause/scope/retry/deadline-rich
+outcomes described in [Passive health](PASSIVE_HEALTH_ROUTING.md). Exact
+precedence, 401 refresh and post-commit behavior remain explicit test
+obligations.

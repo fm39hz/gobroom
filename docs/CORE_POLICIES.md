@@ -33,11 +33,20 @@ another provider when their behavior is expressible by the same primitive.
 
 ## Health, quota and usage
 
-Quota/usage state is useful only when it can influence routing or policy, not
-merely populate a dashboard. Quota snapshots should identify scope, source,
-observation time and reset time. Authoritative upstream observations must remain
-distinguishable from local estimates. Expired or unknown data must have explicit
-policy semantics.
+Health and limits are passive by default: real inference attempts produce typed
+observations and scoped outcomes. The daemon does not continuously ping routes.
+Quota endpoints are queried opportunistically after relevant evidence unless a
+provider opts into another explicit policy. See
+[the passive health contract](PASSIVE_HEALTH_ROUTING.md).
+
+Quota/usage state is useful only when it influences routing or policy, not
+merely a dashboard. Limit windows identify scope, source, observation/reset
+time, confidence and evidence. Authoritative reset times remain distinguishable
+from estimates and are not capped. Unknown/stale data has explicit semantics.
+
+Static user priority is never rewritten by runtime feedback. Adaptive ranking
+uses bounded, decaying evidence only after capability/limit/health eligibility;
+session affinity and global preference remain separate scopes.
 
 The data plane emits compact usage events into a bounded asynchronous path.
 Persistence, aggregation and display must not delay response delivery. Under

@@ -44,14 +44,21 @@ serving a request.
 | Request codec | Map normalized semantic input into upstream wire format |
 | Response codec | Decode JSON/SSE and emit the selected client format |
 | Model source | Discover and normalize the provider model catalog |
-| Usage source | Extract or query usage data |
-| Quota source | Read quota snapshots and reset information |
-| Error classifier | Convert upstream errors to stable retry/cooldown/terminal classes |
+| Usage source | Extract bounded usage data from real responses |
+| Outcome classifier | Convert attempt evidence into typed cause, scope and retry action |
+| Limit extractor | Parse request/token/quota windows from response headers and bodies |
+| Quota enricher | Optionally fetch exact quota/reset state after relevant evidence |
+| Deadline parser | Normalize provider reset/retry timestamps with provenance |
+| Health policy | Bind passive breaker and ranking defaults without provider-name branches |
 | Session store | Persist protocol continuity/session state when an operation needs it |
 | Extension | Optional, typed behavior outside the common operation contract |
 
 Providers may share any primitive. A provider definition composes them; it
 does not copy their implementation.
+
+The existing generic error classifier and quota source are migration-era
+primitives. Their target replacements and passive/no-polling rules are defined
+in [the passive health contract](PASSIVE_HEALTH_ROUTING.md).
 
 ## Resolution precedence
 

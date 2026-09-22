@@ -23,6 +23,13 @@ format, messages/content, tools, thinking intent, modality flags, transport
 hints, provider-neutral extensions and original fields needed for compatibility.
 See `internal/normalize/types.go` for the implemented contract.
 
+The target reasoning intent distinguishes absent/inherit, explicit auto,
+disabled, ordinal level and numeric budget. It also carries summary intent,
+strictness and provenance. Harness wire shapes, route reasoning dialects and
+lossy-mapping policy are specified in the
+[Physical model contract](PHYSICAL_MODELS.md); an absent field must not be
+silently normalized into an explicit provider default.
+
 ## Normalization responsibilities
 
 - detect source format using endpoint and request evidence;

@@ -1,7 +1,7 @@
 # Implementation roadmap
 
 Status is based on the repository implementation and tests inspected on
-2026-09-20. This is the project roadmap and the source of truth for milestone
+2026-09-22. This is the project roadmap and the source of truth for milestone
 status. Architecture and compatibility documents describe contracts/evidence;
 they do not override this status table.
 
@@ -19,7 +19,9 @@ The governing product definition is [GoBroom vision](VISION.md): discovered
 routes, physical models and combo models are separate management layers in one
 typed graph, and exposure is a model property. Infrastructure options support
 this workflow; they are not a mandate to implement every backend or
-integration. The interaction contract is documented in [TUI UX](TUI_UX.md).
+integration. The interaction contract is documented in [TUI UX](TUI_UX.md),
+and model identity/capability/consumption semantics in
+[Physical models](PHYSICAL_MODELS.md).
 
 GoBroom is a daemon-first local AI gateway. It provides an HTTP-compatible data
 plane for clients and a local IPC control plane for management. SQLite and
@@ -57,13 +59,13 @@ but must not introduce provider-specific branches into the kernel.
 | M1 | SQLite control plane and immutable routing snapshot | Done (core) | Config CRUD, validation/reload, route expansion, IPC and explicit publication exist. Harden schema/lifecycle; storage portability is separate. |
 | M2 | Provider onboarding and model-management UX | Partial | The TUI implements the LazyGit-style block/tab/context skeleton: `h/l` blocks, `j/k` items, `[/]` tabs, Enter/Esc depth, Space selection and context-local `/` filtering. Discovered, Physical and Combos are separately managed tabs with typed CRUD and inline exposure. Finish the split member/candidate editor, reverse references, richer capability filters and Usage/Logs IPC. See [TUI UX](TUI_UX.md). |
 | M3 | OpenAI Chat request vertical slice | Partial | Kernel/adapters and live provider calls exist. Close cancellation, error/commit boundaries, load behavior and end-to-end usage/health tests. |
-| M4 | Hierarchical model execution, connection pool and policy primitives | Partial | Typed physical/combo nodes and strategy primitives preserve nested execution boundaries; legacy flattened resolution remains only as a compatibility API. Ordered, rotating and weighted fallback primitives exist with per-node state. Finish sticky semantics in the new primitive path, fusion/parallel policies, failure scope and broader deterministic concurrency tests. |
+| M4 | Hierarchical model execution, connection pool and policy primitives | Partial | Typed Physical/Combo nodes preserve policy boundaries. Replace coarse route gates with typed eligibility, passive outcome feedback and explicit ranking; finish sticky/fusion behavior, scoped failure transitions and deterministic concurrency. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
 | M5 | Canonical response-event contract | Planned | Introduce shared response events/fixtures where they remove duplicated stream logic; preserve lossless passthrough paths. Scope this to intended protocols. |
-| M6 | Responses/Anthropic semantic compatibility | Partial | Basic adapters and Anthropic text/tool SSE conversion exist. Define and test supported continuity, content-block, tool, thinking, usage and malformed-stream behavior. |
+| M6 | Responses/Anthropic semantic compatibility | Partial | Basic adapters and Anthropic text/tool SSE conversion exist. Implement the normalized reasoning intent and real OpenAI/Anthropic/Gemini dialect translators; remove metadata-only effort handling. Define and test continuity, content-block, tool, thinking, usage and malformed-stream behavior. |
 | M7 | Upstream credential lifecycle and OAuth | Partial | Static API-key/Bearer resolution exists and OAuth dependency is selected. Add typed flow bindings, refresh/token persistence and refresh-once behavior for needed providers. This is distinct from client auth to hosted GoBroom. |
-| M8 | Usage, cost, quota and health services | Partial | Compact usage events, health persistence, quota snapshots/policy and generic source/poller plumbing exist. Add useful aggregates/retention and connect quota/usage to routing; defer elaborate dashboards. |
+| M8 | Passive health, limits, performance and usage | Partial; redesign required | Compact usage events, cooldowns and quota snapshots exist, but health is route-only and quota polling is periodic. Implement AttemptObservation/ClassifiedOutcome, passive limit extraction, scoped breakers, exact reset provenance, performance summaries, session affinity and bounded adaptive ranking. Disable periodic polling by default. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
 | M9 | Provider presets and discovery expansion | Partial | JSON manifests and reusable primitives support generic compositions. Add desired providers/operations; avoid provider-specific kernel code or breadth-only checklists. |
-| M10 | Capability and modality policies | Partial | Typed capability declarations and hard route filtering exist. Complete detection/degradation for supported modalities; never silently strip user input. |
+| M10 | Physical identity, capability and modality policies | Partial | Physical/route separation and basic hard filtering exist, but capabilities are still boolean maps. Implement typed support states, identity/revision and source fidelity, token limits, evidence, route-effective profiles, request requirements and declared/guaranteed/available projections. Never silently strip or downgrade user intent. See [Physical models](PHYSICAL_MODELS.md). |
 | M11 | Optional middleware | Planned/deferred | Not on the critical path. Revisit only for demonstrated need; keep opt-in, bounded and unable to mutate route identity or bypass cancellation. |
 | M12 | Secondary APIs and integrations | Out of core | Embeddings/media/search, tunnels, MITM/DNS and IDE integrations remain separate services/sidecars, not kernel milestones. |
 | M13 | Canonical configuration bundle and sync | Planned | Define a versioned typed representation for provider nodes/connections, discovered routes, physical models, combo models and inline exposure. Add validate/diff/dry-run and atomic apply/export/import; keep secrets separate. Start single-writer; do not imply conflict-free multi-master sync. |
@@ -74,24 +76,26 @@ but must not introduce provider-specific branches into the kernel.
 The existing milestones are grouped mainly by implementation layer. The vision
 calls for a user-workflow-first sequence:
 
-1. **M2 contract first:** implement the panel/tab/context state machine and
-   separate Discovered, Physical and Combo management with context-local
-   filtering. Do not build more editors on the current unified-list facade.
-2. **M4 graph/policy redesign:** preserve hierarchical policy boundaries and
-   make fallback/rotation/weighting registered primitives before polishing the
-   routing UI around misleading flattened behavior.
-3. **M3 hardening:** make cancellation and response-commit behavior predictable
-   under concurrency.
-4. **M13:** establish the canonical versioned config contract before promising
+1. **M10 Physical contract first:** implement identity/fidelity, typed profiles,
+   evidence, effective route profiles and request requirement compilation. Do
+   not build adaptive routing on boolean capability maps.
+2. **M6 reasoning semantics:** parse and translate Codex/OpenCode/Antigravity/
+   Claude Code intent without duplicating Physical models or silently clamping.
+3. **M3 + M5 lifecycle boundaries:** make cancellation, first byte, stream
+   completion and post-commit errors observable and deterministic.
+4. **M8 passive runtime:** replace polling/coarse cooldowns with real-call
+   outcomes, scoped limits/breakers, performance evidence and session affinity.
+5. **M4 policy completion:** apply explainable ranking and strategy only after
+   eligibility; finish sticky/fusion/concurrency behavior.
+6. **M2 management UX:** complete Physical comparison, runtime evidence,
+   effective-order explanations, filters and split member/candidate editors.
+7. **M13:** establish the canonical versioned config contract before promising
    portability or sync. Do not copy database tables as the sync format.
-5. **M14:** make local service operation and protected remote serving explicit.
+8. **M14:** make local service operation and protected remote serving explicit.
    Structured logs to stdout/journal are the first path; remote log vendors
    should use a standard collector/export protocol.
-6. **M5 + M6:** complete only protocol/stream semantics needed by intended
-   clients, backed by fixtures.
-7. **M7 + M8:** finish upstream OAuth and actionable quota/usage policies for
-   providers the user actually configures.
-8. **M9 + M10:** grow provider manifests and modality coverage by demand. Keep
+9. **M7:** finish upstream OAuth for providers the user actually configures.
+10. **M9:** grow provider manifests by demand. Keep
    M11 deferred and M12 outside the core.
 
 M13/M14 are architecture-enabling work, not reasons to delay usable local
@@ -112,20 +116,34 @@ be implemented only against a named need and testable contract.
    and combo policy are separate operations even though they form one graph.
    Node, connection and opaque upstream model ID remain distinct;
    prefixes/display labels are projections.
-5. **Exposure is explicit on the model.** Internal physical and combo models do
+5. **Unknown remains unknown.** Missing capability or limit evidence is not
+   replaced by a guessed global default; explicit negative evidence can
+   override heuristics.
+6. **Eligibility precedes strategy.** Compile request requirements and remove
+   incompatible routes before fallback, rotation, weighting or adaptive
+   scoring.
+7. **Client intent is preserved.** Absent, auto, disabled, effort level and
+   budget are distinct; lossy translation is explicit and observable.
+8. **Runtime evidence is passive by default.** Real attempts update health,
+   limits and performance; no synthetic network check or global quota poll runs
+   unless explicitly configured.
+9. **Priority stays explainable.** Runtime feedback never mutates durable user
+   order. Positive preference is bounded, decayed, confidence-gated and applied
+   only after hard eligibility.
+10. **Exposure is explicit on the model.** Internal physical and combo models do
    not appear in `/v1/models` unless exposed; there is no separate publication
    workflow in the target UX.
-6. **Policy boundaries survive resolution.** Resolving a role combo must not
+11. **Policy boundaries survive resolution.** Resolving a role combo must not
    flatten away the strategy of its physical/combo members.
-7. **No retry after response commitment.** Once response bytes are sent, errors
+12. **No retry after response commitment.** Once response bytes are sent, errors
    are surfaced; the request cannot silently switch routes.
-8. **Usage is best-effort and bounded.** Observability must not stall an SSE
+13. **Usage is best-effort and bounded.** Observability must not stall an SSE
    stream or first-byte delivery.
-9. **Frontend independence.** Daemon operation does not depend on a running TUI
+14. **Frontend independence.** Daemon operation does not depend on a running TUI
    or CLI; all frontend mutations use the same daemon control contract.
-10. **One configuration truth.** UI edits, CLI operations and sync validate and
+15. **One configuration truth.** UI edits, CLI operations and sync validate and
    apply the same versioned domain model; exports exclude secrets by default.
-11. **Defaults stay simple.** SQLite, local IPC, loopback serving and
+16. **Defaults stay simple.** SQLite, local IPC, loopback serving and
     stdout/journal logging work without external services.
 
 ## Delivery sequence
@@ -153,6 +171,9 @@ verified against the user's intended workflows:
   concurrency-safe;
 - credential refresh and quota state influence routing where configured and
   survive restart;
+- real attempts drive scoped health/limit state without mandatory network
+  healthchecks, and effective route order is explainable without mutating user
+  priority;
 - long-lived streams do not serialize or block control-plane actions;
 - the TUI makes the workflow practical without direct database access;
 - config can be validated/exported/imported without copying SQLite internals;

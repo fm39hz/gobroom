@@ -4,7 +4,7 @@ This is a behavior-by-behavior comparison, not a promise of drop-in parity.
 The 9router column is based on source checked in the adjacent local checkout at
 `/home/fm39hz/Workspace/Personal/Tools/AI/9router`; source paths below are
 orientation, not a substitute for executable fixtures. GoBroom status reflects
-the current repository and tests inspected on 2026-09-20.
+the current repository and tests inspected on 2026-09-22.
 
 ## Status legend
 
@@ -33,8 +33,8 @@ the current repository and tests inspected on 2026-09-20.
 | Combo order/fallback (`open-sse/services/combo.js`) | Partial | The execution path traverses typed nodes and preserves inner/outer strategy boundaries with cycle guards. Sticky semantics, fusion and exact retry precedence still need broader fixtures. |
 | Round-robin and sticky limits | Partial | Round-robin scheduler exists; sticky-limit equivalence and concurrent ordering are not yet certified. |
 | Account selection, exclusion and preferred account (`src/sse/services/auth.js`, `accountFallback.js`) | Partial | Fill-first, rotation, preferred connection and health cooldown paths exist; policy precedence remains. |
-| Cooldown and `Retry-After` | Partial | Health state and Retry-After cooldown plumbing exist; provider-specific status mapping and reset behavior need fixtures. |
-| Quota affects candidate eligibility | Partial | Persisted snapshots and quota gate/poller plumbing exist; generic source parsing and concrete provider binding are limited. |
+| Cooldown and `Retry-After` | Partial; redesign required | Basic cooldown plumbing exists. Target behavior uses real-attempt outcomes, scoped breakers, exact deadline provenance and half-open real trials rather than synthetic checks. |
+| Quota affects candidate eligibility | Partial; redesign required | Persisted snapshots gate routes, but the target is passive limit extraction plus opportunistic enrichment; daemon-wide periodic polling is not the default contract. |
 | No switch after response bytes are sent | Partial | HTTP tracks response commitment and kernel execution returns after stream dispatch; expand integration tests across adapters. |
 
 ## Protocol normalization and streaming
@@ -58,7 +58,7 @@ the current repository and tests inspected on 2026-09-20.
 | OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | OAuth library is selected; generic auth registry exists, but a complete end-to-end provider flow is not implemented. |
 | Per-connection proxy settings | Planned | Keep in transport/connection configuration, not kernel routing branches. |
 | Usage history and request detail | Partial | Compact event channel/worker exists; aggregates, cost, retention and bounded diagnostics remain. |
-| Provider quota APIs and reset-aware policy | Partial | Generic HTTP/JSON source and poller exist; provider bindings and authoritative-source semantics remain. |
+| Provider quota APIs and reset-aware policy | Partial; redesign required | Generic HTTP/JSON polling exists as bootstrap code. The target uses passive response evidence and opportunistic provider enrichment with exact reset provenance; scheduled polling is explicit opt-in. |
 | Quota/usage only as dashboard data | Not the target | Runtime policy should consume the same state; current coverage is partial. |
 
 ## Secondary product features

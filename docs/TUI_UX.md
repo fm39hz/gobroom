@@ -102,6 +102,8 @@ Shows physical model identities independently from combos. Selecting
 `deepseek-v4-flash` opens its ordered provider routes, capabilities, source
 policy, reverse references and exposure state. Adding a source opens a filtered
 Discovered picker; it does not turn the top-level view into raw provider rows.
+The profile, evidence, source-fidelity and aggregate views follow the
+[Physical model contract](PHYSICAL_MODELS.md).
 
 ### Combos tab
 
@@ -109,6 +111,11 @@ Shows role/use-case models independently from physical models. Selecting
 `junior` opens its ordered physical/combo members, execution strategy, reverse
 references and exposure state. A combo is a routable model and may be returned
 by `/v1/models` when exposed.
+
+Runtime and source rows display derived cause, scope, deadline, confidence and
+the explanation for effective order; they do not reduce passive evidence to a
+generic health badge. See
+[the passive health contract](PASSIVE_HEALTH_ROUTING.md).
 
 ## Filtering
 

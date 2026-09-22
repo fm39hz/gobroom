@@ -44,10 +44,14 @@ requires explicit operator configuration and appropriate network protection.
 ## Lifecycle expectations
 
 The daemon owns database open/migration, snapshot construction, listeners,
-background workers, signal handling and bounded shutdown. A bad configuration
+bounded event/persistence workers, signal handling and bounded shutdown. A bad configuration
 reload must leave the last valid snapshot active. Provider discovery failures
 should affect the relevant provider operation, not make an otherwise valid
 daemon unusable.
+
+No network healthcheck or daemon-wide quota poll runs by default. Real attempts
+feed passive runtime state; provider quota enrichment is evidence-triggered and
+deduplicated. See [Passive health](PASSIVE_HEALTH_ROUTING.md).
 
 Desired state sequence:
 

@@ -90,7 +90,9 @@ IDs.
    new behavior is implemented once as a reusable primitive.
 8. **Operational data has a job.** Health, quota and usage should inform routing,
    budgets or diagnosis—not exist only to fill a dashboard. They are bounded
-   and must not stall response delivery.
+   and must not stall response delivery. Real calls are the default health and
+   limit evidence; synthetic network checks and periodic quota polling require
+   explicit opt-in.
 9. **Secure remote use is a supported deployment shape.** The data-plane
    listener can be hosted remotely with explicit authentication and transport
    protection. The control plane stays independently configurable and is not

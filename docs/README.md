@@ -8,6 +8,8 @@
   work, invariants and replacement gate. This is the status source of truth.
 - [Architecture](ARCHITECTURE.md) — runtime topology, model layers, concurrency
   and package responsibilities.
+- [Physical model contract](PHYSICAL_MODELS.md) — identity and source fidelity,
+  capability/limit/reasoning profiles, harness consumption and routing rules.
 - [TUI interaction and model management](TUI_UX.md) — LazyGit-style context
   navigation, separate Discovered/Physical/Combos layers and filtering rules.
 - [Behavior comparison](COMPATIBILITY_MATRIX.md) — source-grounded behavior
@@ -26,6 +28,8 @@
 - [Provider definitions](PROVIDERS.md) — typed manifest and primitive model.
 - [Core policies](CORE_POLICIES.md) — concurrency, quota/usage, security and
   hot-path invariants.
+- [Passive health and adaptive routing](PASSIVE_HEALTH_ROUTING.md) — real-call
+  outcomes, limit windows, scoped breakers, status and route ranking.
 
 ## Engineering reference
 
