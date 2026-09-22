@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestTypedModelLayersReuseCatalogAndPreserveLegacyData(t *testing.T) {
+func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	s, err := Open(t.TempDir() + "/models.db")
 	if err != nil {
 		t.Fatal(err)
@@ -26,16 +26,6 @@ func TestTypedModelLayersReuseCatalogAndPreserveLegacyData(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.UpsertLogicalModel("legacy-alias", "route:route-a"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpsertCombo(ComboRecord{Name: "legacy-combo", Members: []string{"route:route-a"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.UpsertPublicModel(PublicModel{Name: "legacy-public", TargetRef: "combo:legacy-combo"}); err != nil {
-		t.Fatal(err)
-	}
-
 	discovered, err := s.DiscoveredRoutes("")
 	if err != nil || len(discovered) != 2 || discovered[0].ID != "route-b" || discovered[1].ProviderPrefix != "orca" {
 		t.Fatalf("discovered=%#v err=%v", discovered, err)
@@ -75,21 +65,9 @@ func TestTypedModelLayersReuseCatalogAndPreserveLegacyData(t *testing.T) {
 		t.Fatalf("combo=%#v", gotCombo)
 	}
 
-	// Running the additive migration again must leave all legacy records intact.
+	// Re-running the schema migration must leave typed records intact.
 	if err := s.Migrate(); err != nil {
 		t.Fatal(err)
-	}
-	legacyAliases, err := s.LogicalModels()
-	if err != nil || len(legacyAliases) != 1 || legacyAliases[0].Name != "legacy-alias" {
-		t.Fatalf("legacy aliases=%#v err=%v", legacyAliases, err)
-	}
-	legacyCombos, err := s.ComboDetails()
-	if err != nil || len(legacyCombos) != 1 || legacyCombos[0].Name != "legacy-combo" {
-		t.Fatalf("legacy combos=%#v err=%v", legacyCombos, err)
-	}
-	legacyPublic, err := s.PublicModels()
-	if err != nil || len(legacyPublic) != 1 || legacyPublic[0].Name != "legacy-public" {
-		t.Fatalf("legacy public=%#v err=%v", legacyPublic, err)
 	}
 }
 
@@ -142,7 +120,7 @@ func TestModelLayerUpsertsAreAtomicAndValidateReferences(t *testing.T) {
 }
 
 func TestMigrationAddsModelLayerTablesWithoutReplacingCatalog(t *testing.T) {
-	path := t.TempDir() + "/legacy.db"
+	path := t.TempDir() + "/typed.db"
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)

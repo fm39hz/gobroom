@@ -52,29 +52,6 @@ func TestQuotaPaneDecodesRuntimeMapContract(t *testing.T) {
 	}
 }
 
-func TestComboEditorPreservesAndReordersTypedMembers(t *testing.T) {
-	selected := &entry{payload: combo{Name: "junior", Strategy: "fallback", StickyLimit: 2, Members: []string{"orca/model-a", "openrouter/model-b"}}}
-	form := newResourceForm(int(sectionCombos), selected, "")
-	if form == nil {
-		t.Fatal("combo editor was not created")
-	}
-	form.moveMember(1)
-	params, err := form.Params()
-	if err != nil {
-		t.Fatal(err)
-	}
-	members, ok := params["members"].([]string)
-	if !ok {
-		t.Fatalf("members have type %T; want []string", params["members"])
-	}
-	if got, want := strings.Join(members, ","), "openrouter/model-b,orca/model-a"; got != want {
-		t.Fatalf("member order = %q, want %q", got, want)
-	}
-	if params["name"] != "junior" {
-		t.Fatalf("combo identity should remain stable, got name %v", params["name"])
-	}
-}
-
 func TestConnectionFormMasksSecretAndOmitsUnchangedSecret(t *testing.T) {
 	form := newResourceForm(int(sectionConnections), &entry{payload: connection{ID: "conn-1", ProviderNodeID: "node-1", Name: "personal", CredentialType: "api_key", Priority: 100}}, "")
 	if form == nil {
@@ -303,7 +280,7 @@ func TestModelTabsRetainCursorFilterAndSelectionIndependently(t *testing.T) {
 	}
 }
 
-func TestModelWorkspaceUsesTypedViewsAndIsolatesLegacyPhysicalMapping(t *testing.T) {
+func TestModelWorkspaceUsesTypedViewsAndSeparatesPhysicalMapping(t *testing.T) {
 	providers := []providerNode{{ID: "xkiro", Name: "XKiro", Prefix: "xkiro"}, {ID: "ocg", Name: "OCG", Prefix: "ocg"}}
 	workspace, err := (modelWorkspaceClient{providers: providers}).Build(
 		json.RawMessage(`[{"id":"r1","providerNodeId":"xkiro","providerPrefix":"xkiro","kind":"discovered","externalId":"qwen/qwen3.7-max:free"},{"id":"r2","providerNodeId":"ocg","providerPrefix":"ocg","kind":"discovered","externalId":"qwen3.7-max"}]`),

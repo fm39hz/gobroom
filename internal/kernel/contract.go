@@ -34,13 +34,6 @@ type PublicModel struct {
 	OwnedBy   string
 }
 
-type Combo struct {
-	Name        string
-	Strategy    Strategy
-	StickyLimit int
-	Members     []string
-}
-
 type Route struct {
 	ID                string
 	NodeID            string
@@ -62,7 +55,6 @@ type Route struct {
 type Snapshot struct {
 	Version      uint64
 	PublicModels map[string]PublicModel
-	Combos       map[string]Combo
 	Routes       map[string]Route
 	// RouteGroups expands a logical catalog route into one candidate per
 	// connection. The group key remains the stable model/catalog ID used by
@@ -70,10 +62,8 @@ type Snapshot struct {
 	RouteGroups map[string][]string
 	// WireRoutes maps prefix/model references to route variants. It is only
 	// reachable through a published target or combo member.
-	WireRoutes    map[string][]string
-	LogicalModels map[string]string
-	// Nodes is the typed execution graph. Combos remains as a compatibility
-	// input for existing snapshot producers; execution normalizes it to Nodes.
+	WireRoutes map[string][]string
+	// Nodes is the typed execution graph used by the data plane.
 	Nodes map[string]ModelNode
 }
 

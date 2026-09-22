@@ -92,22 +92,6 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			f.extra["id"] = value.ID
 			f.extra["capabilities"] = value.Capabilities
 			return f
-		case logicalModel:
-			f := buildForm("Edit logical model", "logical_models.upsert", []fieldSpec{{key: "targetRef", label: "Target reference", placeholder: "physical route / combo"}}, map[string]string{"targetRef": value.TargetRef})
-			f.extra["name"] = value.Name
-			return f
-		case combo:
-			values = map[string]string{"strategy": value.Strategy, "stickyLimit": strconv.Itoa(value.StickyLimit)}
-			f := buildForm("Edit model", "combos.upsert", comboEditFields(), values)
-			f.extra["name"] = value.Name
-			f.comboMembers = append([]string(nil), value.Members...)
-			return f
-		case publishedModel:
-			values = map[string]string{"targetRef": value.TargetRef, "ownedBy": value.OwnedBy}
-			f := buildForm("Edit published model", "public_models.upsert", publishEditFields(), values)
-			f.extra["name"] = value.Name
-			f.extra["metadata"] = value.Metadata
-			return f
 		case physicalModel:
 			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.ID, "discoverable": strconv.FormatBool(value.Discoverable)})
 			f.extra["name"] = value.Name
@@ -133,13 +117,6 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 		return buildForm("Add connection", "connections.create", connectionFields(), values)
 	case sectionModels:
 		return buildForm("Add physical model", "custom_models.upsert", modelFields(), map[string]string{"kind": "custom", "providerNodeID": providerID})
-	case sectionLogical:
-		return buildForm("Add logical model", "logical_models.upsert", logicalFields(), nil)
-	case sectionCombos:
-		f := buildForm("Create model", "combos.upsert", comboFields(), map[string]string{"strategy": "fallback", "stickyLimit": "1"})
-		return f
-	case sectionPublished:
-		return buildForm("Publish model", "public_models.upsert", publishFields(), map[string]string{"ownedBy": "gobroom"})
 	case sectionPhysical:
 		return buildForm("Create physical model", "physical_models.upsert", physicalModelFields(), map[string]string{"policy": "ordered-fallback", "discoverable": "false"})
 	case sectionComboModels:
@@ -499,10 +476,6 @@ func requiredFields(method string) []string {
 		return []string{"id"}
 	case "custom_models.upsert":
 		return []string{"id", "providerNodeID", "externalID", "displayName"}
-	case "logical_models.upsert", "public_models.upsert":
-		return []string{"name", "targetRef"}
-	case "combos.upsert":
-		return []string{"name", "strategy"}
 	case "physical_models.upsert":
 		return []string{"name", "policy"}
 	case "combo_models.upsert":

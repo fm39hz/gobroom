@@ -22,7 +22,7 @@ func TestModelsOnlyExposePublishedReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.UpsertPublicModel(store.PublicModel{Name: "tech-lead", TargetRef: "combo:tech-lead"}); err != nil {
+	if err := s.UpsertComboModel(store.ComboModel{Name: "tech-lead", Discoverable: true, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	server := NewServer(s)
@@ -116,7 +116,8 @@ func TestOpenAIChatVerticalSliceReachesUpstream(t *testing.T) {
 INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('node-a','A',?,'openai_chat','a');
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:a','node-a','custom','upstream-model','Model A');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-a','node-a','primary','api_key','secret');
-		INSERT INTO published_models(name,target_ref) VALUES('public-a','route:a');`, upstreamURL); err != nil {
+		INSERT INTO physical_models(name,discoverable,enabled) VALUES('public-a',1,1);
+INSERT INTO physical_model_sources(physical_name,position,route_id) VALUES('public-a',0,'route:a');`, upstreamURL); err != nil {
 		t.Fatal(err)
 	}
 	server := NewServer(s)

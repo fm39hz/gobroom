@@ -60,19 +60,6 @@ type comboModel struct {
 	Enabled      bool             `json:"enabled"`
 }
 
-type logicalModel struct{ Name, TargetRef string }
-
-type combo struct {
-	Name, Strategy string
-	StickyLimit    int
-	Members        []string
-}
-
-type publishedModel struct {
-	Name, TargetRef, OwnedBy string
-	Metadata                 map[string]any
-}
-
 type routeHealth struct {
 	Failures      int
 	Successes     int
@@ -285,43 +272,6 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			entries = append(entries, entry{key: value.ID, title: physical, summary: fmt.Sprintf("%s  ·  %s  ·  %s", nodeName, value.Kind, caps), detail: detail, parentID: value.NodeID, routeRef: physical, payload: value})
 		}
 		return entries, nil
-	case "logical_models.list":
-		var values []logicalModel
-		if err := decode(&values); err != nil {
-			return nil, err
-		}
-		entries := make([]entry, 0, len(values))
-		for _, value := range values {
-			detail := fmt.Sprintf("Logical model\n\nName   %s\nTarget %s", value.Name, value.TargetRef)
-			entries = append(entries, entry{key: value.Name, title: value.Name, summary: value.TargetRef, detail: detail, payload: value})
-		}
-		return entries, nil
-	case "combos.list":
-		var values []combo
-		if err := decode(&values); err != nil {
-			return nil, err
-		}
-		entries := make([]entry, 0, len(values))
-		for _, value := range values {
-			members := strings.Join(value.Members, "\n  ↓  ")
-			if members == "" {
-				members = "(no members)"
-			}
-			detail := fmt.Sprintf("Combo\n\nName        %s\nStrategy    %s\nSticky limit %d\n\nOrdered members\n  %s", value.Name, value.Strategy, value.StickyLimit, members)
-			entries = append(entries, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s  ·  %d members", value.Strategy, len(value.Members)), detail: detail, payload: value})
-		}
-		return entries, nil
-	case "public_models.list":
-		var values []publishedModel
-		if err := decode(&values); err != nil {
-			return nil, err
-		}
-		entries := make([]entry, 0, len(values))
-		for _, value := range values {
-			detail := fmt.Sprintf("Published model\n\nPublic name %s\nTarget      %s\nOwned by    %s", value.Name, value.TargetRef, value.OwnedBy)
-			entries = append(entries, entry{key: value.Name, title: value.Name, summary: value.TargetRef, detail: detail, payload: value})
-		}
-		return entries, nil
 	case "health.list":
 		var values map[string]routeHealth
 		if err := decode(&values); err != nil {
@@ -446,15 +396,6 @@ func makeDiscoveredEntries(raw json.RawMessage, knownProviders []providerNode) (
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].title < items[j].title })
 	return items, nil
-}
-
-func matchingPublicModel(public map[string]publishedModel, name, legacyKind string) (publishedModel, bool) {
-	for _, value := range public {
-		if value.TargetRef == name || value.TargetRef == legacyKind+":"+name {
-			return value, true
-		}
-	}
-	return publishedModel{}, false
 }
 
 func makeRuntimeEntries(healthJSON, quotaJSON json.RawMessage, providers []providerNode) ([]entry, error) {

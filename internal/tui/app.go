@@ -26,9 +26,6 @@ const (
 	sectionProviders
 	sectionConnections
 	sectionModels
-	sectionLogical
-	sectionCombos
-	sectionPublished
 	sectionHealth
 	sectionQuota
 	sectionUsage
@@ -48,9 +45,6 @@ var sections = []section{
 	{id: sectionProviders, label: "Providers", method: "providers.list"},
 	{id: sectionConnections, label: "Connections", method: "connections.list"},
 	{id: sectionModels, label: "Model sources", method: "models.list"},
-	{id: sectionLogical, label: "Aliases", method: "logical_models.list"},
-	{id: sectionCombos, label: "Model definitions", method: "combos.list"},
-	{id: sectionPublished, label: "Exposure", method: "public_models.list"},
 	{id: sectionHealth, label: "Health", method: "health.list"},
 	{id: sectionQuota, label: "Quota", method: "quota.list"},
 	{id: sectionUsage, label: "Usage", method: "usage.list"},
@@ -388,12 +382,6 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.form = nil
 		m.lastError = ""
 		m.status = message.method + " completed"
-		if message.method == "combos.upsert" {
-			clear(m.active().selected)
-		}
-		if message.method == "public_models.upsert" || message.method == "public_models.delete" {
-			m.status = "model exposure updated"
-		}
 		if message.method == "providers.refresh_models" {
 			var result struct {
 				Models int
@@ -650,7 +638,8 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case physicalModel, comboModel:
 			m.form = newResourceForm(0, selected, "")
 		default:
-			m.form = newResourceForm(int(sectionCombos), selected, "")
+			m.status = "this row is not an editable typed model"
+			return m, nil
 		}
 		if m.form == nil {
 			m.status = "this model definition is read-only"
@@ -1118,8 +1107,8 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "select one or more provider variants with Space"
 			return m, nil
 		}
-		m.form = newResourceForm(int(sectionCombos), nil, "")
-		m.form.title = "Create physical model · legacy combo adapter"
+		m.form = newResourceForm(int(sectionPhysical), nil, "")
+		m.form.title = "Create physical model"
 		m.form.comboMembers = refs
 		m.form.memberCursor = len(refs) - 1
 		m.mode = modeForm
@@ -1158,18 +1147,8 @@ func (m *app) toggleExposure() tea.Cmd {
 		m.status = "updating combo model exposure…"
 		return m.invoke("combo_models.upsert", map[string]any{"name": value.Name, "members": value.Members, "strategy": value.Strategy, "discoverable": value.Discoverable, "enabled": value.Enabled})
 	}
-	if selected.exposed {
-		if selected.publicName == "" {
-			m.status = "exposure alias cannot be resolved"
-			return nil
-		}
-		m.loading = true
-		m.status = "removing model from /v1/models…"
-		return m.invoke("public_models.delete", map[string]any{"name": selected.publicName})
-	}
-	m.loading = true
-	m.status = "exposing model in /v1/models…"
-	return m.invoke("public_models.upsert", map[string]any{"name": selected.title, "targetRef": selected.modelRef, "ownedBy": "gobroom"})
+	m.status = "focus a typed Physical or Combo model to toggle discoverable"
+	return nil
 }
 
 func (m *app) testAndDiscover() tea.Cmd {
@@ -1201,12 +1180,6 @@ func (m *app) confirmDelete() tea.Cmd {
 		method, params = "providers.delete", map[string]any{"id": value.ID}
 	case connection:
 		method, params = "connections.delete", map[string]any{"id": value.ID}
-	case combo:
-		method, params = "combos.delete", map[string]any{"name": value.Name}
-	case logicalModel:
-		method, params = "logical_models.delete", map[string]any{"name": value.Name}
-	case publishedModel:
-		method, params = "public_models.delete", map[string]any{"name": value.Name}
 	case physicalModel:
 		method, params = "physical_models.delete", map[string]any{"name": value.Name}
 	case comboModel:
@@ -1249,12 +1222,6 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 		resources = []sectionID{sectionConnections}
 	case "custom_models.upsert", "custom_models.delete":
 		resources = []sectionID{sectionModels}
-	case "logical_models.upsert", "logical_models.delete":
-		resources = []sectionID{sectionLogical}
-	case "combos.upsert", "combos.delete":
-		resources = []sectionID{sectionCombos}
-	case "public_models.upsert", "public_models.delete":
-		resources = []sectionID{sectionPublished}
 	case "physical_models.upsert", "physical_models.delete":
 		resources = []sectionID{sectionPhysical}
 	case "combo_models.upsert", "combo_models.delete":
@@ -1314,7 +1281,13 @@ func (m *app) openEdit() tea.Cmd {
 		m.status = "focus a row first"
 		return nil
 	}
-	m.form = newResourceForm(int(sectionCombos), selected, "")
+	if _, ok := selected.payload.(physicalModel); !ok {
+		if _, ok := selected.payload.(comboModel); !ok {
+			m.status = "focus a typed model first"
+			return nil
+		}
+	}
+	m.form = newResourceForm(0, selected, "")
 	if m.form == nil {
 		m.status = "this model/source is read-only"
 	} else {

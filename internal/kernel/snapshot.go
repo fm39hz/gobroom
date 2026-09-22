@@ -39,7 +39,7 @@ func (s *SnapshotStore) Publish(next Snapshot) error {
 }
 
 func ValidateSnapshot(s Snapshot) error {
-	if s.PublicModels == nil || s.Combos == nil || s.Routes == nil || s.RouteGroups == nil || s.WireRoutes == nil || s.LogicalModels == nil {
+	if s.PublicModels == nil || s.Routes == nil || s.RouteGroups == nil || s.WireRoutes == nil || s.Nodes == nil {
 		return ErrSnapshotInvalid
 	}
 	for name, public := range s.PublicModels {
@@ -66,11 +66,16 @@ func ResolvePublic(s Snapshot, name string) (ResolvedModel, error) {
 	if err != nil {
 		return ResolvedModel{}, err
 	}
-	strategy := StrategyFallback
-	stickyLimit := 1
-	if combo, ok := s.Combos[public.TargetRef]; ok && combo.Strategy != "" {
-		strategy = combo.Strategy
-		stickyLimit = combo.StickyLimit
+	node, ok := s.Nodes[public.TargetRef]
+	if !ok {
+		return ResolvedModel{}, fmt.Errorf("public model %q targets unknown typed model %q", name, public.TargetRef)
+	}
+	strategy, stickyLimit := node.Strategy, node.StickyLimit
+	if strategy == "" {
+		strategy = StrategyFallback
+	}
+	if stickyLimit < 1 {
+		stickyLimit = 1
 	}
 	return ResolvedModel{PublicName: name, TargetRef: public.TargetRef, Strategy: strategy, StickyLimit: stickyLimit, Candidates: items}, nil
 }
@@ -104,9 +109,6 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 		}
 		return result, nil
 	}
-	if logical, ok := s.LogicalModels[ref]; ok {
-		return resolveRef(s, logical, stack)
-	}
 	if node, ok := s.Nodes[ref]; ok {
 		if stack[ref] {
 			return nil, fmt.Errorf("model cycle at %q", ref)
@@ -135,30 +137,7 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 		}
 		return result, nil
 	}
-	combo, ok := s.Combos[ref]
-	if !ok {
-		return nil, fmt.Errorf("unknown route reference %q", ref)
-	}
-	if stack[ref] {
-		return nil, fmt.Errorf("combo cycle at %q", ref)
-	}
-	stack[ref] = true
-	defer delete(stack, ref)
-	seen := map[string]bool{}
-	result := make([]Route, 0)
-	for _, member := range combo.Members {
-		items, err := resolveRef(s, member, stack)
-		if err != nil {
-			return nil, err
-		}
-		for _, item := range items {
-			if !seen[item.ID] {
-				seen[item.ID] = true
-				result = append(result, item)
-			}
-		}
-	}
-	return result, nil
+	return nil, fmt.Errorf("unknown typed model or route reference %q", ref)
 }
 
 func CandidatesByID(items []Route) []string {

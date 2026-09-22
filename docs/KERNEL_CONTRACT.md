@@ -1,9 +1,9 @@
 # Data-plane kernel contract
 
 Status: hierarchical execution boundary implemented, with remaining policy
-semantics tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md). A flattened
-resolver remains for legacy callers, but the request execution path traverses
-typed model nodes and preserves nested policy boundaries.
+semantics tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md). The request
+execution path traverses typed model nodes and preserves nested policy
+boundaries.
 
 ## Ownership
 
@@ -22,8 +22,8 @@ exposure property is enabled.
 
 Request execution retains typed model nodes and their policy boundaries. A role
 combo selects a model member; that physical or nested combo then applies its own
-source/member policy. The legacy `resolveRef` route expansion remains a
-compatibility/read API and must not be used as the hierarchical execution plan.
+source/member policy. Route expansion is an internal validation/read helper and
+execution always traverses the typed graph.
 Physical route eligibility and reasoning translation follow the typed profile
 and request-requirement rules in [the Physical model contract](PHYSICAL_MODELS.md).
 

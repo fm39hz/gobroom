@@ -71,27 +71,6 @@ CREATE TABLE IF NOT EXISTS model_catalog (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_model_catalog_node ON model_catalog(provider_node_id);
-CREATE TABLE IF NOT EXISTS logical_models (
-  name TEXT PRIMARY KEY, target_ref TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'alias',
-  options_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS combos (
-  name TEXT PRIMARY KEY, strategy TEXT NOT NULL DEFAULT 'fallback',
-  sticky_limit INTEGER NOT NULL DEFAULT 1, options_json TEXT NOT NULL DEFAULT '{}',
-  enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS combo_members (
-  combo_name TEXT NOT NULL REFERENCES combos(name) ON DELETE CASCADE,
-  position INTEGER NOT NULL, target_ref TEXT NOT NULL, options_json TEXT NOT NULL DEFAULT '{}',
-  PRIMARY KEY (combo_name, position)
-);
-CREATE TABLE IF NOT EXISTS published_models (
-  name TEXT PRIMARY KEY, target_ref TEXT NOT NULL,
-  owned_by TEXT NOT NULL DEFAULT 'gobroom',
-  metadata_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 CREATE TABLE IF NOT EXISTS usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
@@ -154,8 +133,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   estimated_cost REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
--- Additive typed model graph. Legacy logical_models/combos/published_models
--- remain intact for existing daemon and control-plane readers.
+-- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
   name TEXT PRIMARY KEY, policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
   capabilities_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
@@ -754,72 +732,6 @@ func (s *Store) Models() ([]Model, error) {
 	return result, rows.Err()
 }
 
-func (s *Store) Combos() ([]map[string]any, error) {
-	rows, err := s.DB.Query(`SELECT name,strategy,sticky_limit FROM combos WHERE enabled=1 ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []map[string]any
-	for rows.Next() {
-		var name, strategy string
-		var sticky int
-		if err := rows.Scan(&name, &strategy, &sticky); err != nil {
-			return nil, err
-		}
-		result = append(result, map[string]any{"name": name, "strategy": strategy, "stickyLimit": sticky})
-	}
-	return result, rows.Err()
-}
-
-type PublicModel struct {
-	Name, TargetRef, OwnedBy string
-	Metadata                 map[string]any
-}
-
-// PublicModels is separate from Models and Combos. Internal helper combos are
-// hidden unless explicitly published here.
-func (s *Store) PublicModels() ([]PublicModel, error) {
-	rows, err := s.DB.Query(`SELECT name,target_ref,owned_by,metadata_json FROM published_models WHERE enabled=1 ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []PublicModel
-	for rows.Next() {
-		var m PublicModel
-		var metadata string
-		if err := rows.Scan(&m.Name, &m.TargetRef, &m.OwnedBy, &metadata); err != nil {
-			return nil, err
-		}
-		m.Metadata = map[string]any{}
-		_ = json.Unmarshal([]byte(metadata), &m.Metadata)
-		result = append(result, m)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) UpsertPublicModel(m PublicModel) error {
-	metadata, err := json.Marshal(m.Metadata)
-	if err != nil {
-		return err
-	}
-	if m.OwnedBy == "" {
-		m.OwnedBy = "gobroom"
-	}
-	_, err = s.DB.Exec(`INSERT INTO published_models(name,target_ref,owned_by,metadata_json,enabled,updated_at)
-VALUES(?,?,?,?,1,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET target_ref=excluded.target_ref, owned_by=excluded.owned_by,
-metadata_json=excluded.metadata_json, enabled=1, updated_at=CURRENT_TIMESTAMP`,
-		m.Name, m.TargetRef, m.OwnedBy, string(metadata))
-	return err
-}
-
-func (s *Store) DeletePublicModel(name string) error {
-	_, err := s.DB.Exec(`DELETE FROM published_models WHERE name=?`, name)
-	return err
-}
-
 type RouteRecord struct {
 	ID, NodeID, Prefix, ExternalModel, Protocol, DefinitionID string
 	BaseURL, AuthMode, CredentialID, CredentialType           string
@@ -860,75 +772,6 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 	return result, rows.Err()
 }
 
-type LogicalModelRecord struct{ Name, TargetRef string }
-
-func (s *Store) LogicalModels() ([]LogicalModelRecord, error) {
-	rows, err := s.DB.Query(`SELECT name,target_ref FROM logical_models WHERE enabled=1 ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []LogicalModelRecord
-	for rows.Next() {
-		var item LogicalModelRecord
-		if err := rows.Scan(&item.Name, &item.TargetRef); err != nil {
-			return nil, err
-		}
-		result = append(result, item)
-	}
-	return result, rows.Err()
-}
-
-type ComboRecord struct {
-	Name, Strategy string
-	StickyLimit    int
-	Members        []string
-}
-
-func (s *Store) ComboDetails() ([]ComboRecord, error) {
-	rows, err := s.DB.Query(`SELECT name,strategy,sticky_limit FROM combos WHERE enabled=1 ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []ComboRecord
-	for rows.Next() {
-		var item ComboRecord
-		if err := rows.Scan(&item.Name, &item.Strategy, &item.StickyLimit); err != nil {
-			return nil, err
-		}
-		members, err := s.DB.Query(`SELECT target_ref FROM combo_members WHERE combo_name=? ORDER BY position`, item.Name)
-		if err != nil {
-			return nil, err
-		}
-		for members.Next() {
-			var ref string
-			if err := members.Scan(&ref); err != nil {
-				members.Close()
-				return nil, err
-			}
-			item.Members = append(item.Members, ref)
-		}
-		members.Close()
-		result = append(result, item)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) UpsertLogicalModel(name, targetRef string) error {
-	if name == "" || targetRef == "" {
-		return fmt.Errorf("name and target reference are required")
-	}
-	_, err := s.DB.Exec(`INSERT INTO logical_models(name,target_ref,kind,enabled,updated_at) VALUES(?,?, 'alias',1,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET target_ref=excluded.target_ref, enabled=1, updated_at=CURRENT_TIMESTAMP`, name, targetRef)
-	return err
-}
-
-func (s *Store) DeleteLogicalModel(name string) error {
-	_, err := s.DB.Exec(`DELETE FROM logical_models WHERE name=?`, name)
-	return err
-}
-
 type UpsertCatalogModelInput struct {
 	ID, ProviderNodeID, Kind, ExternalID, DisplayName string
 	Capabilities                                      map[string]bool
@@ -956,44 +799,6 @@ raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, in
 
 func (s *Store) DeleteCatalogModel(id string) error {
 	_, err := s.DB.Exec(`DELETE FROM model_catalog WHERE id=?`, id)
-	return err
-}
-
-func (s *Store) UpsertCombo(record ComboRecord) error {
-	if record.Name == "" {
-		return fmt.Errorf("combo name is required")
-	}
-	if record.Strategy == "" {
-		record.Strategy = "fallback"
-	}
-	if record.StickyLimit < 1 {
-		record.StickyLimit = 1
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO combos(name,strategy,sticky_limit,enabled,updated_at) VALUES(?,?,?,1,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET strategy=excluded.strategy,sticky_limit=excluded.sticky_limit,enabled=1,updated_at=CURRENT_TIMESTAMP`, record.Name, record.Strategy, record.StickyLimit); err != nil {
-		return err
-	}
-	if _, err = tx.Exec(`DELETE FROM combo_members WHERE combo_name=?`, record.Name); err != nil {
-		return err
-	}
-	for i, ref := range record.Members {
-		if ref == "" {
-			return fmt.Errorf("combo member %d is empty", i)
-		}
-		if _, err = tx.Exec(`INSERT INTO combo_members(combo_name,position,target_ref) VALUES(?,?,?)`, record.Name, i, ref); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-func (s *Store) DeleteCombo(name string) error {
-	_, err := s.DB.Exec(`DELETE FROM combos WHERE name=?`, name)
 	return err
 }
 

@@ -3,20 +3,18 @@ package kernel
 import "fmt"
 
 type SnapshotInput struct {
-	PublicModels  []PublicModel
-	Combos        []Combo
-	Routes        []Route
-	RouteGroups   map[string][]string
-	WireRoutes    map[string][]string
-	LogicalModels map[string]string
-	Nodes         []ModelNode
+	PublicModels []PublicModel
+	Routes       []Route
+	RouteGroups  map[string][]string
+	WireRoutes   map[string][]string
+	Nodes        []ModelNode
 }
 
 // BuildSnapshot converts durable control-plane records into the immutable
 // data-plane representation. Storage adapters stay outside the kernel.
 func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 	snapshot := Snapshot{
-		Version: version, PublicModels: map[string]PublicModel{}, Combos: map[string]Combo{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, LogicalModels: map[string]string{}, Nodes: map[string]ModelNode{},
+		Version: version, PublicModels: map[string]PublicModel{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, Nodes: map[string]ModelNode{},
 	}
 	for _, item := range input.PublicModels {
 		if item.Name == "" {
@@ -26,18 +24,6 @@ func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("duplicate public model %q", item.Name)
 		}
 		snapshot.PublicModels[item.Name] = item
-	}
-	for _, item := range input.Combos {
-		if item.Name == "" {
-			return Snapshot{}, fmt.Errorf("combo has empty name")
-		}
-		if item.Strategy == "" {
-			item.Strategy = StrategyFallback
-		}
-		if _, exists := snapshot.Combos[item.Name]; exists {
-			return Snapshot{}, fmt.Errorf("duplicate combo %q", item.Name)
-		}
-		snapshot.Combos[item.Name] = item
 	}
 	for _, item := range input.Routes {
 		if item.ID == "" {
@@ -64,12 +50,6 @@ func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 			return Snapshot{}, fmt.Errorf("wire route has empty name")
 		}
 		snapshot.WireRoutes[wireName] = append([]string(nil), variants...)
-	}
-	for name, target := range input.LogicalModels {
-		if name == "" || target == "" {
-			return Snapshot{}, fmt.Errorf("invalid logical model %q", name)
-		}
-		snapshot.LogicalModels[name] = target
 	}
 	for _, node := range input.Nodes {
 		if node.ID == "" {

@@ -517,8 +517,8 @@ FailureTransitionPolicy
   Next(outcome, remainingCandidates) -> retry/fallback/return
 ```
 
-The current `Gate`/`MarkFailure` API becomes a compatibility layer during
-migration, not the final policy boundary.
+The `Gate`/`MarkFailure` methods remain the small eligibility boundary; richer
+runtime behavior enters through the typed outcome observer and ranker.
 
 ## Management UX
 

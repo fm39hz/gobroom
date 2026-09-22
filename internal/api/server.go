@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/controlplane"
@@ -52,10 +51,7 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 		r.HandleFunc("/api/providers", s.providerCollection)
 		r.HandleFunc("/api/connections", s.connectionsCollection)
 		r.HandleFunc("/api/models", s.models)
-		r.HandleFunc("/api/combos", s.combos)
-		r.HandleFunc("/api/logical-models", s.logicalModels)
 		r.HandleFunc("/api/custom-models", s.customModels)
-		r.HandleFunc("/api/public-models", s.publicModels)
 	}
 	if options.DataPlane {
 		r.Get("/v1/models", s.models)
@@ -316,17 +312,6 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	public := map[string]kernel.PublicModel{}
 	if s.control != nil {
 		public = s.control.Snapshot().PublicModels
-	} else {
-		// Keep the catalog endpoint available for diagnosing legacy/invalid
-		// configurations even when a routing snapshot cannot be built.
-		items, err := s.store.PublicModels()
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		for _, item := range items {
-			public[item.Name] = kernel.PublicModel{Name: item.Name, TargetRef: item.TargetRef, OwnedBy: item.OwnedBy}
-		}
 	}
 	names := make([]string, 0, len(public))
 	for name := range public {
@@ -339,116 +324,6 @@ func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 		data = append(data, map[string]any{"id": item.Name, "object": "model", "created": 0, "owned_by": item.OwnedBy, "gobroom_target": item.TargetRef})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
-}
-
-func (s *Server) combos(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		items, err := s.store.ComboDetails()
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"combos": items})
-	case http.MethodPost, http.MethodPut:
-		var item store.ComboRecord
-		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
-			return
-		}
-		if s.control != nil {
-			if err := s.control.ValidateCombo(item); err != nil {
-				writeError(w, err)
-				return
-			}
-		}
-		if err := s.store.UpsertCombo(item); err != nil {
-			writeError(w, err)
-			return
-		}
-		if !s.reloadSnapshot(w) {
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	case http.MethodDelete:
-		name := r.URL.Query().Get("name")
-		if name == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
-			return
-		}
-		if s.control != nil {
-			if err := s.control.ValidateComboDelete(name); err != nil {
-				writeError(w, err)
-				return
-			}
-		}
-		if err := s.store.DeleteCombo(name); err != nil {
-			writeError(w, err)
-			return
-		}
-		if !s.reloadSnapshot(w) {
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		w.Header().Set("Allow", "GET, POST, PUT, DELETE")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
-func (s *Server) logicalModels(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		items, err := s.store.LogicalModels()
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"models": items})
-	case http.MethodPut:
-		var item store.LogicalModelRecord
-		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
-			return
-		}
-		if s.control != nil {
-			if err := s.control.ValidateLogicalModel(item); err != nil {
-				writeError(w, err)
-				return
-			}
-		}
-		if err := s.store.UpsertLogicalModel(item.Name, item.TargetRef); err != nil {
-			writeError(w, err)
-			return
-		}
-		if !s.reloadSnapshot(w) {
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	case http.MethodDelete:
-		name := r.URL.Query().Get("name")
-		if name == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
-			return
-		}
-		if s.control != nil {
-			if err := s.control.ValidateLogicalModelDelete(name); err != nil {
-				writeError(w, err)
-				return
-			}
-		}
-		if err := s.store.DeleteLogicalModel(name); err != nil {
-			writeError(w, err)
-			return
-		}
-		if !s.reloadSnapshot(w) {
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		w.Header().Set("Allow", "GET, PUT, DELETE")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
 }
 
 func (s *Server) customModels(w http.ResponseWriter, r *http.Request) {
@@ -497,59 +372,6 @@ func (s *Server) customModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) publicModels(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		items, err := s.store.PublicModels()
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"models": items})
-	case http.MethodPut:
-		var item store.PublicModel
-		if err := json.NewDecoder(r.Body).Decode(&item); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
-			return
-		}
-		if strings.TrimSpace(item.Name) == "" || strings.TrimSpace(item.TargetRef) == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name and targetRef are required"})
-			return
-		}
-		if s.control != nil {
-			if err := s.control.ValidatePublicModel(item); err != nil {
-				writeError(w, err)
-				return
-			}
-		}
-		if err := s.store.UpsertPublicModel(item); err != nil {
-			writeError(w, err)
-			return
-		}
-		if !s.reloadSnapshot(w) {
-			return
-		}
-		writeJSON(w, http.StatusOK, item)
-	case http.MethodDelete:
-		name := r.URL.Query().Get("name")
-		if name == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
-			return
-		}
-		if err := s.store.DeletePublicModel(name); err != nil {
-			writeError(w, err)
-			return
-		}
-		if !s.reloadSnapshot(w) {
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		w.Header().Set("Allow", "GET, PUT, DELETE")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-	}
-}
-
 func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -576,14 +398,9 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	items, err := s.store.PublicModels()
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	for _, item := range items {
-		if item.Name == requestModel {
-			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": map[string]string{"message": "public model resolved; provider execution is the next adapter milestone", "model": item.Name, "target": item.TargetRef}})
+	if s.control != nil {
+		if item, ok := s.control.Snapshot().PublicModels[requestModel]; ok {
+			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": map[string]string{"message": "model is exposed; provider execution is not configured", "model": item.Name, "target": item.TargetRef}})
 			return
 		}
 	}

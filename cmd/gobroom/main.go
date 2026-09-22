@@ -185,40 +185,7 @@ func resourceCommands() []*cobra.Command {
 	typedComboUpsert.Flags().BoolVar(&comboDiscoverable, "discoverable", false, "include this combo in /v1/models")
 	typedCombos.AddCommand(typedComboUpsert, idCommand("delete", "delete combo model", "combo_models.delete", "name", &typedComboName))
 
-	logical := &cobra.Command{Use: "logical-models", Short: "manage logical model aliases"}
-	var logicalName, targetRef string
-	logical.AddCommand(listCommand("list", "logical_models.list", nil))
-	logicalUpsert := &cobra.Command{Use: "upsert", Short: "upsert logical model", RunE: func(*cobra.Command, []string) error {
-		return invoke("logical_models.upsert", map[string]any{"name": logicalName, "targetRef": targetRef})
-	}}
-	logicalUpsert.Flags().StringVar(&logicalName, "name", "", "logical model name")
-	logicalUpsert.Flags().StringVar(&targetRef, "target", "", "target reference")
-	logical.AddCommand(logicalUpsert, idCommand("delete", "delete logical model", "logical_models.delete", "name", &logicalName))
-
-	combos := &cobra.Command{Use: "combos", Short: "manage fallback combos"}
-	var comboName, comboStrategy string
-	var comboMembers []string
-	combos.AddCommand(listCommand("list", "combos.list", nil))
-	comboUpsert := &cobra.Command{Use: "upsert", Short: "upsert combo", RunE: func(*cobra.Command, []string) error {
-		return invoke("combos.upsert", map[string]any{"name": comboName, "strategy": comboStrategy, "members": comboMembers})
-	}}
-	comboUpsert.Flags().StringVar(&comboName, "name", "", "combo name")
-	comboUpsert.Flags().StringVar(&comboStrategy, "strategy", "fallback", "fallback, round_robin, round_robin_fallback or weighted")
-	comboUpsert.Flags().StringArrayVar(&comboMembers, "member", nil, "combo member reference (repeat for multiple members)")
-	combos.AddCommand(comboUpsert, idCommand("delete", "delete combo", "combos.delete", "name", &comboName))
-
-	public := &cobra.Command{Use: "public-models", Short: "manage published models"}
-	var publicName, ownedBy string
-	public.AddCommand(listCommand("list", "public_models.list", nil))
-	publicUpsert := &cobra.Command{Use: "upsert", Short: "publish model", RunE: func(*cobra.Command, []string) error {
-		return invoke("public_models.upsert", map[string]any{"name": publicName, "targetRef": targetRef, "ownedBy": ownedBy})
-	}}
-	publicUpsert.Flags().StringVar(&publicName, "name", "", "public model name")
-	publicUpsert.Flags().StringVar(&targetRef, "target", "", "target reference")
-	publicUpsert.Flags().StringVar(&ownedBy, "owned-by", "gobroom", "owner label")
-	public.AddCommand(publicUpsert, idCommand("delete", "unpublish model", "public_models.delete", "name", &publicName))
-
-	return []*cobra.Command{providers, connections, models, physical, typedCombos, logical, combos, public}
+	return []*cobra.Command{providers, connections, models, physical, typedCombos}
 }
 
 func healthCommand() *cobra.Command {

@@ -507,78 +507,6 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": name})
-	case "combos.list":
-		items, err := d.store.ComboDetails()
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, items)
-	case "combos.upsert":
-		var item store.ComboRecord
-		if err := decodeParams(request.Params, &item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Control().ValidateCombo(item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.store.UpsertCombo(item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Reload(); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, item)
-	case "combos.delete":
-		name := stringParam(request.Params, "name")
-		if name == "" {
-			return fail(request, "name is required")
-		}
-		if err := d.server.Control().ValidateComboDelete(name); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.store.DeleteCombo(name); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Reload(); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, map[string]string{"deleted": name})
-	case "logical_models.list":
-		items, err := d.store.LogicalModels()
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, items)
-	case "logical_models.upsert":
-		var item store.LogicalModelRecord
-		if err := decodeParams(request.Params, &item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Control().ValidateLogicalModel(item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.store.UpsertLogicalModel(item.Name, item.TargetRef); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Reload(); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, item)
-	case "logical_models.delete":
-		name := stringParam(request.Params, "name")
-		if name == "" {
-			return fail(request, "name is required")
-		}
-		if err := d.server.Control().ValidateLogicalModelDelete(name); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.store.DeleteLogicalModel(name); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Reload(); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, map[string]string{"deleted": name})
 	case "custom_models.upsert":
 		var item store.UpsertCatalogModelInput
 		if err := decodeParams(request.Params, &item); err != nil {
@@ -603,39 +531,6 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": id})
-	case "public_models.list":
-		items, err := d.store.PublicModels()
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, items)
-	case "public_models.upsert":
-		var item store.PublicModel
-		if err := decodeParams(request.Params, &item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Control().ValidatePublicModel(item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.store.UpsertPublicModel(item); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Reload(); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, item)
-	case "public_models.delete":
-		name := stringParam(request.Params, "name")
-		if name == "" {
-			return fail(request, "name is required")
-		}
-		if err := d.store.DeletePublicModel(name); err != nil {
-			return fail(request, err.Error())
-		}
-		if err := d.server.Reload(); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, map[string]string{"deleted": name})
 	case "shutdown":
 		go d.Stop(context.Background())
 		return IPCResponse{ID: request.ID, OK: true, Result: map[string]string{"status": "stopping"}}

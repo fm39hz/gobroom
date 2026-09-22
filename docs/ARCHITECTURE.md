@@ -79,10 +79,10 @@ nested combo applies its own policy. Pre-flattening the complete graph into one
 route list destroys those semantics. Requests read the immutable snapshot and
 do not query SQLite for static routing data.
 
-The request execution path preserves typed Physical/Combo boundaries. Legacy
-logical/combo/publication tables and flattened read APIs remain compatibility
-representations while migration proceeds. Migration must preserve existing
-data and must not turn provider routes into Physical identities implicitly.
+The request execution path preserves typed Physical/Combo boundaries. The
+typed graph is the only model configuration source; exposure is the
+`discoverable` property on Physical/Combo nodes. Provider routes are never
+silently turned into Physical identities.
 
 ## Policy primitives
 

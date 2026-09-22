@@ -22,7 +22,7 @@ the current repository and tests inspected on 2026-09-22.
 | Provider prefixes and provider aliases (`open-sse/services/model.js`, provider registry) | Partial | Prefix registry, provider definitions and collision handling exist; edge-case compatibility fixtures are incomplete. |
 | Opaque `provider/model` names and model-ID rewriting | Partial | Typed model references and route mappings exist; verify first-slash, nested slash and marker behavior against source. |
 | Models discovered from provider `/models` plus custom models | Partial | OpenAI-style discovery and custom catalog entries exist; UI import/review workflow is incomplete. |
-| Model aliases, physical abstractions and role combos | Partial | Additive typed persistence, IPC/CLI and separate Discovered/Physical/Combos TUI tabs exist. Automatic legacy-to-typed migration and full editor polish remain. |
+| Model aliases, physical abstractions and role combos | Partial | Typed persistence, IPC/CLI and separate Discovered/Physical/Combos TUI tabs are authoritative. There is no separate publication table or alias layer; full editor polish remains. |
 | Only selected models exposed to clients | Implemented | Explicit public-model projection drives `/v1/models`. |
 | Connection pools per provider/model | Partial | Route expansion per connection and multiple selection strategies exist; full policy parity needs fixtures. |
 

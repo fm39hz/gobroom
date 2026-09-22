@@ -63,7 +63,7 @@ func (HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorCla
 	}
 }
 
-// ClassifyOutcome adds the provider-neutral evidence that the legacy class
+// ClassifyOutcome adds provider-neutral evidence that the coarse class
 // classifier cannot carry. Providers may replace this primitive in a manifest
 // without touching the kernel.
 func (HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header, body []byte) kernel.ClassifiedOutcome {

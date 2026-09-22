@@ -23,7 +23,7 @@ func TestRootWithoutSubcommandRunsBundledTUI(t *testing.T) {
 	}
 }
 
-func TestRootHelpAndLegacyCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
+func TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	called := 0
 	root := newRootCommand("/tmp/default.sock", func(string, string) error { called++; return nil })
 	root.SetOut(&bytes.Buffer{})
@@ -38,7 +38,7 @@ func TestRootHelpAndLegacyCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	for _, path := range [][]string{{"status"}, {"providers", "list"}, {"physical-models", "list"}, {"combo-models", "list"}} {
 		command, _, err := root.Find(path)
 		if err != nil || command == root {
-			t.Fatalf("legacy command %v missing: command=%v err=%v", path, command, err)
+			t.Fatalf("typed command %v missing: command=%v err=%v", path, command, err)
 		}
 	}
 	if root.PersistentFlags().Lookup("ipc") == nil || root.PersistentFlags().Lookup("json") == nil {

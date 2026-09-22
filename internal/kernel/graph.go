@@ -2,27 +2,10 @@ package kernel
 
 import "fmt"
 
-// ensureModelNodes upgrades legacy combo snapshots in memory and fills typed
-// references without changing the legacy fields consumed by older callers.
+// ensureModelNodes validates the typed Physical/Combo graph.
 func ensureModelNodes(snapshot *Snapshot) error {
 	if snapshot.Nodes == nil {
 		snapshot.Nodes = make(map[string]ModelNode)
-	}
-	for id, combo := range snapshot.Combos {
-		if _, exists := snapshot.Nodes[id]; exists {
-			continue
-		}
-		node := ModelNode{ID: id, Kind: ModelCombo, Strategy: combo.Strategy, StickyLimit: combo.StickyLimit}
-		for _, raw := range combo.Members {
-			node.Members = append(node.Members, classifyMember(*snapshot, raw))
-		}
-		snapshot.Nodes[id] = node
-	}
-	for id, target := range snapshot.LogicalModels {
-		if _, exists := snapshot.Nodes[id]; exists {
-			continue
-		}
-		snapshot.Nodes[id] = ModelNode{ID: id, Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{classifyMember(*snapshot, target)}}
 	}
 	for _, public := range snapshot.PublicModels {
 		if _, exists := snapshot.Nodes[public.TargetRef]; exists {
@@ -61,12 +44,6 @@ func ensureModelNodes(snapshot *Snapshot) error {
 
 func classifyMember(snapshot Snapshot, ref string) MemberRef {
 	if _, ok := snapshot.Nodes[ref]; ok {
-		return MemberRef{Kind: MemberModel, ID: ref}
-	}
-	if _, ok := snapshot.Combos[ref]; ok {
-		return MemberRef{Kind: MemberModel, ID: ref}
-	}
-	if _, ok := snapshot.LogicalModels[ref]; ok {
 		return MemberRef{Kind: MemberModel, ID: ref}
 	}
 	if _, ok := snapshot.Routes[ref]; ok {
