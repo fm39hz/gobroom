@@ -50,3 +50,17 @@ func TestHealthGatePreservesAuthoritativeRetryAt(t *testing.T) {
 		t.Fatalf("authoritative reset was capped or lost: %v < %v", state.CooldownUntil, reset)
 	}
 }
+
+func TestHealthGateAppliesConnectionScopeAcrossRoutes(t *testing.T) {
+	gate := NewHealthGate()
+	first := kernel.Route{ID: "model-a", NodeID: "provider", CredentialID: "conn"}
+	second := kernel.Route{ID: "model-b", NodeID: "provider", CredentialID: "conn"}
+	other := kernel.Route{ID: "model-c", NodeID: "provider", CredentialID: "other"}
+	gate.ObserveOutcome(first, kernel.ClassifiedOutcome{Cause: kernel.CauseQuotaExhausted, Scope: kernel.ScopeConnection, Retry: kernel.RetryAfter, RetryAt: time.Now().Add(time.Hour)})
+	if gate.Usable(first, time.Now()) || gate.Usable(second, time.Now()) {
+		t.Fatal("connection-scoped block did not cover all routes on the connection")
+	}
+	if !gate.Usable(other, time.Now()) {
+		t.Fatal("connection-scoped block leaked to another connection")
+	}
+}

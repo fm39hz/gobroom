@@ -4,8 +4,8 @@ Status: target runtime contract. The first runtime slice is now implemented:
 classified outcomes enter the kernel, route evidence is retained, exact
 provider reset times are honored, eligible routes receive bounded feedback
 ranking, completion TTFT/throughput is captured, and quota polling is opt-in.
-Request-class aggregation, scoped breakers and opportunistic quota enrichment
-remain follow-up work.
+Request-class aggregation, half-open breaker trials and opportunistic quota
+enrichment remain follow-up work.
 
 ## Principle
 
@@ -587,7 +587,8 @@ not hide evidence/provenance behind a generic “healthy” badge.
 
 ## Current implementation gaps
 
-- Scoped breaker state and half-open singleflight are not complete.
+- Scoped route/connection/provider breaker state is implemented; half-open
+  singleflight trials are not complete.
 - Request-class performance summaries and session affinity are not complete;
   the current in-memory book is route-level.
 - Opportunistic quota enrichment/singleflight is not complete.

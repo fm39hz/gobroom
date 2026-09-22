@@ -22,16 +22,24 @@ type RouteHealth struct {
 type HealthGate struct {
 	mu      sync.RWMutex
 	routes  map[string]RouteHealth
+	scoped  map[string]RouteHealth
 	observe func(kernel.Route, RouteHealth)
 }
 
-func NewHealthGate() *HealthGate                                           { return &HealthGate{routes: map[string]RouteHealth{}} }
+func NewHealthGate() *HealthGate {
+	return &HealthGate{routes: map[string]RouteHealth{}, scoped: map[string]RouteHealth{}}
+}
 func (g *HealthGate) SetObserver(observer func(kernel.Route, RouteHealth)) { g.observe = observer }
 func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	state := g.routes[route.ID]
-	return state.CooldownUntil.IsZero() || !state.CooldownUntil.After(now)
+	for _, key := range healthKeys(route) {
+		state := g.scoped[key]
+		if state.CooldownUntil.After(now) {
+			return false
+		}
+	}
+	return true
 }
 
 // ObserveOutcome is the passive runtime boundary. It accepts evidence only
@@ -39,7 +47,8 @@ func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.ClassifiedOutcome) {
 	now := time.Now()
 	g.mu.Lock()
-	state := g.routes[route.ID]
+	key := outcomeScopeKey(route, outcome.Scope)
+	state := g.scoped[key]
 	state.LastAttempt = now
 	state.LastCause = outcome.Cause
 	state.LastScope = outcome.Scope
@@ -64,7 +73,14 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 			state.CooldownUntil = now.Add(failureDelay(state.Failures, outcome.Cause))
 		}
 	}
-	g.routes[route.ID] = state
+	g.scoped[key] = state
+	// Keep a route projection for existing control-plane/TUI consumers. The
+	// scoped map remains authoritative for eligibility.
+	routeState := g.routes[route.ID]
+	if outcome.Scope == kernel.ScopeRoute || routeState.LastAttempt.IsZero() || state.LastAttempt.After(routeState.LastAttempt) {
+		routeState = state
+	}
+	g.routes[route.ID] = routeState
 	observer := g.observe
 	g.mu.Unlock()
 	if observer != nil {
@@ -77,7 +93,7 @@ func (g *HealthGate) MarkFailure(route kernel.Route, class kernel.ErrorClass, er
 
 func (g *HealthGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClass, err error, override time.Duration) {
 	g.mu.Lock()
-	state := g.routes[route.ID]
+	state := g.scoped[scopeKey(route)]
 	state.Failures++
 	delay := failureDelay(state.Failures, errorCause(class))
 	if override > delay {
@@ -87,6 +103,7 @@ func (g *HealthGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClas
 	if err != nil {
 		state.LastError = err.Error()
 	}
+	g.scoped[scopeKey(route)] = state
 	g.routes[route.ID] = state
 	g.mu.Unlock()
 	if g.observe != nil {
@@ -95,7 +112,7 @@ func (g *HealthGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClas
 }
 func (g *HealthGate) MarkSuccess(route kernel.Route) {
 	g.mu.Lock()
-	state := g.routes[route.ID]
+	state := g.scoped[scopeKey(route)]
 	now := time.Now()
 	state.Successes++
 	state.Failures = 0
@@ -105,6 +122,7 @@ func (g *HealthGate) MarkSuccess(route kernel.Route) {
 	state.LastScope = kernel.ScopeRoute
 	state.LastAttempt = now
 	state.LastSuccess = now
+	g.scoped[scopeKey(route)] = state
 	g.routes[route.ID] = state
 	g.mu.Unlock()
 	if g.observe != nil {
@@ -146,6 +164,7 @@ func failureDelay(failures int, cause kernel.OutcomeCause) time.Duration {
 func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.scoped[scopeKey(route)] = state
 	g.routes[route.ID] = state
 }
 func (g *HealthGate) Snapshot() map[string]RouteHealth {
@@ -156,4 +175,30 @@ func (g *HealthGate) Snapshot() map[string]RouteHealth {
 		result[id] = state
 	}
 	return result
+}
+
+func scopeKey(route kernel.Route) string { return "route:" + route.ID }
+
+func outcomeScopeKey(route kernel.Route, scope kernel.OutcomeScope) string {
+	switch scope {
+	case kernel.ScopeConnection:
+		return "connection:" + route.CredentialID
+	case kernel.ScopeProvider:
+		return "provider:" + route.NodeID
+	case kernel.ScopeRouteConnection:
+		return "route_connection:" + route.ID + "\x00" + route.CredentialID
+	default:
+		return scopeKey(route)
+	}
+}
+
+func healthKeys(route kernel.Route) []string {
+	keys := []string{scopeKey(route)}
+	if route.CredentialID != "" {
+		keys = append(keys, "route_connection:"+route.ID+"\x00"+route.CredentialID, "connection:"+route.CredentialID)
+	}
+	if route.NodeID != "" {
+		keys = append(keys, "provider:"+route.NodeID)
+	}
+	return keys
 }
