@@ -22,10 +22,11 @@ type PerformanceBook struct {
 	mu      sync.RWMutex
 	alpha   float64
 	byRoute map[string]PerformanceStats
+	byClass map[string]map[string]PerformanceStats
 }
 
 func NewPerformanceBook() *PerformanceBook {
-	return &PerformanceBook{alpha: 0.2, byRoute: map[string]PerformanceStats{}}
+	return &PerformanceBook{alpha: 0.2, byRoute: map[string]PerformanceStats{}, byClass: map[string]map[string]PerformanceStats{}}
 }
 
 func (b *PerformanceBook) Observe(route kernel.Route, event kernel.UsageEvent) {
@@ -45,7 +46,33 @@ func (b *PerformanceBook) Observe(route kernel.Route, event kernel.UsageEvent) {
 	}
 	stats.LastAt = event.At
 	b.byRoute[route.ID] = stats
+	if event.RequestClass != "" {
+		classes := b.byClass[route.ID]
+		if classes == nil {
+			classes = map[string]PerformanceStats{}
+			b.byClass[route.ID] = classes
+		}
+		classStats := classes[event.RequestClass]
+		classStats.Samples++
+		if event.Status == "ok" {
+			classStats.Successes++
+		}
+		classStats.EWMLatency = ewmaDuration(classStats.EWMLatency, event.Latency, b.alpha)
+		classStats.EWMTTFT = ewmaDuration(classStats.EWMTTFT, event.TTFT, b.alpha)
+		if event.OutputTokensPerSecond > 0 {
+			classStats.EWMThroughput = ewmaFloat(classStats.EWMThroughput, event.OutputTokensPerSecond, b.alpha)
+		}
+		classStats.LastAt = event.At
+		classes[event.RequestClass] = classStats
+	}
 	b.mu.Unlock()
+}
+
+func (b *PerformanceBook) ClassSnapshot(routeID, requestClass string) (PerformanceStats, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	stats, ok := b.byClass[routeID][requestClass]
+	return stats, ok
 }
 
 func (b *PerformanceBook) Snapshot() map[string]PerformanceStats {

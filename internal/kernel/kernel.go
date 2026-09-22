@@ -117,7 +117,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			continue
 		}
-		routes := k.Scheduler.RankRoutes(resolveRouteMember(snapshot, member), time.Now())
+		routes := k.Scheduler.RankRoutesFor(resolveRouteMember(snapshot, member), time.Now(), requestClass(req))
 		failureClass := ErrorRetryable
 		var memberErr error = ErrNoRoute
 		if preferred := req.Transport.PreferredConnectionID; preferred != "" {
@@ -254,6 +254,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if event.ConnectionID == "" {
 					event.ConnectionID = candidate.CredentialID
 				}
+				if event.RequestClass == "" {
+					event.RequestClass = requestClass(req)
+				}
 				if observer, ok := k.Scheduler.gate.(UsageObserver); ok {
 					observer.ObserveUsage(candidate, event)
 				}
@@ -266,6 +269,18 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 		}
 	}
 	return ErrNoRoute
+}
+
+func requestClass(req NormalizedRequest) string {
+	contextBucket := "empty"
+	if len(req.Messages) > 32 {
+		contextBucket = "large"
+	} else if len(req.Messages) > 8 {
+		contextBucket = "medium"
+	} else if len(req.Messages) > 0 {
+		contextBucket = "small"
+	}
+	return fmt.Sprintf("format=%s;stream=%t;vision=%t;audio=%t;video=%t;pdf=%t;tools=%t;thinking=%s;context=%s", req.SourceFormat, req.Stream, req.Modalities.Vision, req.Modalities.AudioInput, req.Modalities.VideoInput, req.Modalities.PDF, len(req.Tools) > 0, req.Thinking.Effort, contextBucket)
 }
 
 func retryAfterDuration(value string) time.Duration {

@@ -99,6 +99,25 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.kernel.Adapters = runtimeRegistry.Adapters()
 	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiers()
+	opportunisticQuota := &runtimehealth.OpportunisticQuota{
+		Sources: runtimeRegistry.QuotaSources(),
+		Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
+			credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
+			if !ok {
+				return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
+			}
+			flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(credential.Type))
+			if !ok {
+				return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", credential.Type)
+			}
+			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
+		},
+		Record: func(snapshot quota.Snapshot) {
+			d.policy.SetQuota(snapshot)
+			_ = d.store.SaveQuotaSnapshot(snapshot)
+		},
+	}
+	d.policy.SetQuotaEnricher(opportunisticQuota.Trigger)
 	go (runtimehealth.QuotaPoller{
 		Sources:  runtimeRegistry.QuotaSources(),
 		Snapshot: func() kernel.Snapshot { return d.kernel.Snapshots.Load() },

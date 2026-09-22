@@ -257,6 +257,10 @@ type RouteRanker interface {
 	RankRoutes([]Route, time.Time) []Route
 }
 
+type RequestClassRanker interface {
+	RankRoutesFor([]Route, time.Time, string) []Route
+}
+
 type RouteAdmission interface {
 	Acquire(Route, time.Time) bool
 	Release(Route)
@@ -304,6 +308,7 @@ type UsageEvent struct {
 	FirstByteAt           time.Time
 	TTFT                  time.Duration
 	OutputTokensPerSecond float64
+	RequestClass          string
 	InputTokens           int64
 	OutputTokens          int64
 	EstimatedCost         float64

@@ -4,8 +4,9 @@ Status: target runtime contract. The first runtime slice is now implemented:
 classified outcomes enter the kernel, route evidence is retained, exact
 provider reset times are honored, eligible routes receive bounded feedback
 ranking, completion TTFT/throughput is captured, and quota polling is opt-in.
-Request-class aggregation and opportunistic quota enrichment remain follow-up
-work.
+Opportunistic quota enrichment is singleflight/cooldowned and runs only after
+quota/rate-limit evidence; durable evidence projections and session affinity
+remain follow-up work.
 
 ## Principle
 
@@ -589,10 +590,11 @@ not hide evidence/provenance behind a generic “healthy” badge.
 
 - Scoped route/connection/provider breaker state and one-real-request
   half-open trials are implemented.
-- Request-class performance summaries and session affinity are not complete;
-  the current in-memory book is route-level.
-- Opportunistic quota enrichment/singleflight is not complete.
-- Runtime ranking currently uses bounded success/failure feedback plus the
-  in-memory route-level performance book; request-class aggregation is pending.
+- Request-class performance summaries are now held in a bounded in-memory EWMA
+  book; session affinity and durable evidence projections are not complete.
+- Durable evidence projections and session affinity are not complete.
+- Runtime ranking uses bounded success/failure feedback plus request-class
+  performance when at least two class samples exist, falling back to route
+  aggregate otherwise.
 - User priority and runtime preference are not yet exposed in the control UI.
 - Status does not explain aggregate cause, confidence or next eligibility.

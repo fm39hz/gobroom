@@ -184,6 +184,18 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 // Nested model policies remain owned by Plan; this only orders physical route
 // candidates after hard eligibility has been checked.
 func (s *Scheduler) RankRoutes(routes []Route, now time.Time) []Route {
+	return s.rankRoutes(routes, now, "")
+}
+
+func (s *Scheduler) RankRoutesFor(routes []Route, now time.Time, requestClass string) []Route {
+	available := s.availableRoutes(routes, now)
+	if ranker, ok := s.gate.(RequestClassRanker); ok {
+		return ranker.RankRoutesFor(available, now, requestClass)
+	}
+	return s.rankRoutes(available, now, requestClass)
+}
+
+func (s *Scheduler) rankRoutes(routes []Route, now time.Time, _ string) []Route {
 	available := make([]Route, 0, len(routes))
 	for _, route := range routes {
 		if route.Enabled && s.gate.Usable(route, now) {
@@ -192,6 +204,16 @@ func (s *Scheduler) RankRoutes(routes []Route, now time.Time) []Route {
 	}
 	if ranker, ok := s.gate.(RouteRanker); ok {
 		available = ranker.RankRoutes(available, now)
+	}
+	return available
+}
+
+func (s *Scheduler) availableRoutes(routes []Route, now time.Time) []Route {
+	available := make([]Route, 0, len(routes))
+	for _, route := range routes {
+		if route.Enabled && s.gate.Usable(route, now) {
+			available = append(available, route)
+		}
 	}
 	return available
 }

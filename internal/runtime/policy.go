@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ type PolicyGate struct {
 	Performance *PerformanceBook
 	mu          sync.RWMutex
 	quotas      map[string]quota.Snapshot
+	enrich      func(context.Context, kernel.Route)
 }
 
 func NewPolicyGate() *PolicyGate {
@@ -40,8 +42,13 @@ func (g *PolicyGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClas
 }
 func (g *PolicyGate) MarkSuccess(route kernel.Route) { g.Health.MarkSuccess(route) }
 
+func (g *PolicyGate) SetQuotaEnricher(enrich func(context.Context, kernel.Route)) { g.enrich = enrich }
+
 func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.ClassifiedOutcome) {
 	g.Health.ObserveOutcome(route, outcome)
+	if (outcome.Cause == kernel.CauseQuotaExhausted || outcome.Cause == kernel.CauseRateLimited) && g.enrich != nil {
+		g.enrich(context.Background(), route)
+	}
 	for _, limit := range outcome.Limits {
 		if limit.Name == "" {
 			continue
@@ -65,7 +72,15 @@ func (g *PolicyGate) ObserveUsage(route kernel.Route, event kernel.UsageEvent) {
 // durable user order: unknown routes retain their relative order and the
 // adaptive score only orders routes within the same eligible set.
 func (g *PolicyGate) RankRoutes(routes []kernel.Route, now time.Time) []kernel.Route {
+	return g.RankRoutesFor(routes, now, "")
+}
+
+func (g *PolicyGate) RankRoutesFor(routes []kernel.Route, now time.Time, requestClass string) []kernel.Route {
 	states := g.Health.Snapshot()
+	performance := map[string]PerformanceStats{}
+	if g.Performance != nil {
+		performance = g.Performance.Snapshot()
+	}
 	result := append([]kernel.Route(nil), routes...)
 	score := func(route kernel.Route) float64 {
 		state := states[route.ID]
@@ -77,7 +92,13 @@ func (g *PolicyGate) RankRoutes(routes []kernel.Route, now time.Time) []kernel.R
 			value += 0.25
 		}
 		if g.Performance != nil {
-			if perf, ok := g.Performance.Snapshot()[route.ID]; ok && perf.Samples > 0 {
+			perf, ok := performance[route.ID]
+			if requestClass != "" {
+				if classPerf, classOK := g.Performance.ClassSnapshot(route.ID, requestClass); classOK && classPerf.Samples >= 2 {
+					perf, ok = classPerf, true
+				}
+			}
+			if ok && perf.Samples > 0 {
 				reliability := float64(perf.Successes) / float64(perf.Samples)
 				value += reliability
 				if perf.EWMLatency > 0 {

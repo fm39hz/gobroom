@@ -21,3 +21,16 @@ func TestPerformanceBookKeepsBoundedEWMA(t *testing.T) {
 		t.Fatalf("latency is not an EWMA: %v", stats.EWMLatency)
 	}
 }
+
+func TestPerformanceBookSeparatesRequestClasses(t *testing.T) {
+	book := NewPerformanceBook()
+	route := kernel.Route{ID: "route"}
+	book.Observe(route, kernel.UsageEvent{At: time.Now(), Status: "ok", RequestClass: "vision"})
+	book.Observe(route, kernel.UsageEvent{At: time.Now(), Status: "ok", RequestClass: "text"})
+	if stats, ok := book.ClassSnapshot(route.ID, "vision"); !ok || stats.Samples != 1 {
+		t.Fatalf("vision class missing: %#v %v", stats, ok)
+	}
+	if stats, ok := book.ClassSnapshot(route.ID, "text"); !ok || stats.Samples != 1 {
+		t.Fatalf("text class missing: %#v %v", stats, ok)
+	}
+}
