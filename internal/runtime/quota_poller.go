@@ -15,9 +15,15 @@ type QuotaPoller struct {
 	Credential func(context.Context, kernel.Route) (kernel.Credential, error)
 	Record     func(quota.Snapshot)
 	Interval   time.Duration
+	// Enabled is opt-in. Runtime quota evidence normally comes from real
+	// attempts; polling is reserved for explicitly configured providers.
+	Enabled bool
 }
 
 func (p QuotaPoller) Run(ctx context.Context) {
+	if !p.Enabled {
+		return
+	}
 	interval := p.Interval
 	if interval <= 0 {
 		interval = 5 * time.Minute

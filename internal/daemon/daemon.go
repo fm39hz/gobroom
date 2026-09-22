@@ -29,6 +29,7 @@ type Config struct {
 	HTTPControl         bool
 	HTTPControlAddr     string
 	ProviderManifestDir string
+	QuotaPolling        bool
 }
 
 type Daemon struct {
@@ -116,6 +117,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.policy.SetQuota(snapshot)
 			_ = d.store.SaveQuotaSnapshot(snapshot)
 		},
+		Enabled: d.config.QuotaPolling,
 	}).Run(ctx)
 	d.kernel.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
 		credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)

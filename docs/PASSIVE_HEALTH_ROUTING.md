@@ -1,9 +1,11 @@
 # Passive health, limits and adaptive routing contract
 
-Status: target runtime contract. GoBroom currently has route cooldowns, quota
-snapshots and compact usage events, but its health state, error classes and
-scheduler feedback are not yet rich enough to implement this contract. Track
-delivery in [the roadmap](IMPLEMENTATION_PLAN.md).
+Status: target runtime contract. The first runtime slice is now implemented:
+classified outcomes enter the kernel, route evidence is retained, exact
+provider reset times are honored, eligible routes receive bounded feedback
+ranking, completion TTFT/throughput is captured, and quota polling is opt-in.
+Request-class aggregation, scoped breakers and opportunistic quota enrichment
+remain follow-up work.
 
 ## Principle
 
@@ -579,17 +581,18 @@ not hide evidence/provenance behind a generic “healthy” badge.
 5. Record passive performance summaries by request class.
 6. Add session affinity and bounded adaptive-within-tier ranking.
 7. Add opportunistic quota enrichers with singleflight/cooldown.
-8. Disable daemon-wide periodic quota polling by default.
+8. Disable daemon-wide periodic quota polling by default. The daemon exposes
+   an explicit `--quota-poll` opt-in for providers that require it.
 9. Expose evidence, limits, effective order and policy controls in IPC/TUI.
 
 ## Current implementation gaps
 
-- Health is keyed mainly by route ID with a failure counter and one cooldown.
-- Error classes do not carry detailed cause, scope, evidence or retry action.
-- Success clears coarse route error state instead of resolving scoped evidence.
-- `Retry-After` parsing is limited and limit headers/bodies are not retained.
-- A daemon-wide quota poller still exists and defaults to periodic execution.
+- Scoped breaker state and half-open singleflight are not complete.
+- Request-class performance summaries and session affinity are not complete;
+  the current in-memory book is route-level.
+- Opportunistic quota enrichment/singleflight is not complete.
 - No half-open singleflight prevents reset-boundary request storms.
-- Runtime performance does not influence candidate order.
-- User priority and runtime preference are not exposed as separate concepts.
+- Runtime ranking currently uses bounded success/failure feedback; latency and
+  throughput are still pending.
+- User priority and runtime preference are not yet exposed in the control UI.
 - Status does not explain aggregate cause, confidence or next eligibility.

@@ -117,7 +117,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			continue
 		}
-		routes := resolveRouteMember(snapshot, member)
+		routes := k.Scheduler.RankRoutes(resolveRouteMember(snapshot, member), time.Now())
 		failureClass := ErrorRetryable
 		var memberErr error = ErrNoRoute
 		if preferred := req.Transport.PreferredConnectionID; preferred != "" {
@@ -129,10 +129,6 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 		}
 		for _, candidate := range routes {
-			if !candidate.Enabled || !k.Scheduler.gate.Usable(candidate, time.Now()) {
-				failureClass = ErrorCooldown
-				continue
-			}
 			if !supportsRequest(candidate, req) {
 				continue
 			}
@@ -163,7 +159,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			response, err := adapter.Execute(ctx, upstream)
 			if err != nil {
 				failureClass, memberErr = kernelErrorClass(err), err
-				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
+				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, kernelErrorClass(err), err)
 				}
 				continue
@@ -171,14 +169,24 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if response.Status >= 400 {
 				body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 				class := adapter.ClassifyError(response.Status, body)
+				outcome := classifyOutcome(adapter, response.Status, response.Headers, body, class)
 				if classifier, ok := k.ErrorClassifiers[candidate.ErrorClassifierID]; ok {
 					class = classifier.ClassifyError(response.Status, body)
+					if rich, ok := classifier.(OutcomeClassifier); ok {
+						outcome = rich.ClassifyOutcome(response.Status, response.Headers, body)
+					}
+				}
+				outcome.Class = class
+				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+					observer.ObserveOutcome(candidate, outcome)
 				}
 				failureClass = class
 				memberErr = fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body)))
 				retryAfter := retryAfterDuration(response.Headers.Get("Retry-After"))
-				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-					feedback.MarkFailureAfter(candidate, class, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))), retryAfter)
+				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
+					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+						feedback.MarkFailureAfter(candidate, class, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))), retryAfter)
+					}
 				}
 				_ = response.Body.Close()
 				if class == ErrorTerminal {
@@ -193,19 +201,36 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				continue
 			}
 			defer response.Body.Close()
+			var firstByteAt time.Time
 			return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnError: func(streamErr error) {
-				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
+				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
-			}, OnComplete: func(event UsageEvent) {
-				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-					feedback.MarkSuccess(candidate)
+			}, OnFirstByte: func(at time.Time) { firstByteAt = at }, OnComplete: func(event UsageEvent) {
+				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
+				}
+				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
+					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+						feedback.MarkSuccess(candidate)
+					}
 				}
 				if event.At.IsZero() {
 					event.At = time.Now()
 				}
 				if event.Latency == 0 {
 					event.Latency = time.Since(started)
+				}
+				if event.FirstByteAt.IsZero() {
+					event.FirstByteAt = firstByteAt
+				}
+				if !event.FirstByteAt.IsZero() {
+					event.TTFT = event.FirstByteAt.Sub(started)
+				}
+				if event.OutputTokens > 0 && event.Latency > 0 {
+					event.OutputTokensPerSecond = float64(event.OutputTokens) / event.Latency.Seconds()
 				}
 				if event.LogicalModel == "" {
 					event.LogicalModel = req.Model
@@ -219,6 +244,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if event.ConnectionID == "" {
 					event.ConnectionID = candidate.CredentialID
 				}
+				if observer, ok := k.Scheduler.gate.(UsageObserver); ok {
+					observer.ObserveUsage(candidate, event)
+				}
 				k.EmitUsage(event)
 			}})
 		}
@@ -231,11 +259,38 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 }
 
 func retryAfterDuration(value string) time.Duration {
-	seconds, err := strconv.Atoi(strings.TrimSpace(value))
-	if err != nil || seconds <= 0 {
-		return 0
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
 	}
-	return time.Duration(seconds) * time.Second
+	if parsed, err := http.ParseTime(value); err == nil {
+		if delay := time.Until(parsed); delay > 0 {
+			return delay
+		}
+	}
+	return 0
+}
+
+func classifyOutcome(adapter ProviderAdapter, status int, headers http.Header, body []byte, class ErrorClass) ClassifiedOutcome {
+	if rich, ok := adapter.(OutcomeClassifier); ok {
+		outcome := rich.ClassifyOutcome(status, headers, body)
+		outcome.Class = class
+		return outcome
+	}
+	outcome := ClassifiedOutcome{Class: class, Scope: ScopeRoute, Confidence: 0.5, Evidence: []EvidenceSource{EvidenceErrorBody}, StatusCode: status, Message: strings.TrimSpace(string(body))}
+	switch {
+	case status == 401 || status == 403:
+		outcome.Cause, outcome.Retry = CauseAuth, RetryNever
+	case status == 429:
+		outcome.Cause, outcome.Retry = CauseRateLimited, RetryAfter
+	case status >= 500:
+		outcome.Cause, outcome.Retry = CauseCapacity, RetryAfter
+	case status >= 400:
+		outcome.Cause, outcome.Retry = CauseRequestInvalid, RetryNever
+	default:
+		outcome.Cause, outcome.Retry = CauseUnknown, RetryUnknown
+	}
+	return outcome
 }
 
 func supportsRequest(route Route, req NormalizedRequest) bool {

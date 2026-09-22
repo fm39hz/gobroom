@@ -38,3 +38,14 @@ func TestQuotaPollerResolvesRouteSourceAndRecordsSnapshot(t *testing.T) {
 		t.Fatalf("recorded=%d", got)
 	}
 }
+
+func TestQuotaPollerIsOptIn(t *testing.T) {
+	called := false
+	poller := QuotaPoller{Enabled: false, Record: func(quota.Snapshot) { called = true }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	poller.Run(ctx)
+	if called {
+		t.Fatal("disabled poller should not perform any work")
+	}
+}

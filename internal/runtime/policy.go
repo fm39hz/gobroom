@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -9,13 +10,14 @@ import (
 )
 
 type PolicyGate struct {
-	Health *HealthGate
-	mu     sync.RWMutex
-	quotas map[string]quota.Snapshot
+	Health      *HealthGate
+	Performance *PerformanceBook
+	mu          sync.RWMutex
+	quotas      map[string]quota.Snapshot
 }
 
 func NewPolicyGate() *PolicyGate {
-	return &PolicyGate{Health: NewHealthGate(), quotas: map[string]quota.Snapshot{}}
+	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}}
 }
 func (g *PolicyGate) Usable(route kernel.Route, now time.Time) bool {
 	if !g.Health.Usable(route, now) {
@@ -37,6 +39,57 @@ func (g *PolicyGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClas
 	g.Health.MarkFailureAfter(route, class, err, delay)
 }
 func (g *PolicyGate) MarkSuccess(route kernel.Route) { g.Health.MarkSuccess(route) }
+
+func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.ClassifiedOutcome) {
+	g.Health.ObserveOutcome(route, outcome)
+	for _, limit := range outcome.Limits {
+		if limit.Name == "" {
+			continue
+		}
+		snapshot := quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: limit.Name, Source: string(limit.Source)}
+		snapshot.Limit, snapshot.Remaining, snapshot.ResetAt = limit.Limit, limit.Remaining, limit.ResetAt
+		if limit.Used != nil {
+			snapshot.Used = *limit.Used
+		}
+		g.SetQuota(snapshot)
+	}
+}
+
+func (g *PolicyGate) ObserveUsage(route kernel.Route, event kernel.UsageEvent) {
+	if g.Performance != nil {
+		g.Performance.Observe(route, event)
+	}
+}
+
+// RankRoutes performs bounded, explainable feedback ranking. It never changes
+// durable user order: unknown routes retain their relative order and the
+// adaptive score only orders routes within the same eligible set.
+func (g *PolicyGate) RankRoutes(routes []kernel.Route, now time.Time) []kernel.Route {
+	states := g.Health.Snapshot()
+	result := append([]kernel.Route(nil), routes...)
+	score := func(route kernel.Route) float64 {
+		state := states[route.ID]
+		if !state.LastAttempt.IsZero() && now.Sub(state.LastAttempt) > 30*time.Minute {
+			return 0
+		}
+		value := float64(state.Successes - state.Failures*3)
+		if !state.LastSuccess.IsZero() {
+			value += 0.25
+		}
+		if g.Performance != nil {
+			if perf, ok := g.Performance.Snapshot()[route.ID]; ok && perf.Samples > 0 {
+				reliability := float64(perf.Successes) / float64(perf.Samples)
+				value += reliability
+				if perf.EWMLatency > 0 {
+					value += 1 / (1 + perf.EWMLatency.Seconds())
+				}
+			}
+		}
+		return value
+	}
+	sort.SliceStable(result, func(i, j int) bool { return score(result[i]) > score(result[j]) })
+	return result
+}
 func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

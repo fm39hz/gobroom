@@ -113,6 +113,9 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 			}
 		}
 	}
+	if ranker, ok := s.gate.(RouteRanker); ok {
+		available = ranker.RankRoutes(available, now)
+	}
 	if len(available) < 2 || model.Strategy == StrategyFallback {
 		return available
 	}
@@ -175,4 +178,20 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 		ordered = append(ordered, available[(start+i)%len(available)])
 	}
 	return ordered
+}
+
+// RankRoutes applies the same runtime gate/ranker to a nested route group.
+// Nested model policies remain owned by Plan; this only orders physical route
+// candidates after hard eligibility has been checked.
+func (s *Scheduler) RankRoutes(routes []Route, now time.Time) []Route {
+	available := make([]Route, 0, len(routes))
+	for _, route := range routes {
+		if route.Enabled && s.gate.Usable(route, now) {
+			available = append(available, route)
+		}
+	}
+	if ranker, ok := s.gate.(RouteRanker); ok {
+		available = ranker.RankRoutes(available, now)
+	}
+	return available
 }

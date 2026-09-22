@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,46 @@ func (HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorCla
 	default:
 		return kernel.ErrorRetryable
 	}
+}
+
+// ClassifyOutcome adds the provider-neutral evidence that the legacy class
+// classifier cannot carry. Providers may replace this primitive in a manifest
+// without touching the kernel.
+func (HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header, body []byte) kernel.ClassifiedOutcome {
+	message := strings.TrimSpace(string(body))
+	outcome := kernel.ClassifiedOutcome{Class: HTTPJSONErrorClassifier{}.Classify(status, body), Scope: kernel.ScopeRoute, Confidence: 0.7, Evidence: []kernel.EvidenceSource{kernel.EvidenceErrorBody}, StatusCode: status, Message: message}
+	switch {
+	case status == 401:
+		outcome.Cause, outcome.Retry = kernel.CauseAuth, kernel.RetryNever
+	case status == 403:
+		outcome.Cause, outcome.Retry = kernel.CausePermission, kernel.RetryNever
+	case status == 404:
+		outcome.Cause, outcome.Retry = kernel.CauseModelNotFound, kernel.RetryNever
+	case status == 429:
+		outcome.Cause, outcome.Retry = kernel.CauseRateLimited, kernel.RetryAfter
+	case status >= 500:
+		outcome.Cause, outcome.Retry = kernel.CauseCapacity, kernel.RetryAfter
+	case status >= 400:
+		outcome.Cause, outcome.Retry = kernel.CauseRequestInvalid, kernel.RetryNever
+	default:
+		outcome.Cause, outcome.Retry, outcome.Confidence = kernel.CauseSuccess, kernel.RetryNow, 1
+	}
+	if value := headers.Get("Retry-After"); value != "" {
+		if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && seconds > 0 {
+			outcome.RetryAt = time.Now().Add(time.Duration(seconds) * time.Second)
+		}
+		outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
+	}
+	if remaining, err := strconv.ParseFloat(headers.Get("X-RateLimit-Remaining"), 64); err == nil {
+		window := kernel.LimitWindow{Name: "rate_limit", Kind: "requests", Remaining: &remaining, Source: kernel.EvidenceResponseHeader}
+		if reset, err := strconv.ParseInt(headers.Get("X-RateLimit-Reset"), 10, 64); err == nil && reset > 0 {
+			at := time.Unix(reset, 0)
+			window.ResetAt = &at
+		}
+		outcome.Limits = append(outcome.Limits, window)
+		outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
+	}
+	return outcome
 }
 
 type StaticModelSource struct{}

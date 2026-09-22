@@ -169,6 +169,94 @@ const (
 	ErrorAuth      ErrorClass = "auth"
 )
 
+// OutcomeCause is deliberately more specific than ErrorClass. ErrorClass is
+// kept as the compatibility decision used by existing strategies; Cause is
+// the evidence the runtime uses for health, limits and user-facing status.
+type OutcomeCause string
+
+const (
+	CauseSuccess        OutcomeCause = "success"
+	CauseRequestInvalid OutcomeCause = "request_invalid"
+	CauseCapability     OutcomeCause = "capability_mismatch"
+	CauseModelNotFound  OutcomeCause = "model_not_found"
+	CauseAuth           OutcomeCause = "auth"
+	CausePermission     OutcomeCause = "permission"
+	CauseQuotaExhausted OutcomeCause = "quota_exhausted"
+	CauseRateLimited    OutcomeCause = "rate_limited"
+	CauseCapacity       OutcomeCause = "capacity"
+	CauseOverloaded     OutcomeCause = "overloaded"
+	CauseTimeout        OutcomeCause = "timeout"
+	CauseNetwork        OutcomeCause = "network"
+	CauseProtocol       OutcomeCause = "protocol"
+	CauseStreamFailure  OutcomeCause = "stream_failure"
+	CauseUnknown        OutcomeCause = "unknown"
+)
+
+type OutcomeScope string
+
+const (
+	ScopeRequest         OutcomeScope = "request"
+	ScopeRoute           OutcomeScope = "route"
+	ScopeRouteConnection OutcomeScope = "route_connection"
+	ScopeConnection      OutcomeScope = "connection"
+	ScopeProvider        OutcomeScope = "provider"
+)
+
+type EvidenceSource string
+
+const (
+	EvidenceResponseHeader EvidenceSource = "response_header"
+	EvidenceSuccessBody    EvidenceSource = "success_body"
+	EvidenceErrorBody      EvidenceSource = "error_body"
+	EvidenceInferred       EvidenceSource = "inferred"
+)
+
+type RetryAction string
+
+const (
+	RetryNow     RetryAction = "retry_now"
+	RetryAfter   RetryAction = "retry_after"
+	RetryNever   RetryAction = "retry_never"
+	RetryUnknown RetryAction = "retry_unknown"
+)
+
+// LimitWindow is an observation from a real provider response. Pointers are
+// intentional: zero and unknown are different states.
+type LimitWindow struct {
+	Name      string
+	Kind      string
+	Limit     *float64
+	Used      *float64
+	Remaining *float64
+	ResetAt   *time.Time
+	Source    EvidenceSource
+}
+
+type ClassifiedOutcome struct {
+	Class      ErrorClass
+	Cause      OutcomeCause
+	Scope      OutcomeScope
+	Retry      RetryAction
+	RetryAt    time.Time
+	Confidence float64
+	Evidence   []EvidenceSource
+	Limits     []LimitWindow
+	StatusCode int
+	Message    string
+}
+
+type OutcomeObserver interface {
+	ObserveOutcome(Route, ClassifiedOutcome)
+}
+
+type UsageObserver interface {
+	ObserveUsage(Route, UsageEvent)
+}
+
+type RouteRanker interface {
+	RankRoutes([]Route, time.Time) []Route
+}
+
 type ProviderAdapter interface {
 	ID() string
 	Protocol() Protocol
@@ -180,6 +268,10 @@ type ProviderAdapter interface {
 
 type ErrorClassifier interface {
 	ClassifyError(status int, body []byte) ErrorClass
+}
+
+type OutcomeClassifier interface {
+	ClassifyOutcome(status int, headers http.Header, body []byte) ClassifiedOutcome
 }
 
 type Credential struct {
@@ -197,16 +289,19 @@ type StreamHooks struct {
 }
 
 type UsageEvent struct {
-	At             time.Time
-	LogicalModel   string
-	ProviderNodeID string
-	ExternalModel  string
-	ConnectionID   string
-	Status         string
-	Latency        time.Duration
-	InputTokens    int64
-	OutputTokens   int64
-	EstimatedCost  float64
+	At                    time.Time
+	LogicalModel          string
+	ProviderNodeID        string
+	ExternalModel         string
+	ConnectionID          string
+	Status                string
+	Latency               time.Duration
+	FirstByteAt           time.Time
+	TTFT                  time.Duration
+	OutputTokensPerSecond float64
+	InputTokens           int64
+	OutputTokens          int64
+	EstimatedCost         float64
 }
 
 var (
