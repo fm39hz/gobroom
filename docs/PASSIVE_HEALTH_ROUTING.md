@@ -592,7 +592,9 @@ not hide evidence/provenance behind a generic “healthy” badge.
   half-open trials are implemented.
 - Request-class performance summaries are now held in a bounded in-memory EWMA
   book; session affinity and durable evidence projections are not complete.
-- Durable evidence projections and session affinity are not complete.
+- Rich aggregate Physical/provider status projections and log streaming are
+  not complete; route-level health and usage evidence are durable and exposed
+  through IPC/CLI/TUI.
 - Runtime ranking uses bounded success/failure feedback plus request-class
   performance when at least two class samples exist, falling back to route
   aggregate otherwise.

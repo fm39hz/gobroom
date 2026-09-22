@@ -31,6 +31,7 @@ const (
 	sectionPublished
 	sectionHealth
 	sectionQuota
+	sectionUsage
 	sectionDiscovered
 	sectionPhysical
 	sectionComboModels
@@ -52,6 +53,7 @@ var sections = []section{
 	{id: sectionPublished, label: "Exposure", method: "public_models.list"},
 	{id: sectionHealth, label: "Health", method: "health.list"},
 	{id: sectionQuota, label: "Quota", method: "quota.list"},
+	{id: sectionUsage, label: "Usage", method: "usage.list"},
 	{id: sectionDiscovered, label: "Discovered", method: "discovered_models.list"},
 	{id: sectionPhysical, label: "Physical", method: "physical_models.list"},
 	{id: sectionComboModels, label: "Combos", method: "combo_models.list"},
@@ -93,7 +95,7 @@ var dashboardPanes = []dashboardBlockDef{
 		{id: dashboardModels, key: "combos", label: "Combos", sources: []sectionID{sectionPhysical, sectionDiscovered, sectionComboModels}, view: "combos"},
 	}},
 	{key: "4", label: "Usage", tabs: []dashboardPaneDef{
-		{id: dashboardRuntime, key: "usage", label: "Usage", view: "unavailable-usage"},
+		{id: dashboardRuntime, key: "usage", label: "Usage", sources: []sectionID{sectionUsage}, view: "usage"},
 		{id: dashboardRuntime, key: "quota", label: "Quota", sources: []sectionID{sectionQuota}, view: "quota"},
 	}},
 	{key: "5", label: "Runtime", tabs: []dashboardPaneDef{
@@ -939,6 +941,8 @@ func (m *app) rebuildDashboardPane(index int) tea.Cmd {
 		}
 	case "quota":
 		items, err = makeEntries("quota.list", m.raw[sectionQuota], m.providers)
+	case "usage":
+		items, err = makeEntries("usage.list", m.raw[sectionUsage], m.providers)
 	case "health":
 		items, err = makeEntries("health.list", m.raw[sectionHealth], m.providers)
 	case "unavailable-usage":

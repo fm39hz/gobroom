@@ -81,3 +81,14 @@ func TestHealthGateHalfOpenAllowsOneRealTrial(t *testing.T) {
 		t.Fatal("trial should be released after the real attempt")
 	}
 }
+
+func TestPolicyGateSessionAffinityPrefersLastSuccessfulRoute(t *testing.T) {
+	gate := NewPolicyGate()
+	first := kernel.Route{ID: "first", Enabled: true}
+	second := kernel.Route{ID: "second", Enabled: true}
+	gate.ObserveUsage(second, kernel.UsageEvent{At: time.Now(), Status: "ok", SessionID: "session-1"})
+	ordered := gate.RankRoutesForSession([]kernel.Route{first, second}, time.Now(), "text", "session-1")
+	if ordered[0].ID != "second" {
+		t.Fatalf("session route was not preferred: %#v", ordered)
+	}
+}

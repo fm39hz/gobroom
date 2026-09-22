@@ -185,8 +185,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			case event := <-healthEvents:
-				_ = d.store.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: event.route.CredentialID, Status: healthStatus(event.state), ConsecutiveFailures: event.state.Failures, CooldownUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError})
-				_ = d.store.SaveModelAvailability(store.ModelAvailability{ConnectionID: event.route.CredentialID, ModelRef: event.route.ExternalModel, Status: healthStatus(event.state), BlockedUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError, ConsecutiveFailures: event.state.Failures})
+				_ = d.store.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: event.route.CredentialID, Status: healthStatus(event.state), ConsecutiveFailures: event.state.Failures, CooldownUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError, ErrorCode: string(event.state.LastCause)})
+				_ = d.store.SaveModelAvailability(store.ModelAvailability{ConnectionID: event.route.CredentialID, ModelRef: event.route.ExternalModel, Status: healthStatus(event.state), BlockedUntil: formatTime(event.state.CooldownUntil), Reason: string(event.state.LastCause), ErrorCode: string(event.state.LastScope), LastError: event.state.LastError, ConsecutiveFailures: event.state.Failures})
 			}
 		}
 	}()
@@ -312,6 +312,16 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, "runtime policy unavailable")
 		}
 		return success(request, d.policy.Quotas())
+	case "usage.list":
+		limit := 100
+		if raw, ok := request.Params["limit"].(float64); ok && int(raw) > 0 {
+			limit = int(raw)
+		}
+		items, err := d.store.UsageEvents(limit)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
 	case "quota.set":
 		if d.policy == nil {
 			return fail(request, "runtime policy unavailable")

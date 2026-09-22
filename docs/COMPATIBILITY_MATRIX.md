@@ -57,7 +57,7 @@ the current repository and tests inspected on 2026-09-22.
 | Static API-key/Bearer credentials | Partial | Credentials resolve per connection through daemon control/runtime path; more auth aliases and redaction tests required. |
 | OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | OAuth library is selected; generic auth registry exists, but a complete end-to-end provider flow is not implemented. |
 | Per-connection proxy settings | Planned | Keep in transport/connection configuration, not kernel routing branches. |
-| Usage history and request detail | Partial | Compact event channel/worker exists; aggregates, cost, retention and bounded diagnostics remain. |
+| Usage history and request detail | Partial | Compact events are durably stored and exposed through `usage.list`, CLI and TUI, including class/session/TTFT fields; aggregates, cost, retention and bounded diagnostics remain. |
 | Provider quota APIs and reset-aware policy | Partial; redesign required | Generic HTTP/JSON polling exists as bootstrap code. The target uses passive response evidence and opportunistic provider enrichment with exact reset provenance; scheduled polling is explicit opt-in. |
 | Quota/usage only as dashboard data | Not the target | Runtime policy should consume the same state; current coverage is partial. |
 

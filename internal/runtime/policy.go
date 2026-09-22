@@ -16,10 +16,17 @@ type PolicyGate struct {
 	mu          sync.RWMutex
 	quotas      map[string]quota.Snapshot
 	enrich      func(context.Context, kernel.Route)
+	affinityMu  sync.Mutex
+	affinity    map[string]sessionRoute
+}
+
+type sessionRoute struct {
+	RouteID string
+	SeenAt  time.Time
 }
 
 func NewPolicyGate() *PolicyGate {
-	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}}
+	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}, affinity: map[string]sessionRoute{}}
 }
 func (g *PolicyGate) Usable(route kernel.Route, now time.Time) bool {
 	if !g.Health.Usable(route, now) {
@@ -66,6 +73,14 @@ func (g *PolicyGate) ObserveUsage(route kernel.Route, event kernel.UsageEvent) {
 	if g.Performance != nil {
 		g.Performance.Observe(route, event)
 	}
+	if event.SessionID != "" {
+		g.affinityMu.Lock()
+		if len(g.affinity) >= 2048 {
+			g.expireAffinity(time.Now(), true)
+		}
+		g.affinity[event.SessionID] = sessionRoute{RouteID: route.ID, SeenAt: time.Now()}
+		g.affinityMu.Unlock()
+	}
 }
 
 // RankRoutes performs bounded, explainable feedback ranking. It never changes
@@ -110,6 +125,40 @@ func (g *PolicyGate) RankRoutesFor(routes []kernel.Route, now time.Time, request
 	}
 	sort.SliceStable(result, func(i, j int) bool { return score(result[i]) > score(result[j]) })
 	return result
+}
+
+func (g *PolicyGate) RankRoutesForSession(routes []kernel.Route, now time.Time, requestClass, sessionID string) []kernel.Route {
+	result := g.RankRoutesFor(routes, now, requestClass)
+	if sessionID == "" {
+		return result
+	}
+	g.affinityMu.Lock()
+	defer g.affinityMu.Unlock()
+	g.expireAffinity(now, false)
+	affinity, ok := g.affinity[sessionID]
+	if !ok || now.Sub(affinity.SeenAt) > 30*time.Minute {
+		return result
+	}
+	for index, route := range result {
+		if route.ID == affinity.RouteID && index > 0 {
+			return append([]kernel.Route{route}, append(result[:index:index], result[index+1:]...)...)
+		}
+	}
+	return result
+}
+
+func (g *PolicyGate) expireAffinity(now time.Time, forceOne bool) {
+	for id, item := range g.affinity {
+		if now.Sub(item.SeenAt) > 30*time.Minute {
+			delete(g.affinity, id)
+		}
+	}
+	if forceOne && len(g.affinity) >= 2048 {
+		for id := range g.affinity {
+			delete(g.affinity, id)
+			break
+		}
+	}
 }
 func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
 	g.mu.Lock()

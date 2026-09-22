@@ -117,7 +117,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			continue
 		}
-		routes := k.Scheduler.RankRoutesFor(resolveRouteMember(snapshot, member), time.Now(), requestClass(req))
+		routes := k.Scheduler.RankRoutesForSession(resolveRouteMember(snapshot, member), time.Now(), requestClass(req), req.Session.ID)
 		failureClass := ErrorRetryable
 		var memberErr error = ErrNoRoute
 		if preferred := req.Transport.PreferredConnectionID; preferred != "" {
@@ -256,6 +256,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				if event.RequestClass == "" {
 					event.RequestClass = requestClass(req)
+				}
+				if event.SessionID == "" {
+					event.SessionID = req.Session.ID
 				}
 				if observer, ok := k.Scheduler.gate.(UsageObserver); ok {
 					observer.ObserveUsage(candidate, event)

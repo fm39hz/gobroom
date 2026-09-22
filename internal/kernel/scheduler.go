@@ -195,6 +195,17 @@ func (s *Scheduler) RankRoutesFor(routes []Route, now time.Time, requestClass st
 	return s.rankRoutes(available, now, requestClass)
 }
 
+func (s *Scheduler) RankRoutesForSession(routes []Route, now time.Time, requestClass, sessionID string) []Route {
+	available := s.availableRoutes(routes, now)
+	if ranker, ok := s.gate.(SessionRanker); ok {
+		return ranker.RankRoutesForSession(available, now, requestClass, sessionID)
+	}
+	if ranker, ok := s.gate.(RequestClassRanker); ok {
+		return ranker.RankRoutesFor(available, now, requestClass)
+	}
+	return s.rankRoutes(available, now, requestClass)
+}
+
 func (s *Scheduler) rankRoutes(routes []Route, now time.Time, _ string) []Route {
 	available := make([]Route, 0, len(routes))
 	for _, route := range routes {

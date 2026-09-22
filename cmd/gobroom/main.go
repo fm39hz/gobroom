@@ -56,7 +56,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
-	root.AddCommand(healthCommand(), quotaCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand())
 	return root
 }
 
@@ -225,6 +225,7 @@ func healthCommand() *cobra.Command {
 	return listCommand("health", "health.list", nil)
 }
 func quotaCommand() *cobra.Command { return listCommand("quota", "quota.list", nil) }
+func usageCommand() *cobra.Command { return listCommand("usage", "usage.list", nil) }
 
 func listCommand(use, method string, flags map[string]*string) *cobra.Command {
 	return simpleCommand(use, method, method, flags)

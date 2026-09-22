@@ -75,8 +75,14 @@ type publishedModel struct {
 
 type routeHealth struct {
 	Failures      int
+	Successes     int
 	CooldownUntil time.Time
 	LastError     string
+	LastCause     string
+	LastScope     string
+	LastEvidence  string
+	Confidence    float64
+	LastAttempt   time.Time
 	LastSuccess   time.Time
 }
 
@@ -90,6 +96,16 @@ type quotaSnapshot struct {
 	Remaining      *float64
 	ResetAt        *time.Time
 	Source         string
+}
+
+type usageRecord struct {
+	ID                                                                           int64
+	Timestamp, LogicalModel, ProviderNodeID, ExternalModel, ConnectionID, Status string
+	LatencyMS, InputTokens, OutputTokens                                         int64
+	EstimatedCost                                                                float64
+	RequestClass, SessionID                                                      string
+	TTFTMS                                                                       int64
+	OutputTokensPerSecond                                                        float64
 }
 
 type entry struct {
@@ -317,8 +333,8 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			if !value.CooldownUntil.IsZero() {
 				state = "cooldown until " + value.CooldownUntil.Format(time.RFC3339)
 			}
-			detail := fmt.Sprintf("Route health\n\nState    %s\nFailures %d\nLast error\n%s\n\nInternal route ID\n%s", state, value.Failures, value.LastError, routeID)
-			entries = append(entries, entry{key: routeID, title: state, summary: fmt.Sprintf("%d failures", value.Failures), detail: detail, payload: value})
+			detail := fmt.Sprintf("Route health\n\nState      %s\nFailures   %d\nSuccesses  %d\nCause      %s\nScope      %s\nEvidence   %s\nConfidence %.2f\nLast error\n%s\n\nInternal route ID\n%s", state, value.Failures, value.Successes, value.LastCause, value.LastScope, value.LastEvidence, value.Confidence, value.LastError, routeID)
+			entries = append(entries, entry{key: routeID, title: state, summary: fmt.Sprintf("%s · %d failures", value.LastCause, value.Failures), detail: detail, payload: value})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
 		return entries, nil
@@ -352,6 +368,17 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			entries = append(entries, entry{key: value.ProviderNodeID + value.ConnectionID + value.ModelRef + value.WindowName, title: name, summary: remaining, detail: detail, parentID: value.ProviderNodeID, payload: value})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
+		return entries, nil
+	case "usage.list":
+		var values []usageRecord
+		if err := decode(&values); err != nil {
+			return nil, err
+		}
+		entries := make([]entry, 0, len(values))
+		for _, value := range values {
+			detail := fmt.Sprintf("Usage event\n\nModel      %s\nProvider   %s\nExternal   %s\nConnection %s\nStatus     %s\nClass      %s\nSession    %s\nLatency    %d ms\nTTFT       %d ms\nThroughput %.2f tok/s\nTokens     %d in / %d out\nCost       %.6f\nTimestamp  %s", value.LogicalModel, value.ProviderNodeID, value.ExternalModel, value.ConnectionID, value.Status, value.RequestClass, value.SessionID, value.LatencyMS, value.TTFTMS, value.OutputTokensPerSecond, value.InputTokens, value.OutputTokens, value.EstimatedCost, value.Timestamp)
+			entries = append(entries, entry{key: fmt.Sprintf("%d", value.ID), title: value.LogicalModel, summary: fmt.Sprintf("%s · %d ms", value.Status, value.LatencyMS), detail: detail, payload: value})
+		}
 		return entries, nil
 	default:
 		return nil, fmt.Errorf("unsupported TUI resource %q", method)
