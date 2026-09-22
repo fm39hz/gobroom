@@ -54,7 +54,9 @@ The current kernel contract is represented by `ProviderAdapter` in
 
 Typed eligibility removes incompatible or runtime-blocked members before
 selection. Ranking combines static order with passive runtime evidence under an
-explicit policy; strategy then plans fallback, rotation or fusion. See the
+explicit policy; strategy then plans fallback, rotation or fusion. A route
+whose cooldown has expired admits one real half-open trial before concurrent
+callers can reuse it. See the
 [passive health contract](PASSIVE_HEALTH_ROUTING.md). No scheduler lock may
 span credential refresh or network I/O.
 

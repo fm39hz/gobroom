@@ -23,11 +23,12 @@ type HealthGate struct {
 	mu      sync.RWMutex
 	routes  map[string]RouteHealth
 	scoped  map[string]RouteHealth
+	trials  map[string]bool
 	observe func(kernel.Route, RouteHealth)
 }
 
 func NewHealthGate() *HealthGate {
-	return &HealthGate{routes: map[string]RouteHealth{}, scoped: map[string]RouteHealth{}}
+	return &HealthGate{routes: map[string]RouteHealth{}, scoped: map[string]RouteHealth{}, trials: map[string]bool{}}
 }
 func (g *HealthGate) SetObserver(observer func(kernel.Route, RouteHealth)) { g.observe = observer }
 func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
@@ -40,6 +41,42 @@ func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 		}
 	}
 	return true
+}
+
+// Acquire admits one real request for a route. A route with an expired
+// cooldown and prior failure is half-open: only one request may try recovery.
+func (g *HealthGate) Acquire(route kernel.Route, now time.Time) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	acquired := make([]string, 0, 2)
+	for _, key := range healthKeys(route) {
+		state := g.scoped[key]
+		if state.CooldownUntil.After(now) {
+			for _, acquiredKey := range acquired {
+				delete(g.trials, acquiredKey)
+			}
+			return false
+		}
+		if state.Failures > 0 && !state.CooldownUntil.IsZero() {
+			if g.trials[key] {
+				for _, acquiredKey := range acquired {
+					delete(g.trials, acquiredKey)
+				}
+				return false
+			}
+			g.trials[key] = true
+			acquired = append(acquired, key)
+		}
+	}
+	return true
+}
+
+func (g *HealthGate) Release(route kernel.Route) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, key := range healthKeys(route) {
+		delete(g.trials, key)
+	}
 }
 
 // ObserveOutcome is the passive runtime boundary. It accepts evidence only
@@ -74,6 +111,7 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 		}
 	}
 	g.scoped[key] = state
+	delete(g.trials, key)
 	// Keep a route projection for existing control-plane/TUI consumers. The
 	// scoped map remains authoritative for eligibility.
 	routeState := g.routes[route.ID]
@@ -105,6 +143,7 @@ func (g *HealthGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClas
 	}
 	g.scoped[scopeKey(route)] = state
 	g.routes[route.ID] = state
+	delete(g.trials, scopeKey(route))
 	g.mu.Unlock()
 	if g.observe != nil {
 		g.observe(route, state)
@@ -124,6 +163,9 @@ func (g *HealthGate) MarkSuccess(route kernel.Route) {
 	state.LastSuccess = now
 	g.scoped[scopeKey(route)] = state
 	g.routes[route.ID] = state
+	for _, key := range healthKeys(route) {
+		delete(g.trials, key)
+	}
 	g.mu.Unlock()
 	if g.observe != nil {
 		g.observe(route, state)

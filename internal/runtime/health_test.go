@@ -64,3 +64,20 @@ func TestHealthGateAppliesConnectionScopeAcrossRoutes(t *testing.T) {
 		t.Fatal("connection-scoped block leaked to another connection")
 	}
 }
+
+func TestHealthGateHalfOpenAllowsOneRealTrial(t *testing.T) {
+	gate := NewHealthGate()
+	route := kernel.Route{ID: "route"}
+	gate.Restore(route, RouteHealth{Failures: 1, CooldownUntil: time.Now().Add(-time.Second)})
+	now := time.Now()
+	if !gate.Acquire(route, now) {
+		t.Fatal("first post-cooldown request should be admitted")
+	}
+	if gate.Acquire(route, now) {
+		t.Fatal("second concurrent post-cooldown request should wait")
+	}
+	gate.Release(route)
+	if !gate.Acquire(route, now) {
+		t.Fatal("trial should be released after the real attempt")
+	}
+}

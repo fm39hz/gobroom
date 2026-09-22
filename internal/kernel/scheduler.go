@@ -195,3 +195,16 @@ func (s *Scheduler) RankRoutes(routes []Route, now time.Time) []Route {
 	}
 	return available
 }
+
+func (s *Scheduler) Acquire(route Route, now time.Time) bool {
+	if admission, ok := s.gate.(RouteAdmission); ok {
+		return admission.Acquire(route, now)
+	}
+	return true
+}
+
+func (s *Scheduler) Release(route Route) {
+	if admission, ok := s.gate.(RouteAdmission); ok {
+		admission.Release(route)
+	}
+}

@@ -139,11 +139,16 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if adapter == nil {
 				continue
 			}
+			if !k.Scheduler.Acquire(candidate, time.Now()) {
+				failureClass = ErrorCooldown
+				continue
+			}
 			selectedCredential := credential
 			var err error
 			if selectedCredential.Secret == "" && k.ResolveCredential != nil {
 				selectedCredential, err = k.ResolveCredential(ctx, candidate)
 				if err != nil {
+					k.Scheduler.Release(candidate)
 					failureClass, memberErr = ErrorAuth, err
 					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 						feedback.MarkFailure(candidate, ErrorAuth, err)
@@ -153,11 +158,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			upstream, err := adapter.Prepare(ctx, req, candidate, selectedCredential)
 			if err != nil {
+				k.Scheduler.Release(candidate)
 				failureClass, memberErr = ErrorRetryable, err
 				continue
 			}
 			response, err := adapter.Execute(ctx, upstream)
 			if err != nil {
+				k.Scheduler.Release(candidate)
 				failureClass, memberErr = kernelErrorClass(err), err
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
@@ -167,6 +174,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				continue
 			}
 			if response.Status >= 400 {
+				k.Scheduler.Release(candidate)
 				body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 				class := adapter.ClassifyError(response.Status, body)
 				outcome := classifyOutcome(adapter, response.Status, response.Headers, body, class)
@@ -203,12 +211,14 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			defer response.Body.Close()
 			var firstByteAt time.Time
 			return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnError: func(streamErr error) {
+				k.Scheduler.Release(candidate)
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
 			}, OnFirstByte: func(at time.Time) { firstByteAt = at }, OnComplete: func(event UsageEvent) {
+				k.Scheduler.Release(candidate)
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
 				}

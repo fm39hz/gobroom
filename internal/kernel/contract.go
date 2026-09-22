@@ -257,6 +257,11 @@ type RouteRanker interface {
 	RankRoutes([]Route, time.Time) []Route
 }
 
+type RouteAdmission interface {
+	Acquire(Route, time.Time) bool
+	Release(Route)
+}
+
 type ProviderAdapter interface {
 	ID() string
 	Protocol() Protocol
