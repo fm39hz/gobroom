@@ -52,4 +52,7 @@ func TestProjectProfilesSeparatesGuaranteedAndAvailable(t *testing.T) {
 	if projection.Limits.MaxInputTokens != 100000 || projection.AvailableLimits.MaxInputTokens != 200000 {
 		t.Fatalf("limits=%#v/%#v", projection.Limits, projection.AvailableLimits)
 	}
+	if len(projection.CapabilitySources[CapabilityVision]) != 2 || len(projection.LimitSources["maxInputTokens"]) != 2 {
+		t.Fatalf("source explanations=%#v/%#v", projection.CapabilitySources, projection.LimitSources)
+	}
 }

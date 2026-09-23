@@ -5,9 +5,9 @@ Combo persistence exists. The kernel now has typed support states,
 request-requirement compilation, TokenLimits, Physical identity and source
 fidelity/evidence persistence through catalog, discovered route, Physical and
 snapshot boundaries. Route-effective projections and cross-protocol reasoning
-translation remain incomplete. Declared/guaranteed/available projections are
-available in the Physical control/TUI view; richer route-effective evidence
-and policy explanation remain. Track
+translation remain incomplete. Declared/guaranteed/available projections and
+their route source explanations are available in the Physical control/TUI
+view. Cross-protocol reasoning translation remains in M6. Track
 implementation status in [the roadmap](IMPLEMENTATION_PLAN.md).
 
 ## Purpose

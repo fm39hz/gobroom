@@ -63,11 +63,13 @@ type PhysicalIdentity struct {
 }
 
 type ProfileProjection struct {
-	Declared        CapabilityProfile `json:"declared"`
-	Guaranteed      CapabilityProfile `json:"guaranteed"`
-	Available       CapabilityProfile `json:"available"`
-	Limits          TokenLimits       `json:"guaranteedLimits"`
-	AvailableLimits TokenLimits       `json:"availableLimits"`
+	Declared          CapabilityProfile   `json:"declared"`
+	Guaranteed        CapabilityProfile   `json:"guaranteed"`
+	Available         CapabilityProfile   `json:"available"`
+	Limits            TokenLimits         `json:"guaranteedLimits"`
+	AvailableLimits   TokenLimits         `json:"availableLimits"`
+	CapabilitySources map[string][]string `json:"capabilitySources,omitempty"`
+	LimitSources      map[string][]string `json:"limitSources,omitempty"`
 }
 
 // ProjectProfiles derives semantic projections from active source routes. A
@@ -75,12 +77,13 @@ type ProfileProjection struct {
 // present on at least one route. Limits are conservative for guaranteed use
 // and optimistic only for the explicitly available view.
 func ProjectProfiles(routes []Route) ProfileProjection {
-	projection := ProfileProjection{Declared: CapabilityProfile{}, Guaranteed: CapabilityProfile{}, Available: CapabilityProfile{}}
+	projection := ProfileProjection{Declared: CapabilityProfile{}, Guaranteed: CapabilityProfile{}, Available: CapabilityProfile{}, CapabilitySources: map[string][]string{}, LimitSources: map[string][]string{}}
 	if len(routes) == 0 {
 		return projection
 	}
 	for _, route := range routes {
 		for name, capability := range route.Profile {
+			projection.CapabilitySources[name] = append(projection.CapabilitySources[name], route.ID)
 			if existing, ok := projection.Declared[name]; !ok || capabilityRank(capability.State) > capabilityRank(existing.State) {
 				projection.Declared[name] = capability
 			}
@@ -114,6 +117,17 @@ func ProjectProfiles(routes []Route) ProfileProjection {
 		projection.Guaranteed[name] = Capability{State: guaranteed}
 	}
 	projection.Limits, projection.AvailableLimits = projectLimits(routes)
+	for _, route := range routes {
+		if route.Limits.MaxInputTokens > 0 {
+			projection.LimitSources["maxInputTokens"] = append(projection.LimitSources["maxInputTokens"], route.ID)
+		}
+		if route.Limits.MaxOutputTokens > 0 {
+			projection.LimitSources["maxOutputTokens"] = append(projection.LimitSources["maxOutputTokens"], route.ID)
+		}
+		if route.Limits.MaxTotalTokens > 0 {
+			projection.LimitSources["maxTotalTokens"] = append(projection.LimitSources["maxTotalTokens"], route.ID)
+		}
+	}
 	return projection
 }
 

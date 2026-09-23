@@ -87,9 +87,11 @@ const (
 
 // MemberRef keeps model-policy boundaries distinct from provider routes.
 type MemberRef struct {
-	Kind   MemberKind
-	ID     string
-	Weight int
+	Kind     MemberKind
+	ID       string
+	Weight   int
+	Fidelity SourceFidelity
+	Evidence []Evidence
 }
 
 type ModelNodeKind string
