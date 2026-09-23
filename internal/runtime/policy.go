@@ -25,6 +25,15 @@ type sessionRoute struct {
 	SeenAt  time.Time
 }
 
+type RouteExplanation struct {
+	Route       kernel.Route      `json:"route"`
+	Rank        int               `json:"rank"`
+	Usable      bool              `json:"usable"`
+	Reason      string            `json:"reason"`
+	Health      RouteHealth       `json:"health"`
+	Performance *PerformanceStats `json:"performance,omitempty"`
+}
+
 func NewPolicyGate() *PolicyGate {
 	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}, affinity: map[string]sessionRoute{}}
 }
@@ -143,6 +152,32 @@ func (g *PolicyGate) RankRoutesForSession(routes []kernel.Route, now time.Time, 
 		if route.ID == affinity.RouteID && index > 0 {
 			return append([]kernel.Route{route}, append(result[:index:index], result[index+1:]...)...)
 		}
+	}
+	return result
+}
+
+func (g *PolicyGate) ExplainRoutes(routes []kernel.Route, now time.Time, requestClass, sessionID string) []RouteExplanation {
+	ordered := g.RankRoutesForSession(routes, now, requestClass, sessionID)
+	health := g.Health.Snapshot()
+	performance := map[string]PerformanceStats{}
+	if g.Performance != nil {
+		performance = g.Performance.Snapshot()
+	}
+	result := make([]RouteExplanation, 0, len(ordered))
+	for index, route := range ordered {
+		state := health[route.ID]
+		reason := "eligible; static order"
+		if !g.Usable(route, now) {
+			reason = "blocked by health/quota"
+		} else if !state.LastSuccess.IsZero() {
+			reason = "adaptive success preference"
+		}
+		var perf *PerformanceStats
+		if item, ok := performance[route.ID]; ok {
+			copy := item
+			perf = &copy
+		}
+		result = append(result, RouteExplanation{Route: route, Rank: index + 1, Usable: g.Usable(route, now), Reason: reason, Health: state, Performance: perf})
 	}
 	return result
 }

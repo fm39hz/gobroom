@@ -348,6 +348,24 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "usage.summary":
+		items, err := d.store.UsageSummary(30)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
+	case "routes.explain":
+		model := stringParam(request.Params, "model")
+		if model == "" {
+			return fail(request, "model is required")
+		}
+		resolved, err := d.kernel.Resolve(model)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		requestClass := stringParam(request.Params, "requestClass")
+		sessionID := stringParam(request.Params, "sessionID")
+		return success(request, d.policy.ExplainRoutes(resolved.Candidates, time.Now(), requestClass, sessionID))
 	case "quota.set":
 		if d.policy == nil {
 			return fail(request, "runtime policy unavailable")

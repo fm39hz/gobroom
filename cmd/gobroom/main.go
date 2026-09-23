@@ -56,7 +56,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), routeExplainCommand())
 	return root
 }
 
@@ -191,8 +191,19 @@ func resourceCommands() []*cobra.Command {
 func healthCommand() *cobra.Command {
 	return listCommand("health", "health.list", nil)
 }
-func quotaCommand() *cobra.Command { return listCommand("quota", "quota.list", nil) }
-func usageCommand() *cobra.Command { return listCommand("usage", "usage.list", nil) }
+func quotaCommand() *cobra.Command        { return listCommand("quota", "quota.list", nil) }
+func usageCommand() *cobra.Command        { return listCommand("usage", "usage.list", nil) }
+func usageSummaryCommand() *cobra.Command { return listCommand("usage-summary", "usage.summary", nil) }
+func routeExplainCommand() *cobra.Command {
+	var model, requestClass, sessionID string
+	cmd := &cobra.Command{Use: "route-explain", Short: "explain effective route order", RunE: func(*cobra.Command, []string) error {
+		return invoke("routes.explain", map[string]any{"model": model, "requestClass": requestClass, "sessionID": sessionID})
+	}}
+	cmd.Flags().StringVar(&model, "model", "", "exposed model")
+	cmd.Flags().StringVar(&requestClass, "request-class", "", "request class bucket")
+	cmd.Flags().StringVar(&sessionID, "session", "", "session affinity ID")
+	return cmd
+}
 
 func listCommand(use, method string, flags map[string]*string) *cobra.Command {
 	return simpleCommand(use, method, method, flags)

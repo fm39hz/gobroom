@@ -582,6 +582,32 @@ type UsageRecord struct {
 	OutputTokensPerSecond                                                        float64
 }
 
+type UsageSummary struct {
+	DateKey                                  string  `json:"dateKey"`
+	Requests, PromptTokens, CompletionTokens int64   `json:",omitempty"`
+	EstimatedCost                            float64 `json:"estimatedCost"`
+}
+
+func (s *Store) UsageSummary(limit int) ([]UsageSummary, error) {
+	if limit <= 0 || limit > 366 {
+		limit = 30
+	}
+	rows, err := s.DB.Query(`SELECT date_key,requests,prompt_tokens,completion_tokens,estimated_cost FROM usage_daily ORDER BY date_key DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []UsageSummary
+	for rows.Next() {
+		var item UsageSummary
+		if err := rows.Scan(&item.DateKey, &item.Requests, &item.PromptTokens, &item.CompletionTokens, &item.EstimatedCost); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
