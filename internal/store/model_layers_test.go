@@ -22,7 +22,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	}
 	for _, route := range []UpsertCatalogModelInput{
 		{ID: "route-a", ProviderNodeID: "node-a", Kind: "discovered", ExternalID: "vendor/qwen:free", DisplayName: "Qwen", Profile: map[string]kernel.Capability{"input.image": {State: kernel.SupportNative}}},
-		{ID: "route-b", ProviderNodeID: "node-b", Kind: "custom", ExternalID: "Qwen/Qwen", DisplayName: "Qwen", Capabilities: map[string]bool{"vision": true}},
+		{ID: "route-b", ProviderNodeID: "node-b", Kind: "custom", ExternalID: "Qwen/Qwen", DisplayName: "Qwen", Profile: map[string]kernel.Capability{"input.image": {State: kernel.SupportNative}}},
 	} {
 		if err := s.UpsertCatalogModel(route); err != nil {
 			t.Fatal(err)
@@ -37,10 +37,10 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	}
 
 	physical := PhysicalModel{
-		Name:         "qwen-3.7-max",
-		Sources:      []RouteReference{{RouteID: "route-b"}, {RouteID: "route-a"}},
-		Policy:       StrategySpec{ID: "rotating-fallback", Config: map[string]any{"stickyLimit": 2}},
-		Capabilities: map[string]bool{"reasoning": true}, Discoverable: false, Enabled: true,
+		Name:    "qwen-3.7-max",
+		Sources: []RouteReference{{RouteID: "route-b"}, {RouteID: "route-a"}},
+		Policy:  StrategySpec{ID: "rotating-fallback", Config: map[string]any{"stickyLimit": 2}},
+		Profile: map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
 	}
 	if err := s.UpsertPhysicalModel(physical); err != nil {
 		t.Fatal(err)

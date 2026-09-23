@@ -709,7 +709,6 @@ func (s *Store) UpdateProviderNode(input UpdateProviderNodeInput) (ProviderNode,
 
 type Model struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
-	Capabilities                              map[string]bool
 	Profile                                   kernel.CapabilityProfile
 }
 
@@ -735,7 +734,6 @@ func (s *Store) Models() ([]Model, error) {
 type RouteRecord struct {
 	ID, NodeID, Prefix, ExternalModel, Protocol, DefinitionID string
 	BaseURL, AuthMode, CredentialID, CredentialType           string
-	Capabilities                                              map[string]bool
 	Profile                                                   kernel.CapabilityProfile
 	Enabled                                                   bool
 }
@@ -774,7 +772,6 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 
 type UpsertCatalogModelInput struct {
 	ID, ProviderNodeID, Kind, ExternalID, DisplayName string
-	Capabilities                                      map[string]bool
 	Profile                                           kernel.CapabilityProfile
 	Overrides                                         map[string]any
 	Raw                                               map[string]any

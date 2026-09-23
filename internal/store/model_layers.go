@@ -42,7 +42,6 @@ type DiscoveredRoute struct {
 	Kind           string                   `json:"kind"`
 	ExternalID     string                   `json:"externalId"`
 	DisplayName    string                   `json:"displayName"`
-	Capabilities   map[string]bool          `json:"capabilities"`
 	Profile        kernel.CapabilityProfile `json:"profile,omitempty"`
 	Enabled        bool                     `json:"enabled"`
 	LastSeenAt     string                   `json:"lastSeenAt,omitempty"`
@@ -52,7 +51,6 @@ type PhysicalModel struct {
 	Name         string                   `json:"name"`
 	Sources      []RouteReference         `json:"sources"`
 	Policy       StrategySpec             `json:"policy"`
-	Capabilities map[string]bool          `json:"capabilities"`
 	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
 	Discoverable bool                     `json:"discoverable"`
 	Enabled      bool                     `json:"enabled"`
@@ -182,7 +180,7 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	}
 	caps, err := json.Marshal(item.Profile)
 	if err != nil {
-		return fmt.Errorf("encode physical model capabilities: %w", err)
+		return fmt.Errorf("encode physical model profile: %w", err)
 	}
 	tx, err := s.DB.Begin()
 	if err != nil {

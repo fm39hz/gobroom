@@ -18,7 +18,7 @@ func TestPhysicalModelEntryUsesProviderPrefixAndKeepsCatalogIDInInspector(t *tes
   "Kind":"discovered",
   "ExternalID":"orcarouter/free/model-v2",
   "DisplayName":"Free Model",
-  "Capabilities":{"chat":true}
+  "Profile":{"input.image":{"state":"native"}}
 }]`)
 	items, err := makeEntries("models.list", raw, providers)
 	if err != nil {

@@ -27,13 +27,11 @@ type connection struct {
 
 type catalogModel struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
-	Capabilities                              map[string]bool
 	Profile                                   map[string]capability `json:"profile,omitempty"`
 }
 
 type discoveredRoute struct {
 	ID, ProviderNodeID, ProviderPrefix, Kind, ExternalID, DisplayName string
-	Capabilities                                                      map[string]bool
 	Profile                                                           map[string]capability
 	Enabled                                                           bool
 	LastSeenAt                                                        string
@@ -55,7 +53,6 @@ type physicalModel struct {
 	Name         string                `json:"name"`
 	Sources      []routeReference      `json:"sources"`
 	Policy       strategySpec          `json:"policy"`
-	Capabilities map[string]bool       `json:"capabilities"`
 	Profile      map[string]capability `json:"profile,omitempty"`
 	Discoverable bool                  `json:"discoverable"`
 	Enabled      bool                  `json:"enabled"`
@@ -160,7 +157,7 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		if value.Discoverable {
 			visibility = "exposed in /models"
 		}
-		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Capabilities), visibility, value.Enabled, strings.Join(members, "\n  ↓  "))
+		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Profile), visibility, value.Enabled, strings.Join(members, "\n  ↓  "))
 		physical = append(physical, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d routes · %s", value.Policy.ID, len(value.Sources), visibility), detail: detail, modelRef: value.Name, modelKind: "physical", publicName: value.Name, exposed: value.Discoverable, payload: value})
 	}
 	for _, value := range comboModels {
@@ -180,18 +177,20 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 	return modelWorkspace{Discovered: discovered, Physical: physical, Combos: combos}, nil
 }
 
-func capabilitySummary(value map[string]bool) string {
-	var enabled []string
-	for name, ok := range value {
-		if ok {
-			enabled = append(enabled, name)
+func capabilitySummary(value map[string]capability) string {
+	var declared []string
+	for name, item := range value {
+		state := item.State
+		if state == "" {
+			state = "unknown"
 		}
+		declared = append(declared, name+"="+state)
 	}
-	sort.Strings(enabled)
-	if len(enabled) == 0 {
+	sort.Strings(declared)
+	if len(declared) == 0 {
 		return "not declared"
 	}
-	return strings.Join(enabled, ", ")
+	return strings.Join(declared, ", ")
 }
 
 func (e entry) FilterValue() string {
@@ -266,17 +265,7 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 				physical = prefix + "/" + strings.TrimPrefix(physical, prefix+"/")
 			}
 			nodeName := nameByNode[value.NodeID]
-			capabilities := make([]string, 0, len(value.Capabilities))
-			for capability, enabled := range value.Capabilities {
-				if enabled {
-					capabilities = append(capabilities, capability)
-				}
-			}
-			sort.Strings(capabilities)
-			caps := strings.Join(capabilities, ", ")
-			if caps == "" {
-				caps = "not declared"
-			}
+			caps := capabilitySummary(value.Profile)
 			detail := fmt.Sprintf("Physical model\n\nModel       %s\nProvider    %s\nKind        %s\nCapabilities %s\n\nCatalog ID\n%s\n\nProvider node ID\n%s\n\nUpstream model ID\n%s", physical, nodeName, value.Kind, caps, value.ID, value.NodeID, value.ExternalID)
 			entries = append(entries, entry{key: value.ID, title: physical, summary: fmt.Sprintf("%s  ·  %s  ·  %s", nodeName, value.Kind, caps), detail: detail, parentID: value.NodeID, routeRef: physical, payload: value})
 		}
@@ -400,8 +389,8 @@ func makeDiscoveredEntries(raw json.RawMessage, knownProviders []providerNode) (
 		if provider == "" {
 			provider = value.ProviderPrefix
 		}
-		detail := fmt.Sprintf("Discovered provider route\n\nProvider     %s\nPrefix       %s\nUpstream ID  %s\nKind         %s\nEnabled      %t\nRoute ID     %s\nCapabilities %s", provider, value.ProviderPrefix, value.ExternalID, value.Kind, value.Enabled, value.ID, capabilitySummary(value.Capabilities))
-		items = append(items, entry{key: value.ID, title: name, summary: fmt.Sprintf("%s · %s", provider, capabilitySummary(value.Capabilities)), detail: detail, parentID: value.ProviderNodeID, routeRef: name, modelRef: "", kind: "source", payload: value})
+		detail := fmt.Sprintf("Discovered provider route\n\nProvider     %s\nPrefix       %s\nUpstream ID  %s\nKind         %s\nEnabled      %t\nRoute ID     %s\nCapabilities %s", provider, value.ProviderPrefix, value.ExternalID, value.Kind, value.Enabled, value.ID, capabilitySummary(value.Profile))
+		items = append(items, entry{key: value.ID, title: name, summary: fmt.Sprintf("%s · %s", provider, capabilitySummary(value.Profile)), detail: detail, parentID: value.ProviderNodeID, routeRef: name, modelRef: "", kind: "source", payload: value})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].title < items[j].title })
 	return items, nil
