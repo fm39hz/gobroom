@@ -57,6 +57,7 @@ type physicalModel struct {
 	Policy       strategySpec          `json:"policy"`
 	Profile      map[string]capability `json:"profile,omitempty"`
 	Limits       map[string]any        `json:"limits,omitempty"`
+	Projection   map[string]any        `json:"projection,omitempty"`
 	Discoverable bool                  `json:"discoverable"`
 	Enabled      bool                  `json:"enabled"`
 }
@@ -160,7 +161,7 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		if value.Discoverable {
 			visibility = "exposed in /models"
 		}
-		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Profile), visibility, value.Enabled, strings.Join(members, "\n  ↓  "))
+		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\n\nEffective projection\n%s\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Profile), visibility, value.Enabled, pretty(value.Projection), strings.Join(members, "\n  ↓  "))
 		physical = append(physical, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d routes · %s", value.Policy.ID, len(value.Sources), visibility), detail: detail, modelRef: value.Name, modelKind: "physical", publicName: value.Name, exposed: value.Discoverable, payload: value})
 	}
 	for _, value := range comboModels {

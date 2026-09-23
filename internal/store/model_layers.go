@@ -57,6 +57,7 @@ type PhysicalModel struct {
 	Policy       StrategySpec             `json:"policy"`
 	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
 	Limits       kernel.TokenLimits       `json:"limits,omitempty"`
+	Projection   kernel.ProfileProjection `json:"projection,omitempty"`
 	Discoverable bool                     `json:"discoverable"`
 	Enabled      bool                     `json:"enabled"`
 }

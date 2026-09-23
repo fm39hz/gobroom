@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -451,6 +452,22 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		items, err := d.store.PhysicalModels()
 		if err != nil {
 			return fail(request, err.Error())
+		}
+		snapshot := d.server.Control().Snapshot()
+		for index := range items {
+			var routes []kernel.Route
+			for _, source := range items[index].Sources {
+				for id, route := range snapshot.Routes {
+					base := id
+					if at := strings.IndexByte(base, '@'); at >= 0 {
+						base = base[:at]
+					}
+					if base == source.RouteID {
+						routes = append(routes, route)
+					}
+				}
+			}
+			items[index].Projection = kernel.ProjectProfiles(routes)
 		}
 		return success(request, items)
 	case "physical_models.upsert":
