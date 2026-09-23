@@ -23,7 +23,7 @@ func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	if prepared.URL != "https://provider.example/v1/chat/completions" || prepared.Headers.Get("Authorization") != "Bearer secret" {
 		t.Fatalf("prepared=%#v", prepared)
 	}
-	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: ok\n\n"))}
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))}
 	recorder := httptest.NewRecorder()
 	if err := adapter.TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{}); err != nil {
 		t.Fatal(err)
@@ -53,5 +53,16 @@ func TestChatAdapterEmitsCanonicalSSEEvents(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "[DONE]") {
 		t.Fatalf("passthrough=%q", recorder.Body.String())
+	}
+}
+
+func TestChatAdapterReportsMalformedSSE(t *testing.T) {
+	var got kernel.ResponseEvent
+	var streamErr error
+	recorder := httptest.NewRecorder()
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {bad}\n\n"))}
+	err := (Chat{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { got = event }, OnError: func(err error) { streamErr = err }})
+	if err == nil || streamErr == nil || got.Kind != kernel.EventResponseError {
+		t.Fatalf("err=%v streamErr=%v event=%#v", err, streamErr, got)
 	}
 }

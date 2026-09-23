@@ -91,6 +91,8 @@ Adapters may additionally emit the canonical `ResponseEvent` stream through
 `StreamHooks.OnEvent`: response start, text/thinking delta, tool-call delta,
 usage, completion and error. This event stream is semantic observation; the
 adapter remains responsible for the lossless client renderer.
+Malformed SSE payloads are protocol errors: adapters emit a canonical error
+event and return the error instead of silently discarding the payload.
 
 ## Stable error classes
 

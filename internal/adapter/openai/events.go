@@ -34,8 +34,15 @@ func streamSSEEvents(body io.Reader, writer http.ResponseWriter, hooks kernel.St
 			}
 		}
 		var payload map[string]any
-		if json.Unmarshal([]byte(data), &payload) != nil {
-			continue
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			canonicalErr := kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: "malformed SSE JSON: " + err.Error()}
+			if hooks.OnEvent != nil {
+				hooks.OnEvent(canonicalErr)
+			}
+			if hooks.OnError != nil {
+				hooks.OnError(err)
+			}
+			return err
 		}
 		emitOpenAIEvent(payload, hooks.OnEvent)
 	}

@@ -185,8 +185,14 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 			continue
 		}
 		var event map[string]any
-		if json.Unmarshal([]byte(data), &event) != nil {
-			continue
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			if hooks.OnEvent != nil {
+				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: "malformed SSE JSON: " + err.Error()})
+			}
+			if hooks.OnError != nil {
+				hooks.OnError(err)
+			}
+			return err
 		}
 		eventType, _ := event["type"].(string)
 		if eventType == "message_start" {
