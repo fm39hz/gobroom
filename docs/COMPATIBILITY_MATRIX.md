@@ -31,7 +31,7 @@ the current repository and tests inspected on 2026-09-22.
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
 | Combo order/fallback (`open-sse/services/combo.js`) | Partial | The execution path traverses typed nodes and preserves inner/outer strategy boundaries with cycle guards. Sticky semantics, fusion and exact retry precedence still need broader fixtures. |
-| Round-robin and sticky limits | Partial | Round-robin scheduler exists; sticky-limit equivalence and concurrent ordering are not yet certified. |
+| Round-robin and sticky limits | Partial | Round-robin/sticky/weighted scheduler semantics and concurrent access are covered by fixtures; provider-specific precedence/fusion parity remains. |
 | Account selection, exclusion and preferred account (`src/sse/services/auth.js`, `accountFallback.js`) | Partial | Fill-first, rotation, preferred connection and health cooldown paths exist; policy precedence remains. |
 | Cooldown and `Retry-After` | Partial; redesign required | Basic cooldown plumbing exists. Target behavior uses real-attempt outcomes, scoped breakers, exact deadline provenance and half-open real trials rather than synthetic checks. |
 | Quota affects candidate eligibility | Partial; redesign required | Persisted snapshots gate routes, but the target is passive limit extraction plus opportunistic enrichment; daemon-wide periodic polling is not the default contract. |
