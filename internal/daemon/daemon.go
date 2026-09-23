@@ -325,6 +325,20 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]any{"valid": true, "version": bundle.Version})
+	case "config.diff":
+		var desired controlplane.ConfigBundle
+		if err := decodeParams(request.Params, &desired); err != nil {
+			return fail(request, err.Error())
+		}
+		current, err := controlplane.ExportBundle(d.store)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		diff, err := controlplane.DiffBundle(current, desired)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, diff)
 	case "reload":
 		if err := d.server.Reload(); err != nil {
 			return IPCResponse{ID: request.ID, OK: false, Error: err.Error()}

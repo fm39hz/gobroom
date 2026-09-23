@@ -56,7 +56,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand())
 	return root
 }
 
@@ -211,6 +211,15 @@ func configValidateCommand() *cobra.Command {
 			return err
 		}
 		return invoke("config.validate", raw)
+	}}
+}
+func configDiffCommand() *cobra.Command {
+	return &cobra.Command{Use: "config-diff", Short: "show config bundle dry-run diff", RunE: func(cmd *cobra.Command, _ []string) error {
+		var raw map[string]any
+		if err := json.NewDecoder(cmd.InOrStdin()).Decode(&raw); err != nil {
+			return err
+		}
+		return invoke("config.diff", raw)
 	}}
 }
 func routeExplainCommand() *cobra.Command {

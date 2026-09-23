@@ -19,3 +19,15 @@ func TestValidateBundleAcceptsSecretFreeTypedGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDiffBundleReportsTypedChanges(t *testing.T) {
+	current := ConfigBundle{Version: 1, Providers: []store.ProviderNode{{ID: "old"}}}
+	desired := ConfigBundle{Version: 1, Providers: []store.ProviderNode{{ID: "new"}}}
+	diff, err := DiffBundle(current, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff.ProvidersAdded != 1 || diff.ProvidersRemoved != 1 || len(diff.Changes) != 2 {
+		t.Fatalf("diff=%#v", diff)
+	}
+}
