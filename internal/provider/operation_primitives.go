@@ -18,6 +18,7 @@ type ModelDescriptor struct {
 	ID           string
 	DisplayName  string
 	Capabilities map[string]bool
+	Profile      kernel.CapabilityProfile
 	Metadata     map[string]any
 }
 

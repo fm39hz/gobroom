@@ -13,6 +13,12 @@ type providerNode struct {
 	Enabled                                                                 bool
 }
 
+type capability struct {
+	State    string   `json:"state"`
+	Formats  []string `json:"formats,omitempty"`
+	MaxItems int      `json:"maxItems,omitempty"`
+}
+
 type connection struct {
 	ID, ProviderNodeID, Name, Email, CredentialType string
 	Priority                                        int
@@ -22,11 +28,13 @@ type connection struct {
 type catalogModel struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
 	Capabilities                              map[string]bool
+	Profile                                   map[string]capability `json:"profile,omitempty"`
 }
 
 type discoveredRoute struct {
 	ID, ProviderNodeID, ProviderPrefix, Kind, ExternalID, DisplayName string
 	Capabilities                                                      map[string]bool
+	Profile                                                           map[string]capability
 	Enabled                                                           bool
 	LastSeenAt                                                        string
 }
@@ -44,12 +52,13 @@ type strategySpec struct {
 }
 
 type physicalModel struct {
-	Name         string           `json:"name"`
-	Sources      []routeReference `json:"sources"`
-	Policy       strategySpec     `json:"policy"`
-	Capabilities map[string]bool  `json:"capabilities"`
-	Discoverable bool             `json:"discoverable"`
-	Enabled      bool             `json:"enabled"`
+	Name         string                `json:"name"`
+	Sources      []routeReference      `json:"sources"`
+	Policy       strategySpec          `json:"policy"`
+	Capabilities map[string]bool       `json:"capabilities"`
+	Profile      map[string]capability `json:"profile,omitempty"`
+	Discoverable bool                  `json:"discoverable"`
+	Enabled      bool                  `json:"enabled"`
 }
 
 type comboModel struct {

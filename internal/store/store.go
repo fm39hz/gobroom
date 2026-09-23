@@ -710,6 +710,7 @@ func (s *Store) UpdateProviderNode(input UpdateProviderNodeInput) (ProviderNode,
 type Model struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
 	Capabilities                              map[string]bool
+	Profile                                   kernel.CapabilityProfile
 }
 
 func (s *Store) Models() ([]Model, error) {
@@ -725,8 +726,7 @@ func (s *Store) Models() ([]Model, error) {
 		if err := rows.Scan(&m.ID, &m.NodeID, &m.Kind, &m.ExternalID, &m.DisplayName, &caps); err != nil {
 			return nil, err
 		}
-		m.Capabilities = map[string]bool{}
-		_ = json.Unmarshal([]byte(caps), &m.Capabilities)
+		_ = json.Unmarshal([]byte(caps), &m.Profile)
 		result = append(result, m)
 	}
 	return result, rows.Err()
@@ -736,6 +736,7 @@ type RouteRecord struct {
 	ID, NodeID, Prefix, ExternalModel, Protocol, DefinitionID string
 	BaseURL, AuthMode, CredentialID, CredentialType           string
 	Capabilities                                              map[string]bool
+	Profile                                                   kernel.CapabilityProfile
 	Enabled                                                   bool
 }
 
@@ -762,8 +763,7 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 			r.Protocol = "chat"
 		}
 		r.Enabled = enabled == 1
-		r.Capabilities = map[string]bool{}
-		_ = json.Unmarshal([]byte(capabilities), &r.Capabilities)
+		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
 		if r.CredentialID != "" {
 			r.ID = r.ID + "@" + r.CredentialID
 		}
@@ -775,6 +775,7 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 type UpsertCatalogModelInput struct {
 	ID, ProviderNodeID, Kind, ExternalID, DisplayName string
 	Capabilities                                      map[string]bool
+	Profile                                           kernel.CapabilityProfile
 	Overrides                                         map[string]any
 	Raw                                               map[string]any
 }
@@ -786,7 +787,7 @@ func (s *Store) UpsertCatalogModel(input UpsertCatalogModelInput) error {
 	if input.Kind == "" {
 		input.Kind = "custom"
 	}
-	caps, _ := json.Marshal(input.Capabilities)
+	caps, _ := json.Marshal(input.Profile)
 	overrides, _ := json.Marshal(input.Overrides)
 	raw, _ := json.Marshal(input.Raw)
 	_, err := s.DB.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,overrides_json,raw_json,enabled,last_seen_at,updated_at)

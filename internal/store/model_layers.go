@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
 // ModelReference is a typed edge in the model graph. Route references are
@@ -34,24 +36,26 @@ type StrategySpec struct {
 }
 
 type DiscoveredRoute struct {
-	ID             string          `json:"id"`
-	ProviderNodeID string          `json:"providerNodeId,omitempty"`
-	ProviderPrefix string          `json:"providerPrefix,omitempty"`
-	Kind           string          `json:"kind"`
-	ExternalID     string          `json:"externalId"`
-	DisplayName    string          `json:"displayName"`
-	Capabilities   map[string]bool `json:"capabilities"`
-	Enabled        bool            `json:"enabled"`
-	LastSeenAt     string          `json:"lastSeenAt,omitempty"`
+	ID             string                   `json:"id"`
+	ProviderNodeID string                   `json:"providerNodeId,omitempty"`
+	ProviderPrefix string                   `json:"providerPrefix,omitempty"`
+	Kind           string                   `json:"kind"`
+	ExternalID     string                   `json:"externalId"`
+	DisplayName    string                   `json:"displayName"`
+	Capabilities   map[string]bool          `json:"capabilities"`
+	Profile        kernel.CapabilityProfile `json:"profile,omitempty"`
+	Enabled        bool                     `json:"enabled"`
+	LastSeenAt     string                   `json:"lastSeenAt,omitempty"`
 }
 
 type PhysicalModel struct {
-	Name         string           `json:"name"`
-	Sources      []RouteReference `json:"sources"`
-	Policy       StrategySpec     `json:"policy"`
-	Capabilities map[string]bool  `json:"capabilities"`
-	Discoverable bool             `json:"discoverable"`
-	Enabled      bool             `json:"enabled"`
+	Name         string                   `json:"name"`
+	Sources      []RouteReference         `json:"sources"`
+	Policy       StrategySpec             `json:"policy"`
+	Capabilities map[string]bool          `json:"capabilities"`
+	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
+	Discoverable bool                     `json:"discoverable"`
+	Enabled      bool                     `json:"enabled"`
 }
 
 type ComboModel struct {
@@ -90,8 +94,8 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 		if err := rows.Scan(&item.ID, &item.ProviderNodeID, &item.ProviderPrefix, &item.Kind, &item.ExternalID, &item.DisplayName, &caps, &enabled, &item.LastSeenAt); err != nil {
 			return nil, err
 		}
-		if err := decodeJSON(caps, &item.Capabilities); err != nil {
-			return nil, fmt.Errorf("route %q capabilities: %w", item.ID, err)
+		if err := decodeJSON(caps, &item.Profile); err != nil {
+			return nil, fmt.Errorf("route %q profile: %w", item.ID, err)
 		}
 		item.Enabled = enabled != 0
 		result = append(result, item)
@@ -116,8 +120,8 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 		if err := decodeJSON(policy, &item.Policy); err != nil {
 			return nil, fmt.Errorf("physical model %q policy: %w", item.Name, err)
 		}
-		if err := decodeJSON(caps, &item.Capabilities); err != nil {
-			return nil, fmt.Errorf("physical model %q capabilities: %w", item.Name, err)
+		if err := decodeJSON(caps, &item.Profile); err != nil {
+			return nil, fmt.Errorf("physical model %q profile: %w", item.Name, err)
 		}
 		item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
 		item.Sources, err = s.physicalSources(item.Name)
@@ -140,8 +144,8 @@ func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 	if err := decodeJSON(policy, &item.Policy); err != nil {
 		return item, fmt.Errorf("physical model %q policy: %w", name, err)
 	}
-	if err := decodeJSON(caps, &item.Capabilities); err != nil {
-		return item, fmt.Errorf("physical model %q capabilities: %w", name, err)
+	if err := decodeJSON(caps, &item.Profile); err != nil {
+		return item, fmt.Errorf("physical model %q profile: %w", name, err)
 	}
 	item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
 	item.Sources, err = s.physicalSources(name)
@@ -176,7 +180,7 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	if err != nil {
 		return fmt.Errorf("encode physical model policy: %w", err)
 	}
-	caps, err := json.Marshal(item.Capabilities)
+	caps, err := json.Marshal(item.Profile)
 	if err != nil {
 		return fmt.Errorf("encode physical model capabilities: %w", err)
 	}

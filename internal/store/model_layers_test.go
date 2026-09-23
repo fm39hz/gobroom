@@ -4,6 +4,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
 func TestTypedModelLayersReuseCatalog(t *testing.T) {
@@ -19,7 +21,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, route := range []UpsertCatalogModelInput{
-		{ID: "route-a", ProviderNodeID: "node-a", Kind: "discovered", ExternalID: "vendor/qwen:free", DisplayName: "Qwen", Capabilities: map[string]bool{"reasoning": true}},
+		{ID: "route-a", ProviderNodeID: "node-a", Kind: "discovered", ExternalID: "vendor/qwen:free", DisplayName: "Qwen", Profile: map[string]kernel.Capability{"input.image": {State: kernel.SupportNative}}},
 		{ID: "route-b", ProviderNodeID: "node-b", Kind: "custom", ExternalID: "Qwen/Qwen", DisplayName: "Qwen", Capabilities: map[string]bool{"vision": true}},
 	} {
 		if err := s.UpsertCatalogModel(route); err != nil {
@@ -29,6 +31,9 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	discovered, err := s.DiscoveredRoutes("")
 	if err != nil || len(discovered) != 2 || discovered[0].ID != "route-b" || discovered[1].ProviderPrefix != "orca" {
 		t.Fatalf("discovered=%#v err=%v", discovered, err)
+	}
+	if discovered[1].Profile["input.image"].State != kernel.SupportNative {
+		t.Fatalf("typed capability profile was not persisted: %#v", discovered[1].Profile)
 	}
 
 	physical := PhysicalModel{

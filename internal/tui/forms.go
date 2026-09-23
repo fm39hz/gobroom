@@ -90,12 +90,12 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			values = map[string]string{"providerNodeID": value.NodeID, "kind": value.Kind, "externalID": value.ExternalID, "displayName": value.DisplayName}
 			f := buildForm("Edit physical model", "custom_models.upsert", modelEditFields(), values)
 			f.extra["id"] = value.ID
-			f.extra["capabilities"] = value.Capabilities
+			f.extra["profile"] = value.Profile
 			return f
 		case physicalModel:
 			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.ID, "discoverable": strconv.FormatBool(value.Discoverable)})
 			f.extra["name"] = value.Name
-			f.extra["capabilities"] = value.Capabilities
+			f.extra["profile"] = value.Profile
 			f.extra["enabled"] = value.Enabled
 			f.typedSources = append([]routeReference(nil), value.Sources...)
 			return f
@@ -448,8 +448,8 @@ func (f *formState) Params() (map[string]any, error) {
 		if _, ok := params["enabled"]; !ok {
 			params["enabled"] = true
 		}
-		if _, ok := params["capabilities"]; !ok {
-			params["capabilities"] = map[string]bool{}
+		if _, ok := params["profile"]; !ok {
+			params["profile"] = map[string]capability{}
 		}
 	}
 	if f.method == "combo_models.upsert" {

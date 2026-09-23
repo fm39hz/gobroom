@@ -47,7 +47,7 @@ func (s Service) RefreshNode(ctx context.Context, nodeID string) (Result, error)
 			raw = map[string]any{}
 		}
 		raw["source"] = "models_endpoint"
-		if err := s.Store.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: nodeID, Kind: "discovered", ExternalID: id, DisplayName: model.DisplayName, Raw: raw}); err != nil {
+		if err := s.Store.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: nodeID, Kind: "discovered", ExternalID: id, DisplayName: model.DisplayName, Profile: model.Profile, Raw: raw}); err != nil {
 			return Result{}, err
 		}
 	}
