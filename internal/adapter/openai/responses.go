@@ -109,7 +109,11 @@ func (a Responses) TranslateStream(_ context.Context, response kernel.UpstreamRe
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
 	}
-	_, err := io.Copy(writer, response.Body)
+	data, err := io.ReadAll(response.Body)
+	if err == nil {
+		_, err = writer.Write(data)
+		observeOpenAIJSON(data, hooks.OnEvent)
+	}
 	if err != nil && hooks.OnError != nil {
 		hooks.OnError(err)
 	}

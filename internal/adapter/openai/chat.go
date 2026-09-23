@@ -120,7 +120,11 @@ func (a Chat) TranslateStream(ctx context.Context, response kernel.UpstreamRespo
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(timeNow())
 	}
-	_, err := io.Copy(writer, response.Body)
+	data, err := io.ReadAll(response.Body)
+	if err == nil {
+		_, err = writer.Write(data)
+		observeOpenAIJSON(data, hooks.OnEvent)
+	}
 	if err != nil {
 		if hooks.OnError != nil {
 			hooks.OnError(err)

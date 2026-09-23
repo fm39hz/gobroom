@@ -92,3 +92,19 @@ func TestResponsesEventsKeepOutputItemBoundaries(t *testing.T) {
 		t.Fatalf("events=%#v", events)
 	}
 }
+
+func TestChatJSONRendererPreservesBodyAndEmitsText(t *testing.T) {
+	body := `{"id":"chat","choices":[{"message":{"content":"hello"}}],"usage":{"input_tokens":2,"output_tokens":1}}`
+	var events []kernel.ResponseEvent
+	recorder := httptest.NewRecorder()
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+	if err := (Chat{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }}); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Body.String() != body {
+		t.Fatalf("body changed: %q", recorder.Body.String())
+	}
+	if len(events) == 0 || events[0].Kind != kernel.EventTextDelta || events[0].Text != "hello" {
+		t.Fatalf("events=%#v", events)
+	}
+}

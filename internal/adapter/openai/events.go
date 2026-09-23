@@ -60,6 +60,9 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 	if choices, ok := payload["choices"].([]any); ok && len(choices) > 0 {
 		choice, _ := choices[0].(map[string]any)
 		delta, _ := choice["delta"].(map[string]any)
+		if len(delta) == 0 {
+			delta, _ = choice["message"].(map[string]any)
+		}
 		if text, ok := delta["content"].(string); ok && text != "" {
 			emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, Text: text})
 		}
@@ -100,6 +103,16 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 	if usage, ok := payload["usage"].(map[string]any); ok {
 		event := kernel.UsageEvent{InputTokens: int64(numberValue(usage["input_tokens"])), OutputTokens: int64(numberValue(usage["output_tokens"]))}
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &event})
+	}
+}
+
+func observeOpenAIJSON(data []byte, emit func(kernel.ResponseEvent)) {
+	if emit == nil {
+		return
+	}
+	var payload map[string]any
+	if json.Unmarshal(data, &payload) == nil {
+		emitOpenAIEvent(payload, emit)
 	}
 }
 
