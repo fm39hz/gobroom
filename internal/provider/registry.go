@@ -21,6 +21,7 @@ var Profiles = map[string]Profile{
 	"responses":   {ID: "responses", DisplayName: "OpenAI-compatible Responses", Protocol: "openai_responses", ModelsPath: "/models", AuthMode: "api_key"},
 	"opencode-go": {ID: "opencode-go", DisplayName: "OpenCode Go", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "api_key", Aliases: []string{"ocg"}},
 	"opencode":    {ID: "opencode", DisplayName: "OpenCode Free", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "none", Aliases: []string{"oc"}},
+	"gemini":      {ID: "gemini", DisplayName: "Google Gemini", Protocol: "gemini", ModelsPath: "/v1beta/models", AuthMode: "api_key"},
 }
 
 func ProfileFor(id string) (Profile, bool) { p, ok := Profiles[id]; return p, ok }

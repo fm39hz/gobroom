@@ -364,6 +364,8 @@ func protocolMatchesRequest(format normalize.Format, protocol Protocol) bool {
 		return protocol == ProtocolAnthropic
 	case normalize.FormatOpenAIResponses:
 		return protocol == ProtocolOpenAIResponses
+	case normalize.FormatGemini, normalize.FormatGeminiCLI, normalize.FormatAntigravity:
+		return protocol == ProtocolGemini
 	case normalize.FormatOpenAIChat:
 		return protocol == ProtocolOpenAIChat || protocol == ProtocolAnthropic
 	default:

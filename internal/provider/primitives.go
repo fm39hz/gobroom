@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/fm39hz/gobroom/internal/adapter/anthropic"
+	"github.com/fm39hz/gobroom/internal/adapter/gemini"
 	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
@@ -134,6 +135,9 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 	if err := runtime.RegisterAdapter("anthropic-messages", anthropic.NewAdapter()); err != nil {
 		return nil, err
 	}
+	if err := runtime.RegisterAdapter("gemini", gemini.NewAdapter()); err != nil {
+		return nil, err
+	}
 	return runtime, nil
 }
 
@@ -186,6 +190,8 @@ func RuntimeAdapterIDForProtocol(protocol kernel.Protocol) string {
 		return "openai-responses"
 	case kernel.ProtocolAnthropic:
 		return "anthropic-messages"
+	case kernel.ProtocolGemini:
+		return "gemini"
 	default:
 		return ""
 	}

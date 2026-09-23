@@ -11,8 +11,8 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 	}{
 		{PrimitiveEndpoint, []string{"http-json"}},
 		{PrimitiveAuth, []string{"static-secret"}},
-		{PrimitiveRequestCodec, []string{"openai-chat-json", "openai-responses-json", "anthropic-messages-json"}},
-		{PrimitiveResponseCodec, []string{"openai-sse", "openai-responses-sse", "anthropic-sse", "json"}},
+		{PrimitiveRequestCodec, []string{"openai-chat-json", "openai-responses-json", "anthropic-messages-json", "gemini-json"}},
+		{PrimitiveResponseCodec, []string{"openai-sse", "openai-responses-sse", "anthropic-sse", "gemini-json", "json"}},
 		{PrimitiveModelSource, []string{"openai-models", "static-models"}},
 		{PrimitiveErrorClassifier, []string{"http-json"}},
 	}
@@ -24,6 +24,10 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 		}
 	}
 	definitions := []ProviderDefinition{
+		{
+			ID: "gemini", Version: "1", DisplayName: "Google Gemini", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+			Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, RuntimeAdapterID: "gemini", RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "gemini-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "gemini-json"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}}},
+		},
 		{
 			ID: "openai-compatible-chat", Version: "1", DisplayName: "OpenAI-compatible Chat",
 			Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
