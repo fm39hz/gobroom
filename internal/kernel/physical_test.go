@@ -28,3 +28,11 @@ func TestCompileRequirementsCapturesToolsAndReasoning(t *testing.T) {
 		t.Fatalf("requirements=%#v", compiled)
 	}
 }
+
+func TestEligibleRejectsTokenBudgetOverflow(t *testing.T) {
+	req := NormalizedRequest{SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"messages": "a", "max_tokens": float64(200)}}
+	route := Route{Protocol: ProtocolOpenAIChat, Limits: TokenLimits{MaxOutputTokens: 100, MaxTotalTokens: 1000}}
+	if ok, reason := Eligible(route, CompileRequirements(req)); ok || reason != "output exceeds route limit" {
+		t.Fatalf("expected output limit rejection, ok=%v reason=%q", ok, reason)
+	}
+}

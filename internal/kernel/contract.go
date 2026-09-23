@@ -46,6 +46,7 @@ type Route struct {
 	QuotaSourceID     string
 	Capabilities      map[string]bool
 	Profile           CapabilityProfile
+	Limits            TokenLimits
 	Weight            int
 	Enabled           bool
 	BaseURL           string

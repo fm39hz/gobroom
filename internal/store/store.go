@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS connections (
 CREATE TABLE IF NOT EXISTS model_catalog (
   id TEXT PRIMARY KEY, provider_node_id TEXT REFERENCES provider_nodes(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, external_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL,
-  capabilities_json TEXT NOT NULL DEFAULT '{}', overrides_json TEXT NOT NULL DEFAULT '{}',
+  capabilities_json TEXT NOT NULL DEFAULT '{}', limits_json TEXT NOT NULL DEFAULT '{}', overrides_json TEXT NOT NULL DEFAULT '{}',
   raw_json TEXT NOT NULL DEFAULT '{}', enabled INTEGER NOT NULL DEFAULT 1,
   last_seen_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -136,7 +136,7 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT N
 -- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
   name TEXT PRIMARY KEY, policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
-  capabilities_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
+  capabilities_json TEXT NOT NULL DEFAULT '{}', limits_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS physical_model_sources (
@@ -167,6 +167,8 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN ttft_ms INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN output_tokens_per_second REAL NOT NULL DEFAULT 0`)
+	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`UPDATE provider_nodes SET definition_id=CASE protocol WHEN 'openai_chat' THEN 'openai-compatible-chat' WHEN 'chat' THEN 'openai-compatible-chat' WHEN 'openai_responses' THEN 'openai-compatible-responses' WHEN 'responses' THEN 'openai-compatible-responses' WHEN 'anthropic' THEN 'anthropic-messages' ELSE definition_id END WHERE definition_id=''`)
 	return err
 }
@@ -710,10 +712,11 @@ func (s *Store) UpdateProviderNode(input UpdateProviderNodeInput) (ProviderNode,
 type Model struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
 	Profile                                   kernel.CapabilityProfile
+	Limits                                    kernel.TokenLimits
 }
 
 func (s *Store) Models() ([]Model, error) {
-	rows, err := s.DB.Query(`SELECT id,COALESCE(provider_node_id,''),kind,external_id,display_name,capabilities_json FROM model_catalog WHERE enabled=1 ORDER BY display_name`)
+	rows, err := s.DB.Query(`SELECT id,COALESCE(provider_node_id,''),kind,external_id,display_name,capabilities_json,limits_json FROM model_catalog WHERE enabled=1 ORDER BY display_name`)
 	if err != nil {
 		return nil, err
 	}
@@ -721,11 +724,12 @@ func (s *Store) Models() ([]Model, error) {
 	var result []Model
 	for rows.Next() {
 		var m Model
-		var caps string
-		if err := rows.Scan(&m.ID, &m.NodeID, &m.Kind, &m.ExternalID, &m.DisplayName, &caps); err != nil {
+		var caps, limits string
+		if err := rows.Scan(&m.ID, &m.NodeID, &m.Kind, &m.ExternalID, &m.DisplayName, &caps, &limits); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(caps), &m.Profile)
+		_ = json.Unmarshal([]byte(limits), &m.Limits)
 		result = append(result, m)
 	}
 	return result, rows.Err()
@@ -735,12 +739,13 @@ type RouteRecord struct {
 	ID, NodeID, Prefix, ExternalModel, Protocol, DefinitionID string
 	BaseURL, AuthMode, CredentialID, CredentialType           string
 	Profile                                                   kernel.CapabilityProfile
+	Limits                                                    kernel.TokenLimits
 	Enabled                                                   bool
 }
 
 func (s *Store) Routes() ([]RouteRecord, error) {
 	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),m.external_id,m.enabled,
-	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}')
+	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
 WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
@@ -752,9 +757,9 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 	for rows.Next() {
 		var r RouteRecord
 		var enabled int
-		var capabilities string
+		var capabilities, limits string
 		var credentialSecret string
-		if err := rows.Scan(&r.ID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.BaseURL, &r.AuthMode, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities); err != nil {
+		if err := rows.Scan(&r.ID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.BaseURL, &r.AuthMode, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
 			return nil, err
 		}
 		if r.Protocol == "" {
@@ -762,6 +767,7 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 		}
 		r.Enabled = enabled == 1
 		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
+		_ = json.Unmarshal([]byte(limits), &r.Limits)
 		if r.CredentialID != "" {
 			r.ID = r.ID + "@" + r.CredentialID
 		}
@@ -773,6 +779,7 @@ WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
 type UpsertCatalogModelInput struct {
 	ID, ProviderNodeID, Kind, ExternalID, DisplayName string
 	Profile                                           kernel.CapabilityProfile
+	Limits                                            kernel.TokenLimits
 	Overrides                                         map[string]any
 	Raw                                               map[string]any
 }
@@ -785,13 +792,14 @@ func (s *Store) UpsertCatalogModel(input UpsertCatalogModelInput) error {
 		input.Kind = "custom"
 	}
 	caps, _ := json.Marshal(input.Profile)
+	limits, _ := json.Marshal(input.Limits)
 	overrides, _ := json.Marshal(input.Overrides)
 	raw, _ := json.Marshal(input.Raw)
-	_, err := s.DB.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,overrides_json,raw_json,enabled,last_seen_at,updated_at)
-VALUES(?,?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+	_, err := s.DB.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,kind=excluded.kind,external_id=excluded.external_id,
-display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,overrides_json=excluded.overrides_json,
-raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, input.ProviderNodeID, input.Kind, input.ExternalID, input.DisplayName, string(caps), string(overrides), string(raw))
+display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,overrides_json=excluded.overrides_json,
+raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, input.ProviderNodeID, input.Kind, input.ExternalID, input.DisplayName, string(caps), string(limits), string(overrides), string(raw))
 	return err
 }
 

@@ -43,6 +43,7 @@ type DiscoveredRoute struct {
 	ExternalID     string                   `json:"externalId"`
 	DisplayName    string                   `json:"displayName"`
 	Profile        kernel.CapabilityProfile `json:"profile,omitempty"`
+	Limits         kernel.TokenLimits       `json:"limits,omitempty"`
 	Enabled        bool                     `json:"enabled"`
 	LastSeenAt     string                   `json:"lastSeenAt,omitempty"`
 }
@@ -52,6 +53,7 @@ type PhysicalModel struct {
 	Sources      []RouteReference         `json:"sources"`
 	Policy       StrategySpec             `json:"policy"`
 	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
+	Limits       kernel.TokenLimits       `json:"limits,omitempty"`
 	Discoverable bool                     `json:"discoverable"`
 	Enabled      bool                     `json:"enabled"`
 }
@@ -70,7 +72,7 @@ var ErrModelReferenced = errors.New("model is referenced by another model")
 // in model_catalog. Custom provider routes are included alongside discovered
 // routes; no duplicate catalog table or one-time data copy is needed.
 func (s *Store) DiscoveredRoutes(providerNodeID string) ([]DiscoveredRoute, error) {
-	query := `SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),m.kind,m.external_id,m.display_name,m.capabilities_json,m.enabled,COALESCE(m.last_seen_at,'')
+	query := `SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),m.kind,m.external_id,m.display_name,m.capabilities_json,m.limits_json,m.enabled,COALESCE(m.last_seen_at,'')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 	args := []any{}
@@ -87,13 +89,16 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 	var result []DiscoveredRoute
 	for rows.Next() {
 		var item DiscoveredRoute
-		var caps string
+		var caps, limits string
 		var enabled int
-		if err := rows.Scan(&item.ID, &item.ProviderNodeID, &item.ProviderPrefix, &item.Kind, &item.ExternalID, &item.DisplayName, &caps, &enabled, &item.LastSeenAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.ProviderNodeID, &item.ProviderPrefix, &item.Kind, &item.ExternalID, &item.DisplayName, &caps, &limits, &enabled, &item.LastSeenAt); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(caps, &item.Profile); err != nil {
 			return nil, fmt.Errorf("route %q profile: %w", item.ID, err)
+		}
+		if err := decodeJSON(limits, &item.Limits); err != nil {
+			return nil, fmt.Errorf("route %q limits: %w", item.ID, err)
 		}
 		item.Enabled = enabled != 0
 		result = append(result, item)
@@ -102,7 +107,7 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 }
 
 func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
-	rows, err := s.DB.Query(`SELECT name,policy_json,capabilities_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
+	rows, err := s.DB.Query(`SELECT name,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +115,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 	var result []PhysicalModel
 	for rows.Next() {
 		var item PhysicalModel
-		var policy, caps string
+		var policy, caps, limits string
 		var discoverable, enabled int
-		if err := rows.Scan(&item.Name, &policy, &caps, &discoverable, &enabled); err != nil {
+		if err := rows.Scan(&item.Name, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(policy, &item.Policy); err != nil {
@@ -120,6 +125,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 		}
 		if err := decodeJSON(caps, &item.Profile); err != nil {
 			return nil, fmt.Errorf("physical model %q profile: %w", item.Name, err)
+		}
+		if err := decodeJSON(limits, &item.Limits); err != nil {
+			return nil, fmt.Errorf("physical model %q limits: %w", item.Name, err)
 		}
 		item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
 		item.Sources, err = s.physicalSources(item.Name)
@@ -133,9 +141,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 
 func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 	var item PhysicalModel
-	var policy, caps string
+	var policy, caps, limits string
 	var discoverable, enabled int
-	err := s.DB.QueryRow(`SELECT name,policy_json,capabilities_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &policy, &caps, &discoverable, &enabled)
+	err := s.DB.QueryRow(`SELECT name,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &policy, &caps, &limits, &discoverable, &enabled)
 	if err != nil {
 		return item, err
 	}
@@ -144,6 +152,9 @@ func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 	}
 	if err := decodeJSON(caps, &item.Profile); err != nil {
 		return item, fmt.Errorf("physical model %q profile: %w", name, err)
+	}
+	if err := decodeJSON(limits, &item.Limits); err != nil {
+		return item, fmt.Errorf("physical model %q limits: %w", name, err)
 	}
 	item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
 	item.Sources, err = s.physicalSources(name)
@@ -182,13 +193,17 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	if err != nil {
 		return fmt.Errorf("encode physical model profile: %w", err)
 	}
+	limits, err := json.Marshal(item.Limits)
+	if err != nil {
+		return fmt.Errorf("encode physical model limits: %w", err)
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO physical_models(name,policy_json,capabilities_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(policy), string(caps), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO physical_models(name,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {

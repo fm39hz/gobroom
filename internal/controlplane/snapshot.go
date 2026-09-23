@@ -40,7 +40,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if protocol == "" {
 			protocol = kernel.ProtocolOpenAIChat
 		}
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, AdapterID: provider.RuntimeAdapterIDForProtocol(protocol), ErrorClassifierID: "http-json", Profile: row.Profile, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, AdapterID: provider.RuntimeAdapterIDForProtocol(protocol), ErrorClassifierID: "http-json", Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
 		baseID := row.ID
 		if at := strings.IndexByte(baseID, '@'); at >= 0 {
 			baseID = baseID[:at]

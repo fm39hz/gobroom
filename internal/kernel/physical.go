@@ -1,8 +1,11 @@
 package kernel
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
 
-import "github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/normalize"
+)
 
 // SupportState describes capability evidence. Unknown is deliberately not
 // silently treated as supported or unsupported.
@@ -24,6 +27,14 @@ type Capability struct {
 
 type CapabilityProfile map[string]Capability
 
+type TokenLimits struct {
+	MaxInputTokens  int64  `json:"maxInputTokens,omitempty"`
+	MaxOutputTokens int64  `json:"maxOutputTokens,omitempty"`
+	MaxTotalTokens  int64  `json:"maxTotalTokens,omitempty"`
+	Tokenizer       string `json:"tokenizer,omitempty"`
+	CountingMode    string `json:"countingMode,omitempty"`
+}
+
 const (
 	CapabilityVision = "input.image"
 	CapabilityAudio  = "input.audio"
@@ -33,14 +44,16 @@ const (
 )
 
 type RequestRequirements struct {
-	Capabilities []string
-	Protocol     Protocol
-	Streaming    bool
-	Reasoning    bool
+	Capabilities         []string
+	Protocol             Protocol
+	Streaming            bool
+	Reasoning            bool
+	EstimatedInputTokens int64
+	ReservedOutputTokens int64
 }
 
 func CompileRequirements(req NormalizedRequest) RequestRequirements {
-	result := RequestRequirements{Protocol: protocolForFormat(req.SourceFormat), Streaming: req.Stream, Reasoning: req.Thinking.Effort != "" || req.Thinking.Mode == "level" || req.Thinking.Mode == "budget"}
+	result := RequestRequirements{Protocol: protocolForFormat(req.SourceFormat), Streaming: req.Stream, Reasoning: req.Thinking.Effort != "" || req.Thinking.Mode == "level" || req.Thinking.Mode == "budget", EstimatedInputTokens: estimateInputTokens(req), ReservedOutputTokens: requestedOutputTokens(req)}
 	if req.Modalities.Vision {
 		result.Capabilities = append(result.Capabilities, CapabilityVision)
 	}
@@ -57,6 +70,23 @@ func CompileRequirements(req NormalizedRequest) RequestRequirements {
 		result.Capabilities = append(result.Capabilities, CapabilityTools)
 	}
 	return result
+}
+
+func estimateInputTokens(req NormalizedRequest) int64 {
+	if len(req.Raw) == 0 {
+		return int64(len(req.Messages) * 16)
+	}
+	data, _ := json.Marshal(req.Raw)
+	return int64((len(data) + 3) / 4)
+}
+
+func requestedOutputTokens(req NormalizedRequest) int64 {
+	for _, key := range []string{"max_output_tokens", "max_tokens"} {
+		if value, ok := req.Raw[key].(float64); ok && value > 0 {
+			return int64(value)
+		}
+	}
+	return 0
 }
 
 func protocolForFormat(format normalize.Format) Protocol {
@@ -85,16 +115,26 @@ func Eligible(route Route, requirements RequestRequirements) (bool, string) {
 				return false, capability + " is not proven supported"
 			}
 		}
-		return true, ""
+	} else {
+		checks := map[string]bool{CapabilityVision: route.Capabilities["vision"], CapabilityAudio: route.Capabilities["audio"], CapabilityVideo: route.Capabilities["video"], CapabilityPDF: route.Capabilities["pdf"]}
+		for _, capability := range requirements.Capabilities {
+			if capability == CapabilityTools {
+				continue
+			}
+			if needed := checks[capability]; !needed {
+				return false, capability + " is not declared"
+			}
+		}
 	}
-	checks := map[string]bool{CapabilityVision: route.Capabilities["vision"], CapabilityAudio: route.Capabilities["audio"], CapabilityVideo: route.Capabilities["video"], CapabilityPDF: route.Capabilities["pdf"]}
-	for _, capability := range requirements.Capabilities {
-		if capability == CapabilityTools {
-			continue
-		}
-		if needed := checks[capability]; !needed {
-			return false, capability + " is not declared"
-		}
+	limits := route.Limits
+	if limits.MaxInputTokens > 0 && requirements.EstimatedInputTokens > limits.MaxInputTokens {
+		return false, "input exceeds route limit"
+	}
+	if limits.MaxOutputTokens > 0 && requirements.ReservedOutputTokens > limits.MaxOutputTokens {
+		return false, "output exceeds route limit"
+	}
+	if limits.MaxTotalTokens > 0 && requirements.EstimatedInputTokens+requirements.ReservedOutputTokens > limits.MaxTotalTokens {
+		return false, "total tokens exceed route limit"
 	}
 	return true, ""
 }
