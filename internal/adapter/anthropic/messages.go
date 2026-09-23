@@ -197,6 +197,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 		if eventType == "content_block_start" {
 			block, _ := event["content_block"].(map[string]any)
 			if block["type"] == "tool_use" {
+				if hooks.OnEvent != nil {
+					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolCallID: stringValue(block["id"]), ToolName: stringValue(block["name"])})
+				}
 				call := map[string]any{"index": toolIndex, "id": block["id"], "type": "function", "function": map[string]any{"name": block["name"]}}
 				chunk := map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{call}}}}}
 				writeSSEChunk(writer, chunk)
@@ -207,6 +210,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 			delta, _ := event["delta"].(map[string]any)
 			text, _ := delta["text"].(string)
 			if text != "" {
+				if hooks.OnEvent != nil {
+					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventTextDelta, Text: text})
+				}
 				chunk := map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": text}}}}
 				encoded, _ := json.Marshal(chunk)
 				_, _ = io.WriteString(writer, "data: "+string(encoded)+"\n\n")
@@ -216,6 +222,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 				}
 			}
 			if partial, ok := delta["partial_json"].(string); ok {
+				if hooks.OnEvent != nil {
+					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex - 1, ToolArguments: partial})
+				}
 				call := map[string]any{"index": toolIndex - 1, "function": map[string]any{"arguments": partial}}
 				chunk := map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{call}}}}}
 				writeSSEChunk(writer, chunk)
@@ -225,6 +234,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 			delta, _ := event["delta"].(map[string]any)
 			usage, _ := event["usage"].(map[string]any)
 			outputTokens = int64(numberValue(usage["output_tokens"]))
+			if hooks.OnEvent != nil {
+				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: inputTokens, OutputTokens: outputTokens}})
+			}
 			finish := "stop"
 			if delta["stop_reason"] == "tool_use" {
 				finish = "tool_calls"
@@ -285,6 +297,8 @@ func numberValue(value any) float64 {
 	}
 	return 0
 }
+
+func stringValue(value any) string { result, _ := value.(string); return result }
 
 func writeOpenAIJSON(writer http.ResponseWriter, status int, payload map[string]any) error {
 	text := ""

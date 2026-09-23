@@ -210,14 +210,27 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			defer response.Body.Close()
 			var firstByteAt time.Time
+			emitEvent := responseEventSink(writer)
 			return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnError: func(streamErr error) {
 				k.Scheduler.Release(candidate)
+				if emitEvent != nil {
+					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
+				}
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
-			}, OnFirstByte: func(at time.Time) { firstByteAt = at }, OnComplete: func(event UsageEvent) {
+			}, OnEvent: func(event ResponseEvent) {
+				if emitEvent != nil {
+					emitEvent(event)
+				}
+			}, OnFirstByte: func(at time.Time) {
+				firstByteAt = at
+				if emitEvent != nil {
+					emitEvent(ResponseEvent{At: at, Kind: EventResponseStarted})
+				}
+			}, OnComplete: func(event UsageEvent) {
 				k.Scheduler.Release(candidate)
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
@@ -263,6 +276,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if observer, ok := k.Scheduler.gate.(UsageObserver); ok {
 					observer.ObserveUsage(candidate, event)
 				}
+				if emitEvent != nil {
+					emitEvent(ResponseEvent{At: event.At, Kind: EventResponseComplete, Usage: &event})
+				}
 				k.EmitUsage(event)
 			}})
 		}
@@ -272,6 +288,15 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 		}
 	}
 	return ErrNoRoute
+}
+
+type responseEventWriter interface{ ResponseEvent(ResponseEvent) }
+
+func responseEventSink(writer http.ResponseWriter) func(ResponseEvent) {
+	if sink, ok := writer.(responseEventWriter); ok {
+		return sink.ResponseEvent
+	}
+	return nil
 }
 
 func requestClass(req NormalizedRequest) string {

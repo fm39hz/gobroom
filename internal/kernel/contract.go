@@ -292,8 +292,33 @@ type CredentialResolver func(context.Context, Route) (Credential, error)
 
 type StreamHooks struct {
 	OnFirstByte func(time.Time)
+	OnEvent     func(ResponseEvent)
 	OnComplete  func(UsageEvent)
 	OnError     func(error)
+}
+
+type ResponseEventKind string
+
+const (
+	EventResponseStarted  ResponseEventKind = "response_started"
+	EventTextDelta        ResponseEventKind = "text_delta"
+	EventThinkingDelta    ResponseEventKind = "thinking_delta"
+	EventToolCallDelta    ResponseEventKind = "tool_call_delta"
+	EventUsage            ResponseEventKind = "usage"
+	EventResponseComplete ResponseEventKind = "response_complete"
+	EventResponseError    ResponseEventKind = "response_error"
+)
+
+type ResponseEvent struct {
+	At            time.Time
+	Kind          ResponseEventKind
+	Index         int
+	Text          string
+	ToolCallID    string
+	ToolName      string
+	ToolArguments string
+	Usage         *UsageEvent
+	Error         string
 }
 
 type UsageEvent struct {

@@ -87,6 +87,11 @@ with logical model, route, connection and elapsed time, then attempts a
 non-blocking send to a bounded event channel. Runtime health updates and
 persistent usage workers consume events independently of response delivery.
 
+Adapters may additionally emit the canonical `ResponseEvent` stream through
+`StreamHooks.OnEvent`: response start, text/thinking delta, tool-call delta,
+usage, completion and error. This event stream is semantic observation; the
+adapter remains responsible for the lossless client renderer.
+
 ## Stable error classes
 
 The following are current migration-era classes, not the target passive outcome
