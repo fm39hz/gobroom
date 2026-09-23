@@ -173,6 +173,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			response, err := adapter.Execute(ctx, upstream)
 			if err != nil {
 				k.Scheduler.Release(candidate)
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				failureClass, memberErr = kernelErrorClass(err), err
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
