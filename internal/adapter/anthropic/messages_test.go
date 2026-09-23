@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,5 +37,28 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	}
 	if !seenText || !seenTool || !seenUsage {
 		t.Fatalf("canonical events=%#v", events)
+	}
+}
+
+func TestAnthropicPrepareTranslatesReasoningWithoutMetadataShim(t *testing.T) {
+	request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"messages": []any{}}, Thinking: normalize.ThinkingIntent{Mode: "level", Effort: "high"}}
+	prepared, err := (Messages{}).Prepare(context.Background(), request, kernel.Route{ID: "route", BaseURL: "https://provider.test", ExternalModel: "claude"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["metadata"]; ok {
+		t.Fatalf("metadata shim remains: %#v", body)
+	}
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "adaptive" {
+		t.Fatalf("thinking=%#v", body["thinking"])
+	}
+	output, ok := body["output_config"].(map[string]any)
+	if !ok || output["effort"] != "high" {
+		t.Fatalf("output_config=%#v", body["output_config"])
 	}
 }

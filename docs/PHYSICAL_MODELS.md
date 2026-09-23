@@ -7,7 +7,8 @@ fidelity/evidence persistence through catalog, discovered route, Physical and
 snapshot boundaries. Route-effective projections and cross-protocol reasoning
 translation remain incomplete. Declared/guaranteed/available projections and
 their route source explanations are available in the Physical control/TUI
-view. Cross-protocol reasoning translation remains in M6. Track
+view. Cross-protocol reasoning translation remains in M6; the first normalized
+intent and Anthropic dialect translation slice is now implemented. Track
 implementation status in [the roadmap](IMPLEMENTATION_PLAN.md).
 
 ## Purpose

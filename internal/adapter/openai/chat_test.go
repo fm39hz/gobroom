@@ -66,3 +66,16 @@ func TestChatAdapterReportsMalformedSSE(t *testing.T) {
 		t.Fatalf("err=%v streamErr=%v event=%#v", err, streamErr, got)
 	}
 }
+
+func TestResponsesEventsKeepContinuityIdentity(t *testing.T) {
+	body := "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_1\",\"item_id\":\"msg_1\",\"delta\":\"hi\"}\n\n"
+	var event kernel.ResponseEvent
+	recorder := httptest.NewRecorder()
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	if err := (Responses{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(got kernel.ResponseEvent) { event = got }}); err != nil {
+		t.Fatal(err)
+	}
+	if event.ResponseID != "resp_1" || event.ItemID != "msg_1" || event.ContentType != "output_text" {
+		t.Fatalf("event=%#v", event)
+	}
+}

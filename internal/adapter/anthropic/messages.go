@@ -65,14 +65,14 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 		if len(request.Tools) > 0 {
 			body["tools"] = anthropicTools(request.Tools)
 		}
-		if request.Thinking.Effort != "" {
-			body["metadata"] = map[string]any{"gobroom_reasoning_effort": request.Thinking.Effort}
-		}
 	}
 	body["model"] = route.ExternalModel
 	body["stream"] = request.Stream
 	if _, ok := body["max_tokens"]; !ok {
 		body["max_tokens"] = 4096
+	}
+	if request.SourceFormat != normalize.FormatAnthropic {
+		applyAnthropicThinking(body, request.Thinking)
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -86,6 +86,29 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 		headers.Set("x-api-key", secret)
 	}
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+}
+
+func applyAnthropicThinking(body map[string]any, intent normalize.ThinkingIntent) {
+	switch intent.Mode {
+	case "inherit", "":
+		return
+	case "disabled":
+		body["thinking"] = map[string]any{"type": "disabled"}
+	case "budget":
+		if intent.BudgetTokens > 0 {
+			body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": intent.BudgetTokens}
+			if max, ok := body["max_tokens"].(float64); !ok || int(max) <= intent.BudgetTokens {
+				body["max_tokens"] = intent.BudgetTokens + 1024
+			}
+		}
+	case "auto":
+		body["thinking"] = map[string]any{"type": "adaptive"}
+	default:
+		body["thinking"] = map[string]any{"type": "adaptive"}
+		if intent.Effort != "" {
+			body["output_config"] = map[string]any{"effort": intent.Effort}
+		}
+	}
 }
 
 func (a Messages) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {

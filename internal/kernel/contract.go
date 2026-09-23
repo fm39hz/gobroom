@@ -313,6 +313,9 @@ type ResponseEvent struct {
 	At            time.Time
 	Kind          ResponseEventKind
 	Index         int
+	ResponseID    string
+	ItemID        string
+	ContentType   string
 	Text          string
 	ToolCallID    string
 	ToolName      string

@@ -101,15 +101,15 @@ func normalizeTools(value any) []Tool {
 
 func normalizeThinking(body map[string]any) ThinkingIntent {
 	if effort := stringValue(body["reasoning_effort"]); effort != "" {
-		return ThinkingIntent{Mode: "effort", Effort: effort, Source: "reasoning_effort"}
+		return ThinkingIntent{Mode: "level", Effort: effort, Source: "request_field"}
 	}
 	if thinking, ok := body["thinking"].(map[string]any); ok {
 		return ThinkingIntent{Mode: stringValue(thinking["type"]), Effort: stringValue(thinking["effort"]), BudgetTokens: intValue(thinking["budget_tokens"]), Source: "thinking"}
 	}
 	if reasoning, ok := body["reasoning"].(map[string]any); ok {
-		return ThinkingIntent{Mode: "effort", Effort: stringValue(reasoning["effort"]), Source: "reasoning"}
+		return ThinkingIntent{Mode: "level", Effort: stringValue(reasoning["effort"]), Source: "request_field"}
 	}
-	return ThinkingIntent{Mode: "auto", Source: "default"}
+	return ThinkingIntent{Mode: "inherit", Source: "absent"}
 }
 
 func normalizeContinuity(body map[string]any) ContinuityState {

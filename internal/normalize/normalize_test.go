@@ -53,3 +53,13 @@ func TestPreferredConnectionHeaderIsCaptured(t *testing.T) {
 		t.Fatalf("preferred connection=%q", result.Request.Transport.PreferredConnectionID)
 	}
 }
+
+func TestAbsentReasoningMeansInherit(t *testing.T) {
+	result, err := Map("/v1/chat/completions", http.Header{}, map[string]any{"model": "public", "messages": []any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.Thinking.Mode != "inherit" {
+		t.Fatalf("thinking=%#v", result.Request.Thinking)
+	}
+}

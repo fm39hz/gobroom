@@ -75,13 +75,20 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 		}
 	}
 	typ, _ := payload["type"].(string)
+	responseID := stringValue(payload["response_id"])
+	itemID := stringValue(payload["item_id"])
+	if responseID == "" {
+		if response, ok := payload["response"].(map[string]any); ok {
+			responseID = stringValue(response["id"])
+		}
+	}
 	switch {
 	case strings.Contains(typ, "output_text.delta"):
-		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, Text: stringValue(payload["delta"])})
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, ResponseID: responseID, ItemID: itemID, ContentType: "output_text", Text: stringValue(payload["delta"])})
 	case strings.Contains(typ, "reasoning") && strings.Contains(typ, "delta"):
-		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Text: stringValue(payload["delta"])})
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, ResponseID: responseID, ItemID: itemID, ContentType: "reasoning", Text: stringValue(payload["delta"])})
 	case strings.Contains(typ, "function_call_arguments.delta"):
-		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, ToolArguments: stringValue(payload["delta"])})
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, ResponseID: responseID, ItemID: itemID, ContentType: "function_call", ToolArguments: stringValue(payload["delta"])})
 	}
 	if usage, ok := payload["usage"].(map[string]any); ok {
 		event := kernel.UsageEvent{InputTokens: int64(numberValue(usage["input_tokens"])), OutputTokens: int64(numberValue(usage["output_tokens"]))}
