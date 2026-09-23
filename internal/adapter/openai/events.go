@@ -83,12 +83,19 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 		}
 	}
 	switch {
+	case strings.Contains(typ, "output_item.added"):
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockStart, ResponseID: responseID, ItemID: itemID, BlockType: stringValue(payload["item_type"])})
+	case strings.Contains(typ, "output_item.done"):
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, ResponseID: responseID, ItemID: itemID, StopReason: stringValue(payload["status"])})
 	case strings.Contains(typ, "output_text.delta"):
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, ResponseID: responseID, ItemID: itemID, ContentType: "output_text", Text: stringValue(payload["delta"])})
 	case strings.Contains(typ, "reasoning") && strings.Contains(typ, "delta"):
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, ResponseID: responseID, ItemID: itemID, ContentType: "reasoning", Text: stringValue(payload["delta"])})
 	case strings.Contains(typ, "function_call_arguments.delta"):
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, ResponseID: responseID, ItemID: itemID, ContentType: "function_call", ToolArguments: stringValue(payload["delta"])})
+	case typ == "response.completed":
+		response, _ := payload["response"].(map[string]any)
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, ResponseID: responseID, StopReason: stringValue(response["status"])})
 	}
 	if usage, ok := payload["usage"].(map[string]any); ok {
 		event := kernel.UsageEvent{InputTokens: int64(numberValue(usage["input_tokens"])), OutputTokens: int64(numberValue(usage["output_tokens"]))}

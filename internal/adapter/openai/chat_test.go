@@ -79,3 +79,16 @@ func TestResponsesEventsKeepContinuityIdentity(t *testing.T) {
 		t.Fatalf("event=%#v", event)
 	}
 }
+
+func TestResponsesEventsKeepOutputItemBoundaries(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"response_id\":\"resp_1\",\"item_id\":\"item_1\",\"item_type\":\"message\"}\n\ndata: {\"type\":\"response.output_item.done\",\"response_id\":\"resp_1\",\"item_id\":\"item_1\",\"status\":\"completed\"}\n\n"
+	var events []kernel.ResponseEvent
+	recorder := httptest.NewRecorder()
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	if err := (Responses{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].Kind != kernel.EventContentBlockStart || events[1].Kind != kernel.EventContentBlockEnd || events[1].StopReason != "completed" {
+		t.Fatalf("events=%#v", events)
+	}
+}

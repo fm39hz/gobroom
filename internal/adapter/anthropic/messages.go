@@ -214,6 +214,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 		}
 		if eventType == "content_block_start" {
 			block, _ := event["content_block"].(map[string]any)
+			if hooks.OnEvent != nil {
+				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventContentBlockStart, Index: toolIndex, BlockType: stringValue(block["type"])})
+			}
 			if block["type"] == "tool_use" {
 				if hooks.OnEvent != nil {
 					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolCallID: stringValue(block["id"]), ToolName: stringValue(block["name"])})
@@ -258,6 +261,9 @@ func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks ker
 			finish := "stop"
 			if delta["stop_reason"] == "tool_use" {
 				finish = "tool_calls"
+			}
+			if hooks.OnEvent != nil {
+				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventContentBlockEnd, StopReason: finish})
 			}
 			writeSSEChunk(writer, map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
 		}

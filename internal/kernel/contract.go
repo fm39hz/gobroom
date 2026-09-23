@@ -304,13 +304,15 @@ type StreamHooks struct {
 type ResponseEventKind string
 
 const (
-	EventResponseStarted  ResponseEventKind = "response_started"
-	EventTextDelta        ResponseEventKind = "text_delta"
-	EventThinkingDelta    ResponseEventKind = "thinking_delta"
-	EventToolCallDelta    ResponseEventKind = "tool_call_delta"
-	EventUsage            ResponseEventKind = "usage"
-	EventResponseComplete ResponseEventKind = "response_complete"
-	EventResponseError    ResponseEventKind = "response_error"
+	EventResponseStarted   ResponseEventKind = "response_started"
+	EventContentBlockStart ResponseEventKind = "content_block_start"
+	EventContentBlockEnd   ResponseEventKind = "content_block_end"
+	EventTextDelta         ResponseEventKind = "text_delta"
+	EventThinkingDelta     ResponseEventKind = "thinking_delta"
+	EventToolCallDelta     ResponseEventKind = "tool_call_delta"
+	EventUsage             ResponseEventKind = "usage"
+	EventResponseComplete  ResponseEventKind = "response_complete"
+	EventResponseError     ResponseEventKind = "response_error"
 )
 
 type ResponseEvent struct {
@@ -320,6 +322,8 @@ type ResponseEvent struct {
 	ResponseID    string
 	ItemID        string
 	ContentType   string
+	BlockType     string
+	StopReason    string
 	Text          string
 	ToolCallID    string
 	ToolName      string

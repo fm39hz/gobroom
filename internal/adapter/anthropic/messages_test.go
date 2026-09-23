@@ -29,13 +29,15 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	if usage.InputTokens != 12 || usage.OutputTokens != 4 {
 		t.Fatalf("usage=%#v", usage)
 	}
-	seenText, seenTool, seenUsage := false, false, false
+	seenText, seenTool, seenUsage, seenStart, seenEnd := false, false, false, false, false
 	for _, event := range events {
 		seenText = seenText || event.Kind == kernel.EventTextDelta
 		seenTool = seenTool || event.Kind == kernel.EventToolCallDelta
 		seenUsage = seenUsage || event.Kind == kernel.EventUsage
+		seenStart = seenStart || event.Kind == kernel.EventContentBlockStart
+		seenEnd = seenEnd || event.Kind == kernel.EventContentBlockEnd
 	}
-	if !seenText || !seenTool || !seenUsage {
+	if !seenText || !seenTool || !seenUsage || !seenStart || !seenEnd {
 		t.Fatalf("canonical events=%#v", events)
 	}
 }
