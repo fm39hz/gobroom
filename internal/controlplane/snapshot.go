@@ -9,7 +9,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
-type Loader struct{ Store *store.Store }
+type Loader struct{ Store store.SnapshotRepository }
 
 func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	if l.Store == nil {

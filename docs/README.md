@@ -14,6 +14,8 @@
   navigation, separate Discovered/Physical/Combos layers and filtering rules.
 - [Behavior comparison](COMPATIBILITY_MATRIX.md) — source-grounded behavior
   comparison and known compatibility gaps.
+- [Operations](OPERATIONS.md) — paths, journald, data-plane auth and
+  reverse-proxy boundary.
 
 ## Contracts
 
