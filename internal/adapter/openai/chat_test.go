@@ -32,3 +32,26 @@ func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 		t.Fatalf("body=%q", recorder.Body.String())
 	}
 }
+
+func TestChatAdapterEmitsCanonicalSSEEvents(t *testing.T) {
+	body := "data: {\"choices\":[{\"delta\":{\"content\":\"hello\",\"tool_calls\":[{\"id\":\"call-1\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}\n\ndata: [DONE]\n\n"
+	var events []kernel.ResponseEvent
+	recorder := httptest.NewRecorder()
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	err := (Chat{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenText, seenTool, seenUsage := false, false, false
+	for _, event := range events {
+		seenText = seenText || event.Kind == kernel.EventTextDelta
+		seenTool = seenTool || event.Kind == kernel.EventToolCallDelta
+		seenUsage = seenUsage || event.Kind == kernel.EventUsage
+	}
+	if !seenText || !seenTool || !seenUsage {
+		t.Fatalf("events=%#v", events)
+	}
+	if !strings.Contains(recorder.Body.String(), "[DONE]") {
+		t.Fatalf("passthrough=%q", recorder.Body.String())
+	}
+}

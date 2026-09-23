@@ -114,6 +114,9 @@ func (a Chat) TranslateStream(ctx context.Context, response kernel.UpstreamRespo
 		}
 	}
 	writer.WriteHeader(response.Status)
+	if strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream") {
+		return streamSSEEvents(response.Body, writer, hooks)
+	}
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(timeNow())
 	}
