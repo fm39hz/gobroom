@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -110,6 +111,167 @@ func DiffBundle(current, desired ConfigBundle) (BundleDiff, error) {
 	result.PhysicalAdded, result.PhysicalRemoved = countDelta(physicalIDs(current.Physical), physicalIDs(desired.Physical), "physical model", &result.Changes)
 	result.CombosAdded, result.CombosRemoved = countDelta(comboIDs(current.Combos), comboIDs(desired.Combos), "combo model", &result.Changes)
 	return result, nil
+}
+
+func ApplyBundle(s *store.Store, bundle ConfigBundle) error {
+	if err := ValidateBundle(bundle); err != nil {
+		return err
+	}
+	current, err := ExportBundle(s)
+	if err != nil {
+		return err
+	}
+	secrets := map[string]string{}
+	for _, connection := range current.Connections {
+		var secret string
+		if err := s.DB.QueryRow(`SELECT secret_ref FROM connections WHERE id=?`, connection.ID).Scan(&secret); err == nil {
+			secrets[connection.ID] = secret
+		}
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, provider := range bundle.Providers {
+		if _, err = tx.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,protocol=excluded.protocol,definition_id=excluded.definition_id,prefix=excluded.prefix,models_path=excluded.models_path,auth_mode=excluded.auth_mode,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, provider.ID, provider.Name, provider.BaseURL, provider.Protocol, provider.DefinitionID, provider.Prefix, provider.ModelsPath, provider.AuthMode, boolInt(provider.Enabled)); err != nil {
+			return err
+		}
+	}
+	for _, connection := range bundle.Connections {
+		secret := secrets[connection.ID]
+		if _, err = tx.Exec(`INSERT INTO connections(id,provider_node_id,name,email,credential_type,secret_ref,priority,enabled,state_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,name=excluded.name,email=excluded.email,credential_type=excluded.credential_type,priority=excluded.priority,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, connection.ID, connection.ProviderNodeID, connection.Name, connection.Email, connection.CredentialType, secret, connection.Priority, boolInt(connection.Enabled), `{}`); err != nil {
+			return err
+		}
+	}
+	for _, model := range bundle.Models {
+		profile, _ := json.Marshal(model.Profile)
+		limits, _ := json.Marshal(model.Limits)
+		if _, err = tx.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?, ?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,kind=excluded.kind,external_id=excluded.external_id,display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, model.ID, model.NodeID, model.Kind, model.ExternalID, model.DisplayName, string(profile), string(limits), `{}`, `{}`, boolInt(true)); err != nil {
+			return err
+		}
+	}
+	for _, item := range bundle.Physical {
+		identity, _ := json.Marshal(item.Identity)
+		reasoning, _ := json.Marshal(item.Reasoning)
+		policy, _ := json.Marshal(item.Policy)
+		profile, _ := json.Marshal(item.Profile)
+		limits, _ := json.Marshal(item.Limits)
+		if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), string(policy), string(profile), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {
+			return err
+		}
+		for position, source := range item.Sources {
+			evidence, _ := json.Marshal(source.Evidence)
+			if source.Fidelity == "" {
+				source.Fidelity = "unknown"
+			}
+			if _, err = tx.Exec(`INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity,evidence_json) VALUES(?,?,?,?,?)`, item.Name, position, source.RouteID, source.Fidelity, string(evidence)); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range bundle.Combos {
+		reasoning, _ := json.Marshal(item.Reasoning)
+		strategy, _ := json.Marshal(item.Strategy)
+		if _, err = tx.Exec(`INSERT INTO combo_models(name,reasoning_json,strategy_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,strategy_json=excluded.strategy_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(reasoning), string(strategy), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM combo_model_members WHERE combo_name=?`, item.Name); err != nil {
+			return err
+		}
+		for position, member := range item.Members {
+			if _, err = tx.Exec(`INSERT INTO combo_model_members(combo_name,position,ref_kind,ref_id) VALUES(?,?,?,?)`, item.Name, position, member.Kind, member.ID); err != nil {
+				return err
+			}
+		}
+	}
+	// Remove objects absent from the desired bundle only after all references are rebuilt.
+	for _, item := range current.Combos {
+		if !containsCombo(bundle.Combos, item.Name) {
+			if _, err = tx.Exec(`DELETE FROM combo_models WHERE name=?`, item.Name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range current.Physical {
+		if !containsPhysical(bundle.Physical, item.Name) {
+			if _, err = tx.Exec(`DELETE FROM physical_models WHERE name=?`, item.Name); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range current.Models {
+		if !containsModel(bundle.Models, item.ID) {
+			if _, err = tx.Exec(`DELETE FROM model_catalog WHERE id=?`, item.ID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range current.Connections {
+		if !containsConnection(bundle.Connections, item.ID) {
+			if _, err = tx.Exec(`DELETE FROM connections WHERE id=?`, item.ID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range current.Providers {
+		if !containsProvider(bundle.Providers, item.ID) {
+			if _, err = tx.Exec(`DELETE FROM provider_nodes WHERE id=?`, item.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+func containsProvider(items []store.ProviderNode, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+func containsConnection(items []store.ConnectionRecord, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+func containsModel(items []store.Model, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
+}
+func containsPhysical(items []store.PhysicalModel, id string) bool {
+	for _, item := range items {
+		if item.Name == id {
+			return true
+		}
+	}
+	return false
+}
+func containsCombo(items []store.ComboModel, id string) bool {
+	for _, item := range items {
+		if item.Name == id {
+			return true
+		}
+	}
+	return false
 }
 
 func countDelta(current, desired map[string]bool, kind string, changes *[]string) (int, int) {

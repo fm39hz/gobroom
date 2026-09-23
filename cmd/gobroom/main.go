@@ -56,7 +56,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
 	return root
 }
 
@@ -220,6 +220,15 @@ func configDiffCommand() *cobra.Command {
 			return err
 		}
 		return invoke("config.diff", raw)
+	}}
+}
+func configApplyCommand() *cobra.Command {
+	return &cobra.Command{Use: "config-apply", Short: "atomically apply a config bundle JSON", RunE: func(cmd *cobra.Command, _ []string) error {
+		var raw map[string]any
+		if err := json.NewDecoder(cmd.InOrStdin()).Decode(&raw); err != nil {
+			return err
+		}
+		return invoke("config.apply", raw)
 	}}
 }
 func routeExplainCommand() *cobra.Command {

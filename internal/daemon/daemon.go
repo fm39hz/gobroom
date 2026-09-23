@@ -339,6 +339,19 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, diff)
+	case "config.apply":
+		var bundle controlplane.ConfigBundle
+		if err := decodeParams(request.Params, &bundle); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := controlplane.ApplyBundle(d.store, bundle); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		d.appendLog("info", "typed config bundle applied")
+		return success(request, d.server.Status())
 	case "reload":
 		if err := d.server.Reload(); err != nil {
 			return IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
