@@ -98,7 +98,9 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			f.extra["profile"] = value.Profile
 			f.extra["identity"] = value.Identity
 			f.extra["limits"] = value.Limits
+			f.extra["reasoning"] = value.Reasoning
 			f.extra["enabled"] = value.Enabled
+			f.extra["reasoning"] = value.Reasoning
 			f.typedSources = append([]routeReference(nil), value.Sources...)
 			return f
 		case comboModel:
@@ -453,6 +455,9 @@ func (f *formState) Params() (map[string]any, error) {
 		if limits, ok := f.extra["limits"]; ok {
 			params["limits"] = limits
 		}
+		if reasoning, ok := f.extra["reasoning"]; ok {
+			params["reasoning"] = reasoning
+		}
 		if _, ok := params["enabled"]; !ok {
 			params["enabled"] = true
 		}
@@ -465,6 +470,9 @@ func (f *formState) Params() (map[string]any, error) {
 		delete(params, "strategy")
 		params["strategy"] = strategySpec{ID: strategy}
 		params["members"] = append([]modelReference(nil), f.typedMembers...)
+		if reasoning, ok := f.extra["reasoning"]; ok {
+			params["reasoning"] = reasoning
+		}
 		if _, ok := params["enabled"]; !ok {
 			params["enabled"] = true
 		}

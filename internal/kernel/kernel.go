@@ -96,6 +96,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 	}
 	stack[node.ID] = true
 	defer delete(stack, node.ID)
+	if req.Thinking.Mode == "" || req.Thinking.Mode == "inherit" {
+		if node.Reasoning.Mode != "" && node.Reasoning.Mode != "inherit" {
+			req.Thinking = node.Reasoning
+		}
+	}
 	for _, member := range k.Scheduler.Plan(node) {
 		if err := ctx.Err(); err != nil {
 			return err

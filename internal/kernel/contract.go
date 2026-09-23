@@ -108,7 +108,10 @@ type ModelNode struct {
 	StickyLimit int
 	Members     []MemberRef
 	Identity    PhysicalIdentity
+	Reasoning   NormalizedRequestReasoning
 }
+
+type NormalizedRequestReasoning = normalize.ThinkingIntent
 
 // StrategyPrimitive plans members at exactly one node boundary. Mutable
 // state is scoped by the scheduler to that node ID.

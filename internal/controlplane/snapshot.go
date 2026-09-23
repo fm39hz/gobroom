@@ -48,7 +48,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		input.RouteGroups[baseID] = append(input.RouteGroups[baseID], row.ID)
 	}
 	for _, row := range physicalRows {
-		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: kernelStrategy(row.Policy.ID), StickyLimit: strategyInt(row.Policy.Config, "stickyLimit", 1), Identity: row.Identity}
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: kernelStrategy(row.Policy.ID), StickyLimit: strategyInt(row.Policy.Config, "stickyLimit", 1), Identity: row.Identity, Reasoning: row.Reasoning}
 		for _, source := range row.Sources {
 			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberRouteGroup, ID: source.RouteID, Fidelity: source.Fidelity, Evidence: source.Evidence})
 		}
@@ -58,7 +58,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		}
 	}
 	for _, row := range typedComboRows {
-		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelCombo, Strategy: kernelStrategy(row.Strategy.ID), StickyLimit: strategyInt(row.Strategy.Config, "stickyLimit", 1)}
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelCombo, Strategy: kernelStrategy(row.Strategy.ID), StickyLimit: strategyInt(row.Strategy.Config, "stickyLimit", 1), Reasoning: row.Reasoning}
 		for _, member := range row.Members {
 			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberModel, ID: member.ID, Weight: strategyInt(row.Strategy.Config, "weight:"+member.ID, 0)})
 		}

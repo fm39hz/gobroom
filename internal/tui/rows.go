@@ -58,6 +58,7 @@ type physicalModel struct {
 	Profile      map[string]capability `json:"profile,omitempty"`
 	Limits       map[string]any        `json:"limits,omitempty"`
 	Projection   map[string]any        `json:"projection,omitempty"`
+	Reasoning    map[string]any        `json:"reasoning,omitempty"`
 	Discoverable bool                  `json:"discoverable"`
 	Enabled      bool                  `json:"enabled"`
 }
@@ -68,6 +69,7 @@ type comboModel struct {
 	Strategy     strategySpec     `json:"strategy"`
 	Discoverable bool             `json:"discoverable"`
 	Enabled      bool             `json:"enabled"`
+	Reasoning    map[string]any   `json:"reasoning,omitempty"`
 }
 
 type routeHealth struct {

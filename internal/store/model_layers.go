@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 // ModelReference is a typed edge in the model graph. Route references are
@@ -58,16 +59,18 @@ type PhysicalModel struct {
 	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
 	Limits       kernel.TokenLimits       `json:"limits,omitempty"`
 	Projection   kernel.ProfileProjection `json:"projection,omitempty"`
+	Reasoning    normalize.ThinkingIntent `json:"reasoning,omitempty"`
 	Discoverable bool                     `json:"discoverable"`
 	Enabled      bool                     `json:"enabled"`
 }
 
 type ComboModel struct {
-	Name         string           `json:"name"`
-	Members      []ModelReference `json:"members"`
-	Strategy     StrategySpec     `json:"strategy"`
-	Discoverable bool             `json:"discoverable"`
-	Enabled      bool             `json:"enabled"`
+	Name         string                   `json:"name"`
+	Members      []ModelReference         `json:"members"`
+	Strategy     StrategySpec             `json:"strategy"`
+	Discoverable bool                     `json:"discoverable"`
+	Enabled      bool                     `json:"enabled"`
+	Reasoning    normalize.ThinkingIntent `json:"reasoning,omitempty"`
 }
 
 var ErrModelReferenced = errors.New("model is referenced by another model")
@@ -111,7 +114,7 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 }
 
 func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
-	rows, err := s.DB.Query(`SELECT name,identity_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
+	rows, err := s.DB.Query(`SELECT name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -119,9 +122,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 	var result []PhysicalModel
 	for rows.Next() {
 		var item PhysicalModel
-		var identity, policy, caps, limits string
+		var identity, reasoning, policy, caps, limits string
 		var discoverable, enabled int
-		if err := rows.Scan(&item.Name, &identity, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
+		if err := rows.Scan(&item.Name, &identity, &reasoning, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(policy, &item.Policy); err != nil {
@@ -129,6 +132,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 		}
 		if err := decodeJSON(identity, &item.Identity); err != nil {
 			return nil, fmt.Errorf("physical model %q identity: %w", item.Name, err)
+		}
+		if err := decodeJSON(reasoning, &item.Reasoning); err != nil {
+			return nil, fmt.Errorf("physical model %q reasoning: %w", item.Name, err)
 		}
 		if err := decodeJSON(caps, &item.Profile); err != nil {
 			return nil, fmt.Errorf("physical model %q profile: %w", item.Name, err)
@@ -148,14 +154,20 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 
 func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 	var item PhysicalModel
-	var identity, policy, caps, limits string
+	var identity, reasoning, policy, caps, limits string
 	var discoverable, enabled int
-	err := s.DB.QueryRow(`SELECT name,identity_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &identity, &policy, &caps, &limits, &discoverable, &enabled)
+	err := s.DB.QueryRow(`SELECT name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &identity, &reasoning, &policy, &caps, &limits, &discoverable, &enabled)
 	if err != nil {
 		return item, err
 	}
 	if err := decodeJSON(policy, &item.Policy); err != nil {
 		return item, fmt.Errorf("physical model %q policy: %w", name, err)
+	}
+	if err := decodeJSON(identity, &item.Identity); err != nil {
+		return item, fmt.Errorf("physical model %q identity: %w", name, err)
+	}
+	if err := decodeJSON(reasoning, &item.Reasoning); err != nil {
+		return item, fmt.Errorf("physical model %q reasoning: %w", name, err)
 	}
 	if err := decodeJSON(caps, &item.Profile); err != nil {
 		return item, fmt.Errorf("physical model %q profile: %w", name, err)
@@ -203,6 +215,10 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	if err != nil {
 		return fmt.Errorf("encode physical model identity: %w", err)
 	}
+	reasoning, err := json.Marshal(item.Reasoning)
+	if err != nil {
+		return fmt.Errorf("encode physical model reasoning: %w", err)
+	}
 	policy, err := json.Marshal(item.Policy)
 	if err != nil {
 		return fmt.Errorf("encode physical model policy: %w", err)
@@ -220,8 +236,8 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {
@@ -271,7 +287,7 @@ func (s *Store) DeletePhysicalModel(name string) error {
 }
 
 func (s *Store) ComboModels() ([]ComboModel, error) {
-	rows, err := s.DB.Query(`SELECT name,strategy_json,discoverable,enabled FROM combo_models WHERE enabled=1 ORDER BY name`)
+	rows, err := s.DB.Query(`SELECT name,reasoning_json,strategy_json,discoverable,enabled FROM combo_models WHERE enabled=1 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -279,13 +295,16 @@ func (s *Store) ComboModels() ([]ComboModel, error) {
 	var result []ComboModel
 	for rows.Next() {
 		var item ComboModel
-		var strategy string
+		var reasoning, strategy string
 		var discoverable, enabled int
-		if err := rows.Scan(&item.Name, &strategy, &discoverable, &enabled); err != nil {
+		if err := rows.Scan(&item.Name, &reasoning, &strategy, &discoverable, &enabled); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(strategy, &item.Strategy); err != nil {
 			return nil, fmt.Errorf("combo model %q strategy: %w", item.Name, err)
+		}
+		if err := decodeJSON(reasoning, &item.Reasoning); err != nil {
+			return nil, fmt.Errorf("combo model %q reasoning: %w", item.Name, err)
 		}
 		item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
 		item.Members, err = s.comboMembers(item.Name)
@@ -299,14 +318,17 @@ func (s *Store) ComboModels() ([]ComboModel, error) {
 
 func (s *Store) ComboModel(name string) (ComboModel, error) {
 	var item ComboModel
-	var strategy string
+	var reasoning, strategy string
 	var discoverable, enabled int
-	err := s.DB.QueryRow(`SELECT name,strategy_json,discoverable,enabled FROM combo_models WHERE name=?`, name).Scan(&item.Name, &strategy, &discoverable, &enabled)
+	err := s.DB.QueryRow(`SELECT name,reasoning_json,strategy_json,discoverable,enabled FROM combo_models WHERE name=?`, name).Scan(&item.Name, &reasoning, &strategy, &discoverable, &enabled)
 	if err != nil {
 		return item, err
 	}
 	if err := decodeJSON(strategy, &item.Strategy); err != nil {
 		return item, fmt.Errorf("combo model %q strategy: %w", name, err)
+	}
+	if err := decodeJSON(reasoning, &item.Reasoning); err != nil {
+		return item, fmt.Errorf("combo model %q reasoning: %w", name, err)
 	}
 	item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
 	item.Members, err = s.comboMembers(name)
@@ -341,13 +363,17 @@ func (s *Store) UpsertComboModel(item ComboModel) error {
 	if err != nil {
 		return fmt.Errorf("encode combo strategy: %w", err)
 	}
+	reasoning, err := json.Marshal(item.Reasoning)
+	if err != nil {
+		return fmt.Errorf("encode combo reasoning: %w", err)
+	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO combo_models(name,strategy_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET strategy_json=excluded.strategy_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(strategy), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO combo_models(name,reasoning_json,strategy_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,strategy_json=excluded.strategy_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(reasoning), string(strategy), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`DELETE FROM combo_model_members WHERE combo_name=?`, item.Name); err != nil {
