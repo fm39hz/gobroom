@@ -24,7 +24,9 @@ const (
 )
 
 type RouteReference struct {
-	RouteID string `json:"routeId"`
+	RouteID  string                `json:"routeId"`
+	Fidelity kernel.SourceFidelity `json:"fidelity,omitempty"`
+	Evidence []kernel.Evidence     `json:"evidence,omitempty"`
 }
 
 // StrategySpec binds a registered strategy primitive to its typed JSON
@@ -50,6 +52,7 @@ type DiscoveredRoute struct {
 
 type PhysicalModel struct {
 	Name         string                   `json:"name"`
+	Identity     kernel.PhysicalIdentity  `json:"identity"`
 	Sources      []RouteReference         `json:"sources"`
 	Policy       StrategySpec             `json:"policy"`
 	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
@@ -107,7 +110,7 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 }
 
 func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
-	rows, err := s.DB.Query(`SELECT name,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
+	rows, err := s.DB.Query(`SELECT name,identity_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -115,13 +118,16 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 	var result []PhysicalModel
 	for rows.Next() {
 		var item PhysicalModel
-		var policy, caps, limits string
+		var identity, policy, caps, limits string
 		var discoverable, enabled int
-		if err := rows.Scan(&item.Name, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
+		if err := rows.Scan(&item.Name, &identity, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(policy, &item.Policy); err != nil {
 			return nil, fmt.Errorf("physical model %q policy: %w", item.Name, err)
+		}
+		if err := decodeJSON(identity, &item.Identity); err != nil {
+			return nil, fmt.Errorf("physical model %q identity: %w", item.Name, err)
 		}
 		if err := decodeJSON(caps, &item.Profile); err != nil {
 			return nil, fmt.Errorf("physical model %q profile: %w", item.Name, err)
@@ -141,9 +147,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 
 func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 	var item PhysicalModel
-	var policy, caps, limits string
+	var identity, policy, caps, limits string
 	var discoverable, enabled int
-	err := s.DB.QueryRow(`SELECT name,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &policy, &caps, &limits, &discoverable, &enabled)
+	err := s.DB.QueryRow(`SELECT name,identity_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &identity, &policy, &caps, &limits, &discoverable, &enabled)
 	if err != nil {
 		return item, err
 	}
@@ -162,7 +168,7 @@ func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 }
 
 func (s *Store) physicalSources(name string) ([]RouteReference, error) {
-	rows, err := s.DB.Query(`SELECT route_id FROM physical_model_sources WHERE physical_name=? ORDER BY position`, name)
+	rows, err := s.DB.Query(`SELECT route_id,fidelity,evidence_json FROM physical_model_sources WHERE physical_name=? ORDER BY position`, name)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +176,11 @@ func (s *Store) physicalSources(name string) ([]RouteReference, error) {
 	var result []RouteReference
 	for rows.Next() {
 		var item RouteReference
-		if err := rows.Scan(&item.RouteID); err != nil {
+		var evidence string
+		if err := rows.Scan(&item.RouteID, &item.Fidelity, &evidence); err != nil {
+			return nil, err
+		}
+		if err := decodeJSON(evidence, &item.Evidence); err != nil {
 			return nil, err
 		}
 		result = append(result, item)
@@ -184,6 +194,13 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	}
 	if item.Policy.ID == "" {
 		item.Policy.ID = "ordered-fallback"
+	}
+	if item.Identity.CanonicalName == "" {
+		item.Identity.CanonicalName = item.Name
+	}
+	identity, err := json.Marshal(item.Identity)
+	if err != nil {
+		return fmt.Errorf("encode physical model identity: %w", err)
 	}
 	policy, err := json.Marshal(item.Policy)
 	if err != nil {
@@ -202,8 +219,8 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO physical_models(name,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {
@@ -220,7 +237,14 @@ ON CONFLICT(name) DO UPDATE SET policy_json=excluded.policy_json,capabilities_js
 		if count == 0 {
 			return fmt.Errorf("route %q is not a discovered or custom provider route", source.RouteID)
 		}
-		if _, err = tx.Exec(`INSERT INTO physical_model_sources(physical_name,position,route_id) VALUES(?,?,?)`, item.Name, position, source.RouteID); err != nil {
+		if source.Fidelity == "" {
+			source.Fidelity = kernel.FidelityUnknown
+		}
+		evidence, marshalErr := json.Marshal(source.Evidence)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if _, err = tx.Exec(`INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity,evidence_json) VALUES(?,?,?,?,?)`, item.Name, position, source.RouteID, source.Fidelity, string(evidence)); err != nil {
 			return err
 		}
 	}

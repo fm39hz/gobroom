@@ -135,13 +135,14 @@ CREATE TABLE IF NOT EXISTS usage_daily (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 -- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
-  name TEXT PRIMARY KEY, policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
+  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
   capabilities_json TEXT NOT NULL DEFAULT '{}', limits_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS physical_model_sources (
   physical_name TEXT NOT NULL REFERENCES physical_models(name) ON DELETE CASCADE,
   position INTEGER NOT NULL, route_id TEXT NOT NULL REFERENCES model_catalog(id) ON DELETE RESTRICT,
+  fidelity TEXT NOT NULL DEFAULT 'unknown', evidence_json TEXT NOT NULL DEFAULT '[]',
   PRIMARY KEY (physical_name, position), UNIQUE (physical_name, route_id)
 );
 CREATE INDEX IF NOT EXISTS idx_physical_sources_route ON physical_model_sources(route_id);
@@ -169,6 +170,9 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN output_tokens_per_second REAL NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN identity_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_model_sources ADD COLUMN fidelity TEXT NOT NULL DEFAULT 'unknown'`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_model_sources ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.DB.Exec(`UPDATE provider_nodes SET definition_id=CASE protocol WHEN 'openai_chat' THEN 'openai-compatible-chat' WHEN 'chat' THEN 'openai-compatible-chat' WHEN 'openai_responses' THEN 'openai-compatible-responses' WHEN 'responses' THEN 'openai-compatible-responses' WHEN 'anthropic' THEN 'anthropic-messages' ELSE definition_id END WHERE definition_id=''`)
 	return err
 }

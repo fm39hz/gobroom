@@ -105,6 +105,7 @@ type ModelNode struct {
 	Strategy    Strategy
 	StickyLimit int
 	Members     []MemberRef
+	Identity    PhysicalIdentity
 }
 
 // StrategyPrimitive plans members at exactly one node boundary. Mutable

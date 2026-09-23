@@ -3,6 +3,7 @@ package kernel
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -33,6 +34,31 @@ type TokenLimits struct {
 	MaxTotalTokens  int64  `json:"maxTotalTokens,omitempty"`
 	Tokenizer       string `json:"tokenizer,omitempty"`
 	CountingMode    string `json:"countingMode,omitempty"`
+}
+
+type SourceFidelity string
+
+const (
+	FidelityExact      SourceFidelity = "exact"
+	FidelityAlias      SourceFidelity = "alias"
+	FidelityCompatible SourceFidelity = "compatible"
+	FidelityDynamic    SourceFidelity = "dynamic"
+	FidelityUnknown    SourceFidelity = "unknown"
+)
+
+type Evidence struct {
+	Source     string    `json:"source"`
+	Confidence float64   `json:"confidence,omitempty"`
+	ObservedAt time.Time `json:"observedAt,omitempty"`
+	ExpiresAt  time.Time `json:"expiresAt,omitempty"`
+	Note       string    `json:"note,omitempty"`
+}
+
+type PhysicalIdentity struct {
+	CanonicalName string `json:"canonicalName"`
+	Family        string `json:"family,omitempty"`
+	Revision      string `json:"revision,omitempty"`
+	Pinned        bool   `json:"pinned,omitempty"`
 }
 
 const (

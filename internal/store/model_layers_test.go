@@ -37,10 +37,11 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	}
 
 	physical := PhysicalModel{
-		Name:    "qwen-3.7-max",
-		Sources: []RouteReference{{RouteID: "route-b"}, {RouteID: "route-a"}},
-		Policy:  StrategySpec{ID: "rotating-fallback", Config: map[string]any{"stickyLimit": 2}},
-		Profile: map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
+		Name:     "qwen-3.7-max",
+		Identity: kernel.PhysicalIdentity{CanonicalName: "qwen-3.7-max"},
+		Sources:  []RouteReference{{RouteID: "route-b", Fidelity: kernel.FidelityUnknown}, {RouteID: "route-a", Fidelity: kernel.FidelityUnknown}},
+		Policy:   StrategySpec{ID: "rotating-fallback", Config: map[string]any{"stickyLimit": 2}},
+		Profile:  map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
 	}
 	if err := s.UpsertPhysicalModel(physical); err != nil {
 		t.Fatal(err)
@@ -88,7 +89,7 @@ func TestModelLayerUpsertsAreAtomicAndValidateReferences(t *testing.T) {
 	if err := s.UpsertCatalogModel(UpsertCatalogModelInput{ID: "route-a", ProviderNodeID: "node-a", Kind: "discovered", ExternalID: "a", DisplayName: "A"}); err != nil {
 		t.Fatal(err)
 	}
-	base := PhysicalModel{Name: "model-a", Sources: []RouteReference{{RouteID: "route-a"}}, Enabled: true}
+	base := PhysicalModel{Name: "model-a", Identity: kernel.PhysicalIdentity{CanonicalName: "model-a"}, Sources: []RouteReference{{RouteID: "route-a", Fidelity: kernel.FidelityUnknown}}, Enabled: true}
 	if err := s.UpsertPhysicalModel(base); err != nil {
 		t.Fatal(err)
 	}

@@ -96,6 +96,8 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.ID, "discoverable": strconv.FormatBool(value.Discoverable)})
 			f.extra["name"] = value.Name
 			f.extra["profile"] = value.Profile
+			f.extra["identity"] = value.Identity
+			f.extra["limits"] = value.Limits
 			f.extra["enabled"] = value.Enabled
 			f.typedSources = append([]routeReference(nil), value.Sources...)
 			return f
@@ -445,6 +447,12 @@ func (f *formState) Params() (map[string]any, error) {
 		delete(params, "policy")
 		params["policy"] = strategySpec{ID: policy}
 		params["sources"] = append([]routeReference(nil), f.typedSources...)
+		if identity, ok := f.extra["identity"]; ok {
+			params["identity"] = identity
+		}
+		if limits, ok := f.extra["limits"]; ok {
+			params["limits"] = limits
+		}
 		if _, ok := params["enabled"]; !ok {
 			params["enabled"] = true
 		}

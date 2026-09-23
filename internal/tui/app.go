@@ -1140,7 +1140,7 @@ func (m *app) toggleExposure() tea.Cmd {
 		value.Discoverable = !value.Discoverable
 		m.loading = true
 		m.status = "updating physical model exposure…"
-		return m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "sources": value.Sources, "policy": value.Policy, "profile": value.Profile, "discoverable": value.Discoverable, "enabled": value.Enabled})
+		return m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "identity": value.Identity, "sources": value.Sources, "policy": value.Policy, "profile": value.Profile, "limits": value.Limits, "discoverable": value.Discoverable, "enabled": value.Enabled})
 	case comboModel:
 		value.Discoverable = !value.Discoverable
 		m.loading = true

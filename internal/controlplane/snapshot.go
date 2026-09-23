@@ -48,7 +48,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		input.RouteGroups[baseID] = append(input.RouteGroups[baseID], row.ID)
 	}
 	for _, row := range physicalRows {
-		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: kernelStrategy(row.Policy.ID), StickyLimit: strategyInt(row.Policy.Config, "stickyLimit", 1)}
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: kernelStrategy(row.Policy.ID), StickyLimit: strategyInt(row.Policy.Config, "stickyLimit", 1), Identity: row.Identity}
 		for _, source := range row.Sources {
 			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberRouteGroup, ID: source.RouteID})
 		}

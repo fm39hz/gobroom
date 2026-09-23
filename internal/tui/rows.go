@@ -38,7 +38,8 @@ type discoveredRoute struct {
 }
 
 type routeReference struct {
-	RouteID string `json:"routeId"`
+	RouteID  string `json:"routeId"`
+	Fidelity string `json:"fidelity,omitempty"`
 }
 type modelReference struct {
 	Kind string `json:"kind"`
@@ -51,9 +52,11 @@ type strategySpec struct {
 
 type physicalModel struct {
 	Name         string                `json:"name"`
+	Identity     map[string]any        `json:"identity,omitempty"`
 	Sources      []routeReference      `json:"sources"`
 	Policy       strategySpec          `json:"policy"`
 	Profile      map[string]capability `json:"profile,omitempty"`
+	Limits       map[string]any        `json:"limits,omitempty"`
 	Discoverable bool                  `json:"discoverable"`
 	Enabled      bool                  `json:"enabled"`
 }
