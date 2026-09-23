@@ -21,6 +21,7 @@ type Kernel struct {
 	ErrorClassifiers  map[string]ErrorClassifier
 	Events            chan UsageEvent
 	ResolveCredential CredentialResolver
+	RefreshCredential CredentialRefresher
 	closed            atomic.Bool
 }
 
@@ -161,6 +162,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					continue
 				}
 			}
+			refreshed := false
+		retryUpstream:
 			upstream, err := adapter.Prepare(ctx, req, candidate, selectedCredential)
 			if err != nil {
 				k.Scheduler.Release(candidate)
@@ -177,6 +180,15 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					feedback.MarkFailure(candidate, kernelErrorClass(err), err)
 				}
 				continue
+			}
+			if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil {
+				refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
+				if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {
+					_ = response.Body.Close()
+					selectedCredential = refreshedCredential
+					refreshed = true
+					goto retryUpstream
+				}
 			}
 			if response.Status >= 400 {
 				k.Scheduler.Release(candidate)

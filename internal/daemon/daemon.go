@@ -150,6 +150,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 		return flow.Resolve(context.Background(), provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 	}
+	d.kernel.RefreshCredential = func(ctx context.Context, route kernel.Route, current kernel.Credential) (kernel.Credential, error) {
+		flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(current.Type))
+		if !ok {
+			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", current.Type)
+		}
+		return flow.Refresh(ctx, current)
+	}
 	healthEvents := make(chan healthEvent, 256)
 	d.policy.Health.SetObserver(func(route kernel.Route, state runtimehealth.RouteHealth) {
 		select {

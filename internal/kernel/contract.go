@@ -290,9 +290,12 @@ type Credential struct {
 	ConnectionID string
 	Type         string
 	Secret       string
+	RefreshToken string
+	ExpiresAt    time.Time
 }
 
 type CredentialResolver func(context.Context, Route) (Credential, error)
+type CredentialRefresher func(context.Context, Route, Credential) (Credential, error)
 
 type StreamHooks struct {
 	OnFirstByte func(time.Time)
