@@ -36,3 +36,20 @@ func TestEligibleRejectsTokenBudgetOverflow(t *testing.T) {
 		t.Fatalf("expected output limit rejection, ok=%v reason=%q", ok, reason)
 	}
 }
+
+func TestProjectProfilesSeparatesGuaranteedAndAvailable(t *testing.T) {
+	routes := []Route{
+		{Profile: CapabilityProfile{"input.image": {State: SupportNative}}, Limits: TokenLimits{MaxInputTokens: 200000, MaxTotalTokens: 250000}},
+		{Profile: CapabilityProfile{"input.image": {State: SupportUnsupported}}, Limits: TokenLimits{MaxInputTokens: 100000, MaxTotalTokens: 128000}},
+	}
+	projection := ProjectProfiles(routes)
+	if projection.Available[CapabilityVision].State != SupportNative {
+		t.Fatalf("available=%#v", projection.Available)
+	}
+	if projection.Guaranteed[CapabilityVision].State != SupportUnknown {
+		t.Fatalf("guaranteed=%#v", projection.Guaranteed)
+	}
+	if projection.Limits.MaxInputTokens != 100000 || projection.AvailableLimits.MaxInputTokens != 200000 {
+		t.Fatalf("limits=%#v/%#v", projection.Limits, projection.AvailableLimits)
+	}
+}

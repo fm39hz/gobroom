@@ -3,6 +3,7 @@ package kernel
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -59,6 +60,121 @@ type PhysicalIdentity struct {
 	Family        string `json:"family,omitempty"`
 	Revision      string `json:"revision,omitempty"`
 	Pinned        bool   `json:"pinned,omitempty"`
+}
+
+type ProfileProjection struct {
+	Declared        CapabilityProfile `json:"declared"`
+	Guaranteed      CapabilityProfile `json:"guaranteed"`
+	Available       CapabilityProfile `json:"available"`
+	Limits          TokenLimits       `json:"guaranteedLimits"`
+	AvailableLimits TokenLimits       `json:"availableLimits"`
+}
+
+// ProjectProfiles derives semantic projections from active source routes. A
+// guaranteed capability is present on every route; an available capability is
+// present on at least one route. Limits are conservative for guaranteed use
+// and optimistic only for the explicitly available view.
+func ProjectProfiles(routes []Route) ProfileProjection {
+	projection := ProfileProjection{Declared: CapabilityProfile{}, Guaranteed: CapabilityProfile{}, Available: CapabilityProfile{}}
+	if len(routes) == 0 {
+		return projection
+	}
+	for _, route := range routes {
+		for name, capability := range route.Profile {
+			if existing, ok := projection.Declared[name]; !ok || capabilityRank(capability.State) > capabilityRank(existing.State) {
+				projection.Declared[name] = capability
+			}
+		}
+	}
+	names := make(map[string]bool)
+	for name := range projection.Declared {
+		names[name] = true
+	}
+	for name := range names {
+		available := SupportUnsupported
+		guaranteed := SupportUnsupported
+		count := 0
+		for _, route := range routes {
+			capability, ok := route.Profile[name]
+			state := SupportUnknown
+			if ok && capability.State != "" {
+				state = capability.State
+			}
+			if capabilityRank(state) > capabilityRank(available) {
+				available = state
+			}
+			if count == 0 {
+				guaranteed = state
+			} else if guaranteed != state {
+				guaranteed = SupportUnknown
+			}
+			count++
+		}
+		projection.Available[name] = Capability{State: available}
+		projection.Guaranteed[name] = Capability{State: guaranteed}
+	}
+	projection.Limits, projection.AvailableLimits = projectLimits(routes)
+	return projection
+}
+
+func capabilityRank(state SupportState) int {
+	switch state {
+	case SupportNative:
+		return 5
+	case SupportEmulated:
+		return 4
+	case SupportConditional:
+		return 3
+	case SupportUnsupported:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func projectLimits(routes []Route) (TokenLimits, TokenLimits) {
+	guaranteed, available := TokenLimits{}, TokenLimits{}
+	inputMin, outputMin, totalMin := int64(0), int64(0), int64(0)
+	inputMax, outputMax, totalMax := int64(0), int64(0), int64(0)
+	for _, route := range routes {
+		limits := route.Limits
+		if limits.MaxInputTokens > 0 {
+			if inputMin == 0 || limits.MaxInputTokens < inputMin {
+				inputMin = limits.MaxInputTokens
+			}
+			if limits.MaxInputTokens > inputMax {
+				inputMax = limits.MaxInputTokens
+			}
+		}
+		if limits.MaxOutputTokens > 0 {
+			if outputMin == 0 || limits.MaxOutputTokens < outputMin {
+				outputMin = limits.MaxOutputTokens
+			}
+			if limits.MaxOutputTokens > outputMax {
+				outputMax = limits.MaxOutputTokens
+			}
+		}
+		if limits.MaxTotalTokens > 0 {
+			if totalMin == 0 || limits.MaxTotalTokens < totalMin {
+				totalMin = limits.MaxTotalTokens
+			}
+			if limits.MaxTotalTokens > totalMax {
+				totalMax = limits.MaxTotalTokens
+			}
+		}
+	}
+	guaranteed.MaxInputTokens, guaranteed.MaxOutputTokens, guaranteed.MaxTotalTokens = inputMin, outputMin, totalMin
+	available.MaxInputTokens, available.MaxOutputTokens, available.MaxTotalTokens = inputMax, outputMax, totalMax
+	return guaranteed, available
+}
+
+func CapabilityNames(profile CapabilityProfile) []string {
+	result := make([]string, 0, len(profile))
+	for name := range profile {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
 }
 
 const (
