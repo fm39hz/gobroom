@@ -156,6 +156,20 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		}
 	}
 	physical, combos := make([]entry, 0, len(physicalModels)), make([]entry, 0, len(comboModels))
+	routePhysical := map[string][]string{}
+	physicalUsers := map[string][]string{}
+	for _, value := range physicalModels {
+		for _, source := range value.Sources {
+			routePhysical[source.RouteID] = append(routePhysical[source.RouteID], value.Name)
+		}
+	}
+	for _, value := range comboModels {
+		for _, member := range value.Members {
+			if member.Kind == "physical" {
+				physicalUsers[member.ID] = append(physicalUsers[member.ID], value.Name)
+			}
+		}
+	}
 	for _, value := range physicalModels {
 		members := make([]string, 0, len(value.Sources))
 		for _, source := range value.Sources {
@@ -169,7 +183,7 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		if value.Discoverable {
 			visibility = "exposed in /models"
 		}
-		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\n\nEffective projection\n%s\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Profile), visibility, value.Enabled, pretty(value.Projection), strings.Join(members, "\n  ↓  "))
+		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\nReasoning    %s\nReferenced by %s\n\nEffective projection\n%s\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Profile), visibility, value.Enabled, pretty(value.Reasoning), strings.Join(physicalUsers[value.Name], ", "), pretty(value.Projection), strings.Join(members, "\n  ↓  "))
 		physical = append(physical, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d routes · %s", value.Policy.ID, len(value.Sources), visibility), detail: detail, modelRef: value.Name, modelKind: "physical", publicName: value.Name, exposed: value.Discoverable, payload: value})
 	}
 	for _, value := range comboModels {
@@ -181,8 +195,13 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		if value.Discoverable {
 			visibility = "exposed in /models"
 		}
-		detail := fmt.Sprintf("Combo model\n\nName       %s\nStrategy   %s\nExposure   %s\nEnabled    %t\n\nOrdered members\n  %s", value.Name, value.Strategy.ID, visibility, value.Enabled, strings.Join(members, "\n  ↓  "))
+		detail := fmt.Sprintf("Combo model\n\nName       %s\nStrategy   %s\nExposure   %s\nEnabled    %t\nReasoning  %s\n\nOrdered members\n  %s", value.Name, value.Strategy.ID, visibility, value.Enabled, pretty(value.Reasoning), strings.Join(members, "\n  ↓  "))
 		combos = append(combos, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d members · %s", value.Strategy.ID, len(value.Members), visibility), detail: detail, modelRef: value.Name, modelKind: "combo", publicName: value.Name, exposed: value.Discoverable, payload: value})
+	}
+	for index := range discovered {
+		if route, ok := discovered[index].payload.(discoveredRoute); ok {
+			discovered[index].detail += "\nPhysical models\n" + strings.Join(routePhysical[route.ID], ", ")
+		}
 	}
 	sort.Slice(physical, func(i, j int) bool { return physical[i].title < physical[j].title })
 	sort.Slice(combos, func(i, j int) bool { return combos[i].title < combos[j].title })
