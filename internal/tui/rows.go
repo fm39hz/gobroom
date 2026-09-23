@@ -107,6 +107,12 @@ type usageRecord struct {
 	OutputTokensPerSecond                                                        float64
 }
 
+type logRecord struct {
+	At      time.Time `json:"at"`
+	Level   string    `json:"level"`
+	Message string    `json:"message"`
+}
+
 type entry struct {
 	key, title, summary, detail, parentID string
 	routeRef                              string
@@ -332,6 +338,17 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 		for _, value := range values {
 			detail := fmt.Sprintf("Usage event\n\nModel      %s\nProvider   %s\nExternal   %s\nConnection %s\nStatus     %s\nClass      %s\nSession    %s\nLatency    %d ms\nTTFT       %d ms\nThroughput %.2f tok/s\nTokens     %d in / %d out\nCost       %.6f\nTimestamp  %s", value.LogicalModel, value.ProviderNodeID, value.ExternalModel, value.ConnectionID, value.Status, value.RequestClass, value.SessionID, value.LatencyMS, value.TTFTMS, value.OutputTokensPerSecond, value.InputTokens, value.OutputTokens, value.EstimatedCost, value.Timestamp)
 			entries = append(entries, entry{key: fmt.Sprintf("%d", value.ID), title: value.LogicalModel, summary: fmt.Sprintf("%s · %d ms", value.Status, value.LatencyMS), detail: detail, payload: value})
+		}
+		return entries, nil
+	case "logs.list":
+		var values []logRecord
+		if err := decode(&values); err != nil {
+			return nil, err
+		}
+		entries := make([]entry, 0, len(values))
+		for index, value := range values {
+			detail := fmt.Sprintf("%s [%s]\n\n%s", value.At.Format(time.RFC3339), value.Level, value.Message)
+			entries = append(entries, entry{key: fmt.Sprintf("%d", index), title: value.Level, summary: value.Message, detail: detail, payload: value})
 		}
 		return entries, nil
 	default:

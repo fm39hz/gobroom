@@ -29,6 +29,7 @@ const (
 	sectionHealth
 	sectionQuota
 	sectionUsage
+	sectionLogs
 	sectionDiscovered
 	sectionPhysical
 	sectionComboModels
@@ -48,6 +49,7 @@ var sections = []section{
 	{id: sectionHealth, label: "Health", method: "health.list"},
 	{id: sectionQuota, label: "Quota", method: "quota.list"},
 	{id: sectionUsage, label: "Usage", method: "usage.list"},
+	{id: sectionLogs, label: "Logs", method: "logs.list"},
 	{id: sectionDiscovered, label: "Discovered", method: "discovered_models.list"},
 	{id: sectionPhysical, label: "Physical", method: "physical_models.list"},
 	{id: sectionComboModels, label: "Combos", method: "combo_models.list"},
@@ -94,7 +96,7 @@ var dashboardPanes = []dashboardBlockDef{
 	}},
 	{key: "5", label: "Runtime", tabs: []dashboardPaneDef{
 		{id: dashboardRuntime, key: "health", label: "Health", sources: []sectionID{sectionHealth}, view: "health"},
-		{id: dashboardRuntime, key: "logs", label: "Logs", view: "unavailable-logs"},
+		{id: dashboardRuntime, key: "logs", label: "Logs", sources: []sectionID{sectionLogs}, view: "logs"},
 	}},
 }
 
@@ -284,8 +286,6 @@ func newApp(ipcPath string) *app {
 		status:         "connecting to daemon…",
 		loading:        true,
 	}
-	model.setPaneItems(model.contextIndex(3, 0), []entry{{key: "usage-unavailable", title: "Usage API unavailable", summary: "daemon has no usage read endpoint", detail: "Usage data is not available through the current daemon IPC contract."}})
-	model.setPaneItems(model.contextIndex(4, 1), []entry{{key: "logs-unavailable", title: "Log streaming unavailable", summary: "daemon has no log read endpoint", detail: "The TUI does not read journalctl directly. The daemon IPC contract currently has no log streaming endpoint."}})
 	return model
 }
 
@@ -932,12 +932,12 @@ func (m *app) rebuildDashboardPane(index int) tea.Cmd {
 		items, err = makeEntries("quota.list", m.raw[sectionQuota], m.providers)
 	case "usage":
 		items, err = makeEntries("usage.list", m.raw[sectionUsage], m.providers)
+	case "logs":
+		items, err = makeEntries("logs.list", m.raw[sectionLogs], m.providers)
 	case "health":
 		items, err = makeEntries("health.list", m.raw[sectionHealth], m.providers)
 	case "unavailable-usage":
 		items = []entry{{key: "usage-unavailable", title: "Usage API unavailable", summary: "daemon has no usage read endpoint", detail: "Usage data is not available through the current daemon IPC contract."}}
-	case "unavailable-logs":
-		items = []entry{{key: "logs-unavailable", title: "Log streaming unavailable", summary: "daemon has no log read endpoint", detail: "The TUI does not read journalctl directly. The daemon IPC contract currently has no log streaming endpoint."}}
 	}
 	if err != nil {
 		m.panels[index].err = err.Error()

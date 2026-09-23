@@ -45,7 +45,24 @@ type Daemon struct {
 	usageCancel         context.CancelFunc
 	mu                  sync.Mutex
 	credentialRefreshMu sync.Mutex
+	logMu               sync.RWMutex
+	logs                []LogRecord
 	stop                func()
+}
+
+type LogRecord struct {
+	At      time.Time `json:"at"`
+	Level   string    `json:"level"`
+	Message string    `json:"message"`
+}
+
+func (d *Daemon) appendLog(level, message string) {
+	d.logMu.Lock()
+	defer d.logMu.Unlock()
+	d.logs = append(d.logs, LogRecord{At: time.Now(), Level: level, Message: message})
+	if len(d.logs) > 256 {
+		d.logs = d.logs[len(d.logs)-256:]
+	}
 }
 
 type healthEvent struct {
@@ -61,6 +78,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return err
 	}
 	d.store = s
+	d.appendLog("info", "daemon starting")
 	d.server = api.NewServer(s)
 	ctx, cancel := context.WithCancel(ctx)
 	started := false
@@ -295,6 +313,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.server.Reload(); err != nil {
 			return IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 		}
+		d.appendLog("info", "snapshot reloaded")
 		return IPCResponse{ID: request.ID, OK: true, Result: d.server.Status()}
 	case "resolve":
 		name := stringParam(request.Params, "model")
@@ -354,6 +373,23 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "usage.prune":
+		cutoff := stringParam(request.Params, "before")
+		before, err := time.Parse(time.RFC3339, cutoff)
+		if err != nil {
+			return fail(request, "before must be RFC3339")
+		}
+		deleted, err := d.store.PruneUsage(before)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		d.appendLog("info", fmt.Sprintf("pruned %d usage events", deleted))
+		return success(request, map[string]any{"deleted": deleted, "before": before})
+	case "logs.list":
+		d.logMu.RLock()
+		logs := append([]LogRecord(nil), d.logs...)
+		d.logMu.RUnlock()
+		return success(request, logs)
 	case "routes.explain":
 		model := stringParam(request.Params, "model")
 		if model == "" {

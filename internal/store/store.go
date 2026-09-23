@@ -588,6 +588,20 @@ type UsageSummary struct {
 	EstimatedCost                            float64 `json:"estimatedCost"`
 }
 
+func (s *Store) PruneUsage(before time.Time) (int64, error) {
+	if before.IsZero() {
+		return 0, fmt.Errorf("retention cutoff is required")
+	}
+	result, err := s.DB.Exec(`DELETE FROM usage_events WHERE timestamp < ?`, before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.DB.Exec(`DELETE FROM usage_daily WHERE date_key < ?`, before.UTC().Format("2006-01-02")); err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 func (s *Store) UsageSummary(limit int) ([]UsageSummary, error) {
 	if limit <= 0 || limit > 366 {
 		limit = 30

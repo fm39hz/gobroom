@@ -56,7 +56,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), routeExplainCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand())
 	return root
 }
 
@@ -194,6 +194,12 @@ func healthCommand() *cobra.Command {
 func quotaCommand() *cobra.Command        { return listCommand("quota", "quota.list", nil) }
 func usageCommand() *cobra.Command        { return listCommand("usage", "usage.list", nil) }
 func usageSummaryCommand() *cobra.Command { return listCommand("usage-summary", "usage.summary", nil) }
+func usagePruneCommand() *cobra.Command {
+	var before string
+	cmd := &cobra.Command{Use: "usage-prune", Short: "prune usage before a cutoff", RunE: func(*cobra.Command, []string) error { return invoke("usage.prune", map[string]any{"before": before}) }}
+	cmd.Flags().StringVar(&before, "before", "", "RFC3339 cutoff")
+	return cmd
+}
 func routeExplainCommand() *cobra.Command {
 	var model, requestClass, sessionID string
 	cmd := &cobra.Command{Use: "route-explain", Short: "explain effective route order", RunE: func(*cobra.Command, []string) error {
