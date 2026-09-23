@@ -548,6 +548,14 @@ func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
 	return c, true
 }
 
+func (s *Store) UpdateConnectionSecret(id, secret string) error {
+	if id == "" || secret == "" {
+		return fmt.Errorf("connection ID and secret are required")
+	}
+	_, err := s.DB.Exec(`UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, secret, id)
+	return err
+}
+
 func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
 	dateKey := event.At.UTC().Format("2006-01-02")
 	tx, err := s.DB.Begin()

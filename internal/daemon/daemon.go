@@ -34,17 +34,18 @@ type Config struct {
 }
 
 type Daemon struct {
-	config      Config
-	store       *store.Store
-	server      *api.Server
-	ipc         *IPCServer
-	http        *http.Server
-	httpControl *http.Server
-	kernel      *kernel.Kernel
-	policy      *runtimehealth.PolicyGate
-	usageCancel context.CancelFunc
-	mu          sync.Mutex
-	stop        func()
+	config              Config
+	store               *store.Store
+	server              *api.Server
+	ipc                 *IPCServer
+	http                *http.Server
+	httpControl         *http.Server
+	kernel              *kernel.Kernel
+	policy              *runtimehealth.PolicyGate
+	usageCancel         context.CancelFunc
+	mu                  sync.Mutex
+	credentialRefreshMu sync.Mutex
+	stop                func()
 }
 
 type healthEvent struct {
@@ -151,11 +152,28 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return flow.Resolve(context.Background(), provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 	}
 	d.kernel.RefreshCredential = func(ctx context.Context, route kernel.Route, current kernel.Credential) (kernel.Credential, error) {
+		d.credentialRefreshMu.Lock()
+		defer d.credentialRefreshMu.Unlock()
 		flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(current.Type))
 		if !ok {
 			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", current.Type)
 		}
-		return flow.Refresh(ctx, current)
+		refreshed, err := flow.Refresh(ctx, current)
+		if err != nil {
+			return kernel.Credential{}, err
+		}
+		secret := refreshed.Secret
+		if refreshed.RefreshToken != "" {
+			encoded, encodeErr := json.Marshal(map[string]any{"access_token": refreshed.Secret, "refresh_token": refreshed.RefreshToken, "expires_at": refreshed.ExpiresAt})
+			if encodeErr != nil {
+				return kernel.Credential{}, encodeErr
+			}
+			secret = string(encoded)
+		}
+		if err := d.store.UpdateConnectionSecret(route.CredentialID, secret); err != nil {
+			return kernel.Credential{}, err
+		}
+		return refreshed, nil
 	}
 	healthEvents := make(chan healthEvent, 256)
 	d.policy.Health.SetObserver(func(route kernel.Route, state runtimehealth.RouteHealth) {
