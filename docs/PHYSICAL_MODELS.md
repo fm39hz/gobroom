@@ -1,9 +1,10 @@
 # Physical model contract
 
 Status: target domain, management and consumption contract. Typed Physical and
-Combo persistence exists, but the profile, evidence, requirement compiler and
-cross-protocol reasoning translation described here are not complete. Track
-implementation status in [the roadmap](IMPLEMENTATION_PLAN.md).
+Combo persistence exists. The kernel now has typed support states and a
+request-requirement compiler for hard eligibility; profile persistence,
+identity/evidence/token-limit projections and cross-protocol reasoning
+translation remain incomplete. Track implementation status in [the roadmap](IMPLEMENTATION_PLAN.md).
 
 ## Purpose
 

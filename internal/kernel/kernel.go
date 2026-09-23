@@ -129,7 +129,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 		}
 		for _, candidate := range routes {
-			if !supportsRequest(candidate, req) {
+			if eligible, _ := Eligible(candidate, CompileRequirements(req)); !eligible {
 				continue
 			}
 			if !protocolMatchesRequest(req.SourceFormat, candidate.Protocol) {
@@ -319,24 +319,6 @@ func classifyOutcome(adapter ProviderAdapter, status int, headers http.Header, b
 		outcome.Cause, outcome.Retry = CauseUnknown, RetryUnknown
 	}
 	return outcome
-}
-
-func supportsRequest(route Route, req NormalizedRequest) bool {
-	if len(route.Capabilities) == 0 {
-		return true
-	}
-	checks := map[string]bool{
-		"vision": req.Modalities.Vision,
-		"audio":  req.Modalities.AudioInput,
-		"video":  req.Modalities.VideoInput,
-		"pdf":    req.Modalities.PDF,
-	}
-	for capability, needed := range checks {
-		if needed && !route.Capabilities[capability] {
-			return false
-		}
-	}
-	return true
 }
 
 func kernelErrorClass(err error) ErrorClass {

@@ -45,6 +45,7 @@ type Route struct {
 	ErrorClassifierID string
 	QuotaSourceID     string
 	Capabilities      map[string]bool
+	Profile           CapabilityProfile
 	Weight            int
 	Enabled           bool
 	BaseURL           string
