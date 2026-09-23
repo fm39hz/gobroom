@@ -55,6 +55,12 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 	for key, value := range request.Raw {
 		body[key] = value
 	}
+	if request.SourceFormat != normalize.FormatOpenAIResponses {
+		delete(body, "reasoning_effort")
+		for key, value := range normalize.OpenAIResponsesReasoning(request.Thinking) {
+			body[key] = value
+		}
+	}
 	body["model"] = route.ExternalModel
 	body["stream"] = request.Stream
 	data, err := json.Marshal(body)

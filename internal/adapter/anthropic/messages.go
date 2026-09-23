@@ -89,24 +89,13 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 }
 
 func applyAnthropicThinking(body map[string]any, intent normalize.ThinkingIntent) {
-	switch intent.Mode {
-	case "inherit", "":
-		return
-	case "disabled":
-		body["thinking"] = map[string]any{"type": "disabled"}
-	case "budget":
-		if intent.BudgetTokens > 0 {
-			body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": intent.BudgetTokens}
-			if max, ok := body["max_tokens"].(float64); !ok || int(max) <= intent.BudgetTokens {
-				body["max_tokens"] = intent.BudgetTokens + 1024
-			}
-		}
-	case "auto":
-		body["thinking"] = map[string]any{"type": "adaptive"}
-	default:
-		body["thinking"] = map[string]any{"type": "adaptive"}
-		if intent.Effort != "" {
-			body["output_config"] = map[string]any{"effort": intent.Effort}
+	translated := normalize.AnthropicReasoning(intent)
+	for key, value := range translated {
+		body[key] = value
+	}
+	if intent.Mode == "budget" && intent.BudgetTokens > 0 {
+		if max, ok := body["max_tokens"].(float64); !ok || int(max) <= intent.BudgetTokens {
+			body["max_tokens"] = intent.BudgetTokens + 1024
 		}
 	}
 }

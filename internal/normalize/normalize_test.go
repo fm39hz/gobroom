@@ -63,3 +63,22 @@ func TestAbsentReasoningMeansInherit(t *testing.T) {
 		t.Fatalf("thinking=%#v", result.Request.Thinking)
 	}
 }
+
+func TestReasoningPrecedenceAndDialectTranslation(t *testing.T) {
+	intent := ResolveReasoning(ReasoningPolicy{Explicit: ThinkingIntent{Mode: "inherit"}, Preset: ThinkingIntent{Mode: "level", Effort: "high", Source: "preset"}, Combo: ThinkingIntent{Mode: "level", Effort: "low"}})
+	if intent.Effort != "high" || intent.Source != "preset" {
+		t.Fatalf("resolved=%#v", intent)
+	}
+	anthropic := AnthropicReasoning(intent)
+	if anthropic["output_config"] == nil || anthropic["thinking"] == nil {
+		t.Fatalf("anthropic=%#v", anthropic)
+	}
+	responses := OpenAIResponsesReasoning(intent)
+	if responses["reasoning"] == nil {
+		t.Fatalf("responses=%#v", responses)
+	}
+	gemini := GeminiReasoning(intent)
+	if gemini["generationConfig"] == nil {
+		t.Fatalf("gemini=%#v", gemini)
+	}
+}
