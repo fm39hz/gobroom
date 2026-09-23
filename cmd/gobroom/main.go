@@ -56,7 +56,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand())
 	return root
 }
 
@@ -199,6 +199,19 @@ func usagePruneCommand() *cobra.Command {
 	cmd := &cobra.Command{Use: "usage-prune", Short: "prune usage before a cutoff", RunE: func(*cobra.Command, []string) error { return invoke("usage.prune", map[string]any{"before": before}) }}
 	cmd.Flags().StringVar(&before, "before", "", "RFC3339 cutoff")
 	return cmd
+}
+
+func configExportCommand() *cobra.Command {
+	return listCommand("config-export", "config.export", nil)
+}
+func configValidateCommand() *cobra.Command {
+	return &cobra.Command{Use: "config-validate", Short: "validate config bundle JSON", RunE: func(cmd *cobra.Command, _ []string) error {
+		var raw map[string]any
+		if err := json.NewDecoder(cmd.InOrStdin()).Decode(&raw); err != nil {
+			return err
+		}
+		return invoke("config.validate", raw)
+	}}
 }
 func routeExplainCommand() *cobra.Command {
 	var model, requestClass, sessionID string

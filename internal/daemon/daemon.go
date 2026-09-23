@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/api"
+	"github.com/fm39hz/gobroom/internal/controlplane"
 	"github.com/fm39hz/gobroom/internal/discovery"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -309,6 +310,21 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	switch request.Method {
 	case "status":
 		return IPCResponse{ID: request.ID, OK: true, Result: d.server.Status()}
+	case "config.export":
+		bundle, err := controlplane.ExportBundle(d.store)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, bundle)
+	case "config.validate":
+		var bundle controlplane.ConfigBundle
+		if err := decodeParams(request.Params, &bundle); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := controlplane.ValidateBundle(bundle); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]any{"valid": true, "version": bundle.Version})
 	case "reload":
 		if err := d.server.Reload(); err != nil {
 			return IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
