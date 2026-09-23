@@ -19,11 +19,12 @@ import (
 )
 
 type Server struct {
-	store      *store.Store
-	control    *controlplane.Manager
-	started    time.Time
-	executor   func(context.Context, normalize.Request, http.ResponseWriter) error
-	reloadHook func() error
+	store          *store.Store
+	control        *controlplane.Manager
+	started        time.Time
+	executor       func(context.Context, normalize.Request, http.ResponseWriter) error
+	reloadHook     func() error
+	dataPlaneToken string
 }
 
 type HandlerOptions struct {
@@ -54,12 +55,23 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 		r.HandleFunc("/api/custom-models", s.customModels)
 	}
 	if options.DataPlane {
-		r.Get("/v1/models", s.models)
-		r.Post("/v1/chat/completions", s.chatCompletions)
-		r.Post("/v1/responses", s.chatCompletions)
-		r.Post("/v1/messages", s.chatCompletions)
+		r.Get("/v1/models", s.dataPlane(s.models))
+		r.Post("/v1/chat/completions", s.dataPlane(s.chatCompletions))
+		r.Post("/v1/responses", s.dataPlane(s.chatCompletions))
+		r.Post("/v1/messages", s.dataPlane(s.chatCompletions))
 	}
 	return logging(r)
+}
+
+func (s *Server) SetDataPlaneToken(token string) { s.dataPlaneToken = token }
+func (s *Server) dataPlane(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.dataPlaneToken != "" && r.Header.Get("Authorization") != "Bearer "+s.dataPlaneToken {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "data plane authentication required"}})
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) Status() map[string]any {

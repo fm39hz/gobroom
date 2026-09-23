@@ -83,6 +83,29 @@ func TestProviderPrefixCollisionIsRejected(t *testing.T) {
 	}
 }
 
+func TestDataPlaneBearerTokenIsOptionalButEnforcedWhenConfigured(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	server := NewServer(s)
+	server.SetDataPlaneToken("secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	rec := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated status=%d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec = httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authenticated status=%d", rec.Code)
+	}
+}
+
 func TestOpenAIChatVerticalSliceReachesUpstream(t *testing.T) {
 	upstreamHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer secret" {

@@ -69,7 +69,7 @@ but must not introduce provider-specific branches into the kernel.
 | M11 | Optional middleware | Planned/deferred | Not on the critical path. Revisit only for demonstrated need; keep opt-in, bounded and unable to mutate route identity or bypass cancellation. |
 | M12 | Secondary APIs and integrations | Out of core | Embeddings/media/search, tunnels, MITM/DNS and IDE integrations remain separate services/sidecars, not kernel milestones. |
 | M13 | Canonical configuration bundle and sync | Done (single-writer core) | Versioned secret-free typed bundle export, validation, diff/dry-run and atomic apply/import are implemented. Existing connection secrets are preserved by stable connection ID and never exported. Multi-writer conflict-free sync is intentionally not promised. |
-| M14 | Portable operations and remote hosting | Planned | Make paths/listeners/auth explicit; structured stdout/stderr should work with journald. Protect remotely exposed data plane with client auth and TLS/reverse-proxy guidance; keep control API disabled by default. Define a storage interface; SQLite remains default, and any alternate backend must be named and tested. |
+| M14 | Portable operations and remote hosting | Partial | Explicit paths/listeners exist, control HTTP remains disabled by default, bounded logs/retention are available, and optional bearer auth now protects the data plane. Finish structured journal guidance, TLS/reverse-proxy contract, storage interface and alternate backend tests. |
 
 ## Milestone review and recommended order
 

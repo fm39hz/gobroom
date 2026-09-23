@@ -30,6 +30,7 @@ type Config struct {
 	HTTPAddr            string
 	HTTPControl         bool
 	HTTPControlAddr     string
+	HTTPToken           string
 	ProviderManifestDir string
 	QuotaPolling        bool
 }
@@ -81,6 +82,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.store = s
 	d.appendLog("info", "daemon starting")
 	d.server = api.NewServer(s)
+	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	started := false
 	defer func() {
