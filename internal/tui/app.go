@@ -228,6 +228,7 @@ type app struct {
 	sourceItems       []entry
 
 	status        string
+	previewExtra  string
 	lastError     string
 	loading       bool
 	confirmTitle  string
@@ -382,6 +383,9 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.form = nil
 		m.lastError = ""
 		m.status = message.method + " completed"
+		if message.method == "routes.explain" {
+			m.previewExtra = pretty(json.RawMessage(message.result))
+		}
 		if message.method == "providers.refresh_models" {
 			var result struct {
 				Models int
@@ -619,6 +623,14 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m, m.refreshPane(m.activePanel)
+	case "x":
+		selected := m.selectedEntry()
+		if selected == nil || !selected.exposed || selected.publicName == "" {
+			m.status = "explain order only for an exposed model"
+			return m, nil
+		}
+		m.status = "loading effective route order…"
+		return m, m.invoke("routes.explain", map[string]any{"model": selected.publicName})
 	case "n":
 		m.form = m.newModelForm()
 		if m.form == nil {
@@ -1039,11 +1051,15 @@ func (m *app) mainPreview(selected entry) string {
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 	case physicalModel:
-		actions = append(actions, "e            edit sources and policy", "p            toggle /v1/models exposure", "c            compose into Combo", "d            delete Physical")
+		actions = append(actions, "e            edit sources and policy", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose into Combo", "d            delete Physical")
 	case comboModel:
-		actions = append(actions, "e            edit members and strategy", "p            toggle /v1/models exposure", "c            compose nested Combo", "d            delete Combo")
+		actions = append(actions, "e            edit members and strategy", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose nested Combo", "d            delete Combo")
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, selected.detail, "", muted.Render("Actions"), muted.Render(strings.Join(actions, "\n")))
+	preview := selected.detail
+	if m.previewExtra != "" {
+		preview += "\n\nEffective route order\n" + m.previewExtra
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, preview, "", muted.Render("Actions"), muted.Render(strings.Join(actions, "\n")))
 }
 
 func (m *app) resize() {
