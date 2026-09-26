@@ -226,6 +226,8 @@ type app struct {
 	raw               map[sectionID]json.RawMessage
 	pickerSelected    map[string]bool
 	sourceItems       []entry
+	pickerTarget      string
+	pickerModel       any
 
 	status        string
 	previewExtra  string
@@ -623,6 +625,8 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m, m.refreshPane(m.activePanel)
+	case "m":
+		return m, m.openTypedMemberPicker()
 	case "x":
 		selected := m.selectedEntry()
 		if selected == nil || !selected.exposed || selected.publicName == "" {
@@ -1051,9 +1055,9 @@ func (m *app) mainPreview(selected entry) string {
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 	case physicalModel:
-		actions = append(actions, "e            edit sources and policy", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose into Combo", "d            delete Physical")
+		actions = append(actions, "e            edit policy", "m            edit source candidates", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose into Combo", "d            delete Physical")
 	case comboModel:
-		actions = append(actions, "e            edit members and strategy", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose nested Combo", "d            delete Combo")
+		actions = append(actions, "e            edit strategy", "m            edit members", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose nested Combo", "d            delete Combo")
 	}
 	preview := selected.detail
 	if m.previewExtra != "" {
@@ -1099,6 +1103,56 @@ func (m *app) openSourcePicker() tea.Cmd {
 	return nil
 }
 
+func (m *app) openTypedMemberPicker() tea.Cmd {
+	selected := m.selectedEntry()
+	if selected == nil {
+		m.status = "focus a Physical or Combo first"
+		return nil
+	}
+	workspace, err := (modelWorkspaceClient{providers: m.providers}).Build(m.raw[sectionDiscovered], m.raw[sectionPhysical], m.raw[sectionComboModels])
+	if err != nil {
+		m.status = err.Error()
+		return nil
+	}
+	clear(m.pickerSelected)
+	switch value := selected.payload.(type) {
+	case physicalModel:
+		m.pickerTarget, m.pickerModel = "physical", value
+		m.sourceItems = make([]entry, 0, len(workspace.Discovered))
+		for _, item := range workspace.Discovered {
+			if route, ok := item.payload.(discoveredRoute); ok {
+				for _, source := range value.Sources {
+					if source.RouteID == route.ID {
+						m.pickerSelected[item.key] = true
+					}
+				}
+				m.sourceItems = append(m.sourceItems, item)
+			}
+		}
+	case comboModel:
+		m.pickerTarget, m.pickerModel = "combo", value
+		m.sourceItems = append(append([]entry(nil), workspace.Physical...), workspace.Combos...)
+		for _, item := range m.sourceItems {
+			for _, member := range value.Members {
+				if member.ID == item.modelRef && member.Kind == item.modelKind {
+					m.pickerSelected[item.key] = true
+				}
+			}
+		}
+	default:
+		m.status = "focus a typed Physical or Combo first"
+		return nil
+	}
+	m.mode = modeSourcePicker
+	m.picker.GoToStart()
+	converted := make([]list.Item, 0, len(m.sourceItems))
+	for _, item := range m.sourceItems {
+		converted = append(converted, item)
+	}
+	_ = m.picker.SetItems(converted)
+	return nil
+}
+
 func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keyText := msg.String()
 	if m.picker.FilterState() == list.Filtering {
@@ -1109,10 +1163,43 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch keyText {
 	case "esc", "q":
 		m.mode = modeBrowse
+		m.pickerTarget = ""
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
 	case "enter":
+		if m.pickerTarget == "physical" {
+			value := m.pickerModel.(physicalModel)
+			sources := make([]routeReference, 0)
+			for _, item := range m.sourceItems {
+				if m.pickerSelected[item.key] {
+					if route, ok := item.payload.(discoveredRoute); ok {
+						sources = append(sources, routeReference{RouteID: route.ID})
+					}
+				}
+			}
+			if len(sources) == 0 {
+				m.status = "select at least one source"
+				return m, nil
+			}
+			m.mode, m.pickerTarget, m.loading = modeBrowse, "", true
+			return m, m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "identity": value.Identity, "sources": sources, "policy": value.Policy, "profile": value.Profile, "limits": value.Limits, "reasoning": value.Reasoning, "discoverable": value.Discoverable, "enabled": value.Enabled})
+		}
+		if m.pickerTarget == "combo" {
+			value := m.pickerModel.(comboModel)
+			members := make([]modelReference, 0)
+			for _, item := range m.sourceItems {
+				if m.pickerSelected[item.key] {
+					members = append(members, modelReference{Kind: item.modelKind, ID: item.modelRef})
+				}
+			}
+			if len(members) == 0 {
+				m.status = "select at least one member"
+				return m, nil
+			}
+			m.mode, m.pickerTarget, m.loading = modeBrowse, "", true
+			return m, m.invoke("combo_models.upsert", map[string]any{"name": value.Name, "members": members, "strategy": value.Strategy, "reasoning": value.Reasoning, "discoverable": value.Discoverable, "enabled": value.Enabled})
+		}
 		refs := make([]string, 0, len(m.pickerSelected))
 		for _, source := range m.sourceItems {
 			if m.pickerSelected[source.key] && source.routeRef != "" {
