@@ -64,6 +64,7 @@ func cloneNode(node ModelNode) ModelNode {
 }
 
 func ResolveModelNode(s Snapshot, name string) (ModelNode, error) {
+	s.Nodes = cloneNodes(s.Nodes)
 	public, ok := s.PublicModels[name]
 	if !ok {
 		return ModelNode{}, ErrModelNotPublished
@@ -76,6 +77,14 @@ func ResolveModelNode(s Snapshot, name string) (ModelNode, error) {
 		return ModelNode{}, fmt.Errorf("public model %q targets non-model reference %q", name, public.TargetRef)
 	}
 	return cloneNode(node), nil
+}
+
+func cloneNodes(nodes map[string]ModelNode) map[string]ModelNode {
+	result := make(map[string]ModelNode, len(nodes))
+	for id, node := range nodes {
+		result[id] = cloneNode(node)
+	}
+	return result
 }
 
 func resolveRouteMember(s Snapshot, member MemberRef) []Route {
