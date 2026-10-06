@@ -4,6 +4,10 @@ Status: design constraints for implementation. Implemented portions are marked
 in the [roadmap](IMPLEMENTATION_PLAN.md); this document does not imply that
 every listed policy is already complete.
 
+The normative boundaries for operation-neutral invocation, route
+compatibility, extension stages and architecture change simulations are in
+the [solution architecture contract](SOLUTION_ARCHITECTURE.md).
+
 ## Routing policy
 
 Keep static routing configuration in a validated immutable snapshot. The

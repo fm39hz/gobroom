@@ -1,105 +1,151 @@
 # GoBroom
 
-GoBroom is a local AI gateway daemon with an OpenAI-compatible HTTP data plane
-and a separate local control plane. The daemon owns configuration, routing,
-provider execution and runtime state; the CLI and TUI are clients and are not
-required while serving requests.
+**One model lineup for every provider you use.**
 
-The product vision is a lightweight, portable gateway that makes provider
-connections, discovered routes, physical models and combo models easy to
-manage without conflating those layers.
-SQLite, stdout/journal logging and loopback-only serving are simple defaults,
-not assumptions the domain is built around. See [the vision](docs/VISION.md)
-and [roadmap](docs/IMPLEMENTATION_PLAN.md) for boundaries and current gaps;
-[use cases](docs/USE_CASES.md) records the intended workflows and their
-acceptance status.
+GoBroom brings provider connections, model catalogs and routing policies into a
+single lightweight gateway. Give equivalent upstream routes one stable identity,
+compose those models into roles such as `junior` or `tech-lead`, and expose the
+names your tools should use. The daemon serves requests independently; the
+bundled CLI and keyboard-first TUI are simply ways to operate it.
 
-The project focuses on the useful provider/model-routing workflow: configure a
-provider node and its connections, discover provider routes, group equivalent
-routes into physical models, compose role/use-case combos, then expose the
-model names clients may discover and use.
+```text
+provider connections → discovered routes → physical models → role combos
+                                                        └→ /v1/models
+```
 
-## Implemented today
+## Models that match how you think
 
-- Go daemon, SQLite state, Unix-domain-socket IPC and optional HTTP control API;
-- loopback HTTP data plane, default `127.0.0.1:2712`;
-- `/v1/models`, `/v1/chat/completions`, `/v1/responses` and `/v1/messages` routes;
-- provider nodes, multiple credential connections, selected-connection
-  model-list test/review, selective catalog import and per-connection
-  entitlement-aware routing, plus provider-scoped custom IDs;
-- discovered routes grouped as Physical models, nested role/use-case Combos,
-  and exposure stored directly on routable models;
-- JSON provider manifests composed from registered endpoint, auth, codec,
-  discovery, quota and error-classification primitives;
-- OpenAI Chat, OpenAI Responses and Anthropic Messages adapters, with the
-  protocol/streaming limits described in the compatibility matrix;
-- immutable route snapshots, connection-aware scheduling, health cooldowns,
-  persisted quota snapshots, and asynchronous compact usage events;
-- Cobra CLI and an alternate-screen Bubble Tea dashboard with independently
-  framed blocks and daemon-only IPC access. The Models workspace manages
-  Discovered, Physical and Combos as separate tabs, with typed CRUD, inline
-  exposure, context-local filtering and LazyGit-style block/item/tab/depth
-  navigation. Combo editing has separate ordered-member/candidate panes, typed
-  weights and a searchable strategy catalog; full edit → expose → `/v1/models`
-  acceptance and some operational views remain; see
-  [the TUI UX contract](docs/TUI_UX.md).
+Provider model IDs often encode account, gateway and product-specific prefixes.
+Those strings matter when calling an upstream, but they are not the model you
+want to manage:
 
-The existence of an endpoint or an adapter does not imply complete protocol
-parity. In particular, OAuth refresh flows, comprehensive cross-protocol SSE
-semantics, provider-specific quota integrations and a finished interactive TUI
-remain unfinished; see [current status](docs/IMPLEMENTATION_PLAN.md).
+```text
+xkiro/qwen/qwen3.7-max:free ─┐
+ocg/qwen3.7-max              ├── qwen-3.7-max
+g4f/Qwen:qwen3.7-max        ─┘       │
+                                     ├── junior
+                                     ├── senior
+                                     └── tech-lead
+```
 
-## Build and run
+GoBroom keeps the layers distinct and connected:
 
-Requirements: Go 1.27+ and Unix domain sockets on Unix-like systems.
+- **Discovered routes** retain the exact upstream model ID and the connection
+  that reported it. Discovery is evidence, not an assumption that every account
+  can use every model.
+- **Physical models** give equivalent routes one canonical identity. Their
+  sources carry explicit identity/fidelity evidence and capability profiles,
+  including context limits, modalities and reasoning support.
+- **Combos** are real, routable models made from ordered Physical or Combo
+  members. Their strategy, fallback behavior and member options are typed
+  policy—not hidden strings or a second publishing system.
+
+Manage each layer directly, while moving through the model graph in one
+workflow. Search source prefixes when curating a Combo, see the canonical model
+identity, and decide which Physical models and Combos are discoverable. The
+public model list is a projection of that choice; there is no separate alias
+catalog to keep synchronized.
+
+## Route by what a request needs
+
+Before fallback or ranking, GoBroom evaluates whether a route can satisfy the
+request: operation, tools, modalities, context, reasoning intent and continuity.
+Unknown capability evidence stays unknown; it is not silently treated as
+support. Strategy then selects among eligible routes using the policy configured
+at each model layer.
+
+Health and priority come from actual traffic. Typed outcomes distinguish
+authentication failures, unavailable models, throttling, quota exhaustion and
+transient upstream errors. Reset windows, latency and throughput can inform
+eligibility and bounded adaptive ordering. Synthetic health checks and quota
+polling are opt-in, not background noise on the default path.
+
+Retries and fallback stop when a response is committed to the client. A stream
+does not switch models halfway through. Translation compatibility is explicit:
+unsupported or materially lossy paths are rejected unless the model policy
+allows them.
+
+## A semantic boundary between clients and providers
+
+Clients and upstreams do not have to share a wire protocol. GoBroom decodes
+requests into a typed invocation, routes that semantic request, and converts
+the response through canonical events:
+
+```text
+client wire → ingress codec → typed invocation → routing policy
+            → provider composition → semantic response events
+            → client renderer → client wire
+```
+
+The request contract keeps prompt layers, tools, thinking effort/budget,
+continuity state, generation options and hard requirements distinct. Provider
+signatures and opaque continuation artifacts remain scoped to the provider and
+session that issued them. This gives provider codecs room to translate only what
+they understand and report what cannot be preserved.
+
+The data plane includes OpenAI Chat Completions, OpenAI Responses,
+Anthropic Messages and `/v1/models` endpoints. Provider definitions compose
+reusable primitives for endpoint resolution, transport, authentication,
+request encoding, response decoding, model discovery, error classification,
+usage and quota evidence. A provider-specific quirk belongs behind one of those
+contracts; it does not require a provider-name branch in the routing kernel.
+
+## A daemon you can operate your way
+
+- **Daemon-first:** `gobroomd` owns configuration and runtime state. Serving
+  requests does not depend on an open TUI or CLI.
+- **Keyboard-first TUI:** move between named management panes, search and edit
+  models, connections and combos without treating the screen as a dashboard.
+- **CLI:** inspect, automate and administer the same domain through local IPC.
+- **HTTP gateway:** connect existing clients to the data plane; optionally
+  protect remote access with a bearer token and TLS at the deployment boundary.
+- **Portable configuration:** export a versioned, secret-free bundle, review a
+  diff, then apply it atomically. Credentials remain separate from the bundle.
+- **Lightweight operations:** SQLite, loopback HTTP, Unix-domain control IPC and
+  structured stdout/stderr logging work without external services. Under
+  systemd, logs are available through `journalctl`.
+
+## Get started
+
+Requirements: Go 1.27+ and Unix-domain socket support on Unix-like systems.
+
+```sh
+make build-all
+./gobroomd
+```
+
+In another terminal:
+
+```sh
+./gobroom           # open the bundled TUI
+./gobroom status    # query the daemon
+./gobroom --help
+```
+
+The default data-plane address is `http://127.0.0.1:2712`. The optional HTTP
+control API uses `127.0.0.1:2713` when enabled. The CLI and daemon can also be
+installed with `make install-all`.
 
 ```sh
 make test
 make build-all
-make run-daemon
 ```
 
-The daemon stores state in the user configuration directory, serves the data
-plane on loopback port `2712`, and uses a Unix socket for control IPC. The HTTP
-control API is optional and defaults to loopback port `2713` when enabled.
+## Project status
 
-```sh
-gobroom
-gobroom status
-gobroom providers list
-gobroom models list
-gobroom combo-models strategies
-```
+GoBroom's product and extension contracts are documented independently from
+feature maturity. The roadmap and compatibility matrix identify what is
+implemented, partial or still being validated; this README describes the
+intended product, not a claim that every provider or protocol edge case is
+already interchangeable.
 
-Running `gobroom` without a subcommand opens the bundled TUI. Existing CLI
-subcommands, persistent flags, `--help` and `--version` remain available.
-
-The HTTP control API and provider data plane are separate surfaces. A frontend
-is never responsible for keeping the daemon alive or maintaining its SQLite
-state.
-
-## Project map
-
-```text
-cmd/gobroomd        daemon entry point
-cmd/gobroom         bundled TUI and CLI control client
-internal/tui        Bubble Tea control frontend
-internal/api        HTTP data/control handlers
-internal/daemon     lifecycle, IPC and service wiring
-internal/kernel     immutable route snapshot, scheduler and execution contract
-internal/normalize  inbound semantic request normalization
-internal/adapter    protocol adapters
-internal/provider   provider primitives, manifests and registries
-internal/controlplane snapshot construction and resolution
-internal/store      SQLite persistence
-internal/runtime    health and quota runtime policy
-internal/usage      bounded asynchronous usage events
-manifests/builtin   built-in provider definitions
-docs/               architecture, contracts, status and decisions
-```
-
-## Documentation
-
-Start at [the documentation index](docs/README.md). The implementation plan is
-the status source of truth; design documents define intended contracts and
-must not be read as a claim of complete feature parity.
+- [Implementation roadmap](docs/IMPLEMENTATION_PLAN.md)
+- [Compatibility and verification status](docs/COMPATIBILITY_MATRIX.md)
+- [Product vision](docs/VISION.md)
+- [Solution architecture](docs/SOLUTION_ARCHITECTURE.md)
+- [Physical model contract](docs/PHYSICAL_MODELS.md)
+- [Passive health and adaptive routing](docs/PASSIVE_HEALTH_ROUTING.md)
+- [Provider definitions](docs/PROVIDERS.md)
+- [Normalization contract](docs/NORMALIZATION.md)
+- [Operations and remote hosting](docs/OPERATIONS.md)
+- [TUI interaction model](docs/TUI_UX.md)

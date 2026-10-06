@@ -1,8 +1,12 @@
 # Provider definitions and runtime primitives
 
-Status: executable manifest composition for endpoint, transport, request and
-response codecs plus discovery/auth/error/quota binding is implemented; see M9
-in the [implementation roadmap](IMPLEMENTATION_PLAN.md) for gaps.
+Status: executable manifest composition for endpoint, transport, request
+encoders, provider response decoders, discovery/auth/error/quota binding and
+client renderer registration is implemented. The representative M15 extension
+conformance gate passes; this does not claim complete provider behavior. See
+the [implementation roadmap](IMPLEMENTATION_PLAN.md). The
+normative extension architecture is the
+[solution architecture contract](SOLUTION_ARCHITECTURE.md).
 
 ## Goal
 
@@ -21,6 +25,9 @@ primitive references. Relevant contract types are in
 ```json
 {
   "chat": {
+    "protocol": "openai_chat",
+    "task": "chat.generate",
+    "providerFormat": "openai",
     "endpoint": {"kind": "endpoint", "id": "http-json"},
     "endpointOptions": {
       "path": "/chat/completions",
@@ -28,7 +35,8 @@ primitive references. Relevant contract types are in
     },
     "transport": {"kind": "transport", "id": "http"},
       "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"},
-      "responseCodec": {"kind": "response_codec", "id": "openai-sse"},
+      "providerFormat": "openai",
+      "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"},
       "errorClassifier": {"kind": "error_classifier", "id": "http-json"},
       "errorClassifierOptions": {
         "httpJson": {
@@ -60,7 +68,7 @@ provider definition
   └── operation bindings
       ├── endpoint + typed path/query options
       ├── transport
-      ├── request/response codec
+      ├── request encoder / provider response decoder
       ├── model source
       ├── usage/quota source
       └── error classifier
@@ -78,8 +86,9 @@ serving a request.
 | Endpoint | Resolve the configured API root with operation path and typed path/query overrides |
 | Transport | Execute the prepared upstream request with cancellation and bounded timeout |
 | Auth | Resolve static credentials or an auth-flow contract into request credentials |
-| Request codec | Map normalized semantic input into upstream wire format |
-| Response codec | Decode JSON/SSE and emit the selected client format |
+| Provider encoder | Map normalized invocation semantics into upstream wire format |
+| Provider response decoder | Decode upstream JSON/SSE into semantic response events |
+| Client renderer | Emit the selected ingress client's wire format from semantic events |
 | Model source | Discover and normalize the provider model catalog |
 | Usage source | Extract bounded usage data from real responses |
 | Outcome classifier | Convert attempt evidence into typed cause, scope and retry action; JSON classifiers may bind field paths and quota signals declaratively |
@@ -113,15 +122,23 @@ route snapshot.
 ## Current support and limits
 
 The runtime registry composes OpenAI Chat, OpenAI Responses, Anthropic Messages
-and Gemini request/response codecs with a generic HTTP endpoint and transport.
+and Gemini request/response decoders with a generic HTTP endpoint and transport.
 The selected definition also binds model discovery, auth flow, error classifier
 and quota source. Provider bindings are resolved before the immutable routing
 snapshot is published; the kernel receives the composed runtime adapter and
 does not branch on provider identity. Built-in JSON definitions and externally
 loaded definitions use the same builder.
 
+`responseDecoder` and `providerFormat` describe the upstream response dialect.
+The selected client renderer comes from the ingress contract and the daemon's
+renderer registry; it is not copied into every provider definition. The
+composed adapter decodes to semantic events, applies registered response
+transforms, and renders the client contract. Native same-format responses use
+an explicit wire-frame passthrough renderer. Other cross-format pairs require
+the decoder to declare support and a registered renderer.
+
 An operation binding independently selects `endpoint`, `transport`,
-`requestCodec` and `responseCodec`. `endpointOptions` can override the relative
+`requestCodec` and `responseDecoder`. `endpointOptions` can override the relative
 operation path and add query parameters without editing or duplicating a codec.
 The model-list operation uses the same endpoint resolver as inference.
 
@@ -196,13 +213,20 @@ secret through the same flow before storing it.
 Refresh is bound to that definition and serialized per connection, not behind
 a process-wide network lock.
 
-This is not yet a universal plugin system. Interactive authorization-code
-start/callback handling, usage extraction, provider sessions, all quota APIs,
-embeddings/media operations and every possible codec are not implemented.
-Endpoint path/query can be configured in a definition, while a genuinely new
-wire dialect still requires one reusable codec implementation registered in
-Go. That implementation is then reusable by any definition; it must not add a
-provider-specific kernel branch or duplicate another codec.
+This is not a dynamic plugin system. Static registration is intentional;
+manifests bind trusted primitive IDs and cannot execute arbitrary code. The
+architecture supports three extension levels: manifest composition, reusable
+primitive implementation, or provider-specific module behind an existing
+contract. A module may add build-time registration but must not add a
+provider-name branch to the kernel, a provider-specific storage schema, or a
+provider-specific branch in generic management UI. See the architectural
+[change simulations](SOLUTION_ARCHITECTURE.md#architectural-change-simulations).
+
+Interactive authorization-code/device-flow start/callback handling, usage
+extraction, provider sessions, quota APIs, embeddings/media operations and
+many codecs are not all implemented. A genuinely new wire dialect adds an
+ingress codec, provider encoder/decoder and/or client renderer as needed; it
+does not combine provider decoding with a specific client's response writer.
 
 ## Adding a provider
 

@@ -1,27 +1,45 @@
 # Request normalization and protocol translation
 
-Status: typed inbound normalization and initial adapters are implemented; the
-canonical response-event layer and broad cross-protocol semantics remain
-planned/partial (M5–M6 in the [roadmap](IMPLEMENTATION_PLAN.md)).
+Status: typed ingress, prompt separation, operation/format separation and
+manifest-bound response decode → semantic events → renderer are implemented
+for registered adapters. Semantic family coverage remains adapter-specific and
+incomplete. The normative extension contract is in the
+[solution architecture](SOLUTION_ARCHITECTURE.md).
 
 ## Pipeline
 
 ```text
-HTTP path + headers + JSON body
-  -> source-format detection
-  -> typed semantic request
-  -> shared invariant repair/metadata capture
-  -> route capability check
-  -> provider request codec/adapter
-  -> upstream
-  -> provider response handling
-  -> client-format response
+client wire request
+  -> ingress codec: wire format → Invocation IR
+  -> opt-in request transforms
+  -> compile operation/capability requirements
+  -> resolve model graph and negotiate candidate compatibility
+  -> provider encoder → transport/auth → upstream
+  -> provider decoder → semantic response events
+  -> opt-in response transforms → client renderer
+  -> client wire response
 ```
 
-The normalized request is not an OpenAI wire body. It carries model, source
-format, messages/content, tools, thinking intent, modality flags, transport
-hints, provider-neutral extensions and original fields needed for compatibility.
-See `internal/normalize/types.go` for the implemented contract.
+The target normalized request is an operation-neutral `Invocation`, not an
+OpenAI wire body. It carries the requested public model, client wire contract,
+prompt layers with origin, typed input/content, tools and tool state, thinking
+intent, continuity, derived requirements, transport hints and namespaced opaque
+extensions. Concrete Go names may differ; the complete field ownership and
+extensibility rules are defined in the
+[solution architecture contract](SOLUTION_ARCHITECTURE.md). The current Go type
+is `normalize.Request` in `internal/normalize/types.go` and remains an initial
+subset, not the full target contract.
+
+Operation and wire format are separate. An operation describes the semantic
+task (`chat.generate`, `embeddings.create`, etc.); a wire format describes the
+client envelope (OpenAI Chat, Responses, Anthropic Messages, Gemini, etc.).
+Neither determines the selected provider by itself.
+
+`PromptPlan` separates system/developer instructions from conversation and
+records their origin and order. The contract provides harness-, provider-,
+user- and inline-origin layers. HTTP ingress currently populates inline
+layers; the other origins are architectural slots until their configuration
+sources are wired.
 
 The target reasoning intent distinguishes absent/inherit, explicit auto,
 disabled, ordinal level and numeric budget. It also carries summary intent,
@@ -44,17 +62,26 @@ translation. Adapters must not silently claim semantics they cannot represent.
 
 ## Translation policy
 
-An adapter may translate directly between source and target formats where that
-is more lossless, or use semantic fields as an intermediate representation.
-The protocol contract must define how tools, reasoning, content blocks, finish
-reasons, usage and stream lifecycle map. Information that cannot be represented
-must be preserved as an extension, rejected clearly, or handled under an
-explicit degradation policy—not silently discarded.
+The target separates ingress decoding, provider encoding, provider response
+decoding and client rendering. Candidate compatibility is the intersection of
+operation support, request semantics, provider/model/connection capability,
+response decoding and client rendering. The plan states fidelity and the
+semantic paths it preserves, transforms or loses. Missing declarations mean
+unsupported; material loss is rejected by default. Explicit degraded behavior
+must be visible at a policy boundary. See the
+[solution architecture](SOLUTION_ARCHITECTURE.md) for the contract.
 
-The present adapters include OpenAI Chat, OpenAI Responses and Anthropic
-Messages paths. Their supported subsets differ. Anthropic text/tool SSE
-conversion exists, but this is not full event parity. The exact tested subset
-belongs in the compatibility matrix and adapter fixtures.
+An optimized lossless passthrough may bypass semantic re-encoding only when
+the compatibility plan proves that it preserves the client's contract. It is
+not a general fallback for missing codecs.
+
+Present adapters include OpenAI Chat, OpenAI Responses, Anthropic Messages and
+Gemini paths. Their tested subsets differ. The composed runtime decodes
+provider streams into `ResponseEvent`, applies registered response transforms,
+then selects a client renderer. Native wire-frame passthrough is a renderer
+mode, not a provider-specific writer path. Exact supported event families and
+loss behavior belong in the [compatibility matrix](COMPATIBILITY_MATRIX.md)
+and adapter fixtures.
 
 ## Streaming invariants
 
@@ -65,5 +92,8 @@ belongs in the compatibility matrix and adapter fixtures.
 - usage and health reporting cannot block first byte or stream writes;
 - tool-call state must remain correct when arguments arrive across chunks.
 
-The first four are kernel/adapter contract requirements. Complete shared event
-types, cross-adapter fixtures and conformance tests are M5 work.
+These are architectural requirements. A completed implementation must use one
+semantic event model for streaming and non-stream aggregation, retain partial
+tool-call ordering/signatures, and prove the pre/post-commit retry boundary.
+Milestone status and conformance evidence remain in the roadmap and
+compatibility matrix.

@@ -110,40 +110,20 @@ candidate order, fallback boundaries and usage-event emission. Adapters own
 provider protocol details: request preparation, execution, error classification
 and response translation. No provider-name switch belongs in the kernel.
 
-### Protocol-neutral request and response boundaries
+The normative target for operation-neutral invocation, prompt/tool/thinking IR,
+compatibility negotiation, provider and client codec boundaries, transformation
+stages, runtime evidence, and extension policy is the
+[solution architecture contract](SOLUTION_ARCHITECTURE.md). This overview does
+not redefine those contracts. In particular, a client wire format is separate
+from an upstream provider protocol, and request/response transformations must
+operate at declared typed stages.
 
-```text
-client wire request
-  -> ingress normalization
-       PromptPlan (ordered instruction layers with origin/role)
-       conversation Messages (without system/developer prompt duplication)
-       typed tool calls, thinking intent, modalities, continuity, extensions
-  -> request hooks (typed IR; before route-specific encoding)
-  -> adapter request codec -> provider wire request
-  -> provider response codec -> client wire response
-```
-
-`PromptPlan` separates inline system/developer instructions from conversation
-history. Its origin enum also provides slots for harness-, provider- and
-user-supplied layers; current HTTP ingress populates inline layers, while
-configuration/harness injection is not yet wired. Each codec encodes the plan
-in its target dialect (for example a top-level system field or reconstructed
-role messages). Normalized tool calls have explicit state and opaque
-provider-data slots; semantic `Response`/`ResponsePart` types model text,
-thinking, tool calls, usage and opaque continuation data. Request hooks can
-transform typed request IR before provider encoding, the intended seam for
-future prompt/tool transformations.
-
-Client-wire compatibility is declared by the response codec through
-`ClientFormatSupport`; the kernel asks the adapter to negotiate ingress format
-instead of inferring render compatibility from provider protocol. Current
-declarations are conservative: OpenAI Chat emits Chat, OpenAI Responses emits
-Responses, Anthropic passes Anthropic through and translates to OpenAI Chat,
-and Gemini currently renders OpenAI Chat. Unsupported pairs are excluded from
-routing. This does not mean every adapter decodes upstream output into semantic
-`Response`: current stream codecs still render directly to the HTTP writer and
-expose `ResponseEvent` for observation. Full decode -> semantic hooks -> client
-renderer separation remains follow-up work.
+The current manifest-bound path has typed request encoders, provider response
+decoders, a renderer registry, semantic response events and registered
+request/response transform stages. Raw passthrough is represented as an
+explicit native-wire event. Event-family coverage and cross-protocol fidelity
+are still adapter-specific and incomplete; see the roadmap and compatibility
+matrix rather than inferring full protocol conformance from the pipeline.
 
 No lock is held across database I/O, token refresh or upstream I/O. Retry is
 allowed only before the response is committed to the client.
@@ -153,9 +133,9 @@ allowed only before the response is committed to the client.
 Provider definitions are JSON manifests. They bind typed primitive references
 for endpoint construction, authentication, codecs, model source, error
 classification and optional usage/quota/session behavior. Reusable runtime
-implementations live in registries. A new provider should normally be a
-manifest composition; adding a provider must not require editing kernel code or
-copying another provider's implementation.
+implementations live in registries. The [solution architecture contract](SOLUTION_ARCHITECTURE.md)
+defines the required extension levels and change simulations for proving that
+new behavior does not require a core redesign.
 
 This is an architectural rule, not a claim that every possible OAuth flow or
 provider operation is already represented. Current primitive coverage and

@@ -4,9 +4,10 @@ This is a behavior-by-behavior comparison, not a promise of drop-in parity.
 The 9router column is based on source checked in the adjacent local checkout at
 `/home/fm39hz/Workspace/Personal/Tools/AI/9router`; source paths below are
 orientation, not a substitute for executable fixtures. GoBroom status reflects
-the current repository and tests inspected on 2026-10-03. The roadmap is the
+the current repository and tests inspected on 2026-10-06. The roadmap is the
 status source of truth; this matrix summarizes observable behavior and keeps
-partial protocol semantics visible.
+partial protocol semantics visible. The architecture success criterion is
+defined separately in [`SOLUTION_ARCHITECTURE.md`](SOLUTION_ARCHITECTURE.md).
 
 ## Status legend
 
@@ -16,6 +17,18 @@ partial protocol semantics visible.
 - **Out of core** — intentionally belongs outside the daemon kernel.
 - **Needs verification** — source behavior or edge semantics need fixtures; do
   not claim compatibility yet.
+
+## Architecture catch-up criterion
+
+Feature parity is not the same as architecture readiness. Architecture is
+ready when implementing a missing 9router behavior only adds configuration or
+a reusable/provider-specific module behind stable contracts; it does not
+require a new kernel model category, schema concept, request lifecycle or
+provider branch. This criterion is **verified for the representative M15
+change simulations** by `make test-conformance`; see the
+[conformance evidence](M15_CONFORMANCE.md). This establishes architecture
+readiness for those extension categories, not provider/protocol completeness
+or drop-in parity.
 
 ## Model and route configuration
 
@@ -43,7 +56,7 @@ partial protocol semantics visible.
 
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
-| Shared `handleChatCore` normalization and provider dispatch | Partial | GoBroom has typed inbound normalization, immutable routing and canonical response events. It does not yet match 9router's breadth of format detection, passthrough and provider/client-specific adaptation. |
+| Shared request normalization and provider dispatch | Partial | GoBroom has operation/client-wire separation, provider response decoders, semantic events, registered renderers and request/response transform seams. The M15 architecture extension gate passes; protocol event-family parity remains incomplete. |
 | OpenAI Chat endpoint | Implemented (core; provider matrix partial) | Streaming/JSON, cancellation, usage, tool events and retry boundary have focused tests; more upstream-specific fixtures are needed. |
 | OpenAI Responses endpoint/continuity | Implemented (core; edge compatibility partial) | Responses adapter and client-session continuity are wired; complete item/tool/error compatibility still needs fixtures. |
 | Anthropic Messages | Partial | Text/tool/thinking paths exist; broad content-block, cache, stop-reason and usage parity needs fixtures. |
@@ -86,6 +99,12 @@ Before calling GoBroom a drop-in replacement, add deterministic fixtures for:
 - cancellation, disconnect and errors before/after first response byte;
 - quota window/reset parsing and its effect on route selection;
 - every built-in manifest operation and declared capability.
+
+Before calling the architecture implementation-ready for feature catch-up,
+also exercise one change from each category—new API-key provider, OAuth flow,
+wire dialect, capability, quota/error envelope, strategy, transformation and
+operation—without changing the kernel model graph or provider-specific core
+storage. These are architecture conformance tests, not feature-parity claims.
 
 See [implementation roadmap](IMPLEMENTATION_PLAN.md) for sequencing and the
 [normalization contract](NORMALIZATION.md) for protocol boundaries.

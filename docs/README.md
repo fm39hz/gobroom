@@ -10,6 +10,8 @@
   work, invariants and replacement gate. This is the status source of truth.
 - [Architecture](ARCHITECTURE.md) — runtime topology, model layers, concurrency
   and package responsibilities.
+- [Solution architecture contract](SOLUTION_ARCHITECTURE.md) — normative
+  operation/IR/codec/policy extension points and architecture-readiness tests.
 - [Physical model contract](PHYSICAL_MODELS.md) — identity and source fidelity,
   capability/limit/reasoning profiles, harness consumption and routing rules.
 - [TUI interaction and model management](TUI_UX.md) — LazyGit-style context

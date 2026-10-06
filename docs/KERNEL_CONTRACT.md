@@ -1,17 +1,21 @@
 # Data-plane kernel contract
 
 Status: hierarchical execution boundary implemented, with remaining policy
-semantics tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md). The request
-execution path traverses typed model nodes and preserves nested policy
-boundaries.
+semantics tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md). This is the
+current kernel contract; the normative target for operation-neutral routing,
+compatibility plans and adapter boundaries is the
+[solution architecture](SOLUTION_ARCHITECTURE.md).
 
 ## Ownership
 
-The kernel owns public model resolution, route candidate ordering, request
-eligibility, adapter dispatch, fallback boundary and compact usage emission.
-HTTP handlers normalize inbound requests and translate kernel errors to HTTP;
-they do not walk combos or choose provider credentials. Provider adapters own
-wire protocol behavior.
+The target kernel owns public model resolution, hard route eligibility,
+candidate ordering, model-policy traversal, fallback boundaries and compact
+usage/outcome emission. It consumes a semantic invocation and compatibility
+decisions; it does not know provider names or client wire envelopes. Ingress
+codecs normalize client requests, provider modules encode/decode upstream
+protocols, and egress renderers translate semantic events to the client.
+HTTP handlers map boundary errors to HTTP; they do not walk combos or choose
+provider credentials.
 
 ## Snapshot and resolution
 
@@ -33,17 +37,18 @@ secrets. Credentials are resolved for the selected route at execution time.
 ## Execution sequence
 
 ```text
-normalized request
+semantic invocation
   -> resolve exposed model name
   -> enter physical/combo model node
-  -> apply eligibility filters
+  -> apply operation/capability/health/quota eligibility
   -> ask the node's strategy for an execution plan
   -> recursively execute the selected member
+  -> negotiate provider+client compatibility and fidelity
   -> resolve route credential
-  -> adapter Prepare
-  -> adapter Execute
-  -> classify upstream status
-  -> translate response
+  -> provider encode and transport
+  -> provider decode into semantic response events
+  -> optional response transform and client rendering
+  -> classify attempt evidence
   -> update runtime policy and emit usage event
 ```
 
@@ -67,16 +72,22 @@ cooldown outcomes may continue according to policy.
 
 ## Adapter boundary
 
-```go
-Prepare(ctx, normalizedRequest, route, credential) -> upstream request
-Execute(ctx, upstream request) -> upstream response
-ClassifyError(status, body) -> stable error class
-TranslateStream(ctx, upstream response, writer, client format, hooks) -> error
+The provider extension is composed from separate contracts:
+
+```text
+RequestCodec.Prepare(invocation, route, credential) -> upstream request
+Transport.Execute(upstream request) -> upstream response
+ResponseDecoder.Decode(upstream response) -> semantic response events
+ResponseRenderer.Begin(client contract) -> render session
+render session.Emit(event) / Finish(error) -> client wire response
 ```
 
-The adapter interface currently combines several protocol responsibilities.
-M5 tracks extracting a shared canonical response-event layer without removing
-the ability to use a lossless passthrough path.
+`ComposedAdapter.RenderResponse` coordinates decoder, registered transforms,
+and the selected renderer. Individual provider codecs never write to the
+client writer. The renderer controls response commitment; the kernel may retry
+only while that renderer has not emitted client bytes. See the
+[solution architecture](SOLUTION_ARCHITECTURE.md) for the full compatibility
+and fidelity contract.
 
 ## Runtime events
 
@@ -89,8 +100,9 @@ persistent usage workers consume events independently of response delivery.
 
 Adapters may additionally emit the canonical `ResponseEvent` stream through
 `StreamHooks.OnEvent`: response start, text/thinking delta, tool-call delta,
-usage, completion and error. This event stream is semantic observation; the
-adapter remains responsible for the lossless client renderer.
+usage, completion and error. Today this stream is primarily observational;
+the target contract makes semantic events the shared response path consumed by
+transforms and client renderers.
 Malformed SSE payloads are protocol errors: adapters emit a canonical error
 event and return the error instead of silently discarding the payload.
 

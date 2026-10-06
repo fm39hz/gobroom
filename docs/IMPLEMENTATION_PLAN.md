@@ -1,7 +1,7 @@
 # Implementation roadmap
 
 Status is based on the repository implementation and tests inspected on
-2026-10-03. This is the project roadmap and the source of truth for milestone
+2026-10-06. This is the project roadmap and the source of truth for milestone
 status. Architecture and compatibility documents describe contracts/evidence;
 they do not override this status table.
 
@@ -67,10 +67,11 @@ but must not introduce provider-specific branches into the kernel.
 | M8 | Passive health, limits, performance and usage | Partial (runtime core; typed classifier options wired) | Typed outcomes, scoped feedback, reset-aware policy, bounded ranking, TTFT/throughput, EWMA, half-open trials, session affinity, durable health/usage IPC/TUI and retention/logging are implemented. Rich `ClassifyOutcome` survives registry wrapping; common typed HTTP error envelopes, quota reset/retry delay, Retry-After dates, rate-limit headers and manifest JSON pointers/signals/named windows feed route eligibility. The bounded coalescing writer persists asynchronously and flushes after producers stop; a daemon start → configured manifest HTTP 429 → two windows + connection scope → stop/reopen → restored route gating/cause fixture passes. Remaining: broader provider reset/error envelopes, scope precedence across simultaneous sources and state behavior on classifier/storage failure; add specialized extractors only when typed options cannot express the shape. |
 | M9 | Provider presets and discovery expansion | Partial (executable shared composition) | Definitions now bind endpoint, transport, request/response codecs, static/OAuth/no-auth auth, model discovery, passive usage enrichment, session store, configurable error evidence and quota API operations. Quota polling resolves the dedicated quota operation's endpoint/transport/parser and remains opt-in/opportunistic. Session state is connection/definition/physical-model/client-session scoped, cached in memory and persisted asynchronously; OpenAI Responses restores stored continuity only with a client session key. Connection model-list snapshots now persist positive entitlement evidence and completeness; only positively observed discovered routes expand to that connection, while complete snapshots mark prior routes not listed and incomplete snapshots do not revoke evidence. Remaining: dedicated provider usage-report operations, custom per-connection availability editing and wider real-provider fixtures. |
 | M10 | Physical identity, capability and modality policies | Done (physical core) | Typed support states, request-requirement compilation, profile persistence, typed TokenLimits, Physical identity/revision fields, source fidelity/evidence persistence, declared/guaranteed/available projections, projection source explanations and Physical IPC/TUI display are implemented and tested. Exact/alias sources are eligible by default; compatible/dynamic require opt-in and unknown fidelity is excluded. Conditional/emulated capability evidence does not satisfy hard requirements until an evaluator exists. Cross-protocol reasoning remains in M6. |
-| M11 | Optional middleware | Planned/deferred | Not on the critical path. Revisit only for demonstrated need; keep opt-in, bounded and unable to mutate route identity or bypass cancellation. |
-| M12 | Secondary APIs and integrations | Out of core | Embeddings/media/search, tunnels, MITM/DNS and IDE integrations remain separate services/sidecars, not kernel milestones. |
+| M11 | Typed request/response transformation primitives | Planned/deferred | Named transform stages/effects are required by the architecture contract; individual transforms remain opt-in and are implemented only for demonstrated need. They must be bounded and unable to mutate route identity or bypass cancellation. |
+| M12 | Secondary operation implementations and integrations | Out of core | Operation-neutral routing is an architectural requirement; embeddings/media/search implementations, tunnels, MITM/DNS and IDE integrations may remain separate services/sidecars and are not initial core feature commitments. |
 | M13 | Canonical configuration bundle and sync | Done (single-writer core) | Versioned secret-free typed bundle export, validation, diff/dry-run and atomic apply/import are implemented. Existing connection secrets are preserved by stable connection ID and never exported. Multi-writer conflict-free sync is intentionally not promised. |
 | M14 | Portable operations and remote hosting | Done (local/remote boundary core) | Explicit paths/listeners, bounded logs/retention, optional bearer auth, journald guidance, TLS/reverse-proxy boundary and snapshot repository interface are documented/implemented. Alternate database backends remain an optional follow-up until a named backend is selected. |
+| M15 | Architecture catch-up conformance | Complete (extension gate; not feature parity) | `make test-conformance` exercises provider/API-key discovery, OAuth factories, secret-safe provider setup metadata across control surfaces, operation ingress/bindings, feature evaluators, registered strategies, request/response transforms, semantic decoder/renderer composition, quota evidence and response commitment. Kernel/provider-name and adapter direct-write audits pass. This establishes the architecture extension gate only; it does not imply complete TUI onboarding or drop-in feature parity. See [M15 conformance evidence](M15_CONFORMANCE.md). |
 
 ## Milestone review and recommended order
 
@@ -89,6 +90,11 @@ discoverable model → client request → upstream auth/response. Fake-upstream
 vertical fixtures now cover both request paths and Anthropic model discovery;
 live credentials are not required for deterministic acceptance.
 
+0. **M15 architecture conformance:** passed for the extension change
+   simulations listed in [`M15_CONFORMANCE.md`](M15_CONFORMANCE.md), runnable
+   with `make test-conformance`. This is architecture readiness, not a claim
+   that omitted provider implementations, TUI onboarding or drop-in parity are
+   complete.
 1. **OpenAI/Anthropic API-key readiness:** fake-upstream fixtures now cover
    OpenAI Chat bearer-key routing, Anthropic `/v1/messages` key routing, and
    Anthropic model discovery. Broader SSE/auth-failure conformance and live
@@ -119,7 +125,8 @@ live credentials are not required for deterministic acceptance.
    quota/session behavior with representative providers. Keep unsupported
    operations absent rather than routing them to a default.
 
-M11 remains deferred and M12 remains outside core. Alternate database and log
+M11's individual transformations remain deferred and M12 implementations
+remain outside initial core. Alternate database and log
 backends are portability options, not blockers for this local SQLite/journald
 product. M13's bundle is the portability contract; do not sync database tables.
 
@@ -174,6 +181,11 @@ be implemented only against a named need and testable contract.
     Combo models are the only model-management primitives. Exposure is the
     `discoverable` field on those nodes; no separate alias/publication layer,
     compatibility table or fallback configuration path may be introduced.
+18. **Catch-up through extensions.** Provider, operation, client format,
+    capability, auth, policy, transform and telemetry additions use the stable
+    extension contracts in [`SOLUTION_ARCHITECTURE.md`](SOLUTION_ARCHITECTURE.md).
+    Adding a provider-specific implementation must not require provider-name
+    branches in kernel, schema or generic TUI/CLI workflows.
 
 ## Delivery sequence
 
@@ -212,6 +224,11 @@ verified against the user's intended workflows:
 
 Parity outside this gate—MITM, tunnels, media APIs, dashboards and similar
 features—is not implied.
+
+Drop-in replacement and architecture readiness are different claims. The
+architecture catch-up gate is passed only after the M15 change simulations;
+passing M15 does not imply that any omitted 9router feature has been
+implemented or that GoBroom is a drop-in replacement.
 
 ## Portability acceptance
 

@@ -156,6 +156,14 @@ serve them through a protected compatible endpoint—while the daemon stays
 responsive, the TUI remains optional, configuration can be moved deliberately,
 and operational output integrates with the host environment.
 
+Product acceptance and architecture readiness are separate gates. Architecture
+is ready for feature catch-up only when the provider, protocol, operation,
+capability, policy and transformation change simulations in the
+[solution architecture contract](SOLUTION_ARCHITECTURE.md) can be implemented
+without redesigning the kernel graph, request lifecycle or core storage.
+Passing that gate does not claim feature parity; it means remaining parity work
+can proceed through established extension points.
+
 Milestone sequencing and current completion state are in the
 [implementation roadmap](IMPLEMENTATION_PLAN.md). This vision defines why that
 work matters; the roadmap defines what exists and what remains. Concrete

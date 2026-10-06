@@ -9,8 +9,10 @@ evidence-backed alias, or explicitly opted-in compatible/dynamic. Missing,
 conditional and emulated capability evidence does not pass hard request
 eligibility; unsupported conditions are not guessed. Route-level typed profile
 and limits remain separate from Physical identity. Reasoning dialect behavior
-is tracked in M6. See [the roadmap](IMPLEMENTATION_PLAN.md) for milestone
-status and remaining work.
+is tracked in M6. Operation-neutral Invocation, compatibility fidelity and
+codec/renderer ownership are governed by the
+[solution architecture contract](SOLUTION_ARCHITECTURE.md). See
+[the roadmap](IMPLEMENTATION_PLAN.md) for milestone status and remaining work.
 
 ## Purpose
 
