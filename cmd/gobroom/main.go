@@ -82,6 +82,7 @@ func simpleCommand(use, short, method string, flags map[string]*string) *cobra.C
 func resourceCommands() []*cobra.Command {
 	providers := &cobra.Command{Use: "providers", Short: "manage provider nodes"}
 	providers.AddCommand(listCommand("list", "providers.list", nil))
+	providers.AddCommand(listCommand("catalog", "providers.catalog", nil))
 	var name, prefix, baseURL, protocol, definitionID, modelsPath, authMode, providerID string
 	create := &cobra.Command{Use: "create", Short: "create provider node", RunE: func(*cobra.Command, []string) error {
 		return invoke("providers.create", map[string]any{"name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "modelsPath": modelsPath, "authMode": authMode})

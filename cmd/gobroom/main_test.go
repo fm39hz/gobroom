@@ -35,7 +35,7 @@ func TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	if called != 0 {
 		t.Fatal("--help unexpectedly launched TUI")
 	}
-	for _, path := range [][]string{{"status"}, {"providers", "list"}, {"connections", "test"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}} {
+	for _, path := range [][]string{{"status"}, {"providers", "list"}, {"providers", "catalog"}, {"connections", "test"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}} {
 		command, _, err := root.Find(path)
 		if err != nil || command == root {
 			t.Fatalf("typed command %v missing: command=%v err=%v", path, command, err)

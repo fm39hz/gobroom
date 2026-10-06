@@ -5,10 +5,25 @@ import (
 	"testing"
 )
 
+type preferLastStrategy struct{}
+
+func (preferLastStrategy) Plan(_ string, members []MemberRef, _ *StrategyState) []MemberRef {
+	result := append([]MemberRef(nil), members...)
+	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
+		result[left], result[right] = result[right], result[left]
+	}
+	return result
+}
+func (preferLastStrategy) OnFailure(StrategyFailure, *StrategyState) FailureAction {
+	return FailureContinue
+}
+
 func TestStrategyCatalogDescribesOnlyCanonicalExecutablePrimitives(t *testing.T) {
 	definitions := StrategyDefinitions()
-	if len(definitions) != len(builtinStrategyDefinitions) {
-		t.Fatalf("catalog count=%d, want %d", len(definitions), len(builtinStrategyDefinitions))
+	for _, builtin := range builtinStrategyDefinitions {
+		if _, found := StrategyDefinitionByID(builtin.ID); !found {
+			t.Fatalf("built-in strategy %q missing from catalog", builtin.ID)
+		}
 	}
 	seen := map[string]bool{}
 	for _, definition := range definitions {
@@ -83,5 +98,21 @@ func TestStrategyValidationDoesNotAcceptLegacyAliases(t *testing.T) {
 	}
 	if _, err := DefaultStrategyConfig("weighted-fallback"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNewStrategyExtensionAppearsInCatalogAndSchedulerWithoutKernelBranch(t *testing.T) {
+	const id Strategy = "vendor.example.prefer-last.v1"
+	definitionID := string(id)
+	if err := RegisterStrategyDefinition(StrategyDefinition{ID: definitionID, Label: "Prefer last", Description: "Fixture strategy extension.", Runtime: id, Primitive: preferLastStrategy{}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := StrategyDefinitionByID(definitionID); !found {
+		t.Fatal("registered strategy missing from catalog")
+	}
+	scheduler := NewScheduler(AlwaysOpenGate{})
+	planned := scheduler.Plan(ModelNode{ID: "fixture", Strategy: id, Members: []MemberRef{{ID: "first"}, {ID: "last"}}})
+	if len(planned) != 2 || planned[0].ID != "last" || planned[1].ID != "first" {
+		t.Fatalf("registered strategy plan=%#v", planned)
 	}
 }

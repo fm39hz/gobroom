@@ -2,6 +2,8 @@ package kernel
 
 import "fmt"
 
+import "github.com/fm39hz/gobroom/internal/normalize"
+
 type SnapshotInput struct {
 	PublicModels []PublicModel
 	Routes       []Route
@@ -32,7 +34,7 @@ func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 		if _, exists := snapshot.Routes[item.ID]; exists {
 			return Snapshot{}, fmt.Errorf("duplicate route %q", item.ID)
 		}
-		snapshot.Routes[item.ID] = item
+		snapshot.Routes[item.ID] = cloneRoute(item)
 		snapshot.RouteGroups[item.ID] = []string{item.ID}
 		if item.DisplayPrefix != "" && item.ExternalModel != "" {
 			wireName := item.DisplayPrefix + "/" + item.ExternalModel
@@ -67,4 +69,32 @@ func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func cloneRoute(route Route) Route {
+	if route.OperationBindings != nil {
+		bindings := make(map[normalize.Operation]RouteOperationBinding, len(route.OperationBindings))
+		for operation, binding := range route.OperationBindings {
+			binding.AdapterIDs = append([]string(nil), binding.AdapterIDs...)
+			bindings[operation] = binding
+		}
+		route.OperationBindings = bindings
+	}
+	if route.Profile != nil {
+		profile := make(CapabilityProfile, len(route.Profile))
+		for name, capability := range route.Profile {
+			capability.Formats = append([]string(nil), capability.Formats...)
+			capability.Constraints = append([]byte(nil), capability.Constraints...)
+			profile[name] = capability
+		}
+		route.Profile = profile
+	}
+	if route.QuotaEndpointOptions.Query != nil {
+		query := make(map[string]string, len(route.QuotaEndpointOptions.Query))
+		for key, value := range route.QuotaEndpointOptions.Query {
+			query[key] = value
+		}
+		route.QuotaEndpointOptions.Query = query
+	}
+	return route
 }

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/controlplane"
@@ -19,12 +19,14 @@ import (
 )
 
 type Server struct {
-	store          *store.Store
-	control        *controlplane.Manager
-	started        time.Time
-	executor       func(context.Context, normalize.Request, http.ResponseWriter) error
-	reloadHook     func() error
-	dataPlaneToken string
+	store           *store.Store
+	control         *controlplane.Manager
+	started         time.Time
+	executor        func(context.Context, normalize.Request, http.ResponseWriter) error
+	reloadHook      func() error
+	dataPlaneToken  string
+	ingress         map[string]OperationIngress
+	providerCatalog []provider.DefinitionMetadata
 }
 
 type HandlerOptions struct {
@@ -41,7 +43,37 @@ func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.R
 	if err != nil {
 		manager = nil
 	}
-	return &Server{store: s, control: manager, started: time.Now()}
+	server := &Server{store: s, control: manager, started: time.Now(), ingress: map[string]OperationIngress{}}
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", Operation: normalize.OperationChatGenerate, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", Operation: normalize.OperationChatGenerate, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", Operation: normalize.OperationChatGenerate, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
+	return server
+}
+
+// RegisterOperationIngress adds one exact client endpoint during daemon
+// wiring. All registered operations use the same authentication, normalization
+// handoff, kernel executor and error boundary.
+func (s *Server) RegisterOperationIngress(codec OperationIngress) error {
+	if err := validateOperationIngress(codec); err != nil {
+		return err
+	}
+	if s.ingress == nil {
+		s.ingress = map[string]OperationIngress{}
+	}
+	for _, route := range codec.Routes() {
+		key := strings.ToUpper(strings.TrimSpace(route.Method)) + " " + route.Path
+		if key == "GET /v1/models" {
+			return fmt.Errorf("operation ingress route %q is reserved", key)
+		}
+		if previous, exists := s.ingress[key]; exists {
+			return fmt.Errorf("operation ingress route %q is already registered by %q", key, previous.ID())
+		}
+	}
+	for _, route := range codec.Routes() {
+		key := strings.ToUpper(strings.TrimSpace(route.Method)) + " " + route.Path
+		s.ingress[key] = codec
+	}
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -53,6 +85,7 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 	if options.ControlPlane {
 		r.Get("/api/status", s.status)
 		r.Get("/api/kernel/resolve", s.resolve)
+		r.Get("/api/provider-definitions", s.providerDefinitions)
 		r.HandleFunc("/api/providers", s.providerCollection)
 		r.HandleFunc("/api/connections", s.connectionsCollection)
 		r.HandleFunc("/api/models", s.models)
@@ -60,11 +93,31 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 	}
 	if options.DataPlane {
 		r.Get("/v1/models", s.dataPlane(s.models))
-		r.Post("/v1/chat/completions", s.dataPlane(s.chatCompletions))
-		r.Post("/v1/responses", s.dataPlane(s.chatCompletions))
-		r.Post("/v1/messages", s.dataPlane(s.chatCompletions))
+		routes := make([]string, 0, len(s.ingress))
+		for route := range s.ingress {
+			routes = append(routes, route)
+		}
+		sort.Strings(routes)
+		for _, route := range routes {
+			parts := strings.SplitN(route, " ", 2)
+			method, path, codec := parts[0], parts[1], s.ingress[route]
+			r.Method(method, path, s.dataPlane(s.operationHandler(codec)))
+		}
 	}
 	return logging(r)
+}
+
+// SetProviderDefinitionCatalog installs the secret-free setup metadata shared
+// by HTTP and IPC control clients.
+func (s *Server) SetProviderDefinitionCatalog(catalog []provider.DefinitionMetadata) {
+	if s == nil {
+		return
+	}
+	s.providerCatalog = append([]provider.DefinitionMetadata(nil), catalog...)
+}
+
+func (s *Server) providerDefinitions(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"definitions": s.providerCatalog})
 }
 
 func (s *Server) SetDataPlaneToken(token string) { s.dataPlaneToken = token }
@@ -392,21 +445,34 @@ func (s *Server) customModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
-	payload, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "cannot read request"}})
-		return
+const maxIngressBodyBytes = 32 << 20
+
+func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxIngressBodyBytes)
+		request, err := codec.Decode(r)
+		if err != nil {
+			status := http.StatusBadRequest
+			var maxBytesError *http.MaxBytesError
+			if errors.As(err, &maxBytesError) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error()}})
+			return
+		}
+		if request.Operation == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "ingress codec returned no semantic operation"}})
+			return
+		}
+		s.executeNormalized(w, r, request)
 	}
-	normalized, err := normalize.JSON(r.URL.Path, r.Header, payload)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": err.Error()}})
-		return
-	}
-	requestModel := normalized.Request.Model
+}
+
+func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, request normalize.Request) {
+	requestModel := request.Model
 	if s.executor != nil {
 		tracked := &trackingWriter{ResponseWriter: w}
-		if err := s.executor(r.Context(), normalized.Request, tracked); err != nil && !tracked.committed {
+		if err := s.executor(r.Context(), request, tracked); err != nil && !tracked.committed {
 			status := http.StatusBadGateway
 			if errors.Is(err, kernel.ErrModelNotPublished) {
 				status = http.StatusNotFound

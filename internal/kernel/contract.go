@@ -42,7 +42,7 @@ type Route struct {
 	DisplayPrefix        string
 	ExternalModel        string
 	Protocol             Protocol
-	AdapterID            string
+	OperationBindings    map[normalize.Operation]RouteOperationBinding
 	DefinitionID         string
 	AuthFlowID           string
 	ErrorClassifierID    string
@@ -61,6 +61,14 @@ type Route struct {
 	BaseURL              string
 	CredentialID         string
 	CredentialType       string
+}
+
+type RouteOperationBinding struct {
+	AdapterIDs        []string
+	ErrorClassifierID string
+	UsageSourceID     string
+	UsageOptions      UsageSourceOptions
+	SessionStoreID    string
 }
 
 type Snapshot struct {
@@ -155,6 +163,7 @@ const (
 type NormalizedRequest = normalize.Request
 type Message = normalize.Message
 type Tool = normalize.Tool
+type FeatureRequirement = normalize.FeatureRequirement
 
 type UpstreamRequest struct {
 	Method  string
@@ -282,33 +291,28 @@ type RouteAdmission interface {
 
 type ProviderAdapter interface {
 	ID() string
-	Protocol() Protocol
+	NegotiateClientFormat(normalize.Format, bool) CompatibilityDecision
 	Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error)
 	Execute(context.Context, UpstreamRequest) (UpstreamResponse, error)
 	ClassifyError(status int, body []byte) ErrorClass
-	TranslateStream(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error
-}
-
-// ClientFormatNegotiator declares which ingress contracts an adapter can
-// render. Route eligibility belongs to this capability, not a kernel protocol
-// switch. An adapter without a declaration is treated as externally managed
-// (useful for test/custom adapters); production composed codecs must declare it.
-type ClientFormatNegotiator interface {
-	NegotiateClientFormat(normalize.Format) CompatibilityDecision
+	RenderResponse(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error
 }
 
 type CompatibilityDecision struct {
 	Supported bool
-	Lossless  bool
+	Fidelity  CompatibilityFidelity
+	Losses    []string
 	Reason    string
 }
 
-// RequestHook runs on normalized semantics before a route adapter encodes the
-// provider dialect. Hooks must not mutate shared state outside the request.
-type RequestHook interface {
-	ID() string
-	Apply(context.Context, *NormalizedRequest) error
-}
+type CompatibilityFidelity string
+
+const (
+	FidelityNative      CompatibilityFidelity = "native"
+	FidelityTranslated  CompatibilityFidelity = "translated"
+	FidelityLossy       CompatibilityFidelity = "lossy"
+	FidelityUnsupported CompatibilityFidelity = "unsupported"
+)
 
 type ErrorClassifier interface {
 	ClassifyError(status int, body []byte) ErrorClass
@@ -332,11 +336,14 @@ type CredentialResolver func(context.Context, Route) (Credential, error)
 type CredentialRefresher func(context.Context, Route, Credential) (Credential, error)
 
 type StreamHooks struct {
-	OnFirstByte    func(time.Time)
-	OnEvent        func(ResponseEvent)
-	OnComplete     func(UsageEvent)
-	OnError        func(error)
-	OnSessionState func(SessionState)
+	OnFirstByte       func(time.Time)
+	OnEvent           func(ResponseEvent)
+	OnComplete        func(UsageEvent)
+	OnError           func(error)
+	OnSessionState    func(SessionState)
+	TransformResponse func(context.Context, ResponseEvent) (ResponseEvent, error)
+	Streaming         bool
+	Model             string
 }
 
 type ResponseEventKind string
@@ -351,6 +358,7 @@ const (
 	EventUsage             ResponseEventKind = "usage"
 	EventResponseComplete  ResponseEventKind = "response_complete"
 	EventResponseError     ResponseEventKind = "response_error"
+	EventRawFrame          ResponseEventKind = "raw_frame"
 )
 
 type ResponseEvent struct {
@@ -368,6 +376,9 @@ type ResponseEvent struct {
 	ToolArguments string
 	Usage         *UsageEvent
 	Error         string
+	WireFormat    normalize.Format
+	Raw           []byte
+	Opaque        json.RawMessage
 }
 
 type UsageEvent struct {
@@ -413,5 +424,6 @@ type SessionStore interface {
 var (
 	ErrModelNotPublished = errors.New("model is not published")
 	ErrNoRoute           = errors.New("no usable route")
+	ErrOperationRequired = errors.New("semantic operation is required")
 	ErrSnapshotInvalid   = errors.New("invalid route snapshot")
 )

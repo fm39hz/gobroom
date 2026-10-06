@@ -50,6 +50,21 @@ func ValidateSnapshot(s Snapshot) error {
 			return fmt.Errorf("public model %q: %w", name, err)
 		}
 	}
+	for id, route := range s.Routes {
+		if route.Enabled && len(route.OperationBindings) == 0 {
+			return fmt.Errorf("route %q has no operation adapter bindings", id)
+		}
+		for operation, binding := range route.OperationBindings {
+			if operation == "" || len(binding.AdapterIDs) == 0 {
+				return fmt.Errorf("route %q has an incomplete operation adapter binding", id)
+			}
+			for _, adapterID := range binding.AdapterIDs {
+				if adapterID == "" {
+					return fmt.Errorf("route %q operation %q has an empty adapter ID", id, operation)
+				}
+			}
+		}
+	}
 	return validateModelGraph(s)
 }
 
@@ -85,7 +100,7 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 		if !route.Enabled {
 			return nil, nil
 		}
-		return []Route{route}, nil
+		return []Route{cloneRoute(route)}, nil
 	}
 	if variants, ok := s.RouteGroups[ref]; ok {
 		result := make([]Route, 0, len(variants))
@@ -94,7 +109,7 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 			if !exists || !route.Enabled {
 				continue
 			}
-			result = append(result, route)
+			result = append(result, cloneRoute(route))
 		}
 		return result, nil
 	}
@@ -105,7 +120,7 @@ func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) 
 			if !exists || !route.Enabled {
 				continue
 			}
-			result = append(result, route)
+			result = append(result, cloneRoute(route))
 		}
 		return result, nil
 	}

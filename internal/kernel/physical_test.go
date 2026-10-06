@@ -29,11 +29,19 @@ func TestTypedCapabilityProfileRejectsConditionalWithoutEvaluator(t *testing.T) 
 func TestCompileRequirementsCapturesToolsAndReasoning(t *testing.T) {
 	req := NormalizedRequest{SourceFormat: normalize.FormatOpenAIResponses, Stream: true, Tools: []Tool{{Name: "lookup"}}, Thinking: normalize.ThinkingIntent{Mode: "level", Effort: "high"}}
 	compiled := CompileRequirements(req)
-	if compiled.Protocol != ProtocolOpenAIResponses || !compiled.Streaming || !compiled.Reasoning {
+	if !compiled.Streaming || !compiled.Reasoning {
 		t.Fatalf("requirements=%#v", compiled)
 	}
 	if len(compiled.Capabilities) != 1 || compiled.Capabilities[0] != CapabilityTools {
 		t.Fatalf("requirements=%#v", compiled)
+	}
+}
+
+func TestClientFormatIsNotInferredFromProviderProtocol(t *testing.T) {
+	req := NormalizedRequest{SourceFormat: normalize.FormatAnthropic}
+	route := Route{Protocol: Protocol("vendor.native.v2")}
+	if ok, reason := Eligible(route, CompileRequirements(req)); !ok {
+		t.Fatalf("protocol label must not gate route compatibility; codec negotiation owns that decision: %s", reason)
 	}
 }
 

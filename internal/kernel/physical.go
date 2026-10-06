@@ -2,7 +2,6 @@ package kernel
 
 import (
 	"encoding/json"
-	"fmt"
 	"sort"
 	"time"
 
@@ -22,9 +21,10 @@ const (
 )
 
 type Capability struct {
-	State    SupportState `json:"state"`
-	Formats  []string     `json:"formats,omitempty"`
-	MaxItems int          `json:"maxItems,omitempty"`
+	State       SupportState    `json:"state"`
+	Formats     []string        `json:"formats,omitempty"`
+	MaxItems    int             `json:"maxItems,omitempty"`
+	Constraints json.RawMessage `json:"constraints,omitempty"`
 }
 
 type CapabilityProfile map[string]Capability
@@ -214,8 +214,9 @@ const (
 )
 
 type RequestRequirements struct {
+	Operation            normalize.Operation
 	Capabilities         []string
-	Protocol             Protocol
+	Features             []normalize.FeatureRequirement
 	Streaming            bool
 	Reasoning            bool
 	EstimatedInputTokens int64
@@ -223,7 +224,7 @@ type RequestRequirements struct {
 }
 
 func CompileRequirements(req NormalizedRequest) RequestRequirements {
-	result := RequestRequirements{Protocol: protocolForFormat(req.SourceFormat), Streaming: req.Stream, Reasoning: req.Thinking.Effort != "" || req.Thinking.Mode == "level" || req.Thinking.Mode == "budget", EstimatedInputTokens: estimateInputTokens(req), ReservedOutputTokens: requestedOutputTokens(req)}
+	result := RequestRequirements{Operation: req.Operation, Features: append([]normalize.FeatureRequirement(nil), req.Requirements...), Streaming: req.Stream, Reasoning: req.Thinking.Effort != "" || req.Thinking.Mode == "level" || req.Thinking.Mode == "budget", EstimatedInputTokens: estimateInputTokens(req), ReservedOutputTokens: requestedOutputTokens(req)}
 	if req.Modalities.Vision {
 		result.Capabilities = append(result.Capabilities, CapabilityVision)
 	}
@@ -259,24 +260,10 @@ func requestedOutputTokens(req NormalizedRequest) int64 {
 	return 0
 }
 
-func protocolForFormat(format normalize.Format) Protocol {
-	switch format {
-	case "anthropic":
-		return ProtocolAnthropic
-	case "openai-responses":
-		return ProtocolOpenAIResponses
-	default:
-		return ProtocolOpenAIChat
-	}
-}
-
 // Eligible evaluates typed profile evidence. A typed profile is conservative:
 // unknown, emulated and conditional cannot satisfy a hard requirement unless
 // a future evaluator explicitly implements their translation/conditions.
 func Eligible(route Route, requirements RequestRequirements) (bool, string) {
-	if route.Protocol != "" && requirements.Protocol != "" && route.Protocol != requirements.Protocol && !(requirements.Protocol == ProtocolOpenAIChat && (route.Protocol == ProtocolAnthropic || route.Protocol == ProtocolGemini)) {
-		return false, fmt.Sprintf("protocol %s is not accepted", requirements.Protocol)
-	}
 	if len(route.Profile) > 0 {
 		for _, capability := range requirements.Capabilities {
 			item, ok := route.Profile[capability]

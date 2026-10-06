@@ -3,6 +3,7 @@ package kernel
 import (
 	"fmt"
 	"math"
+	"sync"
 )
 
 type StrategyOptionType string
@@ -64,9 +65,52 @@ var builtinStrategyDefinitions = []StrategyDefinition{
 	},
 }
 
+var strategyCatalog = struct {
+	sync.RWMutex
+	definitions []StrategyDefinition
+}{definitions: append([]StrategyDefinition(nil), builtinStrategyDefinitions...)}
+
+// RegisterStrategyDefinition adds an executable strategy to the shared
+// catalog. Provider/product extensions register once during daemon startup;
+// validation, scheduling and generic clients consume the same definition.
+func RegisterStrategyDefinition(definition StrategyDefinition) error {
+	if definition.ID == "" || definition.Label == "" || definition.Description == "" || definition.Runtime == "" || definition.Primitive == nil {
+		return fmt.Errorf("strategy definition requires ID, label, description, runtime and primitive")
+	}
+	if err := ValidateStrategyOptions(definition.ID, definition.Options); err != nil {
+		return err
+	}
+	strategyCatalog.Lock()
+	defer strategyCatalog.Unlock()
+	for _, existing := range strategyCatalog.definitions {
+		if existing.ID == definition.ID || existing.Runtime == definition.Runtime {
+			return fmt.Errorf("strategy ID or runtime %q is already registered", definition.ID)
+		}
+	}
+	definition.Options = append([]StrategyOptionDefinition(nil), definition.Options...)
+	strategyCatalog.definitions = append(strategyCatalog.definitions, definition)
+	return nil
+}
+
+func ValidateStrategyOptions(id string, options []StrategyOptionDefinition) error {
+	seen := make(map[string]bool, len(options))
+	for _, option := range options {
+		if option.Key == "" || option.Label == "" || option.Type != StrategyOptionInteger || seen[option.Key] {
+			return fmt.Errorf("strategy %q has an invalid or duplicate option definition", id)
+		}
+		if option.Maximum > 0 && option.Minimum > option.Maximum {
+			return fmt.Errorf("strategy %q option %q has an invalid range", id, option.Key)
+		}
+		seen[option.Key] = true
+	}
+	return nil
+}
+
 func StrategyDefinitions() []StrategyDefinition {
-	result := make([]StrategyDefinition, 0, len(builtinStrategyDefinitions))
-	for _, definition := range builtinStrategyDefinitions {
+	strategyCatalog.RLock()
+	defer strategyCatalog.RUnlock()
+	result := make([]StrategyDefinition, 0, len(strategyCatalog.definitions))
+	for _, definition := range strategyCatalog.definitions {
 		copy := definition
 		copy.Options = append([]StrategyOptionDefinition(nil), definition.Options...)
 		result = append(result, copy)
@@ -75,7 +119,9 @@ func StrategyDefinitions() []StrategyDefinition {
 }
 
 func StrategyDefinitionByID(id string) (StrategyDefinition, bool) {
-	for _, definition := range builtinStrategyDefinitions {
+	strategyCatalog.RLock()
+	defer strategyCatalog.RUnlock()
+	for _, definition := range strategyCatalog.definitions {
 		if definition.ID == id {
 			copy := definition
 			copy.Options = append([]StrategyOptionDefinition(nil), definition.Options...)

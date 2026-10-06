@@ -24,9 +24,9 @@ func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	if prepared.URL != "https://provider.example/v1/chat/completions" || prepared.Headers.Get("Authorization") != "Bearer secret" {
 		t.Fatalf("prepared=%#v", prepared)
 	}
-	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))}
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\n"))}
 	recorder := httptest.NewRecorder()
-	if err := adapter.TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{}); err != nil {
+	if err := adapter.RenderResponse(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(recorder.Body.String(), "data:") {
@@ -50,22 +50,12 @@ func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	}
 }
 
-func TestChatCodecDeclaresOnlyChatClientContract(t *testing.T) {
-	codec := chatResponseCodec{}
-	if !codec.SupportsClientFormat(normalize.FormatOpenAIChat).Supported {
-		t.Fatal("Chat codec should support Chat Completions ingress")
-	}
-	if codec.SupportsClientFormat(normalize.FormatAnthropic).Supported || codec.SupportsClientFormat(normalize.FormatOpenAIResponses).Supported {
-		t.Fatal("Chat passthrough must not claim other wire contracts")
-	}
-}
-
 func TestChatAdapterEmitsCanonicalSSEEvents(t *testing.T) {
 	body := "data: {\"choices\":[{\"delta\":{\"content\":\"hello\",\"tool_calls\":[{\"id\":\"call-1\",\"function\":{\"name\":\"search\",\"arguments\":\"{}\"}}]}}]}\n\ndata: {\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}\n\ndata: [DONE]\n\n"
 	var events []kernel.ResponseEvent
 	recorder := httptest.NewRecorder()
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
-	err := (Chat{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }})
+	err := NewAdapter().RenderResponse(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,18 +78,22 @@ func TestChatAdapterReportsMalformedSSE(t *testing.T) {
 	var streamErr error
 	recorder := httptest.NewRecorder()
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {bad}\n\n"))}
-	err := (Chat{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { got = event }, OnError: func(err error) { streamErr = err }})
+	err := NewAdapter().RenderResponse(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnEvent: func(event kernel.ResponseEvent) { got = event }, OnError: func(err error) { streamErr = err }})
 	if err == nil || streamErr == nil || got.Kind != kernel.EventResponseError {
 		t.Fatalf("err=%v streamErr=%v event=%#v", err, streamErr, got)
 	}
 }
 
 func TestResponsesEventsKeepContinuityIdentity(t *testing.T) {
-	body := "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_1\",\"item_id\":\"msg_1\",\"delta\":\"hi\"}\n\n"
+	body := "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_1\",\"item_id\":\"msg_1\",\"delta\":\"hi\"}\n\ndata: {\"type\":\"response.completed\",\"response_id\":\"resp_1\",\"response\":{\"status\":\"completed\"}}\n\n"
 	var event kernel.ResponseEvent
 	recorder := httptest.NewRecorder()
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
-	if err := (Responses{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(got kernel.ResponseEvent) { event = got }}); err != nil {
+	if err := NewResponsesAdapter().RenderResponse(context.Background(), response, recorder, normalize.FormatOpenAIResponses, kernel.StreamHooks{Streaming: true, OnEvent: func(got kernel.ResponseEvent) {
+		if got.Kind == kernel.EventTextDelta {
+			event = got
+		}
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if event.ResponseID != "resp_1" || event.ItemID != "msg_1" || event.ContentType != "output_text" {
@@ -111,7 +105,7 @@ func TestResponsesJSONExposesResponseIDForSessionContinuity(t *testing.T) {
 	body := `{"id":"resp_42","object":"response","status":"completed"}`
 	var responseID string
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
-	if err := (Responses{}).TranslateStream(context.Background(), response, httptest.NewRecorder(), normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) {
+	if err := NewResponsesAdapter().RenderResponse(context.Background(), response, httptest.NewRecorder(), normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) {
 		if event.Kind == kernel.EventResponseComplete {
 			responseID = event.ResponseID
 		}
@@ -124,30 +118,34 @@ func TestResponsesJSONExposesResponseIDForSessionContinuity(t *testing.T) {
 }
 
 func TestResponsesEventsKeepOutputItemBoundaries(t *testing.T) {
-	body := "data: {\"type\":\"response.output_item.added\",\"response_id\":\"resp_1\",\"item_id\":\"item_1\",\"item_type\":\"message\"}\n\ndata: {\"type\":\"response.output_item.done\",\"response_id\":\"resp_1\",\"item_id\":\"item_1\",\"status\":\"completed\"}\n\n"
+	body := "data: {\"type\":\"response.output_item.added\",\"response_id\":\"resp_1\",\"item_id\":\"item_1\",\"item_type\":\"message\"}\n\ndata: {\"type\":\"response.output_item.done\",\"response_id\":\"resp_1\",\"item_id\":\"item_1\",\"status\":\"completed\"}\n\ndata: {\"type\":\"response.completed\",\"response_id\":\"resp_1\",\"response\":{\"status\":\"completed\"}}\n\n"
 	var events []kernel.ResponseEvent
 	recorder := httptest.NewRecorder()
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
-	if err := (Responses{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }}); err != nil {
+	if err := NewResponsesAdapter().RenderResponse(context.Background(), response, recorder, normalize.FormatOpenAIResponses, kernel.StreamHooks{Streaming: true, OnEvent: func(event kernel.ResponseEvent) {
+		if event.Kind != kernel.EventRawFrame {
+			events = append(events, event)
+		}
+	}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].Kind != kernel.EventContentBlockStart || events[1].Kind != kernel.EventContentBlockEnd || events[1].StopReason != "completed" {
+	if len(events) < 3 || events[0].Kind != kernel.EventContentBlockStart || events[1].Kind != kernel.EventContentBlockEnd || events[len(events)-1].Kind != kernel.EventResponseComplete {
 		t.Fatalf("events=%#v", events)
 	}
 }
 
 func TestChatJSONRendererPreservesBodyAndEmitsText(t *testing.T) {
-	body := `{"id":"chat","choices":[{"message":{"content":"hello"}}],"usage":{"input_tokens":2,"output_tokens":1}}`
+	body := `{"id":"chat","choices":[{"message":{"content":"hello"},"finish_reason":"stop"}],"usage":{"input_tokens":2,"output_tokens":1}}`
 	var events []kernel.ResponseEvent
 	recorder := httptest.NewRecorder()
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
-	if err := (Chat{}).TranslateStream(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }}); err != nil {
+	if err := NewAdapter().RenderResponse(context.Background(), response, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }}); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.Body.String() != body {
 		t.Fatalf("body changed: %q", recorder.Body.String())
 	}
-	if len(events) == 0 || events[0].Kind != kernel.EventTextDelta || events[0].Text != "hello" {
+	if len(events) < 2 || events[1].Kind != kernel.EventTextDelta || events[1].Text != "hello" {
 		t.Fatalf("events=%#v", events)
 	}
 }

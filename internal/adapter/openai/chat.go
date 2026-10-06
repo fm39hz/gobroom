@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -17,8 +17,7 @@ type Chat struct{ Client *http.Client }
 
 const defaultUpstreamTimeout = 2 * time.Minute
 
-func (Chat) ID() string                { return "openai-chat" }
-func (Chat) Protocol() kernel.Protocol { return kernel.ProtocolOpenAIChat }
+func (Chat) ID() string { return "openai-chat" }
 
 type chatRequestCodec struct{ adapter Chat }
 
@@ -27,28 +26,35 @@ func (c chatRequestCodec) Prepare(ctx context.Context, request kernel.Normalized
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
 
-type chatResponseCodec struct{ adapter Chat }
+type chatResponseDecoder struct{ adapter Chat }
 
-func (chatResponseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
-	return kernel.CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Lossless: format == normalize.FormatOpenAIChat, Reason: "OpenAI Chat codec currently emits Chat Completions wire format"}
-}
-
-func (c chatResponseCodec) ID() string { return "openai-sse" }
-func (c chatResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+func (c chatResponseDecoder) ID() string { return "openai-sse" }
+func (c chatResponseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
 }
-func (c chatResponseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
-	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+func (c chatResponseDecoder) Decode(ctx context.Context, response kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	return c.adapter.DecodeResponse(ctx, response, normalize.FormatOpenAIChat, emit, hooks)
 }
-
 func NewAdapter() kernel.ProviderAdapter {
 	adapter := Chat{}
-	return kernel.ComposedAdapter{AdapterID: "openai-chat", AdapterProtocol: kernel.ProtocolOpenAIChat, Endpoint: kernel.HTTPJSONEndpoint{}, Request: chatRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: chatResponseCodec{adapter}}
+	return kernel.ComposedAdapter{AdapterID: "openai-chat", Endpoint: kernel.HTTPJSONEndpoint{}, Request: chatRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: chatResponseDecoder{adapter}, Renderers: rendererMap(), ProviderFormat: normalize.FormatOpenAIChat}
 }
 
-func NewChatCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+func rendererMap() map[normalize.Format]kernel.ResponseRenderer {
+	result := make(map[normalize.Format]kernel.ResponseRenderer)
+	for _, renderer := range egress.Builtins() {
+		result[renderer.ID()] = renderer
+	}
+	return result
+}
+
+func NewChatCodecs() (kernel.RequestCodec, kernel.ResponseDecoder) {
 	adapter := Chat{}
-	return chatRequestCodec{adapter}, chatResponseCodec{adapter}
+	return chatRequestCodec{adapter}, chatResponseDecoder{adapter}
+}
+
+func (Chat) DecodeResponse(ctx context.Context, response kernel.UpstreamResponse, wireFormat normalize.Format, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	return decodeOpenAIResponse(ctx, response, wireFormat, emit, hooks)
 }
 
 func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
@@ -112,36 +118,3 @@ func (Chat) ClassifyError(status int, body []byte) kernel.ErrorClass {
 		return ""
 	}
 }
-
-func (a Chat) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
-	for key, values := range response.Headers {
-		for _, value := range values {
-			writer.Header().Add(key, value)
-		}
-	}
-	writer.WriteHeader(response.Status)
-	if strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream") {
-		return streamSSEEvents(response.Body, writer, hooks)
-	}
-	if hooks.OnFirstByte != nil {
-		hooks.OnFirstByte(timeNow())
-	}
-	data, err := io.ReadAll(response.Body)
-	if err == nil {
-		_, err = writer.Write(data)
-		observeOpenAIJSON(data, hooks.OnEvent)
-	}
-	if err != nil {
-		if hooks.OnError != nil {
-			hooks.OnError(err)
-		}
-		return err
-	}
-	if hooks.OnComplete != nil {
-		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
-	}
-	return nil
-}
-
-// Isolated for deterministic adapter tests.
-var timeNow = func() time.Time { return time.Now() }

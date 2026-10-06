@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -49,25 +50,30 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	}
 	for _, row := range routeRows {
 		protocol := kernel.Protocol(row.Protocol)
-		if protocol == "chat" {
-			protocol = kernel.ProtocolOpenAIChat
+		routeBindings := provider.RuntimeBindingsForProtocol(l.Bindings, row.DefinitionID, protocol)
+		if l.Bindings != nil && len(routeBindings) == 0 {
+			return kernel.Snapshot{}, fmt.Errorf("provider definition %q has no inference operation for protocol %q", row.DefinitionID, protocol)
 		}
-		if protocol == "responses" {
-			protocol = kernel.ProtocolOpenAIResponses
-		}
-		if protocol == "" {
-			protocol = kernel.ProtocolOpenAIChat
-		}
-		operation, ok := provider.OperationForProtocol(protocol)
-		if !ok {
-			return kernel.Snapshot{}, fmt.Errorf("route %q has unsupported protocol %q", row.ID, protocol)
-		}
-		binding, ok := l.Bindings[provider.RuntimeBindingKey(row.DefinitionID, operation)]
-		if l.Bindings != nil && !ok {
-			return kernel.Snapshot{}, fmt.Errorf("provider definition %q has no runtime binding for %q", row.DefinitionID, operation)
+		var binding provider.RuntimeBinding
+		operationBindings := make(map[normalize.Operation]kernel.RouteOperationBinding, len(routeBindings))
+		if len(routeBindings) > 0 {
+			binding = routeBindings[0]
+			for _, routeBinding := range routeBindings {
+				if routeBinding.Task != "" {
+					operationBinding := operationBindings[routeBinding.Task]
+					operationBinding.AdapterIDs = append(operationBinding.AdapterIDs, routeBinding.AdapterID)
+					if operationBinding.ErrorClassifierID == "" {
+						operationBinding.ErrorClassifierID = routeBinding.ErrorClassifierID
+						operationBinding.UsageSourceID = routeBinding.UsageSourceID
+						operationBinding.UsageOptions = routeBinding.UsageOptions
+						operationBinding.SessionStoreID = routeBinding.SessionStoreID
+					}
+					operationBindings[routeBinding.Task] = operationBinding
+				}
+			}
 		}
 		quotaBinding := l.Bindings[provider.RuntimeBindingKey(row.DefinitionID, provider.OperationQuota)]
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, AdapterID: binding.AdapterID, ErrorClassifierID: binding.ErrorClassifierID, QuotaSourceID: quotaBinding.QuotaSourceID, QuotaEndpointID: quotaBinding.EndpointID, QuotaTransportID: quotaBinding.TransportID, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceID: binding.UsageSourceID, UsageOptions: binding.UsageOptions, SessionStoreID: binding.SessionStoreID, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierID: binding.ErrorClassifierID, QuotaSourceID: quotaBinding.QuotaSourceID, QuotaEndpointID: quotaBinding.EndpointID, QuotaTransportID: quotaBinding.TransportID, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceID: binding.UsageSourceID, UsageOptions: binding.UsageOptions, SessionStoreID: binding.SessionStoreID, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
 		baseID := row.ID
 		if at := strings.IndexByte(baseID, '@'); at >= 0 {
 			baseID = baseID[:at]

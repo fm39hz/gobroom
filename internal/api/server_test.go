@@ -135,6 +135,72 @@ func TestDataPlaneBearerTokenIsOptionalButEnforcedWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNamespacedOperationIngressRegistersWithoutServerRouteBranch(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/operation-ingress.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	server := NewServer(s)
+	codec := JSONOperationIngress{CodecID: "audio-transcription-v1", Operation: "audio.transcribe.v1", Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}
+	if err := server.RegisterOperationIngress(codec); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.RegisterOperationIngress(codec); err == nil {
+		t.Fatal("duplicate operation path registration must fail")
+	}
+	var got normalize.Operation
+	server.SetExecutor(func(_ context.Context, request normalize.Request, writer http.ResponseWriter) error {
+		got = request.Operation
+		_, err := writer.Write([]byte(`{"ok":true}`))
+		return err
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewBufferString(`{"model":"asr-model","input":"hello"}`))
+	recorder := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || got != "audio.transcribe.v1" {
+		t.Fatalf("status=%d operation=%q response=%s", recorder.Code, got, recorder.Body.String())
+	}
+}
+
+func TestProviderDefinitionMetadataIsAvailableThroughGenericControlAPI(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/provider-catalog.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := registry.DefinitionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(s)
+	server.SetProviderDefinitionCatalog(metadata)
+	recorder := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{ControlPlane: true}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/provider-definitions", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("catalog status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Definitions []provider.DefinitionMetadata `json:"definitions"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Definitions) == 0 {
+		t.Fatal("provider definition metadata was not exposed")
+	}
+	for _, definition := range response.Definitions {
+		if definition.ID == "openai-compatible-chat" && definition.Auth.ID == "static-secret" && len(definition.Auth.SetupSchema.Fields) == 1 {
+			return
+		}
+	}
+	t.Fatal("provider metadata endpoint omitted auth setup schema")
+}
+
 func TestOpenAIChatVerticalSliceReachesUpstream(t *testing.T) {
 	upstreamHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer secret" {

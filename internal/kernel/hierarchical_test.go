@@ -42,7 +42,10 @@ func (s observingStrategy) OnFailure(failure StrategyFailure, _ *StrategyState) 
 }
 
 func (a attemptAdapter) ID() string         { return "test" }
-func (a attemptAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
+func (a attemptAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision {
+	if format != normalize.FormatOpenAIChat { return CompatibilityDecision{Fidelity: FidelityUnsupported} }
+	return CompatibilityDecision{Supported: true, Fidelity: FidelityNative}
+}
 func (a attemptAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
 }
@@ -54,7 +57,7 @@ func (a attemptAdapter) Execute(_ context.Context, request UpstreamRequest) (Ups
 	return UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
 }
 func (attemptAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
-func (attemptAdapter) TranslateStream(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, _ StreamHooks) error {
+func (attemptAdapter) RenderResponse(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, _ StreamHooks) error {
 	_, err := io.Copy(writer, response.Body)
 	return err
 }
@@ -67,9 +70,9 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 			{ID: "physical", Kind: ModelPhysical, Strategy: "observing", Members: []MemberRef{{Kind: MemberRoute, ID: "child-a", Fidelity: FidelityExact}, {Kind: MemberRoute, ID: "child-b", Fidelity: FidelityExact}}},
 		},
 		Routes: []Route{
-			{ID: "child-a", AdapterID: "test", Protocol: ProtocolOpenAIChat, Enabled: true},
-			{ID: "child-b", AdapterID: "test", Protocol: ProtocolOpenAIChat, Enabled: true},
-			{ID: "outer-route", AdapterID: "test", Protocol: ProtocolOpenAIChat, Enabled: true},
+			{ID: "child-a", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
+			{ID: "child-b", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
+			{ID: "outer-route", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
 		},
 	}, 1)
 	if err != nil {
@@ -85,7 +88,7 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 	kernel.Adapters["test"] = attemptAdapter{attempts: &attempts}
 	kernel.Scheduler.RegisterStrategy("observing", observingStrategy{failedNodes: &failedNodes})
 	kernel.Scheduler.RegisterStrategy("observing-ordered", orderedObservingStrategy{failedNodes: &failedNodes})
-	request := NormalizedRequest{Model: "role", SourceFormat: normalize.FormatOpenAIChat}
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}
 
 	for i, want := range [][]string{{"child-a", "child-b", "outer-route"}, {"child-b", "child-a", "outer-route"}, {"child-a", "child-b", "outer-route"}} {
 		attempts = attempts[:0]

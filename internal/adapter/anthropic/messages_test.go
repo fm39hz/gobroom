@@ -18,8 +18,7 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	var usage kernel.UsageEvent
 	var events []kernel.ResponseEvent
-	adapter := Messages{}
-	if err := adapter.TranslateStream(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(body)}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }, OnComplete: func(event kernel.UsageEvent) { usage = event }}); err != nil {
+	if err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(body)}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }, OnComplete: func(event kernel.UsageEvent) { usage = event }}); err != nil {
 		t.Fatal(err)
 	}
 	output := recorder.Body.String()
@@ -46,7 +45,7 @@ func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {
 	body := `{"id":"msg_live","type":"message","model":"claude-opus-4-8","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":10370,"output_tokens":4}}`
 	recorder := httptest.NewRecorder()
 	var usage kernel.UsageEvent
-	err := (Messages{}).TranslateStream(context.Background(), kernel.UpstreamResponse{
+	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{
 		Status:  http.StatusOK,
 		Headers: http.Header{"Content-Type": []string{"application/json"}},
 		Body:    io.NopCloser(strings.NewReader(body)),
@@ -68,11 +67,11 @@ func TestAnthropicPassthroughStreamReportsUsageWithoutChangingEvents(t *testing.
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	recorder := httptest.NewRecorder()
 	var usage kernel.UsageEvent
-	err := (Messages{}).TranslateStream(context.Background(), kernel.UpstreamResponse{
+	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{
 		Status:  http.StatusOK,
 		Headers: http.Header{"Content-Type": []string{"text/event-stream"}},
 		Body:    io.NopCloser(strings.NewReader(body)),
-	}, recorder, normalize.FormatAnthropic, kernel.StreamHooks{OnComplete: func(event kernel.UsageEvent) { usage = event }})
+	}, recorder, normalize.FormatAnthropic, kernel.StreamHooks{Streaming: true, OnComplete: func(event kernel.UsageEvent) { usage = event }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,18 +119,5 @@ func TestAnthropicRequestMapsPromptPlanToTopLevelSystem(t *testing.T) {
 	system, ok := body["system"].([]any)
 	if !ok || len(system) != 1 || system[0].(map[string]any)["text"] != "policy" {
 		t.Fatalf("system=%#v", body["system"])
-	}
-}
-
-func TestAnthropicCodecDeclaresPassThroughAndChatTranslation(t *testing.T) {
-	codec := messagesResponseCodec{}
-	if got := codec.SupportsClientFormat(normalize.FormatAnthropic); !got.Supported || !got.Lossless {
-		t.Fatalf("Anthropic support=%#v", got)
-	}
-	if got := codec.SupportsClientFormat(normalize.FormatOpenAIChat); !got.Supported || got.Lossless {
-		t.Fatalf("Chat translation=%#v", got)
-	}
-	if codec.SupportsClientFormat(normalize.FormatOpenAIResponses).Supported {
-		t.Fatal("must not claim Responses rendering")
 	}
 }

@@ -2,20 +2,25 @@ package provider
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type RuntimeBinding struct {
 	DefinitionID      string
 	Operation         Operation
+	Task              normalize.Operation
+	Protocol          kernel.Protocol
+	ProviderFormat    normalize.Format
 	EndpointID        string
 	Endpoint          kernel.Endpoint
 	EndpointOptions   kernel.EndpointOptions
 	TransportID       string
 	Transport         kernel.Transport
 	RequestCodecID    string
-	ResponseCodecID   string
+	ResponseDecoderID string
 	AdapterID         string
 	Adapter           kernel.ProviderAdapter
 	AuthFlowID        string
@@ -31,6 +36,89 @@ type RuntimeBinding struct {
 	QuotaSourceID     string
 	QuotaSource       QuotaSource
 	QuotaWindowName   string
+}
+
+// DefinitionMetadata is the safe, frontend-facing projection of a provider
+// definition. It deliberately excludes credentials, auth options, endpoint
+// options and arbitrary defaults while exposing the schemas needed to build
+// generic setup forms.
+type DefinitionMetadata struct {
+	ID           string              `json:"id"`
+	Version      string              `json:"version"`
+	DisplayName  string              `json:"displayName"`
+	Aliases      []string            `json:"aliases,omitempty"`
+	Capabilities CapabilitySet       `json:"capabilities"`
+	Auth         AuthMetadata        `json:"auth"`
+	Operations   []OperationMetadata `json:"operations"`
+}
+
+type AuthMetadata struct {
+	ID          string      `json:"id"`
+	SetupSchema SetupSchema `json:"setupSchema"`
+}
+
+type OperationMetadata struct {
+	ID             Operation           `json:"id"`
+	Protocol       kernel.Protocol     `json:"protocol,omitempty"`
+	Task           normalize.Operation `json:"task,omitempty"`
+	ProviderFormat normalize.Format    `json:"providerFormat,omitempty"`
+	Primitives     map[string]string   `json:"primitives"`
+}
+
+// DefinitionCatalog returns deterministic, secret-free metadata for generic
+// control clients. Provider-specific behavior remains described by primitive
+// IDs rather than frontend branches.
+func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
+	if r == nil || r.Primitives == nil {
+		return nil, fmt.Errorf("provider runtime registry is not initialized")
+	}
+	definitions := r.Primitives.Definitions()
+	sort.Slice(definitions, func(i, j int) bool { return definitions[i].ID < definitions[j].ID })
+	result := make([]DefinitionMetadata, 0, len(definitions))
+	for _, definition := range definitions {
+		flow, err := r.Auth.Build(definition.Auth.ID, definition.AuthOptions)
+		if err != nil {
+			return nil, fmt.Errorf("provider %q auth metadata: %w", definition.ID, err)
+		}
+		item := DefinitionMetadata{
+			ID: definition.ID, Version: definition.Version,
+			DisplayName:  definition.DisplayName,
+			Aliases:      append([]string(nil), definition.Aliases...),
+			Capabilities: definition.Capabilities,
+			Auth:         AuthMetadata{ID: flow.ID(), SetupSchema: flow.SetupSchema()},
+		}
+		item.Auth.SetupSchema.Fields = append([]SetupField(nil), item.Auth.SetupSchema.Fields...)
+		operations := make([]string, 0, len(definition.Operations))
+		for operation := range definition.Operations {
+			operations = append(operations, string(operation))
+		}
+		sort.Strings(operations)
+		for _, rawOperation := range operations {
+			operation := Operation(rawOperation)
+			binding := definition.Operations[operation]
+			primitives := map[string]string{
+				"endpoint":        binding.Endpoint.ID,
+				"transport":       binding.Transport.ID,
+				"requestCodec":    binding.RequestCodec.ID,
+				"responseDecoder": binding.ResponseDecoder.ID,
+				"modelSource":     binding.ModelSource.ID,
+				"usageSource":     binding.UsageSource.ID,
+				"quotaSource":     binding.QuotaSource.ID,
+				"errorClassifier": binding.ErrorClassifier.ID,
+			}
+			for primitive, id := range primitives {
+				if id == "" {
+					delete(primitives, primitive)
+				}
+			}
+			item.Operations = append(item.Operations, OperationMetadata{
+				ID: operation, Protocol: binding.Protocol, Task: binding.Task,
+				ProviderFormat: binding.ProviderFormat, Primitives: primitives,
+			})
+		}
+		result = append(result, item)
+	}
+	return result, nil
 }
 
 type RuntimeBindingBuilder struct {
@@ -129,36 +217,43 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	}
 	endpointOptions := binding.EndpointOptions
 	endpointOptions.Query = query
-	result := RuntimeBinding{DefinitionID: definitionID, Operation: operation, EndpointID: binding.Endpoint.ID, Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, Transport: transport, RequestCodecID: binding.RequestCodec.ID, ResponseCodecID: binding.ResponseCodec.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
-	if operation != OperationChat && operation != OperationResponses && operation != OperationMessages {
+	task := binding.Task
+	if task == "" && binding.RequestCodec.ID != "" {
+		task = normalize.Operation(operation)
+	}
+	result := RuntimeBinding{DefinitionID: definitionID, Operation: operation, Task: task, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, Transport: transport, RequestCodecID: binding.RequestCodec.ID, ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
+	if binding.RequestCodec.ID == "" && binding.ResponseDecoder.ID == "" {
 		return result, nil
 	}
 	requestCodec, ok := b.registry.requestCodecs[binding.RequestCodec.ID]
 	if !ok {
 		return RuntimeBinding{}, fmt.Errorf("request codec %q is not registered", binding.RequestCodec.ID)
 	}
-	responseCodec, ok := b.registry.responseCodecs[binding.ResponseCodec.ID]
+	responseDecoder, ok := b.registry.responseDecoders[binding.ResponseDecoder.ID]
 	if !ok {
-		return RuntimeBinding{}, fmt.Errorf("response codec %q is not registered", binding.ResponseCodec.ID)
+		return RuntimeBinding{}, fmt.Errorf("response codec %q is not registered", binding.ResponseDecoder.ID)
 	}
 	result.AdapterID = RuntimeBindingKey(definitionID, operation)
-	result.Adapter = kernel.ComposedAdapter{AdapterID: result.AdapterID, AdapterProtocol: protocolForOperation(operation), Endpoint: endpoint, EndpointOptions: endpointOptions, Request: requestCodec, Transport: transport, Response: responseCodec}
-	return result, nil
-}
-
-func protocolForOperation(operation Operation) kernel.Protocol {
-	switch operation {
-	case OperationResponses:
-		return kernel.ProtocolOpenAIResponses
-	case OperationMessages:
-		return kernel.ProtocolAnthropic
-	default:
-		return kernel.ProtocolOpenAIChat
+	if result.Protocol == "" {
+		result.Protocol = kernel.Protocol(operation)
 	}
+	result.Adapter = kernel.ComposedAdapter{AdapterID: result.AdapterID, Endpoint: endpoint, EndpointOptions: endpointOptions, Request: requestCodec, Transport: transport, Response: responseDecoder, Renderers: b.registry.ResponseRenderers(), ProviderFormat: result.ProviderFormat}
+	return result, nil
 }
 
 func RuntimeBindingKey(definitionID string, operation Operation) string {
 	return definitionID + ":" + string(operation)
+}
+
+func RuntimeBindingsForProtocol(bindings map[string]RuntimeBinding, definitionID string, protocol kernel.Protocol) []RuntimeBinding {
+	result := make([]RuntimeBinding, 0)
+	for _, binding := range bindings {
+		if binding.DefinitionID == definitionID && binding.Adapter != nil && binding.Protocol == protocol {
+			result = append(result, binding)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Operation < result[j].Operation })
+	return result
 }
 
 func RuntimeErrorClassifierKey(definitionID string, operation Operation, primitiveID string) string {
@@ -170,19 +265,6 @@ func AuthBindingKey(definitionID, authFlowID string) string {
 		return ""
 	}
 	return definitionID + ":" + authFlowID
-}
-
-func OperationForProtocol(protocol kernel.Protocol) (Operation, bool) {
-	switch protocol {
-	case kernel.ProtocolOpenAIChat, kernel.ProtocolGemini:
-		return OperationChat, true
-	case kernel.ProtocolOpenAIResponses:
-		return OperationResponses, true
-	case kernel.ProtocolAnthropic:
-		return OperationMessages, true
-	default:
-		return "", false
-	}
 }
 
 func (r *RuntimeRegistry) BuildBindings() (map[string]RuntimeBinding, error) {

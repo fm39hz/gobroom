@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,14 +17,31 @@ type RequestCodec interface {
 	Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error)
 }
 
-type ResponseCodec interface {
+type ResponseDecoder interface {
 	ID() string
 	ClassifyError(status int, body []byte) ErrorClass
-	TranslateStream(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error
+	Decode(context.Context, UpstreamResponse, func(ResponseEvent) error, StreamHooks) error
 }
 
-type ClientFormatSupport interface {
-	SupportsClientFormat(normalize.Format) CompatibilityDecision
+type ResponseRenderContext struct {
+	Status            int
+	Headers           http.Header
+	ClientFormat      normalize.Format
+	ProviderFormat    normalize.Format
+	Streaming         bool
+	ProviderStreaming bool
+	Model             string
+}
+
+type ResponseRenderSession interface {
+	Emit(context.Context, ResponseEvent) error
+	Finish(context.Context, error) error
+}
+
+type ResponseRenderer interface {
+	ID() normalize.Format
+	SupportsResponse(ResponseRenderContext) CompatibilityDecision
+	Begin(context.Context, ResponseRenderContext, http.ResponseWriter) (ResponseRenderSession, error)
 }
 
 type Transport interface {
@@ -88,21 +106,22 @@ func (HTTPJSONEndpoint) Resolve(baseURL, operationPath string, options EndpointO
 
 type ComposedAdapter struct {
 	AdapterID       string
-	AdapterProtocol Protocol
 	Endpoint        Endpoint
 	EndpointOptions EndpointOptions
 	Request         RequestCodec
 	Transport       Transport
-	Response        ResponseCodec
+	Response        ResponseDecoder
+	Renderers       map[normalize.Format]ResponseRenderer
+	ProviderFormat  normalize.Format
 }
 
-func (a ComposedAdapter) ID() string         { return a.AdapterID }
-func (a ComposedAdapter) Protocol() Protocol { return a.AdapterProtocol }
-func (a ComposedAdapter) NegotiateClientFormat(format normalize.Format) CompatibilityDecision {
-	if support, ok := a.Response.(ClientFormatSupport); ok {
-		return support.SupportsClientFormat(format)
+func (a ComposedAdapter) ID() string { return a.AdapterID }
+func (a ComposedAdapter) NegotiateClientFormat(format normalize.Format, streaming bool) CompatibilityDecision {
+	renderer, ok := a.Renderers[format]
+	if !ok {
+		return CompatibilityDecision{Reason: "no client renderer is registered for the requested format"}
 	}
-	return CompatibilityDecision{Reason: "response codec does not declare client formats"}
+	return renderer.SupportsResponse(ResponseRenderContext{ClientFormat: format, ProviderFormat: a.ProviderFormat, Streaming: streaming, ProviderStreaming: streaming})
 }
 func (a ComposedAdapter) Prepare(ctx context.Context, req NormalizedRequest, route Route, credential Credential) (UpstreamRequest, error) {
 	upstream, err := a.Request.Prepare(ctx, req, route, credential)
@@ -124,8 +143,92 @@ func (a ComposedAdapter) Execute(ctx context.Context, req UpstreamRequest) (Upst
 func (a ComposedAdapter) ClassifyError(status int, body []byte) ErrorClass {
 	return a.Response.ClassifyError(status, body)
 }
-func (a ComposedAdapter) TranslateStream(ctx context.Context, response UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks StreamHooks) error {
-	return a.Response.TranslateStream(ctx, response, writer, source, hooks)
+func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks StreamHooks) error {
+	renderer := a.Renderers[source]
+	if renderer == nil {
+		return fmt.Errorf("adapter %q has no renderer for client format %q", a.AdapterID, source)
+	}
+	providerStreaming := strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream")
+	session, err := renderer.Begin(ctx, ResponseRenderContext{Status: response.Status, Headers: response.Headers, ClientFormat: source, ProviderFormat: a.ProviderFormat, Streaming: hooks.Streaming, ProviderStreaming: providerStreaming, Model: hooks.Model}, writer)
+	if err != nil {
+		return err
+	}
+	decodeHooks := hooks
+	decodeHooks.OnEvent = nil
+	decodeHooks.OnError = nil
+	decodeHooks.TransformResponse = nil
+	firstByte := false
+	signalFirstByte := func(at time.Time) {
+		if firstByte {
+			return
+		}
+		firstByte = true
+		if hooks.OnFirstByte != nil {
+			hooks.OnFirstByte(at)
+		}
+	}
+	decodeHooks.OnFirstByte = signalFirstByte
+	decoderCompleted := false
+	completionUsage := UsageEvent{}
+	decodeHooks.OnComplete = func(event UsageEvent) {
+		decoderCompleted = true
+		completionUsage = event
+	}
+	providerComplete := false
+	firstEvent := false
+	emit := func(event ResponseEvent) error {
+		if event.Kind == EventResponseComplete {
+			providerComplete = true
+			if event.Usage != nil {
+				completionUsage = *event.Usage
+			}
+		}
+		if event.Kind == EventUsage && event.Usage != nil {
+			completionUsage = *event.Usage
+		}
+		if !firstEvent {
+			firstEvent = true
+			signalFirstByte(time.Now())
+		}
+		if hooks.TransformResponse != nil {
+			transformed, transformErr := hooks.TransformResponse(ctx, event)
+			if transformErr != nil {
+				return transformErr
+			}
+			event = transformed
+		}
+		if hooks.OnEvent != nil {
+			hooks.OnEvent(event)
+		}
+		return session.Emit(ctx, event)
+	}
+	decodeErr := a.Response.Decode(ctx, response, emit, decodeHooks)
+	if decodeErr == nil && !providerComplete {
+		decodeErr = io.ErrUnexpectedEOF
+	}
+	if decodeErr != nil {
+		_ = emit(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: decodeErr.Error()})
+	}
+	finishErr := session.Finish(ctx, decodeErr)
+	if decodeErr != nil {
+		if hooks.OnError != nil {
+			hooks.OnError(decodeErr)
+		}
+		return decodeErr
+	}
+	if finishErr != nil {
+		if hooks.OnError != nil {
+			hooks.OnError(finishErr)
+		}
+		return finishErr
+	}
+	if !decoderCompleted {
+		completionUsage.Status = "ok"
+	}
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(completionUsage)
+	}
+	return nil
 }
 
 type HTTPTransport struct {

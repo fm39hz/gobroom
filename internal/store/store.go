@@ -994,9 +994,6 @@ WHERE m.enabled=1 AND (m.kind='custom' OR e.connection_id IS NOT NULL) ORDER BY 
 		if err := rows.Scan(&r.ID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.BaseURL, &r.AuthMode, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
 			return nil, err
 		}
-		if r.Protocol == "" {
-			r.Protocol = "chat"
-		}
 		r.Enabled = enabled == 1
 		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
 		_ = json.Unmarshal([]byte(limits), &r.Limits)

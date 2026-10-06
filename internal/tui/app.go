@@ -19,6 +19,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/fm39hz/gobroom/internal/discovery"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 )
 
 type sectionID int
@@ -36,6 +37,7 @@ const (
 	sectionPhysical
 	sectionComboModels
 	sectionStrategies
+	sectionProviderCatalog
 )
 
 type section struct {
@@ -57,6 +59,7 @@ var sections = []section{
 	{id: sectionPhysical, label: "Physical", method: "physical_models.list"},
 	{id: sectionComboModels, label: "Combos", method: "combo_models.list"},
 	{id: sectionStrategies, label: "Strategies", method: "strategies.list"},
+	{id: sectionProviderCatalog, label: "Provider definition catalog", method: "providers.catalog"},
 }
 
 type dashboardPaneID int
@@ -232,6 +235,7 @@ type app struct {
 	commandErr            string
 
 	providers           []providerNode
+	providerCatalog     []provider.DefinitionMetadata
 	providerContextID   string
 	strategyCatalog     []kernel.StrategyDefinition
 	importPreview       discovery.ConnectionModelsPreview
@@ -582,6 +586,16 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case fetchMsg:
+		if message.section == sectionProviderCatalog {
+			if message.err != nil {
+				m.status = "provider setup metadata unavailable: " + message.err.Error()
+				return m, nil
+			}
+			if err := json.Unmarshal(message.result, &m.providerCatalog); err != nil {
+				m.status = "decode provider setup metadata: " + err.Error()
+			}
+			return m, nil
+		}
 		if message.section == sectionStrategies {
 			if message.err != nil {
 				m.pendingStrategyPicker = false
@@ -1069,7 +1083,7 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
 				if node, ok := selected.payload.(providerNode); ok {
-					m.form = newConnectionForm(node)
+					m.form = newConnectionFormWithMetadata(node, m.providerCatalog)
 					m.mode = modeForm
 					m.resize()
 				} else {

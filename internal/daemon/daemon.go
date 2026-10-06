@@ -45,6 +45,8 @@ type Daemon struct {
 	httpControl         *http.Server
 	kernel              *kernel.Kernel
 	providerBindings    map[string]provider.RuntimeBinding
+	providerRegistry    *provider.RuntimeRegistry
+	providerCatalog     []provider.DefinitionMetadata
 	authFlows           map[string]provider.AuthFlow
 	providerAuthModes   map[string]string
 	providerAuthFlowIDs map[string]string
@@ -108,6 +110,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 			return fmt.Errorf("load provider manifests: %w", err)
 		}
 	}
+	d.providerRegistry = runtimeRegistry
+	d.providerCatalog, err = runtimeRegistry.DefinitionCatalog()
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("build provider definition catalog: %w", err)
+	}
 	runtimeBindings, err := runtimeRegistry.BuildBindings()
 	if err != nil {
 		_ = s.Close()
@@ -118,6 +126,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.providerAuthModes = runtimeRegistry.DefaultCredentialTypes()
 	d.providerAuthFlowIDs = runtimeRegistry.AuthFlowIDsByDefinition()
 	d.server = api.NewServerWithRuntimeBindings(s, runtimeBindings)
+	d.server.SetProviderDefinitionCatalog(d.providerCatalog)
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	started := false
@@ -495,6 +504,11 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "providers.catalog":
+		if d.providerRegistry == nil {
+			return fail(request, "provider definitions unavailable")
+		}
+		return success(request, d.providerCatalog)
 	case "providers.refresh_models":
 		var input struct {
 			NodeID       string   `json:"nodeID"`

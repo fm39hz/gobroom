@@ -30,8 +30,9 @@ func NewScheduler(gate Gate) *Scheduler {
 	if gate == nil {
 		gate = AlwaysOpenGate{}
 	}
-	strategies := make(map[Strategy]StrategyPrimitive, len(builtinStrategyDefinitions))
-	for _, definition := range builtinStrategyDefinitions {
+	definitions := StrategyDefinitions()
+	strategies := make(map[Strategy]StrategyPrimitive, len(definitions))
+	for _, definition := range definitions {
 		strategies[definition.Runtime] = definition.Primitive
 	}
 	return &Scheduler{cursors: map[string]int{}, sticky: map[string]stickyState{}, gate: gate,

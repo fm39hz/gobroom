@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -18,8 +20,7 @@ type Messages struct{ Client *http.Client }
 
 const defaultUpstreamTimeout = 2 * time.Minute
 
-func (Messages) ID() string                { return "anthropic-messages" }
-func (Messages) Protocol() kernel.Protocol { return kernel.ProtocolAnthropic }
+func (Messages) ID() string { return "anthropic-messages" }
 
 type messagesRequestCodec struct{ adapter Messages }
 
@@ -28,29 +29,243 @@ func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.Normal
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
 
-type messagesResponseCodec struct{ adapter Messages }
+type messagesResponseDecoder struct{ adapter Messages }
 
-func (messagesResponseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
-	supported := format == normalize.FormatAnthropic || format == normalize.FormatOpenAIChat
-	return kernel.CompatibilityDecision{Supported: supported, Lossless: format == normalize.FormatAnthropic, Reason: "Anthropic Messages codec passes Anthropic through and translates to OpenAI Chat"}
-}
-
-func (c messagesResponseCodec) ID() string { return "anthropic-sse" }
-func (c messagesResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+func (c messagesResponseDecoder) ID() string { return "anthropic-sse" }
+func (c messagesResponseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
 }
-func (c messagesResponseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
-	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+func (c messagesResponseDecoder) Decode(ctx context.Context, response kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	return c.adapter.DecodeResponse(ctx, response, emit, hooks)
 }
-
 func NewAdapter() kernel.ProviderAdapter {
 	adapter := Messages{}
-	return kernel.ComposedAdapter{AdapterID: "anthropic-messages", AdapterProtocol: kernel.ProtocolAnthropic, Endpoint: kernel.HTTPJSONEndpoint{}, Request: messagesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: messagesResponseCodec{adapter}}
+	return kernel.ComposedAdapter{AdapterID: "anthropic-messages", Endpoint: kernel.HTTPJSONEndpoint{}, Request: messagesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: messagesResponseDecoder{adapter}, Renderers: rendererMap(), ProviderFormat: normalize.FormatAnthropic}
 }
 
-func NewMessageCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+func rendererMap() map[normalize.Format]kernel.ResponseRenderer {
+	result := make(map[normalize.Format]kernel.ResponseRenderer)
+	for _, renderer := range egress.Builtins() {
+		result[renderer.ID()] = renderer
+	}
+	return result
+}
+
+func NewMessageCodecs() (kernel.RequestCodec, kernel.ResponseDecoder) {
 	adapter := Messages{}
-	return messagesRequestCodec{adapter}, messagesResponseCodec{adapter}
+	return messagesRequestCodec{adapter}, messagesResponseDecoder{adapter}
+}
+
+func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	if response.Body == nil {
+		return fmt.Errorf("Anthropic response body is empty")
+	}
+	contentType := strings.ToLower(response.Headers.Get("content-type"))
+	if strings.Contains(contentType, "text/event-stream") {
+		scanner := bufio.NewScanner(response.Body)
+		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
+		scanner.Split(splitAnthropicSSELines)
+		var usage kernel.UsageEvent
+		started := false
+		toolIndex := -1
+		for scanner.Scan() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			rawLine := append([]byte(nil), scanner.Bytes()...)
+			line := strings.TrimRight(string(rawLine), "\r\n")
+			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
+				return err
+			}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "data:"), "\n"))
+			if data == "" || data == "[DONE]" {
+				continue
+			}
+			var event map[string]any
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				return fmt.Errorf("decode Anthropic SSE event: %w", err)
+			}
+			if !started {
+				started = true
+				if hooks.OnFirstByte != nil {
+					hooks.OnFirstByte(time.Now())
+				}
+			}
+			updatedUsage, updatedToolIndex, err := emitAnthropicEvents(event, usage, toolIndex, emit)
+			usage, toolIndex = updatedUsage, updatedToolIndex
+			if err != nil {
+				return err
+			}
+			if stringValue(event["type"]) == "message_stop" {
+				usage.Status = "ok"
+				if hooks.OnComplete != nil {
+					hooks.OnComplete(usage)
+				}
+			}
+		}
+		return scanner.Err()
+	}
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("decode Anthropic response: %w", err)
+	}
+	if hooks.OnFirstByte != nil {
+		hooks.OnFirstByte(time.Now())
+	}
+	if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: append([]byte(nil), data...)}); err != nil {
+		return err
+	}
+	usage, _, err := emitAnthropicEvents(payload, kernel.UsageEvent{}, -1, emit)
+	if err != nil {
+		return err
+	}
+	usage.Status = "ok"
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(usage)
+	}
+	return nil
+}
+
+func splitAnthropicSSELines(data []byte, atEOF bool) (int, []byte, error) {
+	if index := bytes.IndexByte(data, '\n'); index >= 0 {
+		return index + 1, data[:index+1], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
+}
+
+func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolIndex int, emit func(kernel.ResponseEvent) error) (kernel.UsageEvent, int, error) {
+	now := time.Now()
+	if message, ok := event["message"].(map[string]any); ok {
+		if id := stringValue(message["id"]); id != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+		if rawUsage, ok := message["usage"].(map[string]any); ok {
+			usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
+		}
+		if blocks, ok := message["content"].([]any); ok {
+			for index, raw := range blocks {
+				block, _ := raw.(map[string]any)
+				if err := emitAnthropicBlock(block, index, emit); err != nil {
+					return usage, toolIndex, err
+				}
+			}
+		}
+	}
+	if stringValue(event["type"]) == "" || stringValue(event["type"]) == "message" {
+		if id := stringValue(event["id"]); id != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+		if rawUsage, ok := event["usage"].(map[string]any); ok {
+			usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
+			usage.OutputTokens = int64(numberValue(rawUsage["output_tokens"]))
+		}
+		if blocks, ok := event["content"].([]any); ok {
+			for index, raw := range blocks {
+				block, _ := raw.(map[string]any)
+				if err := emitAnthropicBlock(block, index, emit); err != nil {
+					return usage, toolIndex, err
+				}
+			}
+		}
+		stop := stringValue(event["stop_reason"])
+		if stop != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: stop, Usage: &usage}); err != nil {
+				return usage, toolIndex, err
+			}
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, Usage: &usage}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+	}
+	switch stringValue(event["type"]) {
+	case "message_start":
+		message, _ := event["message"].(map[string]any)
+		rawUsage, _ := message["usage"].(map[string]any)
+		usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
+	case "content_block_start":
+		block, _ := event["content_block"].(map[string]any)
+		toolIndex++
+		if err := emitAnthropicBlock(block, toolIndex, emit); err != nil {
+			return usage, toolIndex, err
+		}
+	case "content_block_delta":
+		delta, _ := event["delta"].(map[string]any)
+		if text := stringValue(delta["text"]); text != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, Text: text}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+		if thinking := stringValue(delta["thinking"]); thinking != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Text: thinking}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+		if partial := stringValue(delta["partial_json"]); partial != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolArguments: partial}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+	case "message_delta":
+		delta, _ := event["delta"].(map[string]any)
+		rawUsage, _ := event["usage"].(map[string]any)
+		if value := int64(numberValue(rawUsage["output_tokens"])); value > 0 {
+			usage.OutputTokens = value
+		}
+		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &usage}); err != nil {
+			return usage, toolIndex, err
+		}
+		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: stringValue(delta["stop_reason"]), Usage: &usage}); err != nil {
+			return usage, toolIndex, err
+		}
+	case "message_stop":
+		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, Usage: &usage}); err != nil {
+			return usage, toolIndex, err
+		}
+	}
+	return usage, toolIndex, nil
+}
+
+func emitAnthropicBlock(block map[string]any, index int, emit func(kernel.ResponseEvent) error) error {
+	now := time.Now()
+	typ := stringValue(block["type"])
+	if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockStart, Index: index, BlockType: typ}); err != nil {
+		return err
+	}
+	switch typ {
+	case "text":
+		if text := stringValue(block["text"]); text != "" {
+			return emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, Index: index, Text: text})
+		}
+	case "thinking":
+		if text := stringValue(block["thinking"]); text != "" {
+			return emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Index: index, Text: text})
+		}
+	case "tool_use":
+		arguments := ""
+		if input, exists := block["input"]; exists && input != nil {
+			encoded, err := json.Marshal(input)
+			if err != nil {
+				return err
+			}
+			arguments = string(encoded)
+		}
+		return emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: index, ToolCallID: stringValue(block["id"]), ToolName: stringValue(block["name"]), ToolArguments: arguments})
+	}
+	return nil
 }
 
 func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
@@ -140,252 +355,6 @@ func (Messages) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	}
 	return ""
 }
-func (a Messages) TranslateStream(_ context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
-	if source == normalize.FormatAnthropic {
-		copyHeaders(writer, response.Headers)
-		writer.WriteHeader(response.Status)
-		if hooks.OnFirstByte != nil {
-			hooks.OnFirstByte(time.Now())
-		}
-		var usage anthropicUsage
-		var err error
-		if strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream") {
-			observer := &anthropicUsageObserver{}
-			_, err = io.Copy(io.MultiWriter(writer, observer), response.Body)
-			observer.finish()
-			usage = observer.usage
-		} else {
-			usage, err = copyAnthropicJSONAndUsage(writer, response.Body)
-		}
-		if err == nil && hooks.OnComplete != nil {
-			hooks.OnComplete(kernel.UsageEvent{Status: "ok", InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens})
-		}
-		if err != nil && hooks.OnError != nil {
-			hooks.OnError(err)
-		}
-		return err
-	}
-	contentType := strings.ToLower(response.Headers.Get("content-type"))
-	if strings.Contains(contentType, "text/event-stream") || response.Body != nil {
-		if strings.Contains(contentType, "text/event-stream") {
-			return translateAnthropicSSE(response.Body, writer, hooks)
-		}
-	}
-	data, err := io.ReadAll(response.Body)
-	if err != nil {
-		return err
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return err
-	}
-	err = writeOpenAIJSON(writer, response.Status, payload)
-	if err == nil && hooks.OnComplete != nil {
-		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
-	}
-	if err != nil && hooks.OnError != nil {
-		hooks.OnError(err)
-	}
-	return err
-}
-
-type anthropicUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-}
-
-// copyAnthropicJSONAndUsage tees the original response bytes directly to the
-// client while decoding usage. It avoids buffering arbitrarily large JSON
-// completions and does not alter the Anthropic wire response.
-func copyAnthropicJSONAndUsage(writer http.ResponseWriter, body io.Reader) (anthropicUsage, error) {
-	tee := io.TeeReader(body, writer)
-	var response struct {
-		Usage anthropicUsage `json:"usage"`
-	}
-	decodeErr := json.NewDecoder(tee).Decode(&response)
-	_, copyErr := io.Copy(io.Discard, tee)
-	if decodeErr != nil {
-		return anthropicUsage{}, decodeErr
-	}
-	if copyErr != nil {
-		return anthropicUsage{}, copyErr
-	}
-	return response.Usage, nil
-}
-
-type anthropicUsageObserver struct {
-	pending []byte
-	usage   anthropicUsage
-}
-
-func (o *anthropicUsageObserver) Write(p []byte) (int, error) {
-	const maxPending = 4 << 20
-	o.pending = append(o.pending, p...)
-	for {
-		newline := bytes.IndexByte(o.pending, '\n')
-		if newline < 0 {
-			if len(o.pending) > maxPending {
-				o.pending = append([]byte(nil), o.pending[len(o.pending)-maxPending:]...)
-			}
-			break
-		}
-		line := strings.TrimSpace(string(o.pending[:newline]))
-		o.pending = o.pending[newline+1:]
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		var event struct {
-			Type    string `json:"type"`
-			Message struct {
-				Usage anthropicUsage `json:"usage"`
-			} `json:"message"`
-			Usage anthropicUsage `json:"usage"`
-		}
-		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) != nil {
-			continue
-		}
-		switch event.Type {
-		case "message_start":
-			o.usage.InputTokens = event.Message.Usage.InputTokens
-		case "message_delta":
-			if event.Usage.OutputTokens != 0 {
-				o.usage.OutputTokens = event.Usage.OutputTokens
-			}
-		}
-	}
-	return len(p), nil
-}
-
-func (o *anthropicUsageObserver) finish() {
-	line := strings.TrimSpace(string(o.pending))
-	o.pending = nil
-	if !strings.HasPrefix(line, "data:") {
-		return
-	}
-	var event struct {
-		Type  string         `json:"type"`
-		Usage anthropicUsage `json:"usage"`
-	}
-	if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) == nil && event.Type == "message_delta" && event.Usage.OutputTokens != 0 {
-		o.usage.OutputTokens = event.Usage.OutputTokens
-	}
-}
-
-func copyHeaders(writer http.ResponseWriter, headers http.Header) {
-	for key, values := range headers {
-		for _, value := range values {
-			writer.Header().Add(key, value)
-		}
-	}
-}
-
-func translateAnthropicSSE(body io.Reader, writer http.ResponseWriter, hooks kernel.StreamHooks) error {
-	writer.Header().Set("Content-Type", "text/event-stream")
-	writer.WriteHeader(http.StatusOK)
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 4096), 4*1024*1024)
-	started := false
-	toolIndex := 0
-	var inputTokens, outputTokens int64
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "[DONE]" {
-			_, _ = io.WriteString(writer, "data: [DONE]\n\n")
-			continue
-		}
-		var event map[string]any
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			if hooks.OnEvent != nil {
-				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: "malformed SSE JSON: " + err.Error()})
-			}
-			if hooks.OnError != nil {
-				hooks.OnError(err)
-			}
-			return err
-		}
-		eventType, _ := event["type"].(string)
-		if eventType == "message_start" {
-			message, _ := event["message"].(map[string]any)
-			usage, _ := message["usage"].(map[string]any)
-			inputTokens = int64(numberValue(usage["input_tokens"]))
-		}
-		if eventType == "content_block_start" {
-			block, _ := event["content_block"].(map[string]any)
-			if hooks.OnEvent != nil {
-				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventContentBlockStart, Index: toolIndex, BlockType: stringValue(block["type"])})
-			}
-			if block["type"] == "tool_use" {
-				if hooks.OnEvent != nil {
-					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolCallID: stringValue(block["id"]), ToolName: stringValue(block["name"])})
-				}
-				call := map[string]any{"index": toolIndex, "id": block["id"], "type": "function", "function": map[string]any{"name": block["name"]}}
-				chunk := map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{call}}}}}
-				writeSSEChunk(writer, chunk)
-				toolIndex++
-			}
-		}
-		if eventType == "content_block_delta" {
-			delta, _ := event["delta"].(map[string]any)
-			text, _ := delta["text"].(string)
-			if text != "" {
-				if hooks.OnEvent != nil {
-					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventTextDelta, Text: text})
-				}
-				chunk := map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": text}}}}
-				encoded, _ := json.Marshal(chunk)
-				_, _ = io.WriteString(writer, "data: "+string(encoded)+"\n\n")
-				if !started && hooks.OnFirstByte != nil {
-					hooks.OnFirstByte(time.Now())
-					started = true
-				}
-			}
-			if partial, ok := delta["partial_json"].(string); ok {
-				if hooks.OnEvent != nil {
-					hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex - 1, ToolArguments: partial})
-				}
-				call := map[string]any{"index": toolIndex - 1, "function": map[string]any{"arguments": partial}}
-				chunk := map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{call}}}}}
-				writeSSEChunk(writer, chunk)
-			}
-		}
-		if eventType == "message_delta" {
-			delta, _ := event["delta"].(map[string]any)
-			usage, _ := event["usage"].(map[string]any)
-			outputTokens = int64(numberValue(usage["output_tokens"]))
-			if hooks.OnEvent != nil {
-				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: inputTokens, OutputTokens: outputTokens}})
-			}
-			finish := "stop"
-			if delta["stop_reason"] == "tool_use" {
-				finish = "tool_calls"
-			}
-			if hooks.OnEvent != nil {
-				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventContentBlockEnd, StopReason: finish})
-			}
-			writeSSEChunk(writer, map[string]any{"object": "chat.completion.chunk", "choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finish}}})
-		}
-		if eventType == "message_stop" {
-			_, _ = io.WriteString(writer, "data: [DONE]\n\n")
-			if hooks.OnComplete != nil {
-				hooks.OnComplete(kernel.UsageEvent{Status: "ok", InputTokens: inputTokens, OutputTokens: outputTokens})
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil && hooks.OnError != nil {
-		hooks.OnError(err)
-	}
-	return scanner.Err()
-}
-
-func writeSSEChunk(writer http.ResponseWriter, chunk map[string]any) {
-	encoded, _ := json.Marshal(chunk)
-	_, _ = io.WriteString(writer, "data: "+string(encoded)+"\n\n")
-}
-
 func anthropicTools(tools []normalize.Tool) []map[string]any {
 	result := make([]map[string]any, 0, len(tools))
 	for _, tool := range tools {
@@ -424,24 +393,3 @@ func numberValue(value any) float64 {
 }
 
 func stringValue(value any) string { result, _ := value.(string); return result }
-
-func writeOpenAIJSON(writer http.ResponseWriter, status int, payload map[string]any) error {
-	text := ""
-	if blocks, ok := payload["content"].([]any); ok {
-		for _, block := range blocks {
-			item, _ := block.(map[string]any)
-			if value, ok := item["text"].(string); ok {
-				text += value
-			}
-		}
-	}
-	result := map[string]any{"id": "chatcmpl-gobroom", "object": "chat.completion", "created": time.Now().Unix(), "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": payload["stop_reason"]}}}
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	_, err = writer.Write(encoded)
-	return err
-}

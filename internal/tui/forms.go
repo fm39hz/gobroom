@@ -17,6 +17,7 @@ import (
 type fieldSpec struct {
 	key, label, placeholder string
 	secret                  bool
+	authName                string
 }
 
 type formState struct {
@@ -32,6 +33,8 @@ type formState struct {
 	memberCursor   int
 	extra          map[string]any
 	providerPreset string
+	authSchema     []provider.SetupField
+	hasAuthSchema  bool
 }
 
 func buildForm(title, method string, specs []fieldSpec, values map[string]string) *formState {
@@ -175,13 +178,30 @@ func (f *formState) cycleProviderPreset() {
 }
 
 func newConnectionForm(node providerNode) *formState {
+	return newConnectionFormWithMetadata(node, nil)
+}
+
+func newConnectionFormWithMetadata(node providerNode, catalog []provider.DefinitionMetadata) *formState {
 	credentialType := node.AuthMode
 	if credentialType == "" {
 		credentialType = "api_key"
 	}
-	return buildForm("Add connection", "connections.create", connectionFields(), map[string]string{
-		"providerNodeID": node.ID, "credentialType": credentialType, "priority": "100",
-	})
+	values := map[string]string{"providerNodeID": node.ID, "credentialType": credentialType, "priority": "100"}
+	for _, definition := range catalog {
+		if definition.ID != node.DefinitionID {
+			continue
+		}
+		fields := []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "selected provider"}, {key: "name", label: "Name", placeholder: "personal key"}, {key: "credentialType", label: "Credential type", placeholder: credentialType}}
+		for _, field := range definition.Auth.SetupSchema.Fields {
+			fields = append(fields, fieldSpec{key: "auth:" + field.Name, label: field.Name, placeholder: field.Description, secret: field.Secret, authName: field.Name})
+		}
+		fields = append(fields, fieldSpec{key: "priority", label: "Priority", placeholder: "100"})
+		form := buildForm("Add connection", "connections.create", fields, values)
+		form.authSchema = append([]provider.SetupField(nil), definition.Auth.SetupSchema.Fields...)
+		form.hasAuthSchema = true
+		return form
+	}
+	return buildForm("Add connection", "connections.create", connectionFields(), values)
 }
 
 func physicalModelFields() []fieldSpec {
@@ -439,8 +459,15 @@ func (f *formState) removeMember() {
 
 func (f *formState) Params() (map[string]any, error) {
 	params := make(map[string]any, len(f.fields)+2)
+	authValues := map[string]string{}
 	for index, field := range f.fields {
 		value := strings.TrimSpace(f.inputs[index].Value())
+		if field.authName != "" {
+			if value != "" {
+				authValues[field.authName] = value
+			}
+			continue
+		}
 		if field.key == "id" && f.method == "custom_models.upsert" && value == "" {
 			id, err := newCatalogID()
 			if err != nil {
@@ -491,7 +518,27 @@ func (f *formState) Params() (map[string]any, error) {
 	}
 	if f.method == "connections.create" {
 		credentialType, _ := params["credentialType"].(string)
-		if credentialType != "none" {
+		if f.hasAuthSchema {
+			for _, field := range f.authSchema {
+				if field.Required && authValues[field.Name] == "" {
+					return nil, fmt.Errorf("%s is required", field.Name)
+				}
+			}
+			if credentialType != "none" && len(f.authSchema) == 0 {
+				return nil, fmt.Errorf("provider auth flow %q declares no setup fields", credentialType)
+			}
+			if credentialType != "none" && len(f.authSchema) > 0 {
+				if len(f.authSchema) == 1 && f.authSchema[0].Name == "secret" {
+					params["secret"] = authValues["secret"]
+				} else {
+					encoded, err := json.Marshal(authValues)
+					if err != nil {
+						return nil, fmt.Errorf("encode auth setup values: %w", err)
+					}
+					params["secret"] = string(encoded)
+				}
+			}
+		} else if credentialType != "none" {
 			if secret, ok := params["secret"].(string); !ok || secret == "" {
 				return nil, fmt.Errorf("credential secret is required for %q auth", credentialType)
 			}

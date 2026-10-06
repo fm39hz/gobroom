@@ -187,7 +187,7 @@ func TestTranslateGeminiJSONToOpenAIChat(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	var events []kernel.ResponseEvent
 	var completed kernel.UsageEvent
-	err := (Gemini{}).TranslateStream(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }, OnComplete: func(event kernel.UsageEvent) { completed = event }})
+	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { events = append(events, event) }, OnComplete: func(event kernel.UsageEvent) { completed = event }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestTranslateGeminiSSEEmitsIncrementalOpenAIChunks(t *testing.T) {
 	body := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"one\"}]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" two\"}]},\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":5}}\n\n"
 	recorder := httptest.NewRecorder()
 	var completed kernel.UsageEvent
-	err := (Gemini{}).TranslateStream(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnComplete: func(event kernel.UsageEvent) { completed = event }})
+	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnComplete: func(event kernel.UsageEvent) { completed = event }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestTranslateGeminiSSERejectsMalformedAndTruncatedStreams(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			var callbackErr error
-			err := (Gemini{}).TranslateStream(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(test.body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnError: func(err error) { callbackErr = err }})
+			err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(test.body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{OnError: func(err error) { callbackErr = err }})
 			if err == nil || callbackErr == nil {
 				t.Fatalf("expected stream failure, returned=%v callback=%v", err, callbackErr)
 			}
@@ -274,7 +274,7 @@ func TestTranslateGeminiSSERejectsMalformedAndTruncatedStreams(t *testing.T) {
 
 func TestTranslateGeminiJSONRejectsMissingCandidates(t *testing.T) {
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"promptFeedback":{"blockReason":"SAFETY"}}`))}
-	if err := (Gemini{}).TranslateStream(context.Background(), response, httptest.NewRecorder(), normalize.FormatOpenAIChat, kernel.StreamHooks{}); err == nil {
+	if err := NewAdapter().RenderResponse(context.Background(), response, httptest.NewRecorder(), normalize.FormatOpenAIChat, kernel.StreamHooks{}); err == nil {
 		t.Fatal("missing Gemini candidates were treated as a successful empty completion")
 	}
 }

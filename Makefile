@@ -5,7 +5,7 @@ LDFLAGS  := -s -w $(if $(VERSION),-X main.version=$(VERSION))
 REMOTE   := origin
 BRANCH   := master
 
-.PHONY: help build build-daemon build-all run run-daemon tui test test-v race bench fmt vet install install-all clean reload status
+.PHONY: help build build-daemon build-all run run-daemon tui test test-conformance test-v race bench fmt vet install install-all clean reload status
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -35,6 +35,9 @@ reload: ## reload daemon snapshot over IPC
 
 test: ## unit and integration tests
 	go test ./...
+
+test-conformance: ## architectural extension change simulations (M15)
+	go test ./internal/provider ./internal/api ./internal/kernel ./internal/daemon ./internal/tui -run '^(TestGenericProviderManifestBindsProtocolsAndSemanticTasks|TestDefinitionBuildsConfiguredOAuthAuthFlow|TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets|TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract|TestNamespacedOperationIngressRegistersWithoutServerRouteBranch|TestProviderDefinitionMetadataIsAvailableThroughGenericControlAPI|TestNewFeatureExtensionNegotiatesTypedConstraintsWithoutKernelBranch|TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest|TestNewStrategyExtensionAppearsInCatalogAndSchedulerWithoutKernelBranch|TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding|TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch|TestRuntimeBindingExecutesSelectedEndpointAndCodecs|TestComposedSemanticResponsePipelineRetriesOnlyBeforeRendererCommit|TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart|TestConnectionFormUsesProviderAuthSetupSchema)$$' -count=1
 
 test-v: ## verbose tests
 	go test ./... -count=1 -v

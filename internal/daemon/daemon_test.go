@@ -29,7 +29,15 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	d := &Daemon{store: s, server: api.NewServer(s)}
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerCatalog, err := registry.DefinitionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog}
 	response := d.handleIPC(nil, IPCRequest{ID: "1", Method: "providers.create", Params: map[string]any{"name": "G4F", "prefix": "g4f", "baseUrl": "https://example.test/v1", "protocol": "openai_chat"}})
 	if !response.OK {
 		t.Fatal(response.Error)
@@ -55,6 +63,20 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	}
 	if !hasStickyLimit {
 		t.Fatal("strategy catalog omitted round-robin-fallback's stickyLimit contract")
+	}
+	response = d.handleIPC(nil, IPCRequest{ID: "4", Method: "providers.catalog"})
+	providerDefinitions, ok := response.Result.([]provider.DefinitionMetadata)
+	if !response.OK || !ok || len(providerDefinitions) == 0 {
+		t.Fatalf("provider definition catalog=%#v error=%q", response.Result, response.Error)
+	}
+	var foundOpenAI bool
+	for _, definition := range providerDefinitions {
+		if definition.ID == "openai-compatible-chat" {
+			foundOpenAI = definition.Auth.ID == "static-secret" && len(definition.Auth.SetupSchema.Fields) == 1
+		}
+	}
+	if !foundOpenAI {
+		t.Fatal("provider catalog did not expose generic auth setup metadata")
 	}
 }
 
@@ -218,10 +240,12 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 		ID: "quota-fixture", Version: "1", DisplayName: "Quota fixture",
 		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret"},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
+			Protocol:        kernel.ProtocolOpenAIChat,
+			Task:            "chat.generate",
 			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
 			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
 			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json"},
-			ResponseCodec:   provider.PrimitiveRef{Kind: provider.PrimitiveResponseCodec, ID: "openai-sse"},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse"},
 			ErrorClassifier: provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json"},
 			ErrorClassifierOptions: provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
 				QuotaScope: kernel.ScopeConnection,
@@ -272,6 +296,20 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 	first := New(config)
 	if err := first.Start(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	providerCatalogResponse := first.handleIPC(context.Background(), IPCRequest{ID: "provider-catalog", Method: "providers.catalog"})
+	providerDefinitions, ok := providerCatalogResponse.Result.([]provider.DefinitionMetadata)
+	if !providerCatalogResponse.OK || !ok {
+		t.Fatalf("manifest provider catalog failed: result=%#v error=%q", providerCatalogResponse.Result, providerCatalogResponse.Error)
+	}
+	var cataloguedFixture bool
+	for _, definition := range providerDefinitions {
+		if definition.ID == "quota-fixture" {
+			cataloguedFixture = len(definition.Operations) == 2 && definition.Auth.ID == "static-secret"
+		}
+	}
+	if !cataloguedFixture {
+		t.Fatal("provider definition loaded from manifest was not available to the generic control catalog")
 	}
 	connTest := first.handleIPC(context.Background(), IPCRequest{ID: "test-connection", Method: "connections.test", Params: map[string]any{"connectionID": connection.ID}})
 	if !connTest.OK {

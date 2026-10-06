@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -27,29 +28,126 @@ func (c requestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequ
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
 
-type responseCodec struct{ adapter Gemini }
+type responseDecoder struct{ adapter Gemini }
 
-func (responseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
-	return kernel.CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Lossless: false, Reason: "Gemini codec currently renders OpenAI Chat wire format"}
-}
-
-func (responseCodec) ID() string { return "gemini-json" }
-func (c responseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+func (responseDecoder) ID() string { return "gemini-json" }
+func (c responseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
 }
-func (c responseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
-	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+func (c responseDecoder) Decode(ctx context.Context, response kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	return c.adapter.DecodeResponse(ctx, response, emit, hooks)
 }
-
-func (Gemini) ID() string                { return "gemini" }
-func (Gemini) Protocol() kernel.Protocol { return kernel.ProtocolGemini }
+func (Gemini) ID() string { return "gemini" }
 func NewAdapter() kernel.ProviderAdapter {
 	request, response := NewCodecs()
-	return kernel.ComposedAdapter{AdapterID: "gemini", AdapterProtocol: kernel.ProtocolGemini, Endpoint: kernel.HTTPJSONEndpoint{}, Request: request, Transport: kernel.HTTPTransport{}, Response: response}
+	renderers := make(map[normalize.Format]kernel.ResponseRenderer)
+	for _, renderer := range egress.Builtins() {
+		renderers[renderer.ID()] = renderer
+	}
+	return kernel.ComposedAdapter{AdapterID: "gemini", Endpoint: kernel.HTTPJSONEndpoint{}, Request: request, Transport: kernel.HTTPTransport{}, Response: response, Renderers: renderers, ProviderFormat: normalize.FormatGemini}
 }
-func NewCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+func NewCodecs() (kernel.RequestCodec, kernel.ResponseDecoder) {
 	adapter := Gemini{}
-	return requestCodec{adapter}, responseCodec{adapter}
+	return requestCodec{adapter}, responseDecoder{adapter}
+}
+
+func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	if response.Body == nil {
+		return fmt.Errorf("Gemini response body is empty")
+	}
+	var totalUsage kernel.UsageEvent
+	if strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream") {
+		scanner := bufio.NewScanner(response.Body)
+		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
+		started, finished := false, false
+		for scanner.Scan() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "" || data == "[DONE]" {
+				continue
+			}
+			var payload geminiGenerateContentResponse
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				return fmt.Errorf("decode Gemini SSE event: %w", err)
+			}
+			if !started {
+				started = true
+				if hooks.OnFirstByte != nil {
+					hooks.OnFirstByte(time.Now())
+				}
+			}
+			if len(payload.Candidates) == 0 {
+				continue
+			}
+			_, events, usage := openAIResponse(payload)
+			totalUsage.InputTokens = usage.InputTokens
+			if usage.OutputTokens > 0 {
+				totalUsage.OutputTokens = usage.OutputTokens
+			}
+			for _, event := range events {
+				if err := emit(event); err != nil {
+					return err
+				}
+			}
+			candidate := payload.Candidates[0]
+			if candidate.FinishReason != "" {
+				finished = true
+				finish := openAIFinishReason(candidate.FinishReason)
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventContentBlockEnd, StopReason: finish}); err != nil {
+					return err
+				}
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseComplete}); err != nil {
+					return err
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		if !finished {
+			return reportError(hooks, io.ErrUnexpectedEOF)
+		}
+	} else {
+		data, err := io.ReadAll(response.Body)
+		if err != nil {
+			return err
+		}
+		var payload geminiGenerateContentResponse
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return fmt.Errorf("decode Gemini response: %w", err)
+		}
+		if len(payload.Candidates) == 0 {
+			return fmt.Errorf("Gemini response contains no candidates")
+		}
+		if hooks.OnFirstByte != nil {
+			hooks.OnFirstByte(time.Now())
+		}
+		_, events, usage := openAIResponse(payload)
+		totalUsage = usage
+		for _, event := range events {
+			if err := emit(event); err != nil {
+				return err
+			}
+		}
+		finish := openAIFinishReason(payload.Candidates[0].FinishReason)
+		if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventContentBlockEnd, StopReason: finish}); err != nil {
+			return err
+		}
+		if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseComplete}); err != nil {
+			return err
+		}
+	}
+	totalUsage.Status = "ok"
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(totalUsage)
+	}
+	return nil
 }
 
 // Prepare translates the normalized OpenAI Chat contract into Gemini's
@@ -519,160 +617,6 @@ func (Gemini) ClassifyError(status int, _ []byte) kernel.ErrorClass {
 	return kernel.ErrorRetryable
 }
 
-func (Gemini) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
-	contentType := strings.ToLower(response.Headers.Get("content-type"))
-	if strings.Contains(contentType, "text/event-stream") {
-		return translateGeminiSSE(ctx, response, writer, hooks)
-	}
-	data, err := io.ReadAll(response.Body)
-	if err != nil {
-		return reportError(hooks, err)
-	}
-	var payload geminiGenerateContentResponse
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return reportError(hooks, fmt.Errorf("decode Gemini response: %w", err))
-	}
-	if len(payload.Candidates) == 0 {
-		return reportError(hooks, fmt.Errorf("Gemini response contains no candidates"))
-	}
-	translated, events, usage := openAIResponse(payload)
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(response.Status)
-	if hooks.OnFirstByte != nil {
-		hooks.OnFirstByte(time.Now())
-	}
-	if err := json.NewEncoder(writer).Encode(translated); err != nil {
-		return reportError(hooks, err)
-	}
-	for _, event := range events {
-		if hooks.OnEvent != nil {
-			hooks.OnEvent(event)
-		}
-	}
-	if hooks.OnComplete != nil {
-		hooks.OnComplete(usage)
-	}
-	return nil
-}
-
-func translateGeminiSSE(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, hooks kernel.StreamHooks) error {
-	writer.Header().Set("Content-Type", "text/event-stream")
-	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(response.Status)
-	scanner := bufio.NewScanner(response.Body)
-	scanner.Buffer(make([]byte, 4096), 4*1024*1024)
-	started := false
-	created := time.Now().Unix()
-	toolIndexes := map[string]int{}
-	index := 0
-	finished := false
-	var usage kernel.UsageEvent
-	for scanner.Scan() {
-		if err := ctx.Err(); err != nil {
-			return reportError(hooks, err)
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
-			continue
-		}
-		var payload geminiGenerateContentResponse
-		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			return reportError(hooks, fmt.Errorf("decode Gemini SSE event: %w", err))
-		}
-		if !started {
-			started = true
-			if hooks.OnFirstByte != nil {
-				hooks.OnFirstByte(time.Now())
-			}
-		}
-		if len(payload.Candidates) > 0 {
-			candidate := payload.Candidates[0]
-			for _, part := range candidate.Content.Parts {
-				if part.Text != "" {
-					kind := kernel.EventTextDelta
-					var content, reasoning *string
-					if part.Thought {
-						kind, reasoning = kernel.EventThinkingDelta, &part.Text
-					} else {
-						content = &part.Text
-					}
-					emitChatChunk(writer, content, reasoning, nil, nil, created)
-					if hooks.OnEvent != nil {
-						hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kind, Text: part.Text})
-					}
-				}
-				if call := part.FunctionCall; call != nil {
-					name := call.Name
-					id := call.ID
-					if id == "" {
-						id = fmt.Sprintf("call_gemini_%d", index)
-					}
-					toolIndex, exists := toolIndexes[id]
-					first := !exists
-					if first {
-						toolIndex = index
-						toolIndexes[id] = toolIndex
-						index++
-					}
-					function := openAIChatToolFunctionDelta{}
-					if first {
-						function.Name = name
-					}
-					args := string(call.Args)
-					if args == "" || args == "null" {
-						args = "{}"
-					}
-					function.Arguments = args
-					tool := openAIChatToolCallDelta{Index: toolIndex, Function: function, ThoughtSignature: part.ThoughtSignature}
-					if first {
-						tool.ID, tool.Type = id, "function"
-					}
-					emitChatChunk(writer, nil, nil, []openAIChatToolCallDelta{tool}, nil, created)
-					if hooks.OnEvent != nil {
-						hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolCallID: id, ToolName: name, ToolArguments: args})
-					}
-				}
-			}
-			if reason := candidate.FinishReason; reason != "" {
-				finished = true
-				finish := openAIFinishReason(reason)
-				emitChatChunk(writer, nil, nil, nil, &finish, created)
-			}
-		}
-		if payload.UsageMetadata != nil {
-			usage = geminiUsage(payload.UsageMetadata)
-			if hooks.OnEvent != nil {
-				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &usage})
-			}
-		}
-		if f, ok := writer.(http.Flusher); ok {
-			f.Flush()
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return reportError(hooks, err)
-	}
-	if err := scanner.Err(); err != nil {
-		return reportError(hooks, err)
-	}
-	if !finished {
-		return reportError(hooks, io.ErrUnexpectedEOF)
-	}
-	if !started && hooks.OnFirstByte != nil {
-		hooks.OnFirstByte(time.Now())
-	}
-	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
-	usage.Status = "ok"
-	if hooks.OnComplete != nil {
-		hooks.OnComplete(usage)
-	}
-	return nil
-}
-
 func openAIResponse(payload geminiGenerateContentResponse) (openAIChatResponse, []kernel.ResponseEvent, kernel.UsageEvent) {
 	created := time.Now().Unix()
 	text := strings.Builder{}
@@ -699,7 +643,8 @@ func openAIResponse(payload geminiGenerateContentResponse) (openAIChatResponse, 
 					arguments = "{}"
 				}
 				toolCalls = append(toolCalls, openAIChatToolCall{ID: call.ID, Type: "function", ThoughtSignature: part.ThoughtSignature, Function: openAIChatToolFunction{Name: call.Name, Arguments: arguments}})
-				events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments})
+				providerData, _ := json.Marshal(map[string]string{"thoughtSignature": part.ThoughtSignature})
+				events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments, Opaque: providerData})
 			}
 		}
 	}
@@ -720,13 +665,6 @@ func openAIResponse(payload geminiGenerateContentResponse) (openAIChatResponse, 
 	}
 	response := openAIChatResponse{ID: "chatcmpl-gemini", Object: "chat.completion", Created: created, Choices: []openAIChatChoice{{Index: 0, Message: message, FinishReason: finish}}, Usage: outputUsage}
 	return response, events, usage
-}
-
-func emitChatChunk(writer io.Writer, content, reasoning *string, tools []openAIChatToolCallDelta, finish *string, created int64) {
-	delta := openAIChatDelta{Content: content, ReasoningContent: reasoning, ToolCalls: tools}
-	chunk := openAIChatChunk{ID: "chatcmpl-gemini", Object: "chat.completion.chunk", Created: created, Choices: []openAIChatDeltaChoice{{Index: 0, Delta: delta, FinishReason: finish}}}
-	data, _ := json.Marshal(chunk)
-	_, _ = fmt.Fprintf(writer, "data: %s\n\n", data)
 }
 
 func geminiUsage(metadata *geminiUsageMetadata) kernel.UsageEvent {

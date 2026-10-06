@@ -34,7 +34,7 @@ func (usageSourceFixture) EnrichUsage(_ context.Context, _ Route, headers http.H
 }
 
 func (a cancelAdapter) ID() string         { return "cancel" }
-func (a cancelAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
+func (a cancelAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision { return CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Fidelity: FidelityNative} }
 func (a cancelAdapter) Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://cancel"}, nil
 }
@@ -44,12 +44,12 @@ func (a cancelAdapter) Execute(ctx context.Context, _ UpstreamRequest) (Upstream
 	return UpstreamResponse{}, ctx.Err()
 }
 func (a cancelAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
-func (a cancelAdapter) TranslateStream(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error {
+func (a cancelAdapter) RenderResponse(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error {
 	return nil
 }
 
 func (a fastAdapter) ID() string         { return "fast" }
-func (a fastAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
+func (a fastAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision { return CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Fidelity: FidelityNative} }
 func (a fastAdapter) Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://fast"}, nil
 }
@@ -58,7 +58,7 @@ func (a fastAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResponse
 	return UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
 }
 func (a fastAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
-func (a fastAdapter) TranslateStream(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+func (a fastAdapter) RenderResponse(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
 	}
@@ -70,7 +70,7 @@ func (a fastAdapter) TranslateStream(_ context.Context, response UpstreamRespons
 }
 
 func (a committedFailureAdapter) ID() string         { return "committed-failure" }
-func (a committedFailureAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
+func (a committedFailureAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision { return CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Fidelity: FidelityNative} }
 func (a committedFailureAdapter) Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://"}, nil
 }
@@ -79,7 +79,7 @@ func (a committedFailureAdapter) Execute(context.Context, UpstreamRequest) (Upst
 	return UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader("partial"))}, nil
 }
 func (a committedFailureAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
-func (a committedFailureAdapter) TranslateStream(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+func (a committedFailureAdapter) RenderResponse(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
 	_, _ = io.Copy(writer, response.Body)
 	err := errors.New("post-commit stream failure")
 	if hooks.OnError != nil {
@@ -89,7 +89,7 @@ func (a committedFailureAdapter) TranslateStream(_ context.Context, response Ups
 }
 
 func (usageSourceAdapter) ID() string         { return "usage-source-fixture" }
-func (usageSourceAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
+func (usageSourceAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision { return CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Fidelity: FidelityNative} }
 func (usageSourceAdapter) Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://usage"}, nil
 }
@@ -97,7 +97,7 @@ func (usageSourceAdapter) Execute(context.Context, UpstreamRequest) (UpstreamRes
 	return UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"X-Usage-Input-Tokens": []string{"23"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
 }
 func (usageSourceAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
-func (usageSourceAdapter) TranslateStream(_ context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+func (usageSourceAdapter) RenderResponse(_ context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
 	if hooks.OnComplete != nil {
 		hooks.OnComplete(UsageEvent{Status: "ok"})
 	}
@@ -108,7 +108,7 @@ func TestKernelAppliesSelectedUsageSourceBeforeEmission(t *testing.T) {
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
 		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
-		Routes:       []Route{{ID: "route", NodeID: "provider", AdapterID: "usage-source-fixture", UsageSourceID: "usage-fixture", Protocol: ProtocolOpenAIChat, Enabled: true}},
+		Routes:       []Route{{ID: "route", NodeID: "provider", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"usage-source-fixture"}, UsageSourceID: "usage-fixture"}}, Protocol: ProtocolOpenAIChat, Enabled: true}},
 	}, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestKernelAppliesSelectedUsageSourceBeforeEmission(t *testing.T) {
 	defer k.Close()
 	k.Adapters["usage-source-fixture"] = usageSourceAdapter{}
 	k.UsageSources["usage-fixture"] = usageSourceFixture{}
-	if err := k.Execute(context.Background(), NormalizedRequest{Model: "model", SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder()); err != nil {
+	if err := k.Execute(context.Background(), NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder()); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -138,7 +138,7 @@ func TestKernelDoesNotSwitchAfterResponseCommitment(t *testing.T) {
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
 		Nodes:        []ModelNode{{ID: "role", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "a"}, {Kind: MemberRoute, ID: "b"}}}},
-		Routes:       []Route{{ID: "a", AdapterID: "committed-failure", Protocol: ProtocolOpenAIChat, Enabled: true}, {ID: "b", AdapterID: "committed-failure", Protocol: ProtocolOpenAIChat, Enabled: true}},
+		Routes:       []Route{{ID: "a", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"committed-failure"}}}, Protocol: ProtocolOpenAIChat, Enabled: true}, {ID: "b", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"committed-failure"}}}, Protocol: ProtocolOpenAIChat, Enabled: true}},
 	}, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestKernelDoesNotSwitchAfterResponseCommitment(t *testing.T) {
 	}
 	defer k.Close()
 	k.Adapters["committed-failure"] = committedFailureAdapter{attempts: attempts}
-	err = k.Execute(context.Background(), NormalizedRequest{Model: "role", SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder())
+	err = k.Execute(context.Background(), NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder())
 	if err == nil || !strings.Contains(err.Error(), "post-commit") {
 		t.Fatalf("err=%v", err)
 	}
@@ -160,7 +160,7 @@ func TestKernelDoesNotSwitchAfterResponseCommitment(t *testing.T) {
 
 func TestKernelPropagatesCancellationDuringUpstreamExecution(t *testing.T) {
 	started := make(chan struct{})
-	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}}, Routes: []Route{{ID: "route", AdapterID: "cancel", Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
+	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}}, Routes: []Route{{ID: "route", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"cancel"}}}, Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestKernelPropagatesCancellationDuringUpstreamExecution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		result <- k.Execute(ctx, NormalizedRequest{Model: "model", SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder())
+		result <- k.Execute(ctx, NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder())
 	}()
 	<-started
 	cancel()
@@ -189,7 +189,7 @@ func TestKernelPropagatesCancellationDuringUpstreamExecution(t *testing.T) {
 
 func TestKernelConcurrentRequestsDoNotSerializeProviderExecution(t *testing.T) {
 	attempts := &atomic.Int32{}
-	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}}, Routes: []Route{{ID: "route", AdapterID: "fast", Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
+	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}}, Routes: []Route{{ID: "route", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"fast"}}}, Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestKernelConcurrentRequestsDoNotSerializeProviderExecution(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := k.Execute(context.Background(), NormalizedRequest{Model: "model", SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder()); err != nil {
+			if err := k.Execute(context.Background(), NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder()); err != nil {
 				t.Error(err)
 			}
 		}()

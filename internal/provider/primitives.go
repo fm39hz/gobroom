@@ -11,7 +11,9 @@ import (
 	"github.com/fm39hz/gobroom/internal/adapter/anthropic"
 	"github.com/fm39hz/gobroom/internal/adapter/gemini"
 	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
+	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type Operation string
@@ -36,7 +38,7 @@ const (
 	PrimitiveTransport       PrimitiveKind = "transport"
 	PrimitiveAuth            PrimitiveKind = "auth"
 	PrimitiveRequestCodec    PrimitiveKind = "request_codec"
-	PrimitiveResponseCodec   PrimitiveKind = "response_codec"
+	PrimitiveResponseDecoder PrimitiveKind = "response_decoder"
 	PrimitiveModelSource     PrimitiveKind = "model_source"
 	PrimitiveUsageSource     PrimitiveKind = "usage_source"
 	PrimitiveQuotaSource     PrimitiveKind = "quota_source"
@@ -146,11 +148,14 @@ func validJSONPointer(path string) bool {
 }
 
 type OperationBinding struct {
+	Protocol               kernel.Protocol           `json:"protocol,omitempty"`
+	Task                   normalize.Operation       `json:"task,omitempty"`
+	ProviderFormat         normalize.Format          `json:"providerFormat,omitempty"`
 	Endpoint               PrimitiveRef              `json:"endpoint"`
 	EndpointOptions        kernel.EndpointOptions    `json:"endpointOptions,omitempty"`
 	Transport              PrimitiveRef              `json:"transport"`
 	RequestCodec           PrimitiveRef              `json:"requestCodec,omitempty"`
-	ResponseCodec          PrimitiveRef              `json:"responseCodec,omitempty"`
+	ResponseDecoder        PrimitiveRef              `json:"responseDecoder,omitempty"`
 	ModelSource            PrimitiveRef              `json:"modelSource,omitempty"`
 	UsageSource            PrimitiveRef              `json:"usageSource,omitempty"`
 	UsageOptions           kernel.UsageSourceOptions `json:"usageOptions,omitempty"`
@@ -185,7 +190,8 @@ type OAuthFlowOptions struct {
 }
 
 type AuthOptions struct {
-	OAuth *OAuthFlowOptions `json:"oauth,omitempty"`
+	OAuth   *OAuthFlowOptions `json:"oauth,omitempty"`
+	Options json.RawMessage   `json:"options,omitempty"`
 }
 
 type ProviderDefinition struct {
@@ -244,7 +250,8 @@ type RuntimeRegistry struct {
 	endpoints        map[string]kernel.Endpoint
 	transports       map[string]kernel.Transport
 	requestCodecs    map[string]kernel.RequestCodec
-	responseCodecs   map[string]kernel.ResponseCodec
+	responseDecoders map[string]kernel.ResponseDecoder
+	renderers        map[normalize.Format]kernel.ResponseRenderer
 	modelSources     map[string]ModelSource
 	usageSources     map[string]UsageSource
 	sessionStores    map[string]kernel.SessionStore
@@ -257,18 +264,18 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[string]kernel.Endpoint{}, transports: map[string]kernel.Transport{}, requestCodecs: map[string]kernel.RequestCodec{}, responseCodecs: map[string]kernel.ResponseCodec{}, modelSources: map[string]ModelSource{}, usageSources: map[string]UsageSource{}, sessionStores: map[string]kernel.SessionStore{}, errorClassifiers: map[string]ErrorClassifier{}, quotaSources: map[string]QuotaSource{}}
-	requestCodec, responseCodec := openai.NewChatCodecs()
+	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[string]kernel.Endpoint{}, transports: map[string]kernel.Transport{}, requestCodecs: map[string]kernel.RequestCodec{}, responseDecoders: map[string]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[string]ModelSource{}, usageSources: map[string]UsageSource{}, sessionStores: map[string]kernel.SessionStore{}, errorClassifiers: map[string]ErrorClassifier{}, quotaSources: map[string]QuotaSource{}}
+	requestCodec, responseDecoder := openai.NewChatCodecs()
 	registrations := []error{
 		runtime.RegisterEndpoint(kernel.HTTPJSONEndpoint{}), runtime.RegisterTransport(kernel.HTTPTransport{}),
-		runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseCodec(responseCodec),
+		runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseDecoder(responseDecoder),
 	}
-	requestCodec, responseCodec = openai.NewResponsesCodecs()
-	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseCodec(responseCodec))
-	requestCodec, responseCodec = anthropic.NewMessageCodecs()
-	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseCodec(responseCodec))
-	requestCodec, responseCodec = gemini.NewCodecs()
-	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseCodec(responseCodec))
+	requestCodec, responseDecoder = openai.NewResponsesCodecs()
+	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseDecoder(responseDecoder))
+	requestCodec, responseDecoder = anthropic.NewMessageCodecs()
+	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseDecoder(responseDecoder))
+	requestCodec, responseDecoder = gemini.NewCodecs()
+	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseDecoder(responseDecoder))
 	registrations = append(registrations,
 		runtime.RegisterSessionStore(kernel.NewMemorySessionStore()),
 		runtime.RegisterModelSource(OpenAIModelSource{}), runtime.RegisterModelSource(AnthropicModelSource{}), runtime.RegisterModelSource(StaticModelSource{}),
@@ -277,12 +284,37 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 		runtime.RegisterQuotaSource(NoopQuotaSource{}), runtime.RegisterQuotaSource(HTTPJSONQuotaSource{}),
 		runtime.RegisterAuthFactory("oauth2", OAuthAuthFactory),
 	)
+	for _, renderer := range egress.Builtins() {
+		registrations = append(registrations, runtime.RegisterResponseRenderer(renderer))
+	}
 	for _, registrationErr := range registrations {
 		if registrationErr != nil {
 			return nil, registrationErr
 		}
 	}
 	return runtime, nil
+}
+
+func (r *RuntimeRegistry) RegisterResponseRenderer(renderer kernel.ResponseRenderer) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if renderer == nil || renderer.ID() == "" {
+		return fmt.Errorf("response renderer and format ID are required")
+	}
+	if _, exists := r.renderers[renderer.ID()]; exists {
+		return fmt.Errorf("response renderer for %q is already registered", renderer.ID())
+	}
+	r.renderers[renderer.ID()] = renderer
+	return nil
+}
+
+func (r *RuntimeRegistry) ResponseRenderers() map[normalize.Format]kernel.ResponseRenderer {
+	result := make(map[normalize.Format]kernel.ResponseRenderer, len(r.renderers))
+	for format, renderer := range r.renderers {
+		result[format] = renderer
+	}
+	return result
 }
 
 func (r *RuntimeRegistry) registerImplementation(kind PrimitiveKind, id string) error {
@@ -356,20 +388,20 @@ func (r *RuntimeRegistry) RegisterRequestCodec(codec kernel.RequestCodec) error 
 	return nil
 }
 
-func (r *RuntimeRegistry) RegisterResponseCodec(codec kernel.ResponseCodec) error {
+func (r *RuntimeRegistry) RegisterResponseDecoder(codec kernel.ResponseDecoder) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
 	if codec == nil {
 		return fmt.Errorf("response codec implementation is nil")
 	}
-	if _, exists := r.responseCodecs[codec.ID()]; exists {
+	if _, exists := r.responseDecoders[codec.ID()]; exists {
 		return fmt.Errorf("response codec %q is already registered", codec.ID())
 	}
-	if err := r.registerImplementation(PrimitiveResponseCodec, codec.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveResponseDecoder, codec.ID()); err != nil {
 		return err
 	}
-	r.responseCodecs[codec.ID()] = codec
+	r.responseDecoders[codec.ID()] = codec
 	return nil
 }
 
@@ -635,7 +667,7 @@ func NewPrimitiveRegistry() *PrimitiveRegistry {
 		definitions: map[string]ProviderDefinition{},
 		primitives: map[PrimitiveKind]map[string]struct{}{
 			PrimitiveEndpoint: {}, PrimitiveTransport: {}, PrimitiveAuth: {}, PrimitiveRequestCodec: {},
-			PrimitiveResponseCodec: {}, PrimitiveModelSource: {}, PrimitiveUsageSource: {},
+			PrimitiveResponseDecoder: {}, PrimitiveModelSource: {}, PrimitiveUsageSource: {},
 			PrimitiveQuotaSource: {}, PrimitiveSessionStore: {},
 			PrimitiveErrorClassifier: {}, PrimitiveExtension: {},
 		},
@@ -686,8 +718,8 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		if operation == "" || binding.Endpoint.ID == "" || binding.Transport.ID == "" {
 			return fmt.Errorf("provider %q has incomplete %q operation binding", def.ID, operation)
 		}
-		requestResponseOperation := operation == OperationChat || operation == OperationResponses || operation == OperationMessages
-		if requestResponseOperation && (binding.RequestCodec.ID == "" || binding.ResponseCodec.ID == "") {
+		requestResponseOperation := binding.RequestCodec.ID != "" || binding.ResponseDecoder.ID != ""
+		if requestResponseOperation && (binding.RequestCodec.ID == "" || binding.ResponseDecoder.ID == "") {
 			return fmt.Errorf("provider %q has incomplete %q codec binding", def.ID, operation)
 		}
 		if operation == OperationQuota && binding.QuotaSource.ID == "" {
@@ -707,7 +739,7 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 				return fmt.Errorf("provider %q %q: %w", def.ID, operation, err)
 			}
 		}
-		for _, ref := range []PrimitiveRef{binding.Endpoint, binding.Transport, binding.RequestCodec, binding.ResponseCodec, binding.ModelSource, binding.UsageSource, binding.QuotaSource, binding.ErrorClassifier} {
+		for _, ref := range []PrimitiveRef{binding.Endpoint, binding.Transport, binding.RequestCodec, binding.ResponseDecoder, binding.ModelSource, binding.UsageSource, binding.QuotaSource, binding.ErrorClassifier} {
 			if ref.ID != "" && !r.hasPrimitive(ref) {
 				return fmt.Errorf("provider %q references unknown %s primitive %q", def.ID, ref.Kind, ref.ID)
 			}

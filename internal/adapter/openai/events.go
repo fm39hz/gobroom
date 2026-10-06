@@ -2,55 +2,17 @@ package openai
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
-
-// streamSSEEvents preserves every upstream line while observing common Chat
-// and Responses event shapes. Rendering remains outside this observer.
-func streamSSEEvents(body io.Reader, writer http.ResponseWriter, hooks kernel.StreamHooks) error {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 4096), 4*1024*1024)
-	started := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		_, _ = io.WriteString(writer, line+"\n")
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
-			continue
-		}
-		if !started {
-			started = true
-			if hooks.OnFirstByte != nil {
-				hooks.OnFirstByte(time.Now())
-			}
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			canonicalErr := kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: "malformed SSE JSON: " + err.Error()}
-			if hooks.OnEvent != nil {
-				hooks.OnEvent(canonicalErr)
-			}
-			if hooks.OnError != nil {
-				hooks.OnError(err)
-			}
-			return err
-		}
-		emitOpenAIEvent(payload, hooks.OnEvent)
-	}
-	if err := scanner.Err(); err != nil && hooks.OnError != nil {
-		hooks.OnError(err)
-	}
-	return scanner.Err()
-}
 
 func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 	if emit == nil {
@@ -75,6 +37,10 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 				function, _ := call["function"].(map[string]any)
 				emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: index, ToolCallID: stringValue(call["id"]), ToolName: stringValue(function["name"]), ToolArguments: stringValue(function["arguments"])})
 			}
+		}
+		if finish := stringValue(choice["finish_reason"]); finish != "" {
+			emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: finish})
+			emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete})
 		}
 	}
 	typ, _ := payload["type"].(string)
@@ -105,6 +71,7 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 	case typ == "response.completed":
 		response, _ := payload["response"].(map[string]any)
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, ResponseID: responseID, StopReason: stringValue(response["status"])})
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, ResponseID: responseID})
 	}
 	if usage, ok := payload["usage"].(map[string]any); ok {
 		event := kernel.UsageEvent{InputTokens: int64(numberValue(usage["input_tokens"])), OutputTokens: int64(numberValue(usage["output_tokens"]))}
@@ -112,14 +79,122 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 	}
 }
 
-func observeOpenAIJSON(data []byte, emit func(kernel.ResponseEvent)) {
-	if emit == nil {
-		return
+func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse, wireFormat normalize.Format, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
+	if response.Body == nil {
+		return fmt.Errorf("provider returned an empty response body")
+	}
+	contentType := strings.ToLower(response.Headers.Get("content-type"))
+	if strings.Contains(contentType, "text/event-stream") {
+		scanner := bufio.NewScanner(response.Body)
+		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
+		scanner.Split(splitSSELines)
+		started := false
+		completed := false
+		usage := kernel.UsageEvent{}
+		for scanner.Scan() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			rawLine := append([]byte(nil), scanner.Bytes()...)
+			line := strings.TrimRight(string(rawLine), "\r\n")
+			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: rawLine}); err != nil {
+				return err
+			}
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(line, "\n"), "data:"))
+			if data == "" {
+				continue
+			}
+			if data == "[DONE]" {
+				completed = true
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseComplete}); err != nil {
+					return err
+				}
+				continue
+			}
+			if !started && hooks.OnFirstByte != nil {
+				hooks.OnFirstByte(time.Now())
+				started = true
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				return fmt.Errorf("decode upstream SSE JSON: %w", err)
+			}
+			var events []kernel.ResponseEvent
+			emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) })
+			for _, event := range events {
+				if event.Kind == kernel.EventResponseComplete {
+					completed = true
+				}
+				if event.Usage != nil {
+					usage = *event.Usage
+				}
+				if err := emit(event); err != nil {
+					return err
+				}
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		if !completed {
+			return io.ErrUnexpectedEOF
+		}
+		if hooks.OnComplete != nil {
+			usage.Status = "ok"
+			hooks.OnComplete(usage)
+		}
+		return nil
+	}
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
 	}
 	var payload map[string]any
-	if json.Unmarshal(data, &payload) == nil {
-		emitOpenAIEvent(payload, emit)
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return fmt.Errorf("decode upstream JSON: %w", err)
 	}
+	var events []kernel.ResponseEvent
+	emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) })
+	if hooks.OnFirstByte != nil {
+		hooks.OnFirstByte(time.Now())
+	}
+	if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: append([]byte(nil), data...)}); err != nil {
+		return err
+	}
+	var usage kernel.UsageEvent
+	completed := false
+	for _, event := range events {
+		if event.Kind == kernel.EventResponseComplete {
+			completed = true
+		}
+		if event.Usage != nil {
+			usage = *event.Usage
+		}
+		if err := emit(event); err != nil {
+			return err
+		}
+	}
+	if !completed {
+		return io.ErrUnexpectedEOF
+	}
+	if hooks.OnComplete != nil {
+		usage.Status = "ok"
+		hooks.OnComplete(usage)
+	}
+	return nil
+}
+
+func splitSSELines(data []byte, atEOF bool) (int, []byte, error) {
+	if index := bytes.IndexByte(data, '\n'); index >= 0 {
+		return index + 1, data[:index+1], nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }
 
 func numberValue(value any) float64 { n, _ := value.(float64); return n }

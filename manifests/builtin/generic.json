@@ -7,7 +7,7 @@
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.openai.com/v1", "modelsPath": "/models", "format": "openai"},
     "operations": {
-      "chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
       "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}
     },
     "capabilities": {"chat": true, "streaming": true, "tools": true}
@@ -20,7 +20,7 @@
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://openrouter.ai/api/v1", "modelsPath": "/models", "format": "openai"},
     "operations": {
-      "chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
       "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}
     },
     "capabilities": {"chat": true, "streaming": true, "tools": true}
@@ -33,7 +33,7 @@
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.deepseek.com", "modelsPath": "/models"},
     "operations": {
-      "chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
       "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}
     },
     "capabilities": {"chat": true, "messages": true, "streaming": true, "tools": true, "thinking": true}
@@ -46,7 +46,7 @@
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.anthropic.com/v1", "modelsPath": "/models", "format": "claude"},
     "operations": {
-      "messages": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "anthropic-messages-json"}, "responseCodec": {"kind": "response_codec", "id": "anthropic-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
+      "messages": {"protocol": "anthropic", "task": "chat.generate", "providerFormat": "anthropic", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "anthropic-messages-json"}, "responseDecoder": {"kind": "response_decoder", "id": "anthropic-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}},
       "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "anthropic-models"}}
     },
     "capabilities": {"messages": true, "streaming": true, "tools": true, "thinking": true}
@@ -58,7 +58,7 @@
     "aliases": ["groq"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.groq.com/openai/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -68,7 +68,7 @@
     "aliases": ["mistral"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.mistral.ai/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -78,7 +78,7 @@
     "aliases": ["together"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.together.xyz/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -88,7 +88,7 @@
     "aliases": ["fireworks"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.fireworks.ai/inference/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -98,7 +98,7 @@
     "aliases": ["cerebras"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.cerebras.ai/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -108,7 +108,7 @@
     "aliases": ["nvidia"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://integrate.api.nvidia.com/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -118,7 +118,7 @@
     "aliases": ["siliconflow"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.siliconflow.com/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -128,7 +128,7 @@
     "aliases": ["glm"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.z.ai/api/anthropic/v1", "modelsPath": "/models", "format": "claude"},
-    "operations": {"messages": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "anthropic-messages-json"}, "responseCodec": {"kind": "response_codec", "id": "anthropic-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}},
+    "operations": {"messages": {"protocol": "anthropic", "task": "chat.generate", "providerFormat": "anthropic", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "anthropic-messages-json"}, "responseDecoder": {"kind": "response_decoder", "id": "anthropic-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}},
     "capabilities": {"messages": true, "streaming": true, "tools": true, "thinking": true}
   },
   {
@@ -138,7 +138,7 @@
     "aliases": ["glm-cn"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true, "thinking": true}
   },
   {
@@ -148,7 +148,7 @@
     "aliases": ["perplexity-agent"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.perplexity.ai/v1", "modelsPath": "/models", "format": "openai-responses"},
-    "operations": {"responses": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-responses-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-responses-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"responses": {"protocol": "openai_responses", "task": "chat.generate", "providerFormat": "openai-responses", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-responses-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-responses-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"responses": true, "streaming": true, "tools": true}
   },
   {
@@ -158,7 +158,7 @@
     "aliases": ["vercel-ai-gateway"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://ai-gateway.vercel.sh/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   },
   {
@@ -168,7 +168,7 @@
     "aliases": ["tokenrouter"],
     "auth": {"kind": "auth", "id": "static-secret"},
     "defaults": {"baseUrl": "https://api.tokenrouter.com/v1", "modelsPath": "/models", "format": "openai"},
-    "operations": {"chat": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseCodec": {"kind": "response_codec", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
+    "operations": {"chat": {"protocol": "openai_chat", "task": "chat.generate", "providerFormat": "openai", "endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"}, "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"}, "usageSource": {"kind": "usage_source", "id": "http-header-usage"}, "errorClassifier": {"kind": "error_classifier", "id": "http-json"}}, "models": {"endpoint": {"kind": "endpoint", "id": "http-json"}, "transport": {"kind": "transport", "id": "http"}, "modelSource": {"kind": "model_source", "id": "openai-models"}}},
     "capabilities": {"chat": true, "streaming": true, "tools": true}
   }
 ]

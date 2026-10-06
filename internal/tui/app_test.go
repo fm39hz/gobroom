@@ -14,6 +14,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
@@ -136,6 +137,51 @@ func TestOAuthProviderConnectionFormDefaultsCredentialTypeFromAuthMode(t *testin
 		if field.key == "secret" && form.inputs[index].CharLimit < 4096 {
 			t.Fatalf("OAuth secret field is too short for token JSON: limit=%d", form.inputs[index].CharLimit)
 		}
+	}
+}
+
+func TestConnectionFormUsesProviderAuthSetupSchema(t *testing.T) {
+	catalog := []provider.DefinitionMetadata{{
+		ID: "oauth-device", Auth: provider.AuthMetadata{ID: "device-oauth", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
+			{Name: "access_token", Type: "string", Required: true, Secret: true},
+			{Name: "refresh_token", Type: "string", Secret: true},
+			{Name: "expires_at", Type: "datetime"},
+		}}},
+	}}
+	form := newConnectionFormWithMetadata(providerNode{ID: "node-oauth", DefinitionID: "oauth-device", AuthMode: "oauth2"}, catalog)
+	for index, field := range form.fields {
+		switch field.key {
+		case "name":
+			form.inputs[index].SetValue("work account")
+		case "auth:access_token":
+			if !field.secret {
+				t.Fatal("auth schema secret marker was ignored")
+			}
+			form.inputs[index].SetValue("access-value")
+		case "auth:refresh_token":
+			form.inputs[index].SetValue("refresh-value")
+		case "auth:expires_at":
+			form.inputs[index].SetValue("2026-10-06T12:00:00Z")
+		}
+	}
+	params, err := form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var secret map[string]string
+	if err := json.Unmarshal([]byte(params["secret"].(string)), &secret); err != nil {
+		t.Fatal(err)
+	}
+	if secret["access_token"] != "access-value" || secret["refresh_token"] != "refresh-value" || secret["expires_at"] != "2026-10-06T12:00:00Z" {
+		t.Fatalf("auth setup schema fields were not encoded into connection credential state: %#v", secret)
+	}
+	for index, field := range form.fields {
+		if field.key == "auth:access_token" {
+			form.inputs[index].SetValue("")
+		}
+	}
+	if _, err := form.Params(); err == nil || !strings.Contains(err.Error(), "access_token is required") {
+		t.Fatalf("required auth schema field was not validated: %v", err)
 	}
 }
 
