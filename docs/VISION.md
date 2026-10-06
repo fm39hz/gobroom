@@ -158,4 +158,6 @@ and operational output integrates with the host environment.
 
 Milestone sequencing and current completion state are in the
 [implementation roadmap](IMPLEMENTATION_PLAN.md). This vision defines why that
-work matters; the roadmap defines what exists and what remains.
+work matters; the roadmap defines what exists and what remains. Concrete
+journeys, usability gates and current evidence for each workflow are cataloged
+in [Product use cases](USE_CASES.md).

@@ -35,10 +35,19 @@ func TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	if called != 0 {
 		t.Fatal("--help unexpectedly launched TUI")
 	}
-	for _, path := range [][]string{{"status"}, {"providers", "list"}, {"physical-models", "list"}, {"combo-models", "list"}} {
+	for _, path := range [][]string{{"status"}, {"providers", "list"}, {"connections", "test"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}} {
 		command, _, err := root.Find(path)
 		if err != nil || command == root {
 			t.Fatalf("typed command %v missing: command=%v err=%v", path, command, err)
+		}
+	}
+	for _, item := range []struct {
+		path []string
+		flag string
+	}{{[]string{"combo-models", "upsert"}, "strategy-options"}, {[]string{"physical-models", "upsert"}, "policy-options"}, {[]string{"connections", "refresh-models"}, "model-id"}, {[]string{"connections", "refresh-models"}, "entitlements-only"}} {
+		command, _, err := root.Find(item.path)
+		if err != nil || command.Flags().Lookup(item.flag) == nil {
+			t.Fatalf("typed command %v missing flag --%s: command=%v err=%v", item.path, item.flag, command, err)
 		}
 	}
 	if root.PersistentFlags().Lookup("ipc") == nil || root.PersistentFlags().Lookup("json") == nil {

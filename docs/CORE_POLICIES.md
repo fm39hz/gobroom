@@ -20,14 +20,35 @@ Useful policy inputs include:
 - cooldown, quota/reset and explicit preference;
 - upstream error classification and response commitment state.
 
-The implemented scheduler covers a subset of these; precedence and complete
-round-robin/sticky semantics remain test obligations.
+## Combo strategy primitive contract
+
+Combo strategy selection is a closed, versioned primitive catalog—not a free
+string switch in TUI, CLI or snapshot construction. Each definition owns the
+canonical ID, user-facing explanation, runtime implementation and a typed
+option schema. Store writes and snapshot publication validate the same schema;
+unknown aliases/options are rejected. The current built-ins are:
+
+| Primitive | Execution meaning | Configuration |
+|---|---|---|
+| `ordered-fallback` | Preserve configured member order and continue according to failure policy | No options |
+| `rotating-fallback` | Rotate the first member per request, then try remaining members in order | No options |
+| `round-robin` | Attempt one rotating member; return failure to the parent Combo policy instead of trying siblings | No options |
+| `round-robin-fallback` | Keep one start member for N request plans, then rotate while retaining ordered fallback | `stickyLimit`: integer 1–1000, default 1 |
+| `weighted-fallback` | Weighted starting member, then ordered fallback | Weight is a typed field on each Combo member edge, not strategy JSON |
+
+Strategy configuration is JSON-bound at persistence/control boundaries, but is
+validated by the primitive schema. No option may be accepted and ignored.
+Member order and member weight are independent: filtering/reordering cannot
+rewrite a weight, and changing strategy cannot rewrite the ordered graph.
+
+Kernel fixtures cover these node-level semantics; precedence with nested
+strategies and parent failure policies remains an end-to-end test obligation.
 
 ## Provider extensibility
 
 Provider names must not appear as branches in the kernel. Manifests compose
-typed endpoint, authentication, codec, model-source, classifier, usage and
-quota primitives. Provider-specific behavior should be added as a reusable
+typed endpoint, transport, authentication, codec, model-source, classifier,
+usage and quota primitives. Provider-specific behavior should be added as a reusable
 primitive or configuration binding. Do not duplicate one provider's code for
 another provider when their behavior is expressible by the same primitive.
 

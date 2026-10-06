@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -30,6 +29,10 @@ func (c responsesRequestCodec) Prepare(ctx context.Context, request kernel.Norma
 
 type responsesResponseCodec struct{ adapter Responses }
 
+func (responsesResponseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
+	return kernel.CompatibilityDecision{Supported: format == normalize.FormatOpenAIResponses, Lossless: format == normalize.FormatOpenAIResponses, Reason: "Responses codec currently emits OpenAI Responses wire format"}
+}
+
 func (c responsesResponseCodec) ID() string { return "openai-responses-sse" }
 func (c responsesResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
@@ -40,17 +43,16 @@ func (c responsesResponseCodec) TranslateStream(ctx context.Context, response ke
 
 func NewResponsesAdapter() kernel.ProviderAdapter {
 	adapter := Responses{}
-	return kernel.ComposedAdapter{AdapterID: "openai-responses", AdapterProtocol: kernel.ProtocolOpenAIResponses, Request: responsesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: responsesResponseCodec{adapter}}
+	return kernel.ComposedAdapter{AdapterID: "openai-responses", AdapterProtocol: kernel.ProtocolOpenAIResponses, Endpoint: kernel.HTTPJSONEndpoint{}, Request: responsesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: responsesResponseCodec{adapter}}
+}
+
+func NewResponsesCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+	adapter := Responses{}
+	return responsesRequestCodec{adapter}, responsesResponseCodec{adapter}
 }
 
 func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
-	if route.BaseURL == "" {
-		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)
-	}
-	url := strings.TrimRight(route.BaseURL, "/")
-	if !strings.HasSuffix(url, "/responses") {
-		url += "/responses"
-	}
+	url := "/responses"
 	body := map[string]any{}
 	for key, value := range request.Raw {
 		body[key] = value
@@ -63,6 +65,11 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 	}
 	body["model"] = route.ExternalModel
 	body["stream"] = request.Stream
+	if request.Continuity.PreviousResponse != "" {
+		if _, supplied := body["previous_response_id"]; !supplied {
+			body["previous_response_id"] = request.Continuity.PreviousResponse
+		}
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return kernel.UpstreamRequest{}, err

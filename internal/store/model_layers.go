@@ -13,8 +13,9 @@ import (
 // ModelReference is a typed edge in the model graph. Route references are
 // represented separately by RouteReference and always point at model_catalog.
 type ModelReference struct {
-	Kind ModelReferenceKind `json:"kind"`
-	ID   string             `json:"id"`
+	Kind   ModelReferenceKind `json:"kind"`
+	ID     string             `json:"id"`
+	Weight int                `json:"weight,omitempty"`
 }
 
 type ModelReferenceKind string
@@ -39,29 +40,40 @@ type StrategySpec struct {
 }
 
 type DiscoveredRoute struct {
-	ID             string                   `json:"id"`
-	ProviderNodeID string                   `json:"providerNodeId,omitempty"`
-	ProviderPrefix string                   `json:"providerPrefix,omitempty"`
-	Kind           string                   `json:"kind"`
-	ExternalID     string                   `json:"externalId"`
-	DisplayName    string                   `json:"displayName"`
-	Profile        kernel.CapabilityProfile `json:"profile,omitempty"`
-	Limits         kernel.TokenLimits       `json:"limits,omitempty"`
-	Enabled        bool                     `json:"enabled"`
-	LastSeenAt     string                   `json:"lastSeenAt,omitempty"`
+	ID                     string                    `json:"id"`
+	ProviderNodeID         string                    `json:"providerNodeId,omitempty"`
+	ProviderPrefix         string                    `json:"providerPrefix,omitempty"`
+	Kind                   string                    `json:"kind"`
+	ExternalID             string                    `json:"externalId"`
+	DisplayName            string                    `json:"displayName"`
+	Profile                kernel.CapabilityProfile  `json:"profile,omitempty"`
+	Limits                 kernel.TokenLimits        `json:"limits,omitempty"`
+	ConnectionAvailability []ConnectionModelEvidence `json:"connectionAvailability,omitempty"`
+	Enabled                bool                      `json:"enabled"`
+	LastSeenAt             string                    `json:"lastSeenAt,omitempty"`
+}
+
+type ConnectionModelEvidence struct {
+	ConnectionID   string `json:"connectionId"`
+	ConnectionName string `json:"connectionName"`
+	Status         string `json:"status"`
+	Source         string `json:"source,omitempty"`
+	ObservedAt     string `json:"observedAt,omitempty"`
 }
 
 type PhysicalModel struct {
-	Name         string                   `json:"name"`
-	Identity     kernel.PhysicalIdentity  `json:"identity"`
-	Sources      []RouteReference         `json:"sources"`
-	Policy       StrategySpec             `json:"policy"`
-	Profile      kernel.CapabilityProfile `json:"profile,omitempty"`
-	Limits       kernel.TokenLimits       `json:"limits,omitempty"`
-	Projection   kernel.ProfileProjection `json:"projection,omitempty"`
-	Reasoning    normalize.ThinkingIntent `json:"reasoning,omitempty"`
-	Discoverable bool                     `json:"discoverable"`
-	Enabled      bool                     `json:"enabled"`
+	Name                   string                   `json:"name"`
+	Identity               kernel.PhysicalIdentity  `json:"identity"`
+	Sources                []RouteReference         `json:"sources"`
+	Policy                 StrategySpec             `json:"policy"`
+	Profile                kernel.CapabilityProfile `json:"profile,omitempty"`
+	Limits                 kernel.TokenLimits       `json:"limits,omitempty"`
+	Projection             kernel.ProfileProjection `json:"projection,omitempty"`
+	Reasoning              normalize.ThinkingIntent `json:"reasoning,omitempty"`
+	AllowCompatibleSources bool                     `json:"allowCompatibleSources,omitempty"`
+	AllowDynamicSources    bool                     `json:"allowDynamicSources,omitempty"`
+	Discoverable           bool                     `json:"discoverable"`
+	Enabled                bool                     `json:"enabled"`
 }
 
 type ComboModel struct {
@@ -110,11 +122,43 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 		item.Enabled = enabled != 0
 		result = append(result, item)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	connections, err := s.Connections(providerNodeID)
+	if err != nil {
+		return nil, err
+	}
+	entitlements, err := s.ConnectionModelEntitlements(providerNodeID)
+	if err != nil {
+		return nil, err
+	}
+	byConnectionRoute := make(map[string]ConnectionModelEntitlement, len(entitlements))
+	for _, item := range entitlements {
+		byConnectionRoute[item.ConnectionID+"\x00"+item.ExternalModelID] = item
+	}
+	for index := range result {
+		item := &result[index]
+		if item.Kind == "custom" {
+			item.ConnectionAvailability = []ConnectionModelEvidence{{Status: "provider_assertion", Source: "user"}}
+			continue
+		}
+		for _, connection := range connections {
+			if !connection.Enabled || connection.ProviderNodeID != item.ProviderNodeID {
+				continue
+			}
+			evidence := ConnectionModelEvidence{ConnectionID: connection.ID, ConnectionName: connection.Name, Status: "unknown"}
+			if recorded, ok := byConnectionRoute[connection.ID+"\x00"+item.ExternalID]; ok {
+				evidence.Status, evidence.Source, evidence.ObservedAt = recorded.Status, recorded.Source, recorded.ObservedAt
+			}
+			item.ConnectionAvailability = append(item.ConnectionAvailability, evidence)
+		}
+	}
+	return result, nil
 }
 
 func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
-	rows, err := s.DB.Query(`SELECT name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
+	rows, err := s.DB.Query(`SELECT name,identity_json,reasoning_json,allow_compatible_sources,allow_dynamic_sources,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE enabled=1 ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +167,9 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 	for rows.Next() {
 		var item PhysicalModel
 		var identity, reasoning, policy, caps, limits string
+		var allowCompatible, allowDynamic int
 		var discoverable, enabled int
-		if err := rows.Scan(&item.Name, &identity, &reasoning, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
+		if err := rows.Scan(&item.Name, &identity, &reasoning, &allowCompatible, &allowDynamic, &policy, &caps, &limits, &discoverable, &enabled); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(policy, &item.Policy); err != nil {
@@ -143,6 +188,7 @@ func (s *Store) PhysicalModels() ([]PhysicalModel, error) {
 			return nil, fmt.Errorf("physical model %q limits: %w", item.Name, err)
 		}
 		item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
+		item.AllowCompatibleSources, item.AllowDynamicSources = allowCompatible != 0, allowDynamic != 0
 		item.Sources, err = s.physicalSources(item.Name)
 		if err != nil {
 			return nil, err
@@ -156,7 +202,8 @@ func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 	var item PhysicalModel
 	var identity, reasoning, policy, caps, limits string
 	var discoverable, enabled int
-	err := s.DB.QueryRow(`SELECT name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &identity, &reasoning, &policy, &caps, &limits, &discoverable, &enabled)
+	var allowCompatible, allowDynamic int
+	err := s.DB.QueryRow(`SELECT name,identity_json,reasoning_json,allow_compatible_sources,allow_dynamic_sources,policy_json,capabilities_json,limits_json,discoverable,enabled FROM physical_models WHERE name=?`, name).Scan(&item.Name, &identity, &reasoning, &allowCompatible, &allowDynamic, &policy, &caps, &limits, &discoverable, &enabled)
 	if err != nil {
 		return item, err
 	}
@@ -176,6 +223,7 @@ func (s *Store) PhysicalModel(name string) (PhysicalModel, error) {
 		return item, fmt.Errorf("physical model %q limits: %w", name, err)
 	}
 	item.Discoverable, item.Enabled = discoverable != 0, enabled != 0
+	item.AllowCompatibleSources, item.AllowDynamicSources = allowCompatible != 0, allowDynamic != 0
 	item.Sources, err = s.physicalSources(name)
 	return item, err
 }
@@ -208,6 +256,9 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	if item.Policy.ID == "" {
 		item.Policy.ID = "ordered-fallback"
 	}
+	if err := kernel.ValidateStrategyConfig(item.Policy.ID, item.Policy.Config); err != nil {
+		return fmt.Errorf("physical model %q source policy: %w", item.Name, err)
+	}
 	if item.Identity.CanonicalName == "" {
 		item.Identity.CanonicalName = item.Name
 	}
@@ -236,8 +287,8 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
-ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+	if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,allow_compatible_sources,allow_dynamic_sources,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,allow_compatible_sources=excluded.allow_compatible_sources,allow_dynamic_sources=excluded.allow_dynamic_sources,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), boolInt(item.AllowCompatibleSources), boolInt(item.AllowDynamicSources), string(policy), string(caps), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {
@@ -246,6 +297,14 @@ ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_j
 	for position, source := range item.Sources {
 		if source.RouteID == "" {
 			return fmt.Errorf("physical model source %d has empty route ID", position)
+		}
+		switch source.Fidelity {
+		case "", kernel.FidelityExact, kernel.FidelityAlias, kernel.FidelityCompatible, kernel.FidelityDynamic, kernel.FidelityUnknown:
+		default:
+			return fmt.Errorf("physical model source %d has invalid fidelity %q", position, source.Fidelity)
+		}
+		if source.Fidelity == kernel.FidelityAlias && len(source.Evidence) == 0 {
+			return fmt.Errorf("physical model source %d alias fidelity requires evidence", position)
 		}
 		var count int
 		if err = tx.QueryRow(`SELECT count(*) FROM model_catalog WHERE id=? AND provider_node_id IS NOT NULL AND kind IN ('discovered','custom')`, source.RouteID).Scan(&count); err != nil {
@@ -336,7 +395,7 @@ func (s *Store) ComboModel(name string) (ComboModel, error) {
 }
 
 func (s *Store) comboMembers(name string) ([]ModelReference, error) {
-	rows, err := s.DB.Query(`SELECT ref_kind,ref_id FROM combo_model_members WHERE combo_name=? ORDER BY position`, name)
+	rows, err := s.DB.Query(`SELECT ref_kind,ref_id,options_json FROM combo_model_members WHERE combo_name=? ORDER BY position`, name)
 	if err != nil {
 		return nil, err
 	}
@@ -344,9 +403,17 @@ func (s *Store) comboMembers(name string) ([]ModelReference, error) {
 	var result []ModelReference
 	for rows.Next() {
 		var item ModelReference
-		if err := rows.Scan(&item.Kind, &item.ID); err != nil {
+		var options struct {
+			Weight int `json:"weight,omitempty"`
+		}
+		var rawOptions string
+		if err := rows.Scan(&item.Kind, &item.ID, &rawOptions); err != nil {
 			return nil, err
 		}
+		if err := decodeJSON(rawOptions, &options); err != nil {
+			return nil, fmt.Errorf("combo model %q member options: %w", name, err)
+		}
+		item.Weight = options.Weight
 		result = append(result, item)
 	}
 	return result, rows.Err()
@@ -358,6 +425,9 @@ func (s *Store) UpsertComboModel(item ComboModel) error {
 	}
 	if item.Strategy.ID == "" {
 		item.Strategy.ID = "ordered-fallback"
+	}
+	if err := kernel.ValidateStrategyConfig(item.Strategy.ID, item.Strategy.Config); err != nil {
+		return fmt.Errorf("combo model %q strategy: %w", item.Name, err)
 	}
 	strategy, err := json.Marshal(item.Strategy)
 	if err != nil {
@@ -386,6 +456,9 @@ ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,strategy_
 		if member.Kind != PhysicalReference && member.Kind != ComboReference {
 			return fmt.Errorf("combo member %d has unsupported reference kind %q", position, member.Kind)
 		}
+		if member.Weight < 0 {
+			return fmt.Errorf("combo member %d has negative weight", position)
+		}
 		if member.Kind == ComboReference && member.ID == item.Name {
 			return fmt.Errorf("combo model %q cannot reference itself", item.Name)
 		}
@@ -400,7 +473,13 @@ ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,strategy_
 		if count == 0 {
 			return fmt.Errorf("combo member %s %q does not exist or is disabled", member.Kind, member.ID)
 		}
-		if _, err = tx.Exec(`INSERT INTO combo_model_members(combo_name,position,ref_kind,ref_id) VALUES(?,?,?,?)`, item.Name, position, member.Kind, member.ID); err != nil {
+		options, err := json.Marshal(struct {
+			Weight int `json:"weight,omitempty"`
+		}{Weight: member.Weight})
+		if err != nil {
+			return fmt.Errorf("encode combo member %d options: %w", position, err)
+		}
+		if _, err = tx.Exec(`INSERT INTO combo_model_members(combo_name,position,ref_kind,ref_id,options_json) VALUES(?,?,?,?,?)`, item.Name, position, member.Kind, member.ID, string(options)); err != nil {
 			return err
 		}
 	}

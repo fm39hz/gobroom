@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -31,6 +30,11 @@ func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.Normal
 
 type messagesResponseCodec struct{ adapter Messages }
 
+func (messagesResponseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
+	supported := format == normalize.FormatAnthropic || format == normalize.FormatOpenAIChat
+	return kernel.CompatibilityDecision{Supported: supported, Lossless: format == normalize.FormatAnthropic, Reason: "Anthropic Messages codec passes Anthropic through and translates to OpenAI Chat"}
+}
+
 func (c messagesResponseCodec) ID() string { return "anthropic-sse" }
 func (c messagesResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
@@ -41,23 +45,29 @@ func (c messagesResponseCodec) TranslateStream(ctx context.Context, response ker
 
 func NewAdapter() kernel.ProviderAdapter {
 	adapter := Messages{}
-	return kernel.ComposedAdapter{AdapterID: "anthropic-messages", AdapterProtocol: kernel.ProtocolAnthropic, Request: messagesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: messagesResponseCodec{adapter}}
+	return kernel.ComposedAdapter{AdapterID: "anthropic-messages", AdapterProtocol: kernel.ProtocolAnthropic, Endpoint: kernel.HTTPJSONEndpoint{}, Request: messagesRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: messagesResponseCodec{adapter}}
+}
+
+func NewMessageCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+	adapter := Messages{}
+	return messagesRequestCodec{adapter}, messagesResponseCodec{adapter}
 }
 
 func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
-	if route.BaseURL == "" {
-		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)
-	}
-	url := strings.TrimRight(route.BaseURL, "/")
-	if !strings.HasSuffix(url, "/messages") {
-		url += "/messages"
-	}
+	url := "/messages"
 	body := map[string]any{}
 	if request.SourceFormat == normalize.FormatAnthropic {
 		for key, value := range request.Raw {
 			body[key] = value
 		}
 	} else {
+		if len(request.Prompt.Layers) > 0 {
+			parts := make([]map[string]any, 0, len(request.Prompt.Layers))
+			for _, layer := range request.Prompt.Layers {
+				parts = append(parts, map[string]any{"type": "text", "text": layer.Text})
+			}
+			body["system"] = parts
+		}
 		body["messages"] = make([]map[string]any, 0, len(request.Messages))
 		for _, message := range request.Messages {
 			body["messages"] = append(body["messages"].([]map[string]any), map[string]any{"role": message.Role, "content": message.Content})
@@ -137,9 +147,18 @@ func (a Messages) TranslateStream(_ context.Context, response kernel.UpstreamRes
 		if hooks.OnFirstByte != nil {
 			hooks.OnFirstByte(time.Now())
 		}
-		_, err := io.Copy(writer, response.Body)
+		var usage anthropicUsage
+		var err error
+		if strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream") {
+			observer := &anthropicUsageObserver{}
+			_, err = io.Copy(io.MultiWriter(writer, observer), response.Body)
+			observer.finish()
+			usage = observer.usage
+		} else {
+			usage, err = copyAnthropicJSONAndUsage(writer, response.Body)
+		}
 		if err == nil && hooks.OnComplete != nil {
-			hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
+			hooks.OnComplete(kernel.UsageEvent{Status: "ok", InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens})
 		}
 		if err != nil && hooks.OnError != nil {
 			hooks.OnError(err)
@@ -168,6 +187,88 @@ func (a Messages) TranslateStream(_ context.Context, response kernel.UpstreamRes
 		hooks.OnError(err)
 	}
 	return err
+}
+
+type anthropicUsage struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+}
+
+// copyAnthropicJSONAndUsage tees the original response bytes directly to the
+// client while decoding usage. It avoids buffering arbitrarily large JSON
+// completions and does not alter the Anthropic wire response.
+func copyAnthropicJSONAndUsage(writer http.ResponseWriter, body io.Reader) (anthropicUsage, error) {
+	tee := io.TeeReader(body, writer)
+	var response struct {
+		Usage anthropicUsage `json:"usage"`
+	}
+	decodeErr := json.NewDecoder(tee).Decode(&response)
+	_, copyErr := io.Copy(io.Discard, tee)
+	if decodeErr != nil {
+		return anthropicUsage{}, decodeErr
+	}
+	if copyErr != nil {
+		return anthropicUsage{}, copyErr
+	}
+	return response.Usage, nil
+}
+
+type anthropicUsageObserver struct {
+	pending []byte
+	usage   anthropicUsage
+}
+
+func (o *anthropicUsageObserver) Write(p []byte) (int, error) {
+	const maxPending = 4 << 20
+	o.pending = append(o.pending, p...)
+	for {
+		newline := bytes.IndexByte(o.pending, '\n')
+		if newline < 0 {
+			if len(o.pending) > maxPending {
+				o.pending = append([]byte(nil), o.pending[len(o.pending)-maxPending:]...)
+			}
+			break
+		}
+		line := strings.TrimSpace(string(o.pending[:newline]))
+		o.pending = o.pending[newline+1:]
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		var event struct {
+			Type    string `json:"type"`
+			Message struct {
+				Usage anthropicUsage `json:"usage"`
+			} `json:"message"`
+			Usage anthropicUsage `json:"usage"`
+		}
+		if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) != nil {
+			continue
+		}
+		switch event.Type {
+		case "message_start":
+			o.usage.InputTokens = event.Message.Usage.InputTokens
+		case "message_delta":
+			if event.Usage.OutputTokens != 0 {
+				o.usage.OutputTokens = event.Usage.OutputTokens
+			}
+		}
+	}
+	return len(p), nil
+}
+
+func (o *anthropicUsageObserver) finish() {
+	line := strings.TrimSpace(string(o.pending))
+	o.pending = nil
+	if !strings.HasPrefix(line, "data:") {
+		return
+	}
+	var event struct {
+		Type  string         `json:"type"`
+		Usage anthropicUsage `json:"usage"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event) == nil && event.Type == "message_delta" && event.Usage.OutputTokens != 0 {
+		o.usage.OutputTokens = event.Usage.OutputTokens
+	}
 }
 
 func copyHeaders(writer http.ResponseWriter, headers http.Header) {

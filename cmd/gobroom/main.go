@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/fm39hz/gobroom/internal/tui"
@@ -91,7 +92,7 @@ func resourceCommands() []*cobra.Command {
 	create.Flags().StringVar(&protocol, "protocol", "openai_chat", "protocol")
 	create.Flags().StringVar(&definitionID, "definition-id", "", "provider definition ID")
 	create.Flags().StringVar(&modelsPath, "models-path", "/models", "models endpoint path")
-	create.Flags().StringVar(&authMode, "auth-mode", "api_key", "authentication mode")
+	create.Flags().StringVar(&authMode, "auth-mode", "", "credential type (defaults from provider definition)")
 	providers.AddCommand(create)
 	update := &cobra.Command{Use: "update", Short: "update provider node", RunE: func(*cobra.Command, []string) error {
 		return invoke("providers.update", map[string]any{"id": providerID, "name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "modelsPath": modelsPath, "authMode": authMode})
@@ -100,6 +101,11 @@ func resourceCommands() []*cobra.Command {
 	providers.AddCommand(update)
 	providers.AddCommand(idCommand("delete", "delete provider node", "providers.delete", "id", &providerID))
 	refresh := idCommand("refresh-models", "refresh provider model catalog", "providers.refresh_models", "nodeID", &providerID)
+	var refreshConnectionID string
+	refresh.Flags().StringVar(&refreshConnectionID, "connection-id", "", "enabled connection to use (defaults to highest priority)")
+	refresh.RunE = func(*cobra.Command, []string) error {
+		return invoke("providers.refresh_models", map[string]any{"nodeID": providerID, "connectionID": refreshConnectionID})
+	}
 	providers.AddCommand(refresh)
 
 	connections := &cobra.Command{Use: "connections", Short: "manage provider connections"}
@@ -111,7 +117,7 @@ func resourceCommands() []*cobra.Command {
 	}}
 	createConn.Flags().StringVar(&nodeID, "node-id", "", "provider node ID")
 	createConn.Flags().StringVar(&connName, "name", "", "connection name")
-	createConn.Flags().StringVar(&credentialType, "credential-type", "api_key", "credential type")
+	createConn.Flags().StringVar(&credentialType, "credential-type", "", "credential type (defaults from provider definition)")
 	createConn.Flags().StringVar(&secret, "secret", "", "credential secret")
 	createConn.Flags().IntVar(&priority, "priority", 100, "selection priority")
 	connections.AddCommand(createConn)
@@ -125,6 +131,35 @@ func resourceCommands() []*cobra.Command {
 	updateConn.Flags().IntVar(&priority, "priority", 0, "selection priority")
 	connections.AddCommand(updateConn)
 	connections.AddCommand(idCommand("delete", "delete connection", "connections.delete", "id", &connID))
+	testConn := &cobra.Command{Use: "test", Short: "test one connection's model-list endpoint without importing", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("connections.test", map[string]any{"connectionID": connID})
+	}}
+	testConn.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
+	connections.AddCommand(testConn)
+	previewConnModels := &cobra.Command{Use: "preview-models", Short: "review one connection's full model catalog without importing", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("connections.preview_models", map[string]any{"connectionID": connID})
+	}}
+	previewConnModels.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
+	connections.AddCommand(previewConnModels)
+	var selectedModelIDs []string
+	var entitlementsOnly bool
+	refreshConnModels := &cobra.Command{Use: "refresh-models", Short: "import all or selected models using one connection", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		params := map[string]any{"nodeID": nodeID, "connectionID": connID}
+		if entitlementsOnly && len(selectedModelIDs) > 0 {
+			return fmt.Errorf("--entitlements-only cannot be combined with --model-id")
+		}
+		if entitlementsOnly {
+			params["modelIDs"] = []string{}
+		} else if selectedModelIDs != nil {
+			params["modelIDs"] = selectedModelIDs
+		}
+		return invoke("providers.refresh_models", params)
+	}}
+	refreshConnModels.Flags().StringVar(&nodeID, "node-id", "", "provider node ID")
+	refreshConnModels.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
+	refreshConnModels.Flags().StringArrayVar(&selectedModelIDs, "model-id", nil, "exact upstream model ID to import (repeat to select a subset; omit for all)")
+	refreshConnModels.Flags().BoolVar(&entitlementsOnly, "entitlements-only", false, "record the connection's catalog evidence without importing route IDs")
+	connections.AddCommand(refreshConnModels)
 
 	models := &cobra.Command{Use: "models", Short: "manage model catalog"}
 	models.AddCommand(listCommand("list", "models.list", nil))
@@ -140,34 +175,50 @@ func resourceCommands() []*cobra.Command {
 	models.AddCommand(custom, idCommand("delete", "delete catalog model", "custom_models.delete", "id", &modelID))
 
 	physical := &cobra.Command{Use: "physical-models", Short: "manage physical model identities"}
-	var physicalName, physicalPolicy string
+	var physicalName, physicalPolicy, physicalPolicyOptions string
 	var physicalSources []string
 	var physicalDiscoverable bool
+	var allowCompatibleSources, allowDynamicSources bool
 	physical.AddCommand(listCommand("list", "physical_models.list", nil))
 	physicalUpsert := &cobra.Command{Use: "upsert", Short: "create or update a physical model", RunE: func(*cobra.Command, []string) error {
 		sources := make([]map[string]any, 0, len(physicalSources))
 		for _, source := range physicalSources {
-			sources = append(sources, map[string]any{"routeId": source})
+			sources = append(sources, map[string]any{"routeId": source, "fidelity": "alias", "evidence": []map[string]any{{"source": "user_assertion", "confidence": 0.5, "note": "manually grouped by config author"}}})
 		}
-		return invoke("physical_models.upsert", map[string]any{"name": physicalName, "sources": sources, "policy": map[string]any{"id": physicalPolicy}, "discoverable": physicalDiscoverable, "enabled": true})
+		policyOptions := map[string]any{}
+		if strings.TrimSpace(physicalPolicyOptions) != "" {
+			if err := json.Unmarshal([]byte(physicalPolicyOptions), &policyOptions); err != nil || policyOptions == nil {
+				if err == nil {
+					err = fmt.Errorf("must be a JSON object")
+				}
+				return fmt.Errorf("policy options: %w", err)
+			}
+		}
+		return invoke("physical_models.upsert", map[string]any{"name": physicalName, "sources": sources, "policy": map[string]any{"id": physicalPolicy, "config": policyOptions}, "allowCompatibleSources": allowCompatibleSources, "allowDynamicSources": allowDynamicSources, "discoverable": physicalDiscoverable, "enabled": true})
 	}}
 	physicalUpsert.Flags().StringVar(&physicalName, "name", "", "physical model name")
 	physicalUpsert.Flags().StringArrayVar(&physicalSources, "source", nil, "discovered route ID (repeat for multiple sources)")
 	physicalUpsert.Flags().StringVar(&physicalPolicy, "policy", "ordered-fallback", "source policy primitive ID")
+	physicalUpsert.Flags().StringVar(&physicalPolicyOptions, "policy-options", "{}", "JSON object validated against the selected strategy schema")
 	physicalUpsert.Flags().BoolVar(&physicalDiscoverable, "discoverable", false, "include this model in /v1/models")
+	physicalUpsert.Flags().BoolVar(&allowCompatibleSources, "allow-compatible-sources", false, "allow compatible revisions as Physical candidates")
+	physicalUpsert.Flags().BoolVar(&allowDynamicSources, "allow-dynamic-sources", false, "allow dynamic upstream routing sources")
 	physical.AddCommand(physicalUpsert, idCommand("delete", "delete physical model", "physical_models.delete", "name", &physicalName))
 
 	typedCombos := &cobra.Command{Use: "combo-models", Short: "manage typed combo models"}
 	var typedComboName, typedComboStrategy string
+	var typedComboOptions string
 	var typedMembers []string
 	var comboDiscoverable bool
 	typedCombos.AddCommand(listCommand("list", "combo_models.list", nil))
+	typedCombos.AddCommand(listCommand("strategies", "strategies.list", nil))
 	typedComboUpsert := &cobra.Command{Use: "upsert", Short: "create or update a combo model", RunE: func(*cobra.Command, []string) error {
-		members := make([]map[string]string, 0, len(typedMembers))
+		members := make([]map[string]any, 0, len(typedMembers))
 		for index, raw := range typedMembers {
 			var member struct {
-				Kind string `json:"kind"`
-				ID   string `json:"id"`
+				Kind   string `json:"kind"`
+				ID     string `json:"id"`
+				Weight int    `json:"weight,omitempty"`
 			}
 			if err := json.Unmarshal([]byte(raw), &member); err != nil {
 				return fmt.Errorf("member %d: invalid JSON: %w", index+1, err)
@@ -175,13 +226,27 @@ func resourceCommands() []*cobra.Command {
 			if (member.Kind != "physical" && member.Kind != "combo") || member.ID == "" {
 				return fmt.Errorf("member %d: kind must be physical or combo and id is required", index+1)
 			}
-			members = append(members, map[string]string{"kind": member.Kind, "id": member.ID})
+			item := map[string]any{"kind": member.Kind, "id": member.ID}
+			if member.Weight > 0 {
+				item["weight"] = member.Weight
+			}
+			members = append(members, item)
 		}
-		return invoke("combo_models.upsert", map[string]any{"name": typedComboName, "members": members, "strategy": map[string]any{"id": typedComboStrategy}, "discoverable": comboDiscoverable, "enabled": true})
+		options := map[string]any{}
+		if strings.TrimSpace(typedComboOptions) != "" {
+			if err := json.Unmarshal([]byte(typedComboOptions), &options); err != nil || options == nil {
+				if err == nil {
+					err = fmt.Errorf("must be a JSON object")
+				}
+				return fmt.Errorf("strategy options: %w", err)
+			}
+		}
+		return invoke("combo_models.upsert", map[string]any{"name": typedComboName, "members": members, "strategy": map[string]any{"id": typedComboStrategy, "config": options}, "discoverable": comboDiscoverable, "enabled": true})
 	}}
 	typedComboUpsert.Flags().StringVar(&typedComboName, "name", "", "combo model name")
-	typedComboUpsert.Flags().StringArrayVar(&typedMembers, "member", nil, `ordered typed member JSON, e.g. {"kind":"physical","id":"qwen-3.7-max"}`)
+	typedComboUpsert.Flags().StringArrayVar(&typedMembers, "member", nil, `ordered typed member JSON, e.g. {"kind":"physical","id":"qwen-3.7-max","weight":3}`)
 	typedComboUpsert.Flags().StringVar(&typedComboStrategy, "strategy", "ordered-fallback", "execution strategy primitive ID")
+	typedComboUpsert.Flags().StringVar(&typedComboOptions, "strategy-options", "{}", "JSON object validated against the selected strategy schema")
 	typedComboUpsert.Flags().BoolVar(&comboDiscoverable, "discoverable", false, "include this combo in /v1/models")
 	typedCombos.AddCommand(typedComboUpsert, idCommand("delete", "delete combo model", "combo_models.delete", "name", &typedComboName))
 

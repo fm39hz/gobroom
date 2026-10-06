@@ -80,12 +80,18 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 	typ, _ := payload["type"].(string)
 	responseID := stringValue(payload["response_id"])
 	itemID := stringValue(payload["item_id"])
+	objectType := stringValue(payload["object"])
+	if responseID == "" && objectType == "response" {
+		responseID = stringValue(payload["id"])
+	}
 	if responseID == "" {
 		if response, ok := payload["response"].(map[string]any); ok {
 			responseID = stringValue(response["id"])
 		}
 	}
 	switch {
+	case objectType == "response" && typ == "":
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, ResponseID: responseID})
 	case strings.Contains(typ, "output_item.added"):
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockStart, ResponseID: responseID, ItemID: itemID, BlockType: stringValue(payload["item_type"])})
 	case strings.Contains(typ, "output_item.done"):

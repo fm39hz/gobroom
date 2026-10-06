@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 )
 
 func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
-	adapter := Chat{}
+	adapter := NewAdapter()
 	request := normalize.Request{Model: "public", Stream: true, Raw: map[string]any{"model": "public", "messages": []any{map[string]any{"role": "user", "content": "hi"}}}}
 	route := kernel.Route{ID: "route:test", BaseURL: "https://provider.example/v1", ExternalModel: "upstream-model", Enabled: true}
 	prepared, err := adapter.Prepare(context.Background(), request, route, kernel.Credential{Secret: "secret"})
@@ -30,6 +31,32 @@ func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "data:") {
 		t.Fatalf("body=%q", recorder.Body.String())
+	}
+}
+
+func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
+	request := normalize.Request{Model: "public", Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
+	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := body["messages"].([]any)
+	if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "user" {
+		t.Fatalf("wire messages=%#v", messages)
+	}
+}
+
+func TestChatCodecDeclaresOnlyChatClientContract(t *testing.T) {
+	codec := chatResponseCodec{}
+	if !codec.SupportsClientFormat(normalize.FormatOpenAIChat).Supported {
+		t.Fatal("Chat codec should support Chat Completions ingress")
+	}
+	if codec.SupportsClientFormat(normalize.FormatAnthropic).Supported || codec.SupportsClientFormat(normalize.FormatOpenAIResponses).Supported {
+		t.Fatal("Chat passthrough must not claim other wire contracts")
 	}
 }
 
@@ -77,6 +104,22 @@ func TestResponsesEventsKeepContinuityIdentity(t *testing.T) {
 	}
 	if event.ResponseID != "resp_1" || event.ItemID != "msg_1" || event.ContentType != "output_text" {
 		t.Fatalf("event=%#v", event)
+	}
+}
+
+func TestResponsesJSONExposesResponseIDForSessionContinuity(t *testing.T) {
+	body := `{"id":"resp_42","object":"response","status":"completed"}`
+	var responseID string
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+	if err := (Responses{}).TranslateStream(context.Background(), response, httptest.NewRecorder(), normalize.FormatOpenAIResponses, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) {
+		if event.Kind == kernel.EventResponseComplete {
+			responseID = event.ResponseID
+		}
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if responseID != "resp_42" {
+		t.Fatalf("response ID for session continuity=%q", responseID)
 	}
 }
 

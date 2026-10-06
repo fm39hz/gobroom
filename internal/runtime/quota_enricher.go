@@ -16,6 +16,8 @@ import (
 // quota-endpoint storm.
 type OpportunisticQuota struct {
 	Sources    map[string]provider.QuotaSource
+	Endpoints  map[string]kernel.Endpoint
+	Transports map[string]kernel.Transport
 	Credential func(context.Context, kernel.Route) (kernel.Credential, error)
 	Record     func(quota.Snapshot)
 	Cooldown   time.Duration
@@ -30,6 +32,11 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 	}
 	source := q.Sources[route.QuotaSourceID]
 	if source == nil {
+		return
+	}
+	endpoint := q.Endpoints[route.QuotaEndpointID]
+	transport := q.Transports[route.QuotaTransportID]
+	if endpoint == nil || transport == nil {
 		return
 	}
 	key := route.QuotaSourceID + "\x00" + route.CredentialID + "\x00" + route.ExternalModel
@@ -57,7 +64,7 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 		if err != nil {
 			return
 		}
-		snapshots, err := source.Fetch(ctx, credential, route)
+		snapshots, err := source.Fetch(ctx, provider.QuotaRequest{Credential: credential, Route: route, Endpoint: endpoint, Transport: transport, EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName})
 		if err != nil {
 			return
 		}

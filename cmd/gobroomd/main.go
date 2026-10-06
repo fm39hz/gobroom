@@ -33,9 +33,14 @@ func main() {
 	httpControl := flag.Bool("http-control", false, "expose HTTP control plane")
 	controlAddr := flag.String("control-addr", defaults.HTTPControlAddr, "HTTP control plane listen address")
 	httpToken := flag.String("http-token", "", "optional bearer token for HTTP data plane")
-	providerManifestDir := flag.String("provider-manifests", "", "directory containing provider definition JSON files")
+	providerManifestDir := flag.String("provider-manifests", defaults.ProviderManifestDir, "directory containing provider definition JSON files")
 	quotaPolling := flag.Bool("quota-poll", false, "opt in to periodic provider quota polling")
 	flag.Parse()
+	if *providerManifestDir == defaults.ProviderManifestDir {
+		if err := os.MkdirAll(*providerManifestDir, 0o700); err != nil {
+			log.Fatal(err)
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl, HTTPControlAddr: *controlAddr, HTTPToken: *httpToken, ProviderManifestDir: *providerManifestDir, QuotaPolling: *quotaPolling})

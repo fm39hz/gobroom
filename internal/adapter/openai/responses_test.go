@@ -26,3 +26,22 @@ func TestResponsesPrepareTranslatesChatReasoningIntent(t *testing.T) {
 		t.Fatalf("reasoning=%#v", body["reasoning"])
 	}
 }
+
+func TestResponsesPrepareUsesSessionStoreContinuityWhenClientOmitsIt(t *testing.T) {
+	request := normalize.Request{
+		SourceFormat: normalize.FormatOpenAIChat,
+		Raw:          map[string]any{"messages": []any{map[string]any{"role": "user", "content": "continue"}}},
+		Continuity:   normalize.ContinuityState{PreviousResponse: "resp-from-session"},
+	}
+	prepared, err := (Responses{}).Prepare(context.Background(), request, kernel.Route{ID: "route", ExternalModel: "gpt"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["previous_response_id"] != "resp-from-session" {
+		t.Fatalf("previous_response_id=%#v", body["previous_response_id"])
+	}
+}

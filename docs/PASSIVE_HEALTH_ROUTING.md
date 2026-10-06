@@ -1,12 +1,14 @@
 # Passive health, limits and adaptive routing contract
 
-Status: target runtime contract. The first runtime slice is now implemented:
-classified outcomes enter the kernel, route evidence is retained, exact
-provider reset times are honored, eligible routes receive bounded feedback
-ranking, completion TTFT/throughput is captured, and quota polling is opt-in.
-Opportunistic quota enrichment is singleflight/cooldowned and runs only after
-quota/rate-limit evidence; durable evidence projections and session affinity
-remain follow-up work.
+Status: target runtime contract. The runtime path now preserves classified
+outcomes through the kernel, retains scoped route evidence, honors exact reset
+times, applies bounded feedback ranking, captures TTFT/throughput and persists
+quota snapshots asynchronously. A daemon start → manifest-classified HTTP
+failure → shutdown/reopen fixture proves both body quota and header rate-limit
+windows survive restart, restore connection-scoped cause, and gate the route
+until reset. Broader provider-envelope and conflicting-evidence precedence
+coverage remains. Quota polling is opt-in and opportunistic enrichment is
+singleflight/cooldowned after real quota/rate-limit evidence.
 
 ## Principle
 
@@ -171,10 +173,15 @@ response headers from real success/failure
   -> estimated category backoff
 ```
 
-Header extractors recognize `Retry-After` and provider-specific request or
-token limit/reset fields. Error bodies can supply exact reset timestamps and
-named quota windows. Each provider manifest binds reusable extractor and
-classifier primitives; the kernel does not match provider error strings.
+The generic HTTP/JSON classifier recognizes `Retry-After` (delta or
+HTTP-date), common rate-limit headers, and common JSON error-envelope fields
+for quota codes, reset timestamps and retry delays. Typed manifest options can
+override JSON pointers, add quota code/type/message signals and name a limit
+window, without changing the kernel or duplicating the classifier. The runtime
+registry preserves `ClassifyOutcome`; tests prove evidence reaches route
+eligibility and expires at reset. Shapes requiring transformations beyond
+these common options still need a reusable extractor primitive, not a
+provider-name branch in the kernel.
 
 ### Opportunistic quota enrichment
 

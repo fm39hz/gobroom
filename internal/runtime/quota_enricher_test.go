@@ -17,7 +17,8 @@ type countingQuotaSource struct {
 }
 
 func (s *countingQuotaSource) ID() string { return "counting" }
-func (s *countingQuotaSource) Fetch(_ context.Context, _ kernel.Credential, route kernel.Route) ([]quota.Snapshot, error) {
+func (s *countingQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) ([]quota.Snapshot, error) {
+	route := request.Route
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
@@ -28,14 +29,16 @@ func TestOpportunisticQuotaIsSingleflightAndCooldowned(t *testing.T) {
 	source := &countingQuotaSource{}
 	recorded := make(chan quota.Snapshot, 2)
 	enricher := &OpportunisticQuota{
-		Sources:  map[string]provider.QuotaSource{"counting": source},
-		Cooldown: time.Hour,
+		Sources:    map[string]provider.QuotaSource{"counting": source},
+		Endpoints:  map[string]kernel.Endpoint{"http-json": kernel.HTTPJSONEndpoint{}},
+		Transports: map[string]kernel.Transport{"http": kernel.HTTPTransport{}},
+		Cooldown:   time.Hour,
 		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
 			return kernel.Credential{Secret: "x"}, nil
 		},
 		Record: func(snapshot quota.Snapshot) { recorded <- snapshot },
 	}
-	route := kernel.Route{QuotaSourceID: "counting", CredentialID: "conn", ExternalModel: "model"}
+	route := kernel.Route{QuotaSourceID: "counting", QuotaEndpointID: "http-json", QuotaTransportID: "http", CredentialID: "conn", ExternalModel: "model"}
 	enricher.Trigger(context.Background(), route)
 	enricher.Trigger(context.Background(), route)
 	select {

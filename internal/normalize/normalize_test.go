@@ -17,6 +17,21 @@ func TestResponsesNormalizesToSemanticMessages(t *testing.T) {
 	}
 }
 
+func TestSystemAndDeveloperInstructionsAreSeparatedFromConversation(t *testing.T) {
+	result, err := Map("/v1/chat/completions", http.Header{}, map[string]any{"model": "m", "messages": []any{
+		map[string]any{"role": "system", "content": "harness policy"}, map[string]any{"role": "developer", "content": "provider policy"}, map[string]any{"role": "user", "content": "hello"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Request.Prompt.Layers) != 2 || result.Request.Prompt.Layers[0].Origin != PromptInline || result.Request.Prompt.Layers[0].Role != "system" || result.Request.Prompt.Layers[1].Role != "developer" {
+		t.Fatalf("prompt plan=%#v", result.Request.Prompt)
+	}
+	if len(result.Request.Messages) != 1 || result.Request.Messages[0].Role != "user" {
+		t.Fatalf("conversation=%#v", result.Request.Messages)
+	}
+}
+
 func TestThinkingToolsAndModalitiesAreCaptured(t *testing.T) {
 	result, err := Map("/v1/chat/completions", http.Header{}, map[string]any{
 		"model": "g4f/model", "messages": []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,x"}}}}, map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"function": map[string]any{"name": "search", "arguments": "{}"}}}}},
@@ -40,6 +55,27 @@ func TestEndpointWinsOverBodyHeuristic(t *testing.T) {
 	}
 	if result.Request.SourceFormat != FormatAnthropic {
 		t.Fatalf("got %s", result.Request.SourceFormat)
+	}
+}
+
+func TestStreamingDefaultsToNonStreamAndHonorsExplicitChoice(t *testing.T) {
+	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"} {
+		result, err := Map(path, http.Header{}, map[string]any{"model": "model-a", "messages": []any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Request.Stream {
+			t.Errorf("%s defaulted stream=true", path)
+		}
+	}
+	for _, want := range []bool{false, true} {
+		result, err := Map("/v1/messages", http.Header{}, map[string]any{"model": "model-a", "messages": []any{}, "stream": want})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Request.Stream != want {
+			t.Errorf("explicit stream=%v normalized to %v", want, result.Request.Stream)
+		}
 	}
 }
 

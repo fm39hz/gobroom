@@ -10,7 +10,9 @@ connections, discovered routes, physical models and combo models easy to
 manage without conflating those layers.
 SQLite, stdout/journal logging and loopback-only serving are simple defaults,
 not assumptions the domain is built around. See [the vision](docs/VISION.md)
-and [roadmap](docs/IMPLEMENTATION_PLAN.md) for boundaries and current gaps.
+and [roadmap](docs/IMPLEMENTATION_PLAN.md) for boundaries and current gaps;
+[use cases](docs/USE_CASES.md) records the intended workflows and their
+acceptance status.
 
 The project focuses on the useful provider/model-routing workflow: configure a
 provider node and its connections, discover provider routes, group equivalent
@@ -22,9 +24,11 @@ model names clients may discover and use.
 - Go daemon, SQLite state, Unix-domain-socket IPC and optional HTTP control API;
 - loopback HTTP data plane, default `127.0.0.1:2712`;
 - `/v1/models`, `/v1/chat/completions`, `/v1/responses` and `/v1/messages` routes;
-- provider nodes, multiple credential connections, model discovery and custom
-  catalog entries;
-- logical model references, nested combos and explicit public-model publishing;
+- provider nodes, multiple credential connections, selected-connection
+  model-list test/review, selective catalog import and per-connection
+  entitlement-aware routing, plus provider-scoped custom IDs;
+- discovered routes grouped as Physical models, nested role/use-case Combos,
+  and exposure stored directly on routable models;
 - JSON provider manifests composed from registered endpoint, auth, codec,
   discovery, quota and error-classification primitives;
 - OpenAI Chat, OpenAI Responses and Anthropic Messages adapters, with the
@@ -35,8 +39,10 @@ model names clients may discover and use.
   framed blocks and daemon-only IPC access. The Models workspace manages
   Discovered, Physical and Combos as separate tabs, with typed CRUD, inline
   exposure, context-local filtering and LazyGit-style block/item/tab/depth
-  navigation. The split member/candidate editor and some operational views are
-  still incomplete; see [the TUI UX contract](docs/TUI_UX.md).
+  navigation. Combo editing has separate ordered-member/candidate panes, typed
+  weights and a searchable strategy catalog; full edit → expose → `/v1/models`
+  acceptance and some operational views remain; see
+  [the TUI UX contract](docs/TUI_UX.md).
 
 The existence of an endpoint or an adapter does not imply complete protocol
 parity. In particular, OAuth refresh flows, comprehensive cross-protocol SSE
@@ -62,6 +68,7 @@ gobroom
 gobroom status
 gobroom providers list
 gobroom models list
+gobroom combo-models strategies
 ```
 
 Running `gobroom` without a subcommand opens the bundled TUI. Existing CLI

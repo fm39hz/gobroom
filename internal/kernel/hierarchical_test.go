@@ -64,7 +64,7 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 		PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
 		Nodes: []ModelNode{
 			{ID: "role", Kind: ModelCombo, Strategy: "observing-ordered", Members: []MemberRef{{Kind: MemberModel, ID: "physical"}, {Kind: MemberRoute, ID: "outer-route"}}},
-			{ID: "physical", Kind: ModelPhysical, Strategy: "observing", Members: []MemberRef{{Kind: MemberRoute, ID: "child-a"}, {Kind: MemberRoute, ID: "child-b"}}},
+			{ID: "physical", Kind: ModelPhysical, Strategy: "observing", Members: []MemberRef{{Kind: MemberRoute, ID: "child-a", Fidelity: FidelityExact}, {Kind: MemberRoute, ID: "child-b", Fidelity: FidelityExact}}},
 		},
 		Routes: []Route{
 			{ID: "child-a", AdapterID: "test", Protocol: ProtocolOpenAIChat, Enabled: true},

@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/store"
@@ -29,6 +30,17 @@ func TestDiffBundleReportsTypedChanges(t *testing.T) {
 	}
 	if diff.ProvidersAdded != 1 || diff.ProvidersRemoved != 1 || len(diff.Changes) != 2 {
 		t.Fatalf("diff=%#v", diff)
+	}
+	encoded, err := json.Marshal(BundleDiff{ProvidersAdded: 1, ProvidersRemoved: 2, ConnectionsAdded: 3, ConnectionsRemoved: 4, ModelsAdded: 5, ModelsRemoved: 6, PhysicalAdded: 7, PhysicalRemoved: 8, CombosAdded: 9, CombosRemoved: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]int
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 11 || fields["providersRemoved"] != 2 || fields["connectionsAdded"] != 3 || fields["physicalRemoved"] != 8 || fields["combosRemoved"] != 10 {
+		t.Fatalf("bundle diff JSON lost field tags: %s", encoded)
 	}
 }
 

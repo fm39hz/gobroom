@@ -1,7 +1,7 @@
 # Implementation roadmap
 
 Status is based on the repository implementation and tests inspected on
-2026-09-22. This is the project roadmap and the source of truth for milestone
+2026-10-03. This is the project roadmap and the source of truth for milestone
 status. Architecture and compatibility documents describe contracts/evidence;
 they do not override this status table.
 
@@ -21,7 +21,8 @@ typed graph, and exposure is a model property. Infrastructure options support
 this workflow; they are not a mandate to implement every backend or
 integration. The interaction contract is documented in [TUI UX](TUI_UX.md),
 and model identity/capability/consumption semantics in
-[Physical models](PHYSICAL_MODELS.md).
+[Physical models](PHYSICAL_MODELS.md). End-to-end workflow scope, success
+criteria and usability gaps are cataloged in [Product use cases](USE_CASES.md).
 
 GoBroom is a daemon-first local AI gateway. It provides an HTTP-compatible data
 plane for clients and a local IPC control plane for management. SQLite and
@@ -57,15 +58,15 @@ but must not introduce provider-specific branches into the kernel.
 |---|---|---|---|
 | M0 | Source-grounded behavior inventory and model/prefix contracts | Done (core inventory) | Source-grounded architecture, typed model/prefix contracts and compatibility evidence are documented; unrelated 9router surfaces remain explicitly outside core. |
 | M1 | SQLite control plane and immutable routing snapshot | Done | Typed config CRUD, validation/reload, route expansion, IPC and immutable snapshots are authoritative. Legacy publication/alias tables and APIs were removed; storage portability is separate. |
-| M2 | Provider onboarding and model-management UX | Done (core) | LazyGit-style navigation, typed Discovered/Physical/Combos management, inline exposure, usage/logs, reverse references, effective projections/order explanation and split source/member picker are implemented. Fuzzy search over typed capability/detail fields is the capability filter; further visual polish is non-blocking. See [TUI UX](TUI_UX.md). |
-| M3 | OpenAI Chat request vertical slice | Done (core) | Kernel/adapters/live calls, cancellation propagation, commitment boundary, 100 concurrent kernel requests, usage emission and runtime health integration are covered. Provider-specific load characterization remains operational tuning, not a contract gap. |
+| M2 | Provider onboarding and model-management UX | Partial (typed control operations exist; end-to-end usability incomplete) | Basic LazyGit-style blocks, typed Discovered/Physical/Combos CRUD, exposure, usage/logs and route explanation exist. A selected connection can test its manifest-bound model-list endpoint; `i` now opens a review list with imported/new markers, filterable exact upstream IDs and explicit subset/entitlements-only apply. Connection model-list completeness is tracked; unknown accounts remain unroutable for discovered IDs. Slash-qualified source-prefix filtering matches through Physical source routes while showing one canonical Combo candidate. Combo editing uses separate ordered-member/candidate panes, typed weights and registry-backed strategy selection/options. A key-event acceptance fixture traverses Combo edit → save → exposure → `/v1/models`. Still missing: inference dry-run for definitions without a model-list operation, equivalence suggestions/bulk Physical grouping, per-connection assignment UX for custom IDs and fully joined provider→Physical→Combo onboarding. See [TUI UX](TUI_UX.md) and [Use cases](USE_CASES.md). |
+| M3 | OpenAI Chat request vertical slice | Done (fake-upstream and OpenAI-compatible live acceptance) | Kernel/adapters and Bearer credential binding are covered by fixture; live OpenRouter connection tests `/models`, imports one currently listed free model, exposes it through Physical → Combo, and completes non-stream JSON plus SSE requests through the local endpoint (upstream reported cost 0). Direct OpenAI-vendor credentials have not been tested. |
 | M4 | Hierarchical model execution, connection pool and policy primitives | Done (core) | Typed Physical/Combo boundaries, scoped passive feedback, adaptive ranking, session affinity, half-open admission, typed eligibility, sticky/weighted fallback, retry/commit boundaries, concurrent scheduler behavior and read-only snapshot resolution are implemented/tested. Panel/judge Fusion is explicitly an optional orchestration module outside the kernel core. See [Passive health](PASSIVE_HEALTH_ROUTING.md). |
 | M5 | Canonical response-event contract | Done (core) | Kernel defines canonical lifecycle/content-block/text/thinking/tool/usage/completed/error events. Anthropic and OpenAI Chat/Responses SSE/JSON observers emit semantic events while preserving lossless client output; malformed JSON, continuity metadata and output-item boundaries are covered. |
-| M6 | Responses/Anthropic semantic compatibility | Done (core) | Normalized reasoning, layered Physical/Combo defaults, Anthropic native thinking/effort, OpenAI Responses reasoning, Gemini thinkingConfig, canonical content/tool/thinking/usage events, continuity/output-item identity and malformed-stream behavior are implemented/tested. Provider-specific quirks remain manifest-level extensions. |
-| M7 | Upstream credential lifecycle and OAuth | Done (generic core) | Static credentials, typed OAuth token parsing, refresh-token flow, persisted refreshed token state, refresh-once after 401/403, refresh locking and HTTP token-endpoint fixtures are implemented. Provider-specific OAuth configuration is manifest data; no configured provider currently requires a kernel branch. |
-| M8 | Passive health, limits, performance and usage | Done (runtime core) | Typed outcomes, scoped route/connection/provider evidence, reset-aware cooldowns, bounded feedback ranking, TTFT/throughput, request-class EWMA, half-open trials, session affinity, durable health/usage IPC/TUI, usage summaries, route-order explanation, explicit retention pruning, bounded daemon log ring and logs IPC/TUI are implemented. |
-| M9 | Provider presets and discovery expansion | Done (generic core) | JSON manifests, built-in provider definitions, reusable auth/endpoint/model/error/quota primitives, OpenAI-compatible/Gemini/Anthropic runtimes and discovery are implemented. Additional provider breadth is demand-driven manifest data, not a kernel milestone. |
-| M10 | Physical identity, capability and modality policies | Done (physical core) | Typed support states, request-requirement compilation, profile persistence, typed TokenLimits, Physical identity/revision fields, source fidelity/evidence persistence, declared/guaranteed/available projections, projection source explanations and Physical IPC/TUI display are implemented and tested. Cross-protocol reasoning translation remains intentionally in M6. |
+| M6 | Responses/Anthropic semantic compatibility | Partial (Anthropic fake-upstream vertical verified; no live Anthropic credential) | Gemini/OpenAI request and response wire contracts are JSON-bound typed DTOs. OpenAI Chat requests translate into Gemini contents, system instructions, function declarations/calls, supported generation settings and reasoning; Gemini JSON and incremental SSE translate back, including tool calls, finish reasons and usage. Anthropic `/v1/messages` fake-upstream fixture proves connection-key auth, model rewrite and response; Anthropic model discovery uses its versioned API-key headers and cursor pagination. Remaining: live Anthropic account acceptance, broader SDK-shaped signatures/history, content-block/cache/stop/reasoning/tool conformance, full modality coverage and native Gemini/Antigravity envelopes. |
+| M7 | Upstream credential lifecycle and OAuth | Partial (definition-bound refresh) | OAuth/no-auth/static factories bind from provider definitions through inference and discovery; connection type defaults from that binding and supplied credentials are validated on create/update. Typed access/refresh/client-secret state is parsed, refresh is fixture-tested against a token endpoint, refreshed state is persisted, and refresh locking is scoped per connection. Remaining: interactive authorization-code start/callback/state+PKCE handoff is not yet exposed through IPC/TUI, and no configured live OAuth provider has been verified. |
+| M8 | Passive health, limits, performance and usage | Partial (runtime core; typed classifier options wired) | Typed outcomes, scoped feedback, reset-aware policy, bounded ranking, TTFT/throughput, EWMA, half-open trials, session affinity, durable health/usage IPC/TUI and retention/logging are implemented. Rich `ClassifyOutcome` survives registry wrapping; common typed HTTP error envelopes, quota reset/retry delay, Retry-After dates, rate-limit headers and manifest JSON pointers/signals/named windows feed route eligibility. The bounded coalescing writer persists asynchronously and flushes after producers stop; a daemon start → configured manifest HTTP 429 → two windows + connection scope → stop/reopen → restored route gating/cause fixture passes. Remaining: broader provider reset/error envelopes, scope precedence across simultaneous sources and state behavior on classifier/storage failure; add specialized extractors only when typed options cannot express the shape. |
+| M9 | Provider presets and discovery expansion | Partial (executable shared composition) | Definitions now bind endpoint, transport, request/response codecs, static/OAuth/no-auth auth, model discovery, passive usage enrichment, session store, configurable error evidence and quota API operations. Quota polling resolves the dedicated quota operation's endpoint/transport/parser and remains opt-in/opportunistic. Session state is connection/definition/physical-model/client-session scoped, cached in memory and persisted asynchronously; OpenAI Responses restores stored continuity only with a client session key. Connection model-list snapshots now persist positive entitlement evidence and completeness; only positively observed discovered routes expand to that connection, while complete snapshots mark prior routes not listed and incomplete snapshots do not revoke evidence. Remaining: dedicated provider usage-report operations, custom per-connection availability editing and wider real-provider fixtures. |
+| M10 | Physical identity, capability and modality policies | Done (physical core) | Typed support states, request-requirement compilation, profile persistence, typed TokenLimits, Physical identity/revision fields, source fidelity/evidence persistence, declared/guaranteed/available projections, projection source explanations and Physical IPC/TUI display are implemented and tested. Exact/alias sources are eligible by default; compatible/dynamic require opt-in and unknown fidelity is excluded. Conditional/emulated capability evidence does not satisfy hard requirements until an evaluator exists. Cross-protocol reasoning remains in M6. |
 | M11 | Optional middleware | Planned/deferred | Not on the critical path. Revisit only for demonstrated need; keep opt-in, bounded and unable to mutate route identity or bypass cancellation. |
 | M12 | Secondary APIs and integrations | Out of core | Embeddings/media/search, tunnels, MITM/DNS and IDE integrations remain separate services/sidecars, not kernel milestones. |
 | M13 | Canonical configuration bundle and sync | Done (single-writer core) | Versioned secret-free typed bundle export, validation, diff/dry-run and atomic apply/import are implemented. Existing connection secrets are preserved by stable connection ID and never exported. Multi-writer conflict-free sync is intentionally not promised. |
@@ -73,32 +74,54 @@ but must not introduce provider-specific branches into the kernel.
 
 ## Milestone review and recommended order
 
-The existing milestones are grouped mainly by implementation layer. The vision
-calls for a user-workflow-first sequence:
+The historical implementation sequence above is not the remaining-work queue.
+M0–M1, M3–M5, M10 and M13–M14 have their stated core slices. M10's last gap found
+in review—enforcing source fidelity at runtime and preventing unsupported
+capability states from passing hard eligibility—has now been closed and tested.
+The Gemini adapter now has a real OpenAI Chat translation path, so M6 is still
+partial but no longer just a registered placeholder. A review also found and
+closed a runtime wiring gap: rich HTTP error outcomes were being downgraded by
+the registry adapter before reaching the kernel. Common quota/reset evidence
+now feeds route eligibility; provider-specific extraction remains. The urgent
+acceptance axis is OpenAI API-key and Anthropic Messages API-key readiness
+(UC-40a/40b): verify provider definition → connection key → model route →
+discoverable model → client request → upstream auth/response. Fake-upstream
+vertical fixtures now cover both request paths and Anthropic model discovery;
+live credentials are not required for deterministic acceptance.
 
-1. **M10 Physical contract first:** implement identity/fidelity, typed profiles,
-   evidence, effective route profiles and request requirement compilation. Do
-   not build adaptive routing on boolean capability maps.
-2. **M5 canonical response events:** establish one lifecycle/content/usage
-   event stream before adding protocol-specific semantics.
-3. **M6 reasoning semantics:** parse and translate Codex/OpenCode/Antigravity/
-   Claude Code intent without duplicating Physical models or silently clamping.
-4. **M3 lifecycle boundaries:** make cancellation, first byte, stream
-   completion and post-commit errors observable and deterministic.
-5. **M4 policy completion:** apply explainable ranking and strategy only after
-   eligibility; finish sticky/fusion/concurrency behavior.
-6. **M8 projection/operations:** finish aggregate status, effective-order
-   explanation, retention and logs on top of the runtime core.
-7. **M2 management UX:** complete Physical comparison, runtime evidence,
-   effective-order explanations, filters and split member/candidate editors.
-8. **M7:** finish upstream OAuth for providers the user actually configures.
-9. **M9:** grow provider manifests by demand. Keep M11 deferred and M12
-   outside the core.
-10. **M13:** establish the canonical versioned config contract before promising
-   portability or sync. Do not copy database tables as the sync format.
-11. **M14:** make local service operation and protected remote serving explicit.
-   Structured logs to stdout/journal are the first path; remote log vendors
-   should use a standard collector/export protocol.
+1. **OpenAI/Anthropic API-key readiness:** fake-upstream fixtures now cover
+   OpenAI Chat bearer-key routing, Anthropic `/v1/messages` key routing, and
+   Anthropic model discovery. Broader SSE/auth-failure conformance and live
+   provider validation remain optional; live keys require user authorization.
+   Document unsupported count-tokens and protocol semantics rather than
+   implying full harness parity.
+2. **M2 workflow usability:** close the remaining provider → connection test →
+   discover/review/custom model → suggested Physical grouping journey. The
+   Combo edit/reorder/expose/API projection is now exercised through Tea key
+   events and daemon IPC; preserve documented `h/l`, `j/k`, `Enter`, `Esc`,
+   `Space`, `K/J`, `/` and `ctrl+s` semantics as the onboarding flow is joined
+   to it.
+3. **M8 provider evidence coverage:** test additional real-world error and
+   reset envelopes, scope precedence when header/body/quota-API evidence
+   conflict, and bounded-queue/storage failure behavior. Add specialized
+   extractors only for shapes not expressible through current typed options.
+4. **M7 interactive OAuth onboarding:** build on the definition-bound refresh
+   flow with daemon-owned state/PKCE, authorization URL generation, a bounded
+   callback exchange and connection-secret persistence. Keep the callback
+   listener lifecycle independent of the TUI; verify cancellation, replay and
+   concurrent connection isolation before live provider validation.
+5. **M6 protocol conformance:** broaden Gemini end-to-end coverage to additional
+   SDK-shaped signature/history cases and modality eligibility; validate
+   reasoning option support against model families. Add Antigravity only from
+   observed wire fixtures, not by assuming it is ordinary Gemini.
+6. **M9 operation-surface completion:** wire dedicated provider usage-report
+   APIs through the same composition contract; add real HTTP fixtures for
+   quota/session behavior with representative providers. Keep unsupported
+   operations absent rather than routing them to a default.
+
+M11 remains deferred and M12 remains outside core. Alternate database and log
+backends are portability options, not blockers for this local SQLite/journald
+product. M13's bundle is the portability contract; do not sync database tables.
 
 M13/M14 are architecture-enabling work, not reasons to delay usable local
 SQLite, IPC and journald defaults. A second database or remote log sink should

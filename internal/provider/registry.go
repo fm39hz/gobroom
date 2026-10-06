@@ -8,14 +8,14 @@ import (
 // Profile is a built-in provider preset. Presets define defaults and protocol
 // behavior; credentials, models and combos remain user-owned SQLite data.
 type Profile struct {
-	ID, DisplayName, Protocol, ModelsPath string
-	AuthMode                              string
-	Aliases                               []string
+	ID, DisplayName, Protocol, BaseURL, ModelsPath string
+	AuthMode                                       string
+	Aliases                                        []string
 }
 
 var Profiles = map[string]Profile{
-	"openai":      {ID: "openai", DisplayName: "OpenAI", Protocol: "openai_chat", ModelsPath: "/v1/models", AuthMode: "api_key"},
-	"anthropic":   {ID: "anthropic", DisplayName: "Anthropic", Protocol: "anthropic", ModelsPath: "", AuthMode: "api_key"},
+	"openai":      {ID: "openai", DisplayName: "OpenAI", Protocol: "openai_chat", BaseURL: "https://api.openai.com/v1", ModelsPath: "/models", AuthMode: "api_key"},
+	"anthropic":   {ID: "anthropic", DisplayName: "Anthropic", Protocol: "anthropic", BaseURL: "https://api.anthropic.com/v1", ModelsPath: "/models", AuthMode: "api_key"},
 	"openrouter":  {ID: "openrouter", DisplayName: "OpenRouter", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "api_key"},
 	"openai_chat": {ID: "openai_chat", DisplayName: "OpenAI-compatible Chat", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "api_key"},
 	"responses":   {ID: "responses", DisplayName: "OpenAI-compatible Responses", Protocol: "openai_responses", ModelsPath: "/models", AuthMode: "api_key"},
@@ -40,11 +40,12 @@ type PrefixEntry struct {
 }
 
 type PrefixRegistry struct {
-	entries map[string]PrefixEntry
+	entries    map[string]PrefixEntry
+	configured map[string]bool
 }
 
 func NewPrefixRegistry() *PrefixRegistry {
-	r := &PrefixRegistry{entries: map[string]PrefixEntry{}}
+	r := &PrefixRegistry{entries: map[string]PrefixEntry{}, configured: map[string]bool{}}
 	for id, profile := range Profiles {
 		r.entries[id] = PrefixEntry{Prefix: id, Canonical: profile.ID, Kind: PrefixBuiltIn}
 		for _, alias := range profile.Aliases {
@@ -92,16 +93,24 @@ func (r *PrefixRegistry) AddNode(prefix, definitionID string) error {
 	}
 	if existing, ok := r.entries[prefix]; ok {
 		if existing.Kind == PrefixBuiltIn && compatibleNodeDefinition(existing.Canonical, definitionID) {
+			if r.configured[prefix] {
+				return fmt.Errorf("prefix %q is already used by a configured provider", prefix)
+			}
+			r.configured[prefix] = true
 			return nil
 		}
 		return fmt.Errorf("prefix %q already belongs to %s (%s)", prefix, existing.Canonical, existing.Kind)
 	}
 	r.entries[prefix] = PrefixEntry{Prefix: prefix, Canonical: definitionID, Kind: PrefixCustom}
+	r.configured[prefix] = true
 	return nil
 }
 
 func compatibleNodeDefinition(canonical, definitionID string) bool {
 	if canonical == definitionID {
+		return true
+	}
+	if canonical == "anthropic" && definitionID == "anthropic-messages" {
 		return true
 	}
 	return definitionID == "openai-compatible-chat" && canonical != "anthropic" && canonical != "responses"

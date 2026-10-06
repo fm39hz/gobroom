@@ -4,7 +4,9 @@ This is a behavior-by-behavior comparison, not a promise of drop-in parity.
 The 9router column is based on source checked in the adjacent local checkout at
 `/home/fm39hz/Workspace/Personal/Tools/AI/9router`; source paths below are
 orientation, not a substitute for executable fixtures. GoBroom status reflects
-the current repository and tests inspected on 2026-09-22.
+the current repository and tests inspected on 2026-10-03. The roadmap is the
+status source of truth; this matrix summarizes observable behavior and keeps
+partial protocol semantics visible.
 
 ## Status legend
 
@@ -21,44 +23,45 @@ the current repository and tests inspected on 2026-09-22.
 |---|---|---|
 | Provider prefixes and provider aliases (`open-sse/services/model.js`, provider registry) | Partial | Prefix registry, provider definitions and collision handling exist; edge-case compatibility fixtures are incomplete. |
 | Opaque `provider/model` names and model-ID rewriting | Partial | Typed model references and route mappings exist; verify first-slash, nested slash and marker behavior against source. |
-| Models discovered from provider `/models` plus custom models | Partial | OpenAI-style discovery and custom catalog entries exist; UI import/review workflow is incomplete. |
-| Model aliases, physical abstractions and role combos | Partial | Typed persistence, IPC/CLI and separate Discovered/Physical/Combos TUI tabs are authoritative. There is no separate publication table or alias layer; full editor polish remains. |
-| Only selected models exposed to clients | Implemented | Explicit public-model projection drives `/v1/models`. |
-| Connection pools per provider/model | Partial | Route expansion per connection and multiple selection strategies exist; full policy parity needs fixtures. |
+| Models discovered from provider `/models` plus custom models | Partial | Definition-bound discovery, exact-connection test/review, subset import by exact upstream IDs, entitlements-only apply, completeness-aware per-connection availability and custom entries exist. Inference dry-run for operations without `/models` and connection-target editing for custom IDs remain. |
+| Equivalent routes grouped into Physical models and composed into role Combos | Partial (Physical curation UX incomplete) | Typed persistence, IPC/CLI and separate Discovered/Physical/Combos operations exist. Physical identity retains route fidelity/evidence; slash-qualified picker search is regression-tested to match Physical source prefixes while rendering one canonical row. Combo editing has separate ordered-member/candidate panes, a strategy catalog, typed member weights and order-preserving K/J movement; a TUI-key-event → IPC → SQLite/snapshot → `/v1/models` fixture verifies save and exposure. Suggested equivalence grouping, bulk split/merge and its guided TUI workflow remain. |
+| Only selected models exposed to clients | Implemented | Exposure is the `discoverable` property of routable Physical/Combo models; no separate publication object. `/v1/models` projects that graph. |
+| Connection pools per provider/model | Partial | Discovered routes expand only over connections with positive model-list evidence; complete snapshots revoke previously known absent IDs, incomplete ones never do. Unknown accounts are excluded; custom IDs are an explicit provider-wide user assertion. Per-connection editing for custom IDs and broader real-provider completeness fixtures remain. |
 
 ## Routing and fallback
 
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
-| Combo order/fallback (`open-sse/services/combo.js`) | Partial | Typed execution preserves inner/outer policy boundaries, sticky/weighted/fallback behavior, commit boundaries and retry semantics. 9router's panel/judge Fusion mode is intentionally outside the GoBroom kernel core and would be a separate orchestration module. |
-| Round-robin and sticky limits | Partial | Round-robin/sticky/weighted scheduler semantics and concurrent access are covered by fixtures; provider-specific precedence/fusion parity remains. |
-| Account selection, exclusion and preferred account (`src/sse/services/auth.js`, `accountFallback.js`) | Partial | Fill-first, rotation, preferred connection and health cooldown paths exist; policy precedence remains. |
-| Cooldown and `Retry-After` | Partial; redesign required | Basic cooldown plumbing exists. Target behavior uses real-attempt outcomes, scoped breakers, exact deadline provenance and half-open real trials rather than synthetic checks. |
-| Quota affects candidate eligibility | Partial; redesign required | Persisted snapshots gate routes, but the target is passive limit extraction plus opportunistic enrichment; daemon-wide periodic polling is not the default contract. |
-| No switch after response bytes are sent | Partial | HTTP tracks response commitment and kernel execution returns after stream dispatch; expand integration tests across adapters. |
+| Combo order/fallback (`open-sse/services/combo.js`) | Implemented (core policies; management partial) | Typed execution preserves nested policy boundaries, fallback/rotation/weighted strategies, typed edge weights, retry and response-commit rules. TUI edits ordered members/weights, selects from the strategy catalog and validates JSON-bound options; a TUI-key-event → IPC → store/snapshot → `/v1/models` fixture verifies Combo exposure. Guided provider/Physical onboarding remains incomplete. Fusion panel/judge is intentionally outside the lightweight kernel. |
+| Round-robin and sticky limits | Implemented (core policies) | Strategy state and concurrent scheduler behavior have tests; exact parity for all 9router precedence combinations remains unverified. |
+| Account selection, exclusion and preferred account (`open-sse/services/auth.js`, `accountFallback.js`) | Partial | Connection affinity, health/quota gating and preferred-connection paths exist; provider-specific exclusions and precedence need fixtures. |
+| Cooldown and `Retry-After` | Implemented (common evidence path; provider coverage partial) | Rich classifier outcomes now survive runtime registry wiring. Common Retry-After delta/date and rate headers affect health; provider-specific classifier precedence still needs fixture coverage. |
+| Quota affects candidate eligibility | Implemented (common + manifest-configurable evidence; provider coverage partial) | Structured quota/reset evidence produces zero-remaining windows; manifests bind JSON pointers, quota signals, scope and named windows without kernel changes. A daemon restart fixture proves quota and rate windows persist and gate the route; usage-report operations and broader provider fixtures remain. |
+| No switch after response bytes are sent | Implemented (kernel boundary) | Response commitment prevents retry/switch after output begins; broaden end-to-end coverage across adapters. |
 
 ## Protocol normalization and streaming
 
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
-| Shared `handleChatCore` normalization and provider dispatch | Partial | Typed inbound normalization, kernel and adapters exist; common semantic coverage is not complete. |
-| OpenAI Chat endpoint | Partial | Adapter and live calls exist; broaden SSE, cancellation, tool and failure-boundary conformance. |
-| OpenAI Responses endpoint/continuity | Partial | Adapter route exists; continuity and output-item compatibility need fixtures. |
-| Anthropic Messages | Partial | Basic adapter and text/tool SSE conversion exist; content blocks, thinking, stop reasons and usage parity are incomplete. |
-| Cross-protocol canonical events | Planned | Shared normalized response-event layer is M5. |
-| Tool calls split across SSE chunks | Needs verification | Add fixture suite before claiming compatibility. |
-| Multimodal messages and capability routing | Partial | Typed capability fields and route filtering exist; broad detection/degradation behavior is missing. |
-| Native passthrough and format inference | Needs verification | Define and test when passthrough is lossless and how endpoint/header/body evidence is prioritized. |
+| Shared `handleChatCore` normalization and provider dispatch | Partial | GoBroom has typed inbound normalization, immutable routing and canonical response events. It does not yet match 9router's breadth of format detection, passthrough and provider/client-specific adaptation. |
+| OpenAI Chat endpoint | Implemented (core; provider matrix partial) | Streaming/JSON, cancellation, usage, tool events and retry boundary have focused tests; more upstream-specific fixtures are needed. |
+| OpenAI Responses endpoint/continuity | Implemented (core; edge compatibility partial) | Responses adapter and client-session continuity are wired; complete item/tool/error compatibility still needs fixtures. |
+| Anthropic Messages | Partial | Text/tool/thinking paths exist; broad content-block, cache, stop-reason and usage parity needs fixtures. |
+| Gemini upstream through OpenAI Chat | Partial (typed translation path; kernel integration fixtures) | Typed Chat→Gemini request and Gemini→OpenAI JSON/SSE contracts cover messages/system instructions, function declarations/history, supported generation options/reasoning, base64 images, finish reasons and usage. Unrepresentable options are rejected. Kernel-level binding tests cover tool/signature streaming, non-stream text, cancellation, pre-commit 429/401 fallback, terminal 400 behavior and no fallback after committed truncated output; malformed streams and missing candidates are rejected. Provider-specific error-body/quota parsing, native Gemini/Antigravity requests and complete multimodal/tool-signature conformance are not claimed. |
+| Cross-protocol canonical events | Implemented (core) | Kernel event contract and OpenAI/Anthropic/Gemini adapter observations exist; semantic parity across every event family remains incomplete. |
+| Tool calls split across SSE chunks | Partial | OpenAI and Gemini tool deltas are translated; full interleaving/partial-argument/signature fixtures remain. |
+| Multimodal messages and capability routing | Partial | Typed capability and eligibility policies exist. Gemini accepts base64 image data and explicitly rejects unsupported content instead of silently dropping it; modality coverage remains codec-specific. |
+| Native passthrough and format inference | Partial | Inbound format detection and protocol matching exist; lossless passthrough is not general and must be proven per format/provider. |
 
 ## Credentials, quota and observability
 
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
-| Static API-key/Bearer credentials | Partial | Credentials resolve per connection through daemon control/runtime path; more auth aliases and redaction tests required. |
-| OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | OAuth library is selected; generic auth registry exists, but a complete end-to-end provider flow is not implemented. |
+| Static API-key/Bearer credentials | Implemented (core) | Credentials resolve per connection through daemon/provider bindings; provider-specific auth schemes may need another reusable auth primitive. |
+| OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | Definition-bound refresh, per-connection locking and persistence exist. Interactive authorization-code/PKCE onboarding and live provider validation remain. |
 | Per-connection proxy settings | Planned | Keep in transport/connection configuration, not kernel routing branches. |
-| Usage history and request detail | Partial | Compact events are durably stored and exposed through `usage.list`, CLI and TUI, including class/session/TTFT fields; aggregates, cost, retention and bounded diagnostics remain. |
-| Provider quota APIs and reset-aware policy | Partial; redesign required | Generic HTTP/JSON polling exists as bootstrap code. The target uses passive response evidence and opportunistic provider enrichment with exact reset provenance; scheduled polling is explicit opt-in. |
+| Usage history and request detail | Implemented (compact core) | Bounded asynchronous usage events are persisted and exposed through control/CLI/TUI with request class/session/TTFT/throughput. Rich request-detail parity and cost accounting are not claimed. |
+| Provider quota APIs and reset-aware policy | Partial (generic runtime ready) | Generic quota operations, common structured error evidence, typed manifest JSON paths/signals and reset-aware policy exist; usage-report operations and broader provider fixtures remain. Polling is opt-in/opportunistic. |
 | Quota/usage only as dashboard data | Not the target | Runtime policy should consume the same state; current coverage is partial. |
 
 ## Secondary product features

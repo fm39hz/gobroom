@@ -11,6 +11,8 @@ import (
 
 type QuotaPoller struct {
 	Sources    map[string]provider.QuotaSource
+	Endpoints  map[string]kernel.Endpoint
+	Transports map[string]kernel.Transport
 	Snapshot   func() kernel.Snapshot
 	Credential func(context.Context, kernel.Route) (kernel.Credential, error)
 	Record     func(quota.Snapshot)
@@ -63,7 +65,12 @@ func (p QuotaPoller) poll(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		snapshots, err := source.Fetch(ctx, credential, route)
+		endpoint := p.Endpoints[route.QuotaEndpointID]
+		transport := p.Transports[route.QuotaTransportID]
+		if endpoint == nil || transport == nil {
+			continue
+		}
+		snapshots, err := source.Fetch(ctx, provider.QuotaRequest{Credential: credential, Route: route, Endpoint: endpoint, Transport: transport, EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName})
 		if err != nil {
 			continue
 		}

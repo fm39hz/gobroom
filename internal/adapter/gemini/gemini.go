@@ -1,12 +1,16 @@
 package gemini
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,31 +20,51 @@ import (
 
 type Gemini struct{ Client *http.Client }
 
+type requestCodec struct{ adapter Gemini }
+
+func (requestCodec) ID() string { return "gemini-json" }
+func (c requestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	return c.adapter.Prepare(ctx, request, route, credential)
+}
+
+type responseCodec struct{ adapter Gemini }
+
+func (responseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
+	return kernel.CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Lossless: false, Reason: "Gemini codec currently renders OpenAI Chat wire format"}
+}
+
+func (responseCodec) ID() string { return "gemini-json" }
+func (c responseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
+	return c.adapter.ClassifyError(status, body)
+}
+func (c responseCodec) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks kernel.StreamHooks) error {
+	return c.adapter.TranslateStream(ctx, response, writer, source, hooks)
+}
+
 func (Gemini) ID() string                { return "gemini" }
 func (Gemini) Protocol() kernel.Protocol { return kernel.ProtocolGemini }
-func NewAdapter() kernel.ProviderAdapter { return Gemini{} }
+func NewAdapter() kernel.ProviderAdapter {
+	request, response := NewCodecs()
+	return kernel.ComposedAdapter{AdapterID: "gemini", AdapterProtocol: kernel.ProtocolGemini, Endpoint: kernel.HTTPJSONEndpoint{}, Request: request, Transport: kernel.HTTPTransport{}, Response: response}
+}
+func NewCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+	adapter := Gemini{}
+	return requestCodec{adapter}, responseCodec{adapter}
+}
 
+// Prepare translates the normalized OpenAI Chat contract into Gemini's
+// generateContent shape. Only understood OpenAI fields are forwarded: passing
+// the raw Chat body through would send `messages` to Gemini and appear to work
+// for neither tools nor streaming.
 func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
-	if route.BaseURL == "" {
-		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)
+	operation := "generateContent"
+	if request.Stream {
+		operation = "streamGenerateContent?alt=sse"
 	}
-	url := strings.TrimRight(route.BaseURL, "/")
-	if !strings.Contains(url, ":generateContent") {
-		url += "/models/" + route.ExternalModel + ":generateContent"
-	}
-	body := map[string]any{}
-	for key, value := range request.Raw {
-		body[key] = value
-	}
-	if _, ok := body["contents"]; !ok {
-		contents := make([]map[string]any, 0, len(request.Messages))
-		for _, message := range request.Messages {
-			contents = append(contents, map[string]any{"role": geminiRole(message.Role), "parts": []map[string]any{{"text": fmt.Sprint(message.Content)}}})
-		}
-		body["contents"] = contents
-	}
-	for key, value := range normalize.GeminiReasoning(request.Thinking) {
-		body[key] = value
+	endpoint := "/models/" + url.PathEscape(route.ExternalModel) + ":" + operation
+	body, err := geminiRequest(request)
+	if err != nil {
+		return kernel.UpstreamRequest{}, err
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -51,14 +75,418 @@ func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 	if credential.Secret != "" {
 		headers.Set("x-goog-api-key", credential.Secret)
 	}
-	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: bytes.NewReader(data)}, nil
 }
 
-func geminiRole(role string) string {
-	if role == "assistant" {
-		return "model"
+func geminiRequest(request kernel.NormalizedRequest) (generateContentRequest, error) {
+	body := generateContentRequest{Contents: make([]geminiContent, 0, len(request.Messages))}
+	systemParts := make([]geminiPart, 0)
+	for _, layer := range request.Prompt.Layers {
+		if layer.Text != "" {
+			systemParts = append(systemParts, geminiPart{Text: layer.Text})
+		}
 	}
-	return "user"
+	var options openAIChatRequestOptions
+	if len(request.Raw) > 0 {
+		raw, err := json.Marshal(request.Raw)
+		if err != nil {
+			return generateContentRequest{}, fmt.Errorf("encode OpenAI request options: %w", err)
+		}
+		if err := decodeStrictJSON(raw, &options); err != nil {
+			return generateContentRequest{}, fmt.Errorf("decode OpenAI request options: %w", err)
+		}
+	}
+	if options.Logprobs != nil || options.TopLogprobs != nil || len(options.LogitBias) > 0 || len(options.Functions) > 0 || len(options.FunctionCall) > 0 || options.ParallelToolCalls != nil {
+		return generateContentRequest{}, fmt.Errorf("Gemini adapter cannot preserve one or more requested OpenAI options: logprobs, logit_bias, legacy functions/function_call, parallel_tool_calls")
+	}
+	if len(options.Reasoning) > 0 {
+		var reasoning openAIReasoningConfig
+		if err := decodeStrictJSON(options.Reasoning, &reasoning); err != nil {
+			return generateContentRequest{}, fmt.Errorf("decode OpenAI reasoning options: %w", err)
+		}
+	}
+	if len(options.Thinking) > 0 {
+		var thinking openAIThinkingConfig
+		if err := decodeStrictJSON(options.Thinking, &thinking); err != nil {
+			return generateContentRequest{}, fmt.Errorf("decode thinking options: %w", err)
+		}
+	}
+	switch {
+	case options.User != "", len(options.StreamOptions) > 0, options.ServiceTier != "", options.Metadata != nil, options.PromptCacheKey != "", options.SafetyIdentifier != "":
+		return generateContentRequest{}, fmt.Errorf("Gemini adapter does not yet support OpenAI request attribution, stream_options, or service-tier options")
+	case options.Store != nil && *options.Store:
+		return generateContentRequest{}, fmt.Errorf("Gemini adapter cannot honor OpenAI store=true")
+	case options.Verbosity != "", len(options.Modalities) > 0, len(options.Audio) > 0, len(options.Prediction) > 0:
+		return generateContentRequest{}, fmt.Errorf("Gemini adapter does not yet support OpenAI verbosity, audio, prediction, or output-modality options")
+	}
+	toolNamesByCallID := map[string]string{}
+	for _, message := range request.Messages {
+		for _, call := range message.ToolCalls {
+			toolNamesByCallID[call.ID] = call.Name
+		}
+	}
+	for _, message := range request.Messages {
+		parts, err := messageParts(message)
+		if err != nil {
+			return generateContentRequest{}, err
+		}
+		switch message.Role {
+		case "system", "developer":
+			systemParts = append(systemParts, parts...)
+			continue
+		case "tool", "function":
+			parts = nil
+			name := message.Name
+			if name == "" {
+				name = toolNamesByCallID[message.ToolCallID]
+			}
+			if name == "" {
+				return generateContentRequest{}, fmt.Errorf("Gemini function response is missing its function name")
+			}
+			response, err := functionResponseContent(message.Content)
+			if err != nil {
+				return generateContentRequest{}, err
+			}
+			parts = append(parts, geminiPart{FunctionResponse: &geminiFunctionResponse{ID: message.ToolCallID, Name: name, Response: response}})
+			body.Contents = append(body.Contents, geminiContent{Role: "user", Parts: parts})
+			continue
+		}
+		if message.Role == "assistant" {
+			for _, call := range message.ToolCalls {
+				args, err := toolArguments(call.Arguments)
+				if err != nil {
+					return generateContentRequest{}, fmt.Errorf("encode Gemini function call %q: %w", call.Name, err)
+				}
+				part := geminiPart{FunctionCall: &geminiFunctionCall{ID: call.ID, Name: call.Name, Args: args}}
+				if metadata, err := json.Marshal(call.Metadata); err == nil {
+					var callMetadata struct {
+						ThoughtSignature string `json:"thoughtSignature"`
+					}
+					if json.Unmarshal(metadata, &callMetadata) == nil {
+						part.ThoughtSignature = callMetadata.ThoughtSignature
+					}
+				}
+				parts = append(parts, part)
+			}
+		}
+		if len(parts) > 0 {
+			role, err := geminiRole(message.Role)
+			if err != nil {
+				return generateContentRequest{}, err
+			}
+			body.Contents = append(body.Contents, geminiContent{Role: role, Parts: parts})
+		}
+	}
+	if len(body.Contents) == 0 {
+		return generateContentRequest{}, fmt.Errorf("Gemini request requires at least one non-system message")
+	}
+	if len(systemParts) > 0 {
+		body.SystemInstruction = &geminiContent{Parts: systemParts}
+	}
+	if len(request.Tools) > 0 {
+		declarations := make([]geminiFunctionDeclaration, 0, len(request.Tools))
+		for _, tool := range request.Tools {
+			if tool.Type != "" && tool.Type != "function" {
+				return generateContentRequest{}, fmt.Errorf("Gemini adapter does not support OpenAI tool type %q", tool.Type)
+			}
+			functionData, err := json.Marshal(tool.Function)
+			if err != nil {
+				return generateContentRequest{}, fmt.Errorf("encode tool definition: %w", err)
+			}
+			var function openAIFunctionDefinition
+			if err := decodeStrictJSON(functionData, &function); err != nil {
+				return generateContentRequest{}, fmt.Errorf("decode tool definition: %w", err)
+			}
+			if function.Strict != nil && *function.Strict {
+				return generateContentRequest{}, fmt.Errorf("Gemini adapter cannot guarantee OpenAI strict function schema semantics")
+			}
+			if function.Name == "" {
+				function.Name = tool.Name
+			}
+			if function.Name == "" {
+				return generateContentRequest{}, fmt.Errorf("Gemini function declaration is missing its name")
+			}
+			declarations = append(declarations, geminiFunctionDeclaration{Name: function.Name, Description: function.Description, Parameters: function.Parameters})
+		}
+		body.Tools = []geminiTool{{FunctionDeclarations: declarations}}
+		if choice, err := geminiToolMode(options.ToolChoice); err != nil {
+			return generateContentRequest{}, err
+		} else if choice != nil {
+			body.ToolConfig = &geminiToolConfig{FunctionCallingConfig: *choice}
+		}
+	} else if choice, err := geminiToolMode(options.ToolChoice); err != nil {
+		return generateContentRequest{}, err
+	} else if choice != nil && choice.Mode != "NONE" {
+		return generateContentRequest{}, fmt.Errorf("OpenAI tool_choice requests tool use but the request contains no tools")
+	}
+
+	generation := &geminiGenerationConfig{
+		Temperature: options.Temperature, TopP: options.TopP, TopK: options.TopK,
+		PresencePenalty: options.PresencePenalty, FrequencyPenalty: options.FrequencyPenalty,
+		Seed: options.Seed,
+	}
+	if options.MaxCompletionTokens != nil {
+		generation.MaxOutputTokens = options.MaxCompletionTokens
+	} else {
+		generation.MaxOutputTokens = options.MaxTokens
+	}
+	if options.N != nil {
+		if *options.N != 1 {
+			return generateContentRequest{}, fmt.Errorf("Gemini OpenAI-compat adapter supports n=1, got n=%d", *options.N)
+		}
+		generation.CandidateCount = options.N
+	}
+	if options.Stop != nil {
+		var stopString string
+		if err := json.Unmarshal(options.Stop, &stopString); err == nil {
+			generation.StopSequences = []string{stopString}
+		} else if err := json.Unmarshal(options.Stop, &generation.StopSequences); err != nil {
+			return generateContentRequest{}, fmt.Errorf("decode OpenAI stop sequences: expected string or string array")
+		}
+	}
+	if options.ResponseFormat != nil {
+		switch options.ResponseFormat.Type {
+		case "text":
+			// Text is Gemini's default response mode.
+		case "json_object":
+			generation.ResponseMimeType = "application/json"
+		case "json_schema":
+			if options.ResponseFormat.JSONSchema == nil || len(options.ResponseFormat.JSONSchema.Schema) == 0 {
+				return generateContentRequest{}, fmt.Errorf("OpenAI json_schema response_format requires a JSON schema")
+			}
+			if options.ResponseFormat.JSONSchema.Strict != nil && *options.ResponseFormat.JSONSchema.Strict {
+				return generateContentRequest{}, fmt.Errorf("Gemini adapter cannot guarantee OpenAI strict JSON schema semantics")
+			}
+			generation.ResponseMimeType = "application/json"
+			generation.ResponseSchema = options.ResponseFormat.JSONSchema.Schema
+		default:
+			return generateContentRequest{}, fmt.Errorf("Gemini adapter does not support OpenAI response_format %q", options.ResponseFormat.Type)
+		}
+	}
+	thinking, err := geminiThinkingConfigFor(request.Thinking)
+	if err != nil {
+		return generateContentRequest{}, err
+	}
+	generation.ThinkingConfig = thinking
+	if generation.hasValues() {
+		body.GenerationConfig = generation
+	}
+	return body, nil
+}
+
+func messageParts(message normalize.Message) ([]geminiPart, error) {
+	if text, ok := message.Content.(string); ok {
+		if text == "" {
+			return nil, nil
+		}
+		return []geminiPart{{Text: text}}, nil
+	}
+	if message.Content == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(message.Content)
+	if err != nil {
+		return nil, fmt.Errorf("encode message content: %w", err)
+	}
+	var content []json.RawMessage
+	if err := json.Unmarshal(encoded, &content); err != nil {
+		var part incomingChatContentPart
+		if err := json.Unmarshal(encoded, &part); err != nil {
+			return nil, fmt.Errorf("decode message content as Gemini parts: %w", err)
+		}
+		content = []json.RawMessage{encoded}
+	}
+	parts := make([]geminiPart, 0, len(content))
+	for _, raw := range content {
+		var part incomingChatContentPart
+		if err := json.Unmarshal(raw, &part); err != nil {
+			return nil, fmt.Errorf("decode message content part: %w", err)
+		}
+		switch part.Type {
+		case "text", "input_text":
+			parts = append(parts, geminiPart{Text: part.Text})
+		case "image_url", "input_image", "image":
+			imageURL := part.URL
+			if part.ImageURL.URL != "" {
+				imageURL = part.ImageURL.URL
+			}
+			blob, err := inlineImageFromDataURI(imageURL)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, geminiPart{InlineData: blob})
+		default:
+			return nil, fmt.Errorf("Gemini adapter does not support content block type %q", part.Type)
+		}
+	}
+	return parts, nil
+}
+
+func inlineImageFromDataURI(value string) (*geminiBlob, error) {
+	if !strings.HasPrefix(value, "data:") {
+		return nil, fmt.Errorf("Gemini adapter requires image input as a base64 data URI; remote image URLs are not silently dropped")
+	}
+	comma := strings.IndexByte(value, ',')
+	if comma < 0 {
+		return nil, fmt.Errorf("invalid image data URI")
+	}
+	parts := strings.Split(value[5:comma], ";")
+	mediaType, _, err := mime.ParseMediaType(parts[0])
+	if err != nil || !strings.Contains(mediaType, "/") {
+		return nil, fmt.Errorf("invalid image media type in data URI")
+	}
+	base64Encoded := false
+	for _, parameter := range parts[1:] {
+		base64Encoded = base64Encoded || strings.EqualFold(parameter, "base64")
+	}
+	if !base64Encoded {
+		return nil, fmt.Errorf("Gemini adapter only supports base64 image data URIs")
+	}
+	data, err := base64.StdEncoding.DecodeString(value[comma+1:])
+	if err != nil {
+		return nil, fmt.Errorf("decode image data URI: %w", err)
+	}
+	return &geminiBlob{MIMEType: mediaType, Data: base64.StdEncoding.EncodeToString(data)}, nil
+}
+
+func functionResponseContent(content any) (json.RawMessage, error) {
+	if text, ok := content.(string); ok {
+		var decoded json.RawMessage
+		if json.Unmarshal([]byte(text), &decoded) == nil && json.Valid(decoded) {
+			return decoded, nil
+		}
+		return json.Marshal(map[string]string{"content": text})
+	}
+	encoded, err := json.Marshal(content)
+	return json.RawMessage(encoded), err
+}
+
+func toolArguments(value any) (json.RawMessage, error) {
+	if value == nil {
+		return json.RawMessage(`{}`), nil
+	}
+	var raw json.RawMessage
+	switch args := value.(type) {
+	case string:
+		raw = json.RawMessage(args)
+	case json.RawMessage:
+		raw = args
+	default:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		raw = encoded
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("arguments must be a JSON object")
+	}
+	return raw, nil
+}
+
+func geminiToolMode(raw json.RawMessage) (*geminiFunctionCallingConfig, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var value string
+	if json.Unmarshal(raw, &value) == nil {
+		switch value {
+		case "none":
+			return &geminiFunctionCallingConfig{Mode: "NONE"}, nil
+		case "required":
+			return &geminiFunctionCallingConfig{Mode: "ANY"}, nil
+		case "auto":
+			return &geminiFunctionCallingConfig{Mode: "AUTO"}, nil
+		default:
+			return nil, fmt.Errorf("unsupported OpenAI tool_choice %q", value)
+		}
+	}
+	var choice openAIToolChoice
+	if err := decodeStrictJSON(raw, &choice); err != nil {
+		return nil, fmt.Errorf("decode OpenAI tool_choice: %w", err)
+	}
+	if choice.Type == "function" || choice.Function.Name != "" {
+		if choice.Function.Name == "" {
+			return nil, fmt.Errorf("named OpenAI function tool_choice is missing function.name")
+		}
+		return &geminiFunctionCallingConfig{Mode: "ANY", AllowedFunctionNames: []string{choice.Function.Name}}, nil
+	}
+	if choice.Type == "allowed_tools" {
+		if len(choice.AllowedTools) == 0 {
+			return nil, fmt.Errorf("OpenAI allowed_tools choice must include at least one function")
+		}
+		allowed := make([]string, 0, len(choice.AllowedTools))
+		for _, tool := range choice.AllowedTools {
+			if tool.Type != "function" || tool.Function.Name == "" {
+				return nil, fmt.Errorf("Gemini adapter only supports named function entries in allowed_tools")
+			}
+			allowed = append(allowed, tool.Function.Name)
+		}
+		return &geminiFunctionCallingConfig{Mode: "ANY", AllowedFunctionNames: allowed}, nil
+	}
+	if choice.Type != "" {
+		return nil, fmt.Errorf("unsupported OpenAI tool_choice type %q", choice.Type)
+	}
+	return &geminiFunctionCallingConfig{Mode: "ANY"}, nil
+}
+
+func geminiThinkingConfigFor(intent normalize.ThinkingIntent) (*geminiThinkingConfig, error) {
+	config := &geminiThinkingConfig{}
+	switch intent.Mode {
+	case "", "inherit", "auto":
+		return nil, nil
+	case "disabled":
+		budget := 0
+		config.ThinkingBudget = &budget
+	case "budget", "enabled":
+		if intent.BudgetTokens <= 0 {
+			return nil, nil
+		}
+		config.ThinkingBudget = &intent.BudgetTokens
+	case "level":
+		if intent.Effort == "none" {
+			return nil, fmt.Errorf("Gemini does not provide an exact equivalent for reasoning effort %q", intent.Effort)
+		}
+		if intent.Effort == "" {
+			return nil, nil
+		}
+		config.ThinkingLevel = intent.Effort
+	default:
+		return nil, nil
+	}
+	return config, nil
+}
+
+func geminiRole(role string) (string, error) {
+	switch role {
+	case "assistant":
+		return "model", nil
+	case "user":
+		return "user", nil
+	default:
+		return "", fmt.Errorf("Gemini adapter does not support chat message role %q", role)
+	}
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func (config *geminiGenerationConfig) hasValues() bool {
+	return config.Temperature != nil || config.TopP != nil || config.TopK != nil || config.MaxOutputTokens != nil || config.PresencePenalty != nil || config.FrequencyPenalty != nil || config.Seed != nil || len(config.StopSequences) > 0 || config.CandidateCount != nil || config.ResponseMimeType != "" || len(config.ResponseSchema) > 0 || config.ThinkingConfig != nil
 }
 
 func (a Gemini) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
@@ -91,51 +519,242 @@ func (Gemini) ClassifyError(status int, _ []byte) kernel.ErrorClass {
 	return kernel.ErrorRetryable
 }
 
-func (Gemini) TranslateStream(_ context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
+func (Gemini) TranslateStream(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
+	contentType := strings.ToLower(response.Headers.Get("content-type"))
+	if strings.Contains(contentType, "text/event-stream") {
+		return translateGeminiSSE(ctx, response, writer, hooks)
+	}
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
-		if hooks.OnError != nil {
-			hooks.OnError(err)
-		}
-		return err
+		return reportError(hooks, err)
 	}
-	var payload map[string]any
+	var payload geminiGenerateContentResponse
 	if err := json.Unmarshal(data, &payload); err != nil {
-		if hooks.OnError != nil {
-			hooks.OnError(err)
-		}
-		return err
+		return reportError(hooks, fmt.Errorf("decode Gemini response: %w", err))
 	}
-	text := ""
-	if candidates, ok := payload["candidates"].([]any); ok && len(candidates) > 0 {
-		candidate, _ := candidates[0].(map[string]any)
-		content, _ := candidate["content"].(map[string]any)
-		if parts, ok := content["parts"].([]any); ok {
-			for _, raw := range parts {
-				part, _ := raw.(map[string]any)
-				text += stringValue(part["text"])
-			}
-		}
+	if len(payload.Candidates) == 0 {
+		return reportError(hooks, fmt.Errorf("Gemini response contains no candidates"))
 	}
-	result := map[string]any{"id": "chatcmpl-gemini", "object": "chat.completion", "created": time.Now().Unix(), "choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": text}, "finish_reason": "stop"}}}
+	translated, events, usage := openAIResponse(payload)
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(response.Status)
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
 	}
-	if err := json.NewEncoder(writer).Encode(result); err != nil {
-		if hooks.OnError != nil {
-			hooks.OnError(err)
-		}
-		return err
+	if err := json.NewEncoder(writer).Encode(translated); err != nil {
+		return reportError(hooks, err)
 	}
-	if hooks.OnEvent != nil {
-		hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventTextDelta, Text: text})
+	for _, event := range events {
+		if hooks.OnEvent != nil {
+			hooks.OnEvent(event)
+		}
 	}
 	if hooks.OnComplete != nil {
-		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
+		hooks.OnComplete(usage)
 	}
 	return nil
 }
 
-func stringValue(value any) string { result, _ := value.(string); return result }
+func translateGeminiSSE(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, hooks kernel.StreamHooks) error {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.WriteHeader(response.Status)
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 4096), 4*1024*1024)
+	started := false
+	created := time.Now().Unix()
+	toolIndexes := map[string]int{}
+	index := 0
+	finished := false
+	var usage kernel.UsageEvent
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return reportError(hooks, err)
+		}
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var payload geminiGenerateContentResponse
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			return reportError(hooks, fmt.Errorf("decode Gemini SSE event: %w", err))
+		}
+		if !started {
+			started = true
+			if hooks.OnFirstByte != nil {
+				hooks.OnFirstByte(time.Now())
+			}
+		}
+		if len(payload.Candidates) > 0 {
+			candidate := payload.Candidates[0]
+			for _, part := range candidate.Content.Parts {
+				if part.Text != "" {
+					kind := kernel.EventTextDelta
+					var content, reasoning *string
+					if part.Thought {
+						kind, reasoning = kernel.EventThinkingDelta, &part.Text
+					} else {
+						content = &part.Text
+					}
+					emitChatChunk(writer, content, reasoning, nil, nil, created)
+					if hooks.OnEvent != nil {
+						hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kind, Text: part.Text})
+					}
+				}
+				if call := part.FunctionCall; call != nil {
+					name := call.Name
+					id := call.ID
+					if id == "" {
+						id = fmt.Sprintf("call_gemini_%d", index)
+					}
+					toolIndex, exists := toolIndexes[id]
+					first := !exists
+					if first {
+						toolIndex = index
+						toolIndexes[id] = toolIndex
+						index++
+					}
+					function := openAIChatToolFunctionDelta{}
+					if first {
+						function.Name = name
+					}
+					args := string(call.Args)
+					if args == "" || args == "null" {
+						args = "{}"
+					}
+					function.Arguments = args
+					tool := openAIChatToolCallDelta{Index: toolIndex, Function: function, ThoughtSignature: part.ThoughtSignature}
+					if first {
+						tool.ID, tool.Type = id, "function"
+					}
+					emitChatChunk(writer, nil, nil, []openAIChatToolCallDelta{tool}, nil, created)
+					if hooks.OnEvent != nil {
+						hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolCallID: id, ToolName: name, ToolArguments: args})
+					}
+				}
+			}
+			if reason := candidate.FinishReason; reason != "" {
+				finished = true
+				finish := openAIFinishReason(reason)
+				emitChatChunk(writer, nil, nil, nil, &finish, created)
+			}
+		}
+		if payload.UsageMetadata != nil {
+			usage = geminiUsage(payload.UsageMetadata)
+			if hooks.OnEvent != nil {
+				hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &usage})
+			}
+		}
+		if f, ok := writer.(http.Flusher); ok {
+			f.Flush()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return reportError(hooks, err)
+	}
+	if err := scanner.Err(); err != nil {
+		return reportError(hooks, err)
+	}
+	if !finished {
+		return reportError(hooks, io.ErrUnexpectedEOF)
+	}
+	if !started && hooks.OnFirstByte != nil {
+		hooks.OnFirstByte(time.Now())
+	}
+	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
+	usage.Status = "ok"
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(usage)
+	}
+	return nil
+}
+
+func openAIResponse(payload geminiGenerateContentResponse) (openAIChatResponse, []kernel.ResponseEvent, kernel.UsageEvent) {
+	created := time.Now().Unix()
+	text := strings.Builder{}
+	reasoning := strings.Builder{}
+	toolCalls := make([]openAIChatToolCall, 0)
+	events := make([]kernel.ResponseEvent, 0)
+	finish := "stop"
+	if len(payload.Candidates) > 0 {
+		candidate := payload.Candidates[0]
+		finish = openAIFinishReason(candidate.FinishReason)
+		for _, part := range candidate.Content.Parts {
+			if part.Text != "" {
+				if part.Thought {
+					reasoning.WriteString(part.Text)
+					events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventThinkingDelta, Text: part.Text})
+				} else {
+					text.WriteString(part.Text)
+					events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventTextDelta, Text: part.Text})
+				}
+			}
+			if call := part.FunctionCall; call != nil {
+				arguments := string(call.Args)
+				if arguments == "" || arguments == "null" {
+					arguments = "{}"
+				}
+				toolCalls = append(toolCalls, openAIChatToolCall{ID: call.ID, Type: "function", ThoughtSignature: part.ThoughtSignature, Function: openAIChatToolFunction{Name: call.Name, Arguments: arguments}})
+				events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments})
+			}
+		}
+	}
+	message := openAIChatMessage{Role: "assistant", Content: text.String()}
+	if reasoning.Len() > 0 {
+		message.ReasoningContent = reasoning.String()
+	}
+	if len(toolCalls) > 0 {
+		message.ToolCalls = toolCalls
+		finish = "tool_calls"
+	}
+	usage := kernel.UsageEvent{Status: "ok"}
+	var outputUsage *openAIChatUsage
+	if payload.UsageMetadata != nil {
+		usage = geminiUsage(payload.UsageMetadata)
+		outputUsage = &openAIChatUsage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens}
+		events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &usage})
+	}
+	response := openAIChatResponse{ID: "chatcmpl-gemini", Object: "chat.completion", Created: created, Choices: []openAIChatChoice{{Index: 0, Message: message, FinishReason: finish}}, Usage: outputUsage}
+	return response, events, usage
+}
+
+func emitChatChunk(writer io.Writer, content, reasoning *string, tools []openAIChatToolCallDelta, finish *string, created int64) {
+	delta := openAIChatDelta{Content: content, ReasoningContent: reasoning, ToolCalls: tools}
+	chunk := openAIChatChunk{ID: "chatcmpl-gemini", Object: "chat.completion.chunk", Created: created, Choices: []openAIChatDeltaChoice{{Index: 0, Delta: delta, FinishReason: finish}}}
+	data, _ := json.Marshal(chunk)
+	_, _ = fmt.Fprintf(writer, "data: %s\n\n", data)
+}
+
+func geminiUsage(metadata *geminiUsageMetadata) kernel.UsageEvent {
+	if metadata == nil {
+		return kernel.UsageEvent{Status: "ok"}
+	}
+	return kernel.UsageEvent{InputTokens: metadata.PromptTokenCount, OutputTokens: metadata.CandidatesTokenCount, Status: "ok"}
+}
+
+func openAIFinishReason(reason string) string {
+	switch reason {
+	case "MAX_TOKENS":
+		return "length"
+	case "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII":
+		return "content_filter"
+	case "STOP", "":
+		return "stop"
+	default:
+		return "stop"
+	}
+}
+
+func reportError(hooks kernel.StreamHooks, err error) error {
+	if hooks.OnEvent != nil {
+		hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: err.Error()})
+	}
+	if hooks.OnError != nil {
+		hooks.OnError(err)
+	}
+	return err
+}

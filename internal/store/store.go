@@ -1,12 +1,15 @@
 package store
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
@@ -101,6 +104,16 @@ CREATE TABLE IF NOT EXISTS model_availability (
   PRIMARY KEY(connection_id, model_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_model_availability_until ON model_availability(blocked_until);
+CREATE TABLE IF NOT EXISTS connection_model_catalog (
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  provider_node_id TEXT NOT NULL REFERENCES provider_nodes(id) ON DELETE CASCADE,
+  external_model_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('available','not_listed')),
+  source TEXT NOT NULL,
+  observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(connection_id,external_model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_connection_model_catalog_provider ON connection_model_catalog(provider_node_id,external_model_id,status);
 CREATE TABLE IF NOT EXISTS proxy_pools (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'http',
   endpoint TEXT NOT NULL DEFAULT '', no_proxy TEXT NOT NULL DEFAULT '',
@@ -135,7 +148,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 -- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
-  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
+  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', allow_compatible_sources INTEGER NOT NULL DEFAULT 0, allow_dynamic_sources INTEGER NOT NULL DEFAULT 0, policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
   capabilities_json TEXT NOT NULL DEFAULT '{}', limits_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -175,6 +188,8 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE physical_model_sources ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN reasoning_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE combo_models ADD COLUMN reasoning_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN allow_compatible_sources INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN allow_dynamic_sources INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`UPDATE provider_nodes SET definition_id=CASE protocol WHEN 'openai_chat' THEN 'openai-compatible-chat' WHEN 'chat' THEN 'openai-compatible-chat' WHEN 'openai_responses' THEN 'openai-compatible-responses' WHEN 'responses' THEN 'openai-compatible-responses' WHEN 'anthropic' THEN 'anthropic-messages' ELSE definition_id END WHERE definition_id=''`)
 	return err
 }
@@ -399,6 +414,109 @@ func (s *Store) ModelAvailabilities() ([]ModelAvailability, error) {
 	return result, rows.Err()
 }
 
+type ConnectionModelEntitlement struct {
+	ConnectionID, ProviderNodeID, ExternalModelID string
+	Status, Source, ObservedAt                    string
+}
+
+const (
+	EntitlementAvailable = "available"
+	EntitlementNotListed = "not_listed"
+	EntitlementUnknown   = "unknown"
+)
+
+// RecordConnectionModelSnapshot stores positive account evidence. Only a
+// complete upstream snapshot is authoritative enough to mark previously known
+// routes absent; incomplete pages can never revoke access evidence.
+func (s *Store) RecordConnectionModelSnapshot(connectionID, providerNodeID string, externalIDs []string, complete bool, source string) error {
+	if connectionID == "" || providerNodeID == "" {
+		return fmt.Errorf("connection ID and provider node ID are required")
+	}
+	if source == "" {
+		source = "models_endpoint"
+	}
+	var actualNodeID string
+	if err := s.DB.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&actualNodeID); err != nil {
+		return fmt.Errorf("load connection %q: %w", connectionID, err)
+	}
+	if actualNodeID != providerNodeID {
+		return fmt.Errorf("connection %q does not belong to provider node %q", connectionID, providerNodeID)
+	}
+	seen := make(map[string]struct{}, len(externalIDs))
+	for _, externalID := range externalIDs {
+		if strings.TrimSpace(externalID) == "" {
+			return fmt.Errorf("model snapshot contains an empty upstream ID")
+		}
+		seen[externalID] = struct{}{}
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if complete {
+		if _, err := tx.Exec(`UPDATE connection_model_catalog SET status=?,source=?,observed_at=CURRENT_TIMESTAMP WHERE connection_id=? AND provider_node_id=?`, EntitlementNotListed, source, connectionID, providerNodeID); err != nil {
+			return err
+		}
+		rows, err := tx.Query(`SELECT external_id FROM model_catalog WHERE provider_node_id=? AND kind='discovered' AND enabled=1`, providerNodeID)
+		if err != nil {
+			return err
+		}
+		var importedIDs []string
+		for rows.Next() {
+			var externalID string
+			if err := rows.Scan(&externalID); err != nil {
+				rows.Close()
+				return err
+			}
+			importedIDs = append(importedIDs, externalID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		for _, externalID := range importedIDs {
+			if _, present := seen[externalID]; present {
+				continue
+			}
+			if _, err := tx.Exec(`INSERT INTO connection_model_catalog(connection_id,provider_node_id,external_model_id,status,source,observed_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,external_model_id) DO UPDATE SET status=excluded.status,source=excluded.source,observed_at=CURRENT_TIMESTAMP`, connectionID, providerNodeID, externalID, EntitlementNotListed, source); err != nil {
+				return err
+			}
+		}
+	}
+	for externalID := range seen {
+		if _, err := tx.Exec(`INSERT INTO connection_model_catalog(connection_id,provider_node_id,external_model_id,status,source,observed_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,external_model_id) DO UPDATE SET provider_node_id=excluded.provider_node_id,status=excluded.status,source=excluded.source,observed_at=CURRENT_TIMESTAMP`, connectionID, providerNodeID, externalID, EntitlementAvailable, source); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ConnectionModelEntitlements(providerNodeID string) ([]ConnectionModelEntitlement, error) {
+	query := `SELECT connection_id,provider_node_id,external_model_id,status,source,observed_at FROM connection_model_catalog`
+	args := []any{}
+	if providerNodeID != "" {
+		query += ` WHERE provider_node_id=?`
+		args = append(args, providerNodeID)
+	}
+	query += ` ORDER BY connection_id,external_model_id`
+	rows, err := s.DB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ConnectionModelEntitlement
+	for rows.Next() {
+		var item ConnectionModelEntitlement
+		if err := rows.Scan(&item.ConnectionID, &item.ProviderNodeID, &item.ExternalModelID, &item.Status, &item.Source, &item.ObservedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
 type ProxyPool struct {
 	ID, Name, Kind, Endpoint, NoProxy, Health string
 	Enabled                                   bool
@@ -417,7 +535,7 @@ type ProviderExtension struct {
 
 type ProviderSession struct {
 	ConnectionID, Namespace, SessionKey, ExpiresAt, LastUsedAt string
-	State                                                      map[string]any
+	State                                                      kernel.SessionState
 }
 
 func (s *Store) ConnectionRuntime(id string) (ConnectionRuntime, bool, error) {
@@ -491,8 +609,65 @@ func (s *Store) SaveProviderSession(item ProviderSession) error {
 	if err != nil {
 		return err
 	}
+	if item.ExpiresAt == "" && !item.State.ExpiresAt.IsZero() {
+		item.ExpiresAt = item.State.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	}
+	if item.LastUsedAt == "" {
+		item.LastUsedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	_, err = s.DB.Exec(`INSERT INTO provider_sessions(connection_id,namespace,session_key,state_json,expires_at,last_used_at,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,namespace,session_key) DO UPDATE SET state_json=excluded.state_json,expires_at=excluded.expires_at,last_used_at=excluded.last_used_at,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Namespace, item.SessionKey, string(state), nullable(item.ExpiresAt), nullable(item.LastUsedAt))
 	return err
+}
+
+func (s *Store) ProviderSessions() ([]ProviderSession, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	rows, err := s.DB.Query(`SELECT connection_id,namespace,session_key,state_json,COALESCE(expires_at,''),COALESCE(last_used_at,'') FROM provider_sessions WHERE expires_at IS NULL OR expires_at>? ORDER BY updated_at DESC LIMIT 16384`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sessions []ProviderSession
+	for rows.Next() {
+		var item ProviderSession
+		var state string
+		if err := rows.Scan(&item.ConnectionID, &item.Namespace, &item.SessionKey, &state, &item.ExpiresAt, &item.LastUsedAt); err != nil {
+			return nil, err
+		}
+		if err := decodeSessionState(state, &item.State); err != nil {
+			return nil, fmt.Errorf("provider session %q/%q state: %w", item.Namespace, item.SessionKey, err)
+		}
+		if item.ExpiresAt != "" {
+			item.State.ExpiresAt, err = time.Parse(time.RFC3339Nano, item.ExpiresAt)
+			if err != nil {
+				return nil, fmt.Errorf("provider session %q/%q expiry: %w", item.Namespace, item.SessionKey, err)
+			}
+		}
+		sessions = append(sessions, item)
+	}
+	return sessions, rows.Err()
+}
+
+func decodeSessionState(raw string, target *kernel.SessionState) error {
+	decoder := json.NewDecoder(bytes.NewBufferString(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) PruneExpiredProviderSessions(now time.Time) (int64, error) {
+	result, err := s.DB.Exec(`DELETE FROM provider_sessions WHERE expires_at IS NOT NULL AND expires_at<=?`, now.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 func nullString(value sql.NullString) string {
@@ -528,21 +703,21 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
-type Credential struct{ Type, Secret string }
+type Credential struct{ ID, Type, Secret string }
 
 func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT credential_type,secret_ref FROM connections WHERE provider_node_id=? AND enabled=1 ORDER BY priority,id LIMIT 1`)
+	row := s.DB.QueryRow(`SELECT id,credential_type,secret_ref FROM connections WHERE provider_node_id=? AND enabled=1 ORDER BY priority,id LIMIT 1`, nodeID)
 	var c Credential
-	if err := row.Scan(&c.Type, &c.Secret); err != nil {
+	if err := row.Scan(&c.ID, &c.Type, &c.Secret); err != nil {
 		return Credential{}, false
 	}
 	return c, true
 }
 
 func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT credential_type,secret_ref FROM connections WHERE id=? AND enabled=1`, id)
+	row := s.DB.QueryRow(`SELECT id,credential_type,secret_ref FROM connections WHERE id=? AND enabled=1`, id)
 	var c Credential
-	if err := row.Scan(&c.Type, &c.Secret); err != nil {
+	if err := row.Scan(&c.ID, &c.Type, &c.Secret); err != nil {
 		return Credential{}, false
 	}
 	return c, true
@@ -700,12 +875,14 @@ type UpdateProviderNodeInput struct {
 	Name, Prefix, BaseURL, Protocol, DefinitionID, ModelsPath, AuthMode string
 }
 
-func defaultDefinitionForProtocol(protocol string) string {
+func DefaultDefinitionForProtocol(protocol string) string {
 	switch protocol {
 	case "openai_responses", "responses":
 		return "openai-compatible-responses"
 	case "anthropic":
 		return "anthropic-messages"
+	case "gemini", "google_gemini":
+		return "gemini"
 	default:
 		return "openai-compatible-chat"
 	}
@@ -722,7 +899,7 @@ func (s *Store) CreateProviderNode(input CreateProviderNodeInput) (ProviderNode,
 		input.AuthMode = "api_key"
 	}
 	if input.DefinitionID == "" {
-		input.DefinitionID = defaultDefinitionForProtocol(input.Protocol)
+		input.DefinitionID = DefaultDefinitionForProtocol(input.Protocol)
 	}
 	buf := make([]byte, 12)
 	if _, err := rand.Read(buf); err != nil {
@@ -802,7 +979,8 @@ func (s *Store) Routes() ([]RouteRecord, error) {
 	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
-WHERE m.enabled=1 ORDER BY m.id,c.priority,c.id`)
+LEFT JOIN connection_model_catalog e ON e.connection_id=c.id AND e.provider_node_id=m.provider_node_id AND e.external_model_id=m.external_id AND e.status='available'
+WHERE m.enabled=1 AND (m.kind='custom' OR e.connection_id IS NOT NULL) ORDER BY m.id,c.priority,c.id`)
 	if err != nil {
 		return nil, err
 	}

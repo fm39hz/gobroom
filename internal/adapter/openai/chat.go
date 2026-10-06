@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -30,6 +29,10 @@ func (c chatRequestCodec) Prepare(ctx context.Context, request kernel.Normalized
 
 type chatResponseCodec struct{ adapter Chat }
 
+func (chatResponseCodec) SupportsClientFormat(format normalize.Format) kernel.CompatibilityDecision {
+	return kernel.CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Lossless: format == normalize.FormatOpenAIChat, Reason: "OpenAI Chat codec currently emits Chat Completions wire format"}
+}
+
 func (c chatResponseCodec) ID() string { return "openai-sse" }
 func (c chatResponseCodec) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
@@ -40,18 +43,16 @@ func (c chatResponseCodec) TranslateStream(ctx context.Context, response kernel.
 
 func NewAdapter() kernel.ProviderAdapter {
 	adapter := Chat{}
-	return kernel.ComposedAdapter{AdapterID: "openai-chat", AdapterProtocol: kernel.ProtocolOpenAIChat, Request: chatRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: chatResponseCodec{adapter}}
+	return kernel.ComposedAdapter{AdapterID: "openai-chat", AdapterProtocol: kernel.ProtocolOpenAIChat, Endpoint: kernel.HTTPJSONEndpoint{}, Request: chatRequestCodec{adapter}, Transport: kernel.HTTPTransport{}, Response: chatResponseCodec{adapter}}
+}
+
+func NewChatCodecs() (kernel.RequestCodec, kernel.ResponseCodec) {
+	adapter := Chat{}
+	return chatRequestCodec{adapter}, chatResponseCodec{adapter}
 }
 
 func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
-	if route.BaseURL == "" {
-		return kernel.UpstreamRequest{}, fmt.Errorf("route %s has no base URL", route.ID)
-	}
-	base := strings.TrimRight(route.BaseURL, "/")
-	url := base
-	if !strings.HasSuffix(url, "/chat/completions") {
-		url += "/chat/completions"
-	}
+	url := "/chat/completions"
 	body := map[string]any{}
 	for key, value := range request.Raw {
 		body[key] = value
@@ -59,7 +60,12 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 	body["model"] = route.ExternalModel
 	body["stream"] = request.Stream
 	if len(request.Messages) > 0 {
-		body["messages"] = request.Messages
+		messages := make([]kernel.Message, 0, len(request.Messages)+len(request.Prompt.Layers))
+		for _, layer := range request.Prompt.Layers {
+			messages = append(messages, kernel.Message{Role: layer.Role, Content: layer.Text})
+		}
+		messages = append(messages, request.Messages...)
+		body["messages"] = messages
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

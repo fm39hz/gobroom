@@ -6,6 +6,26 @@ func (OrderedFallback) Plan(_ string, members []MemberRef, _ *StrategyState) []M
 	return members
 }
 
+// RoundRobin chooses exactly one member per plan. If that member fails, the
+// parent model's policy decides whether execution continues elsewhere.
+type RoundRobin struct{}
+
+func (RoundRobin) Plan(_ string, members []MemberRef, state *StrategyState) []MemberRef {
+	if len(members) <= 1 {
+		return members
+	}
+	index := state.Cursor % len(members)
+	state.Cursor = (index + 1) % len(members)
+	return []MemberRef{members[index]}
+}
+
+func (RoundRobin) OnFailure(failure StrategyFailure, _ *StrategyState) FailureAction {
+	if failure.Class == ErrorTerminal {
+		return FailureStop
+	}
+	return FailureContinue
+}
+
 func (OrderedFallback) OnFailure(failure StrategyFailure, _ *StrategyState) FailureAction {
 	if failure.Class == ErrorTerminal {
 		return FailureStop
@@ -27,6 +47,34 @@ func (RotatingFallback) Plan(_ string, members []MemberRef, state *StrategyState
 }
 
 func (RotatingFallback) OnFailure(failure StrategyFailure, _ *StrategyState) FailureAction {
+	if failure.Class == ErrorTerminal {
+		return FailureStop
+	}
+	return FailureContinue
+}
+
+// StickyRoundRobinFallback keeps one starting member for the configured
+// request count, then advances and retains the remaining ordered fallbacks.
+type StickyRoundRobinFallback struct{}
+
+func (StickyRoundRobinFallback) Plan(_ string, members []MemberRef, state *StrategyState) []MemberRef {
+	if len(members) < 2 {
+		return members
+	}
+	limit := state.StickyLimit
+	if limit < 1 {
+		limit = 1
+	}
+	start := state.StickyIndex % len(members)
+	state.StickyCount++
+	if state.StickyCount >= limit {
+		state.StickyIndex = (start + 1) % len(members)
+		state.StickyCount = 0
+	}
+	return rotateMembers(members, start)
+}
+
+func (StickyRoundRobinFallback) OnFailure(failure StrategyFailure, _ *StrategyState) FailureAction {
 	if failure.Class == ErrorTerminal {
 		return FailureStop
 	}

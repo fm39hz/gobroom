@@ -33,17 +33,28 @@ type catalogModel struct {
 type discoveredRoute struct {
 	ID, ProviderNodeID, ProviderPrefix, Kind, ExternalID, DisplayName string
 	Profile                                                           map[string]capability
+	ConnectionAvailability                                            []connectionModelEvidence `json:"connectionAvailability,omitempty"`
 	Enabled                                                           bool
 	LastSeenAt                                                        string
 }
 
+type connectionModelEvidence struct {
+	ConnectionID   string `json:"connectionId"`
+	ConnectionName string `json:"connectionName"`
+	Status         string `json:"status"`
+	Source         string `json:"source,omitempty"`
+	ObservedAt     string `json:"observedAt,omitempty"`
+}
+
 type routeReference struct {
-	RouteID  string `json:"routeId"`
-	Fidelity string `json:"fidelity,omitempty"`
+	RouteID  string           `json:"routeId"`
+	Fidelity string           `json:"fidelity,omitempty"`
+	Evidence []map[string]any `json:"evidence,omitempty"`
 }
 type modelReference struct {
-	Kind string `json:"kind"`
-	ID   string `json:"id"`
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Weight int    `json:"weight,omitempty"`
 }
 type strategySpec struct {
 	ID     string         `json:"id"`
@@ -51,16 +62,18 @@ type strategySpec struct {
 }
 
 type physicalModel struct {
-	Name         string                `json:"name"`
-	Identity     map[string]any        `json:"identity,omitempty"`
-	Sources      []routeReference      `json:"sources"`
-	Policy       strategySpec          `json:"policy"`
-	Profile      map[string]capability `json:"profile,omitempty"`
-	Limits       map[string]any        `json:"limits,omitempty"`
-	Projection   map[string]any        `json:"projection,omitempty"`
-	Reasoning    map[string]any        `json:"reasoning,omitempty"`
-	Discoverable bool                  `json:"discoverable"`
-	Enabled      bool                  `json:"enabled"`
+	Name                   string                `json:"name"`
+	Identity               map[string]any        `json:"identity,omitempty"`
+	Sources                []routeReference      `json:"sources"`
+	Policy                 strategySpec          `json:"policy"`
+	Profile                map[string]capability `json:"profile,omitempty"`
+	Limits                 map[string]any        `json:"limits,omitempty"`
+	Projection             map[string]any        `json:"projection,omitempty"`
+	Reasoning              map[string]any        `json:"reasoning,omitempty"`
+	Discoverable           bool                  `json:"discoverable"`
+	Enabled                bool                  `json:"enabled"`
+	AllowCompatibleSources bool                  `json:"allowCompatibleSources,omitempty"`
+	AllowDynamicSources    bool                  `json:"allowDynamicSources,omitempty"`
 }
 
 type comboModel struct {
@@ -174,7 +187,14 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		members := make([]string, 0, len(value.Sources))
 		for _, source := range value.Sources {
 			if route, ok := routes[source.RouteID]; ok {
-				members = append(members, route.ProviderPrefix+"/"+route.ExternalID)
+				label := route.ProviderPrefix + "/" + route.ExternalID
+				if source.Fidelity != "" {
+					label += " [" + source.Fidelity + "]"
+				}
+				if len(source.Evidence) > 0 {
+					label += " {" + evidenceSummary(source.Evidence) + "}"
+				}
+				members = append(members, label)
 			} else {
 				members = append(members, "route-id:"+source.RouteID)
 			}
@@ -189,7 +209,15 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 	for _, value := range comboModels {
 		members := make([]string, 0, len(value.Members))
 		for _, member := range value.Members {
-			members = append(members, member.Kind+":"+member.ID)
+			label := member.Kind + ":" + member.ID
+			if value.Strategy.ID == "weighted-fallback" {
+				weight := member.Weight
+				if weight < 1 {
+					weight = 1
+				}
+				label += fmt.Sprintf(" (weight %d)", weight)
+			}
+			members = append(members, label)
 		}
 		visibility := "hidden from /models"
 		if value.Discoverable {
@@ -222,6 +250,20 @@ func capabilitySummary(value map[string]capability) string {
 		return "not declared"
 	}
 	return strings.Join(declared, ", ")
+}
+
+func evidenceSummary(items []map[string]any) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		source, _ := item["source"].(string)
+		note, _ := item["note"].(string)
+		if source != "" && note != "" {
+			parts = append(parts, source+": "+note)
+		} else if source != "" {
+			parts = append(parts, source)
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (e entry) FilterValue() string {
@@ -431,7 +473,28 @@ func makeDiscoveredEntries(raw json.RawMessage, knownProviders []providerNode) (
 		if provider == "" {
 			provider = value.ProviderPrefix
 		}
-		detail := fmt.Sprintf("Discovered provider route\n\nProvider     %s\nPrefix       %s\nUpstream ID  %s\nKind         %s\nEnabled      %t\nRoute ID     %s\nCapabilities %s", provider, value.ProviderPrefix, value.ExternalID, value.Kind, value.Enabled, value.ID, capabilitySummary(value.Profile))
+		availability := "unknown (not yet checked per connection)"
+		if value.Kind == "custom" {
+			availability = "provider-wide user assertion"
+		} else if len(value.ConnectionAvailability) > 0 {
+			states := make([]string, 0, len(value.ConnectionAvailability))
+			for _, evidence := range value.ConnectionAvailability {
+				label := evidence.ConnectionName
+				if label == "" {
+					label = evidence.ConnectionID
+				}
+				state := label + "=" + evidence.Status
+				if evidence.Source != "" {
+					state += " via " + evidence.Source
+				}
+				if evidence.ObservedAt != "" {
+					state += " @ " + evidence.ObservedAt
+				}
+				states = append(states, state)
+			}
+			availability = strings.Join(states, ", ")
+		}
+		detail := fmt.Sprintf("Discovered provider route\n\nProvider     %s\nPrefix       %s\nUpstream ID  %s\nKind         %s\nEnabled      %t\nRoute ID     %s\nConnection entitlement %s\nCapabilities %s", provider, value.ProviderPrefix, value.ExternalID, value.Kind, value.Enabled, value.ID, availability, capabilitySummary(value.Profile))
 		items = append(items, entry{key: value.ID, title: name, summary: fmt.Sprintf("%s · %s", provider, capabilitySummary(value.Profile)), detail: detail, parentID: value.ProviderNodeID, routeRef: name, modelRef: "", kind: "source", payload: value})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].title < items[j].title })

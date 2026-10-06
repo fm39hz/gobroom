@@ -17,6 +17,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/fm39hz/gobroom/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/discovery"
+	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
 type sectionID int
@@ -33,6 +35,7 @@ const (
 	sectionDiscovered
 	sectionPhysical
 	sectionComboModels
+	sectionStrategies
 )
 
 type section struct {
@@ -53,6 +56,7 @@ var sections = []section{
 	{id: sectionDiscovered, label: "Discovered", method: "discovered_models.list"},
 	{id: sectionPhysical, label: "Physical", method: "physical_models.list"},
 	{id: sectionComboModels, label: "Combos", method: "combo_models.list"},
+	{id: sectionStrategies, label: "Strategies", method: "strategies.list"},
 }
 
 type dashboardPaneID int
@@ -109,6 +113,8 @@ const (
 	modeConfirm
 	modeHelp
 	modeSourcePicker
+	modeStrategyPicker
+	modeModelImport
 )
 
 type focusPane uint8
@@ -158,7 +164,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 		case "providers":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/c"), key.WithHelp("e/t/c", "edit/test/connect")))
 		case "connections":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("e/d"), key.WithHelp("e/d", "edit/delete")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/i/d"), key.WithHelp("e/t/i/d", "edit/test/review import/delete")))
 		case "discovered":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "create Physical")))
 		case "physical", "combos":
@@ -175,7 +181,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 	case "providers":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("n/t"), key.WithHelp("n/t", "new/test")))
 	case "connections":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/i"), key.WithHelp("t/i", "test/review-import selected connection")))
 	case "discovered":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "create Physical")))
 	case "physical", "combos":
@@ -198,7 +204,7 @@ func (keyHelp) FullHelp() [][]key.Binding {
 		{key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "focus inspector")), key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select model"))},
 		{key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "fuzzy search")), key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh pane"))},
 		{key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "assign discovered routes to Physical")), key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose selected models"))},
-		{key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "toggle model exposure")), key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "test provider + discover"))},
+		{key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "toggle model exposure")), key.NewBinding(key.WithKeys("t/i"), key.WithHelp("t/i", "test/preview · selectively import"))},
 	}
 }
 
@@ -207,37 +213,55 @@ type app struct {
 	width   int
 	height  int
 
-	panels      []dashboardPanel
-	activePanel int
-	activeTabs  []int
-	screenMode  int
-	focus       focusPane
-	mode        appMode
-	dashboard   viewport.Model
-	detail      viewport.Model
-	help        help.Model
-	picker      list.Model
-	form        *formState
-	command     textinput.Model
-	commandErr  string
+	panels                []dashboardPanel
+	activePanel           int
+	activeTabs            []int
+	screenMode            int
+	focus                 focusPane
+	mode                  appMode
+	dashboard             viewport.Model
+	detail                viewport.Model
+	help                  help.Model
+	picker                list.Model
+	memberPicker          list.Model
+	strategyPicker        list.Model
+	importPicker          list.Model
+	pendingStrategyPicker bool
+	form                  *formState
+	command               textinput.Model
+	commandErr            string
 
-	providers         []providerNode
-	providerContextID string
-	raw               map[sectionID]json.RawMessage
-	pickerSelected    map[string]bool
-	sourceItems       []entry
-	pickerTarget      string
-	pickerModel       any
+	providers           []providerNode
+	providerContextID   string
+	strategyCatalog     []kernel.StrategyDefinition
+	importPreview       discovery.ConnectionModelsPreview
+	importSelected      map[string]bool
+	importExisting      map[string]bool
+	importBaselineKnown bool
+	raw                 map[sectionID]json.RawMessage
+	pickerSelected      map[string]bool
+	pickerMemberOrder   []modelReference
+	pickerOrderPos      map[string]int
+	memberItems         []entry
+	pickerFocus         int // 0 = ordered members, 1 = candidates
+	pickerPreview       string
+	sourceItems         []entry
+	pickerTarget        string
+	pickerModel         any
+	pickerSourceRefs    map[string]routeReference
 
-	status        string
-	previewExtra  string
-	lastError     string
-	loading       bool
-	confirmTitle  string
-	confirmMethod string
-	confirmParams map[string]any
-	confirmAction string
-	lastG         bool
+	status            string
+	previewExtra      string
+	previewTitle      string
+	previewKey        string
+	pendingPreviewKey string
+	lastError         string
+	loading           bool
+	confirmTitle      string
+	confirmMethod     string
+	confirmParams     map[string]any
+	confirmAction     string
+	lastG             bool
 }
 
 func newApp(ipcPath string) *app {
@@ -246,6 +270,7 @@ func newApp(ipcPath string) *app {
 		for _, definition := range block.tabs {
 			selected := map[string]bool{}
 			rows := list.New([]list.Item{}, itemDelegate{selected: selected}, 40, 2)
+			rows.Filter = contextFilter
 			rows.SetShowTitle(false)
 			rows.SetShowFilter(false)
 			rows.SetShowStatusBar(false)
@@ -259,14 +284,47 @@ func newApp(ipcPath string) *app {
 		}
 	}
 	pickerSelected := map[string]bool{}
-	picker := list.New([]list.Item{}, itemDelegate{selected: pickerSelected}, 60, 12)
+	pickerSourceRefs := map[string]routeReference{}
+	pickerOrderPos := map[string]int{}
+	strategySelected := map[string]bool{}
+	importSelected := map[string]bool{}
+	importExisting := map[string]bool{}
+	picker := list.New([]list.Item{}, itemDelegate{selected: pickerSelected, ordered: pickerOrderPos}, 60, 12)
+	memberPicker := list.New([]list.Item{}, itemDelegate{selected: pickerSelected, ordered: pickerOrderPos}, 30, 12)
+	strategyPicker := list.New([]list.Item{}, itemDelegate{selected: strategySelected}, 60, 12)
+	importPicker := list.New([]list.Item{}, itemDelegate{selected: importSelected}, 60, 12)
+	picker.Filter = contextFilter
+	memberPicker.Filter = contextFilter
+	strategyPicker.Filter = contextFilter
+	importPicker.Filter = contextFilter
 	picker.SetShowTitle(false)
-	picker.SetShowFilter(false)
+	memberPicker.SetShowTitle(false)
+	strategyPicker.SetShowTitle(false)
+	importPicker.SetShowTitle(false)
+	picker.SetShowFilter(true)
+	memberPicker.SetShowFilter(true)
+	strategyPicker.SetShowFilter(true)
+	importPicker.SetShowFilter(true)
 	picker.SetShowStatusBar(false)
+	memberPicker.SetShowStatusBar(false)
+	strategyPicker.SetShowStatusBar(false)
+	importPicker.SetShowStatusBar(false)
 	picker.SetShowPagination(false)
+	memberPicker.SetShowPagination(false)
+	strategyPicker.SetShowPagination(false)
+	importPicker.SetShowPagination(false)
 	picker.SetShowHelp(false)
+	memberPicker.SetShowHelp(false)
+	strategyPicker.SetShowHelp(false)
+	importPicker.SetShowHelp(false)
 	picker.DisableQuitKeybindings()
+	memberPicker.DisableQuitKeybindings()
+	strategyPicker.DisableQuitKeybindings()
+	importPicker.DisableQuitKeybindings()
 	picker.Styles = list.DefaultStyles(true)
+	memberPicker.Styles = list.DefaultStyles(true)
+	strategyPicker.Styles = list.DefaultStyles(true)
+	importPicker.Styles = list.DefaultStyles(true)
 	command := textinput.New()
 	command.Prompt = ":"
 	command.CharLimit = 160
@@ -274,22 +332,47 @@ func newApp(ipcPath string) *app {
 	activeTabs := make([]int, len(dashboardPanes))
 	activeTabs[dashboardConnections] = 1
 	model := &app{
-		ipcPath:        ipcPath,
-		panels:         panels,
-		activePanel:    int(dashboardConnections),
-		activeTabs:     activeTabs,
-		focus:          focusDashboard,
-		dashboard:      viewport.New(),
-		detail:         viewport.New(),
-		help:           help.New(),
-		picker:         picker,
-		command:        command,
-		raw:            map[sectionID]json.RawMessage{},
-		pickerSelected: pickerSelected,
-		status:         "connecting to daemon…",
-		loading:        true,
+		ipcPath:          ipcPath,
+		panels:           panels,
+		activePanel:      int(dashboardConnections),
+		activeTabs:       activeTabs,
+		focus:            focusDashboard,
+		dashboard:        viewport.New(),
+		detail:           viewport.New(),
+		help:             help.New(),
+		picker:           picker,
+		memberPicker:     memberPicker,
+		strategyPicker:   strategyPicker,
+		importPicker:     importPicker,
+		command:          command,
+		raw:              map[sectionID]json.RawMessage{},
+		pickerSelected:   pickerSelected,
+		pickerSourceRefs: pickerSourceRefs,
+		pickerOrderPos:   pickerOrderPos,
+		importSelected:   importSelected,
+		importExisting:   importExisting,
+		status:           "connecting to daemon…",
+		loading:          true,
 	}
 	return model
+}
+
+// contextFilter treats provider prefixes and slash-qualified upstream IDs as
+// literal route selectors. Fuzzy matching remains useful for ordinary model
+// and role names, but an `orca/` query must not return unrelated rows merely
+// because their inspector text contains those letters in different words.
+func contextFilter(term string, targets []string) []list.Rank {
+	query := strings.ToLower(strings.TrimSpace(term))
+	if !strings.Contains(query, "/") {
+		return list.DefaultFilter(term, targets)
+	}
+	result := make([]list.Rank, 0)
+	for index, target := range targets {
+		if strings.Contains(strings.ToLower(target), query) {
+			result = append(result, list.Rank{Index: index})
+		}
+	}
+	return result
 }
 
 func (m *app) Init() tea.Cmd {
@@ -327,6 +410,171 @@ func (m *app) invoke(method string, params map[string]any) tea.Cmd {
 	}
 }
 
+func (m *app) rebuildStrategyPicker() {
+	items := make([]list.Item, 0, len(m.strategyCatalog))
+	for _, definition := range m.strategyCatalog {
+		items = append(items, strategyEntry(definition))
+	}
+	_ = m.strategyPicker.SetItems(items)
+}
+
+func strategyEntry(definition kernel.StrategyDefinition) entry {
+	lines := []string{definition.Label, definition.Description}
+	if len(definition.Options) == 0 {
+		lines = append(lines, "Options: none")
+	} else {
+		lines = append(lines, "Options:")
+		for _, option := range definition.Options {
+			lines = append(lines, fmt.Sprintf("  %s (%s), default=%v, min=%d, max=%d — %s", option.Key, option.Type, option.Default, option.Minimum, option.Maximum, option.Description))
+		}
+	}
+	return entry{key: definition.ID, title: definition.Label, summary: definition.ID, detail: strings.Join(lines, "\n"), payload: definition}
+}
+
+func (m *app) openStrategyPicker() tea.Cmd {
+	if len(m.strategyCatalog) == 0 {
+		m.status = "loading strategy catalog…"
+		m.pendingStrategyPicker = true
+		return m.fetch(sectionStrategies)
+	}
+	m.strategyPicker.GoToStart()
+	if m.form != nil && m.form.active >= 0 && m.form.active < len(m.form.fields) {
+		current := m.form.inputs[m.form.active].Value()
+		for index, raw := range m.strategyPicker.VisibleItems() {
+			definition, ok := raw.(entry)
+			if ok && definition.key == current {
+				m.strategyPicker.Select(index)
+				break
+			}
+		}
+	}
+	m.mode = modeStrategyPicker
+	m.resize()
+	return nil
+}
+
+func (m *app) updateStrategyPickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	keyText := msg.String()
+	if m.strategyPicker.FilterState() == list.Filtering {
+		updated, cmd := m.strategyPicker.Update(msg)
+		m.strategyPicker = updated
+		return m, cmd
+	}
+	switch keyText {
+	case "esc", "q":
+		m.mode = modeForm
+		m.resize()
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "enter":
+		selected, ok := m.strategyPicker.SelectedItem().(entry)
+		if !ok || m.form == nil {
+			return m, nil
+		}
+		definition := selected.payload.(kernel.StrategyDefinition)
+		strategyField, optionsField := -1, -1
+		for index, field := range m.form.fields {
+			if field.key == "strategy" || field.key == "policy" {
+				strategyField = index
+				if field.key == "strategy" {
+					optionsField = formFieldIndex(m.form, "strategyOptions")
+				} else {
+					optionsField = formFieldIndex(m.form, "policyOptions")
+				}
+				break
+			}
+		}
+		if strategyField < 0 {
+			return m, nil
+		}
+		previous := m.form.inputs[strategyField].Value()
+		m.form.inputs[strategyField].SetValue(definition.ID)
+		if previous != definition.ID && optionsField >= 0 {
+			options, err := kernel.DefaultStrategyConfig(definition.ID)
+			if err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			data, err := json.Marshal(options)
+			if err != nil {
+				m.status = "encode strategy defaults: " + err.Error()
+				return m, nil
+			}
+			m.form.inputs[optionsField].SetValue(string(data))
+		}
+		m.form.focus(strategyField)
+		m.mode = modeForm
+		m.status = "selected strategy: " + definition.ID
+		m.resize()
+		return m, nil
+	}
+	updated, cmd := m.strategyPicker.Update(msg)
+	m.strategyPicker = updated
+	return m, cmd
+}
+
+func formFieldIndex(form *formState, key string) int {
+	for index, field := range form.fields {
+		if field.key == key {
+			return index
+		}
+	}
+	return -1
+}
+
+func (m *app) updateModelImportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	keyText := msg.String()
+	if m.importPicker.FilterState() == list.Filtering {
+		updated, cmd := m.importPicker.Update(msg)
+		m.importPicker = updated
+		return m, cmd
+	}
+	if msg.Key().Code == tea.KeySpace {
+		if item, ok := m.importPicker.SelectedItem().(entry); ok {
+			m.importSelected[item.key] = !m.importSelected[item.key]
+		}
+		return m, nil
+	}
+	switch keyText {
+	case "esc", "q":
+		m.mode = modeBrowse
+		m.status = "model import cancelled; catalog unchanged"
+		m.resize()
+		return m, nil
+	case "ctrl+c":
+		return m, tea.Quit
+	case "a":
+		for _, raw := range m.importPicker.VisibleItems() {
+			if item, ok := raw.(entry); ok {
+				m.importSelected[item.key] = true
+			}
+		}
+		return m, nil
+	case "A":
+		clear(m.importSelected)
+		return m, nil
+	case "enter":
+		selected := make([]string, 0, len(m.importSelected))
+		for _, model := range m.importPreview.Models {
+			if m.importSelected[model.ID] {
+				selected = append(selected, model.ID)
+			}
+		}
+		m.mode, m.loading = modeBrowse, true
+		if len(selected) == 0 {
+			m.status = "applying account availability without importing route IDs…"
+		} else {
+			m.status = fmt.Sprintf("importing %d selected model IDs with %s…", len(selected), m.importPreview.ConnectionID)
+		}
+		m.resize()
+		return m, m.invoke("providers.refresh_models", map[string]any{"nodeID": m.importPreview.ProviderNodeID, "connectionID": m.importPreview.ConnectionID, "modelIDs": selected})
+	}
+	updated, cmd := m.importPicker.Update(msg)
+	m.importPicker = updated
+	return m, cmd
+}
+
 func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -334,6 +582,28 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case fetchMsg:
+		if message.section == sectionStrategies {
+			if message.err != nil {
+				m.pendingStrategyPicker = false
+				m.status = "strategy catalog unavailable: " + message.err.Error()
+				return m, nil
+			}
+			if err := json.Unmarshal(message.result, &m.strategyCatalog); err != nil {
+				m.pendingStrategyPicker = false
+				m.status = "decode strategy catalog: " + err.Error()
+				return m, nil
+			}
+			m.rebuildStrategyPicker()
+			if m.pendingStrategyPicker {
+				m.pendingStrategyPicker = false
+				if m.form == nil || m.mode != modeForm {
+					return m, nil
+				}
+				m.mode = modeStrategyPicker
+				m.resize()
+			}
+			return m, nil
+		}
 		indices := m.panelsForResource(message.section)
 		if message.err != nil {
 			for _, index := range indices {
@@ -376,27 +646,101 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if message.err != nil {
 			m.lastError = message.err.Error()
 			m.status = "action failed"
+			m.pendingPreviewKey = ""
 			m.mode = modeBrowse
 			m.form = nil
 			m.syncDetail()
+			return m, nil
+		}
+		if message.method == "connections.preview_models" {
+			var preview discovery.ConnectionModelsPreview
+			if err := json.Unmarshal(message.result, &preview); err != nil {
+				m.status = "decode connection model preview: " + err.Error()
+				m.syncDetail()
+				return m, nil
+			}
+			m.importPreview = preview
+			clear(m.importSelected)
+			clear(m.importExisting)
+			m.importBaselineKnown = len(m.raw[sectionModels]) > 0
+			known := map[string]bool{}
+			var catalog []catalogModel
+			if err := json.Unmarshal(m.raw[sectionModels], &catalog); err == nil {
+				for _, model := range catalog {
+					if model.NodeID == preview.ProviderNodeID {
+						known[model.ExternalID] = true
+					}
+				}
+			}
+			items := make([]list.Item, 0, len(preview.Models))
+			for _, model := range preview.Models {
+				detail := fmt.Sprintf("Upstream model ID\n%s\n\nDisplay name\n%s\n\nCapabilities\n%s", model.ID, model.DisplayName, pretty(model.Profile))
+				item := entry{key: model.ID, title: model.ID, summary: model.DisplayName, detail: detail, payload: model}
+				if known[model.ID] {
+					m.importExisting[model.ID] = true
+					item.summary += " · already imported"
+					item.title += "  · already imported"
+				} else {
+					item.summary += " · new route"
+					item.title += "  · new"
+				}
+				items = append(items, item)
+				m.importSelected[model.ID] = true
+			}
+			_ = m.importPicker.SetItems(items)
+			m.importPicker.ResetFilter()
+			m.importPicker.GoToStart()
+			m.mode = modeModelImport
+			m.loading = false
+			m.lastError = ""
+			if m.importBaselineKnown {
+				m.status = fmt.Sprintf("reviewing %d IDs · all checked; deselect routes not to import", len(preview.Models))
+			} else {
+				m.status = "catalog baseline not loaded · all returned IDs checked; verify before apply"
+			}
+			m.resize()
 			return m, nil
 		}
 		m.mode = modeBrowse
 		m.form = nil
 		m.lastError = ""
 		m.status = message.method + " completed"
+		m.previewExtra, m.previewTitle = "", ""
+		m.previewKey, m.pendingPreviewKey = m.pendingPreviewKey, ""
 		if message.method == "routes.explain" {
 			m.previewExtra = pretty(json.RawMessage(message.result))
+			m.previewTitle = "Effective route order"
+		}
+		if message.method == "connections.test" {
+			var result struct {
+				Endpoint    string `json:"endpoint"`
+				ModelsFound int    `json:"modelsFound"`
+				Truncated   bool   `json:"truncated"`
+			}
+			if json.Unmarshal(message.result, &result) == nil {
+				m.previewExtra = pretty(message.result)
+				m.previewTitle = "Connection model-list test · no catalog changes"
+				m.status = fmt.Sprintf("connection test passed · %d models from %s", result.ModelsFound, result.Endpoint)
+				if result.Truncated {
+					m.status += " · preview truncated"
+				}
+			}
 		}
 		if message.method == "providers.refresh_models" {
 			var result struct {
-				Models int
-				URL    string
+				Models    int    `json:"models"`
+				Available int    `json:"available"`
+				Complete  bool   `json:"complete"`
+				URL       string `json:"url"`
 			}
 			if json.Unmarshal(message.result, &result) == nil {
-				m.status = fmt.Sprintf("test passed · imported %d source models from %s", result.Models, result.URL)
+				m.status = fmt.Sprintf("imported %d selected IDs · %d available in %s", result.Models, result.Available, result.URL)
+				if !result.Complete {
+					m.status += " · incomplete catalog: absence remains unknown"
+				}
 			}
 		}
+		m.syncDetail()
 		return m, m.refreshAfter(message.method)
 	case tea.KeyPressMsg:
 		return m.updateKey(message)
@@ -419,8 +763,15 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keyText := msg.String()
 	if m.mode == modeForm {
 		if m.form == nil {
+			m.pendingStrategyPicker = false
 			m.mode = modeBrowse
 			return m, nil
+		}
+		if keyText == "enter" && m.form.active >= 0 && m.form.active < len(m.form.fields) {
+			key := m.form.fields[m.form.active].key
+			if key == "strategy" || key == "policy" {
+				return m, m.openStrategyPicker()
+			}
 		}
 		updated, cmd, save, params, resultErr := m.form.Update(msg)
 		m.form = updated
@@ -434,6 +785,7 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if save {
+			m.pendingStrategyPicker = false
 			m.mode = modeBrowse
 			m.loading = true
 			m.status = "saving…"
@@ -443,6 +795,12 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.mode == modeSourcePicker {
 		return m.updateSourcePickerKey(msg)
+	}
+	if m.mode == modeStrategyPicker {
+		return m.updateStrategyPickerKey(msg)
+	}
+	if m.mode == modeModelImport {
+		return m.updateModelImportKey(msg)
 	}
 	if m.mode == modeCommand {
 		if keyText == "esc" {
@@ -634,6 +992,7 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = "loading effective route order…"
+		m.pendingPreviewKey = selected.key
 		return m, m.invoke("routes.explain", map[string]any{"model": selected.publicName})
 	case "n":
 		m.form = m.newModelForm()
@@ -668,8 +1027,21 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.confirmDelete()
 	case "t":
 		if current.definition.id == dashboardConnections {
-			if selected := m.selectedEntry(); selected != nil && selected.kind == "provider" {
-				return m, m.testAndDiscover()
+			if selected := m.selectedEntry(); selected != nil {
+				switch value := selected.payload.(type) {
+				case providerNode:
+					return m, m.testAndDiscover()
+				case connection:
+					return m, m.testConnection(value)
+				}
+			}
+		}
+	case "i":
+		if current.definition.id == dashboardConnections {
+			if selected := m.selectedEntry(); selected != nil {
+				if value, ok := selected.payload.(connection); ok {
+					return m, m.previewConnectionModels(value)
+				}
 			}
 		}
 	case "a":
@@ -697,7 +1069,7 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
 				if node, ok := selected.payload.(providerNode); ok {
-					m.form = newResourceForm(int(sectionConnections), nil, node.ID)
+					m.form = newConnectionForm(node)
 					m.mode = modeForm
 					m.resize()
 				} else {
@@ -838,18 +1210,22 @@ func (m *app) selectedRouteRefs() []routeReference {
 	for _, item := range panel.items {
 		if panel.selected[item.key] {
 			if route, ok := item.payload.(discoveredRoute); ok {
-				result = append(result, routeReference{RouteID: route.ID})
+				result = append(result, userAssertedAlias(route.ID))
 			}
 		}
 	}
 	if len(result) == 0 {
 		if selected := m.selectedEntry(); selected != nil {
 			if route, ok := selected.payload.(discoveredRoute); ok {
-				result = append(result, routeReference{RouteID: route.ID})
+				result = append(result, userAssertedAlias(route.ID))
 			}
 		}
 	}
 	return result
+}
+
+func userAssertedAlias(routeID string) routeReference {
+	return routeReference{RouteID: routeID, Fidelity: "alias", Evidence: []map[string]any{{"source": "user_assertion", "confidence": 0.5, "note": "manually grouped as the same Physical model"}}}
 }
 
 func (m *app) selectedTypedModelRefs() []modelReference {
@@ -1051,7 +1427,7 @@ func (m *app) mainPreview(selected entry) string {
 	case providerNode:
 		actions = append(actions, "e            edit provider", "t            test and discover", "c            add connection")
 	case connection:
-		actions = append(actions, "e            edit connection", "d            delete connection")
+		actions = append(actions, "e            edit connection", "t            test selected account", "i            import models with this account", "d            delete connection")
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 	case physicalModel:
@@ -1060,8 +1436,12 @@ func (m *app) mainPreview(selected entry) string {
 		actions = append(actions, "e            edit strategy", "m            edit members", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose nested Combo", "d            delete Combo")
 	}
 	preview := selected.detail
-	if m.previewExtra != "" {
-		preview += "\n\nEffective route order\n" + m.previewExtra
+	if m.previewExtra != "" && (m.previewKey == "" || m.previewKey == selected.key) {
+		title := m.previewTitle
+		if title == "" {
+			title = "Action result"
+		}
+		preview += "\n\n" + title + "\n" + m.previewExtra
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, preview, "", muted.Render("Actions"), muted.Render(strings.Join(actions, "\n")))
 }
@@ -1085,7 +1465,23 @@ func (m *app) resize() {
 	for index := range m.panels {
 		m.panels[index].list.SetSize(max(1, leftWidth-6), 2)
 	}
-	m.picker.SetSize(max(20, rightWidth-6), max(4, bodyHeight-6))
+	pickerWidth := max(20, rightWidth-6)
+	pickerHeight := max(4, bodyHeight-6)
+	if m.pickerTarget == "combo" {
+		memberWidth := max(16, pickerWidth*36/100)
+		candidateWidth := max(16, pickerWidth-memberWidth-3)
+		listHeight := max(3, m.comboPickerPaneHeight()-3)
+		m.memberPicker.SetSize(max(10, memberWidth-4), listHeight)
+		m.picker.SetSize(max(10, candidateWidth-4), listHeight)
+	} else {
+		m.picker.SetSize(pickerWidth, pickerHeight)
+	}
+	if m.mode == modeStrategyPicker {
+		m.strategyPicker.SetSize(max(10, rightWidth-8), max(4, bodyHeight-13))
+	} else {
+		m.strategyPicker.SetSize(pickerWidth, pickerHeight)
+	}
+	m.importPicker.SetSize(max(10, rightWidth-8), max(4, bodyHeight-13))
 	if m.form != nil {
 		m.form.SetWidth(max(12, rightWidth-11))
 	}
@@ -1098,8 +1494,12 @@ func (m *app) openSourcePicker() tea.Cmd {
 		return nil
 	}
 	clear(m.pickerSelected)
+	clear(m.pickerSourceRefs)
+	m.pickerMemberOrder = nil
+	m.syncPickerOrderPositions()
 	m.mode = modeSourcePicker
 	m.picker.GoToStart()
+	m.resize()
 	return nil
 }
 
@@ -1115,6 +1515,9 @@ func (m *app) openTypedMemberPicker() tea.Cmd {
 		return nil
 	}
 	clear(m.pickerSelected)
+	clear(m.pickerSourceRefs)
+	m.pickerMemberOrder = nil
+	m.syncPickerOrderPositions()
 	switch value := selected.payload.(type) {
 	case physicalModel:
 		m.pickerTarget, m.pickerModel = "physical", value
@@ -1124,6 +1527,7 @@ func (m *app) openTypedMemberPicker() tea.Cmd {
 				for _, source := range value.Sources {
 					if source.RouteID == route.ID {
 						m.pickerSelected[item.key] = true
+						m.pickerSourceRefs[item.key] = source
 					}
 				}
 				m.sourceItems = append(m.sourceItems, item)
@@ -1131,14 +1535,19 @@ func (m *app) openTypedMemberPicker() tea.Cmd {
 		}
 	case comboModel:
 		m.pickerTarget, m.pickerModel = "combo", value
+		m.pickerMemberOrder = append(m.pickerMemberOrder, value.Members...)
 		m.sourceItems = append(append([]entry(nil), workspace.Physical...), workspace.Combos...)
-		for _, item := range m.sourceItems {
-			for _, member := range value.Members {
+		for index := range m.sourceItems {
+			item := &m.sourceItems[index]
+			item.key = modelReferenceKey(modelReference{Kind: item.modelKind, ID: item.modelRef})
+			for _, member := range m.pickerMemberOrder {
 				if member.ID == item.modelRef && member.Kind == item.modelKind {
 					m.pickerSelected[item.key] = true
+					break
 				}
 			}
 		}
+		m.syncPickerOrderPositions()
 	default:
 		m.status = "focus a typed Physical or Combo first"
 		return nil
@@ -1149,11 +1558,28 @@ func (m *app) openTypedMemberPicker() tea.Cmd {
 	for _, item := range m.sourceItems {
 		converted = append(converted, item)
 	}
+	pickerFilterState := m.picker.FilterState()
+	pickerFilterText := m.picker.FilterInput.Value()
 	_ = m.picker.SetItems(converted)
+	if pickerFilterState != list.Unfiltered {
+		m.picker.SetFilterText(pickerFilterText)
+		if pickerFilterState == list.Filtering {
+			m.picker.SetFilterState(list.Filtering)
+		}
+	}
+	if m.pickerTarget == "combo" {
+		m.rebuildComboMemberItems(modelReference{})
+		m.pickerFocus = 1
+	}
+	m.pickerPreview = ""
+	m.resize()
 	return nil
 }
 
 func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.pickerTarget == "combo" {
+		return m.updateComboPickerKey(msg)
+	}
 	keyText := msg.String()
 	if m.picker.FilterState() == list.Filtering {
 		updated, cmd := m.picker.Update(msg)
@@ -1174,7 +1600,12 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			for _, item := range m.sourceItems {
 				if m.pickerSelected[item.key] {
 					if route, ok := item.payload.(discoveredRoute); ok {
-						sources = append(sources, routeReference{RouteID: route.ID})
+						source := m.pickerSourceRefs[item.key]
+						source.RouteID = route.ID
+						if source.Fidelity == "" {
+							source = userAssertedAlias(route.ID)
+						}
+						sources = append(sources, source)
 					}
 				}
 			}
@@ -1183,22 +1614,7 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.mode, m.pickerTarget, m.loading = modeBrowse, "", true
-			return m, m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "identity": value.Identity, "sources": sources, "policy": value.Policy, "profile": value.Profile, "limits": value.Limits, "reasoning": value.Reasoning, "discoverable": value.Discoverable, "enabled": value.Enabled})
-		}
-		if m.pickerTarget == "combo" {
-			value := m.pickerModel.(comboModel)
-			members := make([]modelReference, 0)
-			for _, item := range m.sourceItems {
-				if m.pickerSelected[item.key] {
-					members = append(members, modelReference{Kind: item.modelKind, ID: item.modelRef})
-				}
-			}
-			if len(members) == 0 {
-				m.status = "select at least one member"
-				return m, nil
-			}
-			m.mode, m.pickerTarget, m.loading = modeBrowse, "", true
-			return m, m.invoke("combo_models.upsert", map[string]any{"name": value.Name, "members": members, "strategy": value.Strategy, "reasoning": value.Reasoning, "discoverable": value.Discoverable, "enabled": value.Enabled})
+			return m, m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "identity": value.Identity, "sources": sources, "policy": value.Policy, "profile": value.Profile, "limits": value.Limits, "reasoning": value.Reasoning, "allowCompatibleSources": value.AllowCompatibleSources, "allowDynamicSources": value.AllowDynamicSources, "discoverable": value.Discoverable, "enabled": value.Enabled})
 		}
 		refs := make([]string, 0, len(m.pickerSelected))
 		for _, source := range m.sourceItems {
@@ -1210,26 +1626,296 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "select one or more provider variants with Space"
 			return m, nil
 		}
-		m.form = newResourceForm(int(sectionPhysical), nil, "")
+		m.form = newPhysicalModelForm(selectedRouteRefsFromEntries(m.sourceItems, m.pickerSelected))
 		m.form.title = "Create physical model"
-		m.form.comboMembers = refs
-		m.form.memberCursor = len(refs) - 1
 		m.mode = modeForm
 		m.resize()
 		return m, nil
 	}
 	if msg.Key().Code == tea.KeySpace {
 		if source, ok := m.picker.SelectedItem().(entry); ok {
-			m.pickerSelected[source.key] = !m.pickerSelected[source.key]
-			if !m.pickerSelected[source.key] {
+			selected := !m.pickerSelected[source.key]
+			m.pickerSelected[source.key] = selected
+			if !selected {
 				delete(m.pickerSelected, source.key)
+				delete(m.pickerSourceRefs, source.key)
+			} else if route, ok := source.payload.(discoveredRoute); ok && m.pickerTarget == "physical" {
+				m.pickerSourceRefs[source.key] = userAssertedAlias(route.ID)
 			}
+		}
+		return m, nil
+	}
+	if keyText == "f" && m.pickerTarget == "physical" {
+		if source, ok := m.picker.SelectedItem().(entry); ok && m.pickerSelected[source.key] {
+			item := m.pickerSourceRefs[source.key]
+			cycle := map[string]string{"alias": "exact", "exact": "compatible", "compatible": "dynamic", "dynamic": "unknown", "unknown": "alias", "": "exact"}
+			item.Fidelity = cycle[item.Fidelity]
+			if item.Fidelity == "alias" && len(item.Evidence) == 0 {
+				item.Evidence = userAssertedAlias(item.RouteID).Evidence
+			}
+			m.pickerSourceRefs[source.key] = item
+			m.status = "source fidelity: " + item.Fidelity
 		}
 		return m, nil
 	}
 	updated, cmd := m.picker.Update(msg)
 	m.picker = updated
 	return m, cmd
+}
+
+func (m *app) comboPickerPaneHeight() int {
+	bodyHeight := max(5, m.height-7)
+	if m.pickerPreview != "" {
+		return max(6, bodyHeight-11)
+	}
+	return max(7, bodyHeight-6)
+}
+
+func selectedRouteRefsFromEntries(items []entry, selected map[string]bool) []routeReference {
+	refs := make([]routeReference, 0)
+	for _, item := range items {
+		if selected[item.key] {
+			if route, ok := item.payload.(discoveredRoute); ok {
+				refs = append(refs, userAssertedAlias(route.ID))
+			}
+		}
+	}
+	return refs
+}
+
+func modelReferenceKey(value modelReference) string { return value.Kind + "\x00" + value.ID }
+
+func (m *app) comboMembersFromPicker() []modelReference {
+	return append([]modelReference(nil), m.pickerMemberOrder...)
+}
+
+func (m *app) rebuildComboMemberItems(target modelReference) {
+	selectedKey := ""
+	if target.ID != "" {
+		selectedKey = modelReferenceKey(target)
+	} else if selected, ok := m.memberPicker.SelectedItem().(entry); ok {
+		selectedKey = modelReferenceKey(modelReference{Kind: selected.modelKind, ID: selected.modelRef})
+	}
+	byReference := make(map[string]entry, len(m.sourceItems))
+	for _, item := range m.sourceItems {
+		byReference[modelReferenceKey(modelReference{Kind: item.modelKind, ID: item.modelRef})] = item
+	}
+	m.memberItems = make([]entry, 0, len(m.pickerMemberOrder))
+	for _, member := range m.pickerMemberOrder {
+		key := modelReferenceKey(member)
+		item, ok := byReference[key]
+		if !ok {
+			item = entry{key: key, title: member.Kind + ":" + member.ID, summary: "not in the current model catalog", modelRef: member.ID, modelKind: member.Kind}
+		}
+		if comboUsesWeights(m.pickerModel) {
+			weight := member.Weight
+			if weight < 1 {
+				weight = 1
+			}
+			item.title += fmt.Sprintf(" [w=%d]", weight)
+		}
+		m.memberItems = append(m.memberItems, item)
+	}
+	converted := make([]list.Item, 0, len(m.memberItems))
+	for _, item := range m.memberItems {
+		converted = append(converted, item)
+	}
+	filterState := m.memberPicker.FilterState()
+	filterText := m.memberPicker.FilterInput.Value()
+	_ = m.memberPicker.SetItems(converted)
+	if filterState != list.Unfiltered {
+		m.memberPicker.SetFilterText(filterText)
+		if filterState == list.Filtering {
+			m.memberPicker.SetFilterState(list.Filtering)
+		}
+	}
+	visible := m.memberPicker.VisibleItems()
+	if selectedKey != "" {
+		for index, raw := range visible {
+			item, ok := raw.(entry)
+			if ok && modelReferenceKey(modelReference{Kind: item.modelKind, ID: item.modelRef}) == selectedKey {
+				m.memberPicker.Select(index)
+				return
+			}
+		}
+	}
+	if len(visible) > 0 {
+		m.memberPicker.Select(min(m.memberPicker.Index(), len(visible)-1))
+	}
+}
+
+func (m *app) updateComboPickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	keyText := msg.String()
+	focused := &m.picker
+	if m.pickerFocus == 0 {
+		focused = &m.memberPicker
+	}
+	if focused.FilterState() == list.Filtering {
+		updated, cmd := focused.Update(msg)
+		*focused = updated
+		return m, cmd
+	}
+	if msg.Key().Code == tea.KeySpace {
+		if m.pickerFocus == 0 {
+			item, ok := m.memberPicker.SelectedItem().(entry)
+			if !ok {
+				return m, nil
+			}
+			ref := modelReference{Kind: item.modelKind, ID: item.modelRef}
+			m.removePickerMember(ref)
+			delete(m.pickerSelected, modelReferenceKey(ref))
+			m.syncPickerOrderPositions()
+			m.rebuildComboMemberItems(modelReference{})
+			return m, nil
+		}
+		item, ok := m.picker.SelectedItem().(entry)
+		if !ok {
+			return m, nil
+		}
+		ref := modelReference{Kind: item.modelKind, ID: item.modelRef}
+		if m.pickerSelected[item.key] {
+			delete(m.pickerSelected, item.key)
+			m.removePickerMember(ref)
+		} else {
+			if comboUsesWeights(m.pickerModel) {
+				ref.Weight = 1
+			}
+			m.pickerSelected[item.key] = true
+			m.pickerMemberOrder = append(m.pickerMemberOrder, ref)
+		}
+		m.syncPickerOrderPositions()
+		m.rebuildComboMemberItems(modelReference{})
+		return m, nil
+	}
+	switch keyText {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		if m.pickerPreview != "" {
+			m.pickerPreview = ""
+			m.resize()
+			return m, nil
+		}
+		m.mode, m.pickerTarget = modeBrowse, ""
+		m.status = "Combo edit cancelled"
+		m.resize()
+		return m, nil
+	case "h", "left":
+		m.pickerFocus = 0
+		return m, nil
+	case "l", "right":
+		m.pickerFocus = 1
+		return m, nil
+	case "enter":
+		if item, ok := focused.SelectedItem().(entry); ok {
+			m.pickerPreview = item.detail
+			m.resize()
+		}
+		return m, nil
+	case "ctrl+s":
+		value := m.pickerModel.(comboModel)
+		members := m.comboMembersFromPicker()
+		if len(members) == 0 {
+			m.status = "select at least one member"
+			return m, nil
+		}
+		m.mode, m.pickerTarget, m.loading = modeBrowse, "", true
+		m.status = "saving Combo member order…"
+		m.resize()
+		return m, m.invoke("combo_models.upsert", map[string]any{"name": value.Name, "members": members, "strategy": value.Strategy, "reasoning": value.Reasoning, "discoverable": value.Discoverable, "enabled": value.Enabled})
+	case "+", "=", "-":
+		if m.pickerFocus != 0 {
+			return m, nil
+		}
+		if !comboUsesWeights(m.pickerModel) {
+			m.status = "member weights are used by weighted-fallback"
+			return m, nil
+		}
+		delta := 1
+		if keyText == "-" {
+			delta = -1
+		}
+		if item, ok := m.memberPicker.SelectedItem().(entry); ok {
+			m.changePickerMemberWeight(modelReference{Kind: item.modelKind, ID: item.modelRef}, delta)
+		}
+		return m, nil
+	case "K", "shift+k", "J", "shift+j":
+		if m.pickerFocus == 0 {
+			if item, ok := m.memberPicker.SelectedItem().(entry); ok {
+				delta := -1
+				if keyText == "J" || keyText == "shift+j" {
+					delta = 1
+				}
+				ref := modelReference{Kind: item.modelKind, ID: item.modelRef}
+				m.movePickerMember(ref, delta)
+				m.rebuildComboMemberItems(ref)
+			}
+			return m, nil
+		}
+	}
+	updated, cmd := focused.Update(msg)
+	*focused = updated
+	return m, cmd
+}
+
+func comboUsesWeights(model any) bool {
+	value, ok := model.(comboModel)
+	if !ok {
+		return false
+	}
+	return value.Strategy.ID == "weighted-fallback"
+}
+
+func (m *app) changePickerMemberWeight(target modelReference, delta int) {
+	key := modelReferenceKey(target)
+	for index, member := range m.pickerMemberOrder {
+		if modelReferenceKey(member) != key {
+			continue
+		}
+		weight := member.Weight
+		if weight < 1 {
+			weight = 1
+		}
+		member.Weight = max(1, weight+delta)
+		m.pickerMemberOrder[index] = member
+		m.syncPickerOrderPositions()
+		m.rebuildComboMemberItems(target)
+		m.status = fmt.Sprintf("member weight: %d", member.Weight)
+		return
+	}
+}
+
+func (m *app) syncPickerOrderPositions() {
+	clear(m.pickerOrderPos)
+	for index, member := range m.pickerMemberOrder {
+		m.pickerOrderPos[modelReferenceKey(member)] = index + 1
+	}
+}
+
+func (m *app) removePickerMember(target modelReference) {
+	key := modelReferenceKey(target)
+	for index, member := range m.pickerMemberOrder {
+		if modelReferenceKey(member) == key {
+			m.pickerMemberOrder = append(m.pickerMemberOrder[:index], m.pickerMemberOrder[index+1:]...)
+			return
+		}
+	}
+}
+
+func (m *app) movePickerMember(target modelReference, delta int) {
+	key := modelReferenceKey(target)
+	for index, member := range m.pickerMemberOrder {
+		if modelReferenceKey(member) != key {
+			continue
+		}
+		to := index + delta
+		if to < 0 || to >= len(m.pickerMemberOrder) {
+			return
+		}
+		m.pickerMemberOrder[index], m.pickerMemberOrder[to] = m.pickerMemberOrder[to], m.pickerMemberOrder[index]
+		m.syncPickerOrderPositions()
+		return
+	}
 }
 
 func (m *app) toggleExposure() tea.Cmd {
@@ -1243,7 +1929,7 @@ func (m *app) toggleExposure() tea.Cmd {
 		value.Discoverable = !value.Discoverable
 		m.loading = true
 		m.status = "updating physical model exposure…"
-		return m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "identity": value.Identity, "sources": value.Sources, "policy": value.Policy, "profile": value.Profile, "limits": value.Limits, "reasoning": value.Reasoning, "discoverable": value.Discoverable, "enabled": value.Enabled})
+		return m.invoke("physical_models.upsert", map[string]any{"name": value.Name, "identity": value.Identity, "sources": value.Sources, "policy": value.Policy, "profile": value.Profile, "limits": value.Limits, "reasoning": value.Reasoning, "allowCompatibleSources": value.AllowCompatibleSources, "allowDynamicSources": value.AllowDynamicSources, "discoverable": value.Discoverable, "enabled": value.Enabled})
 	case comboModel:
 		value.Discoverable = !value.Discoverable
 		m.loading = true
@@ -1268,6 +1954,19 @@ func (m *app) testAndDiscover() tea.Cmd {
 	m.loading = true
 	m.status = "testing endpoint and importing model sources…"
 	return m.invoke("providers.refresh_models", map[string]any{"nodeID": node.ID})
+}
+
+func (m *app) testConnection(value connection) tea.Cmd {
+	m.loading = true
+	m.status = "testing selected connection's model-list endpoint (no import)…"
+	m.pendingPreviewKey = value.ID
+	return m.invoke("connections.test", map[string]any{"connectionID": value.ID})
+}
+
+func (m *app) previewConnectionModels(value connection) tea.Cmd {
+	m.loading = true
+	m.status = "loading model IDs for selective import review…"
+	return m.invoke("connections.preview_models", map[string]any{"connectionID": value.ID})
 }
 
 func (m *app) confirmDelete() tea.Cmd {
@@ -1317,6 +2016,8 @@ func (m *app) refreshPane(index int) tea.Cmd {
 func (m *app) refreshAfter(method string) tea.Cmd {
 	resources := []sectionID{}
 	switch method {
+	case "connections.test":
+		return nil
 	case "providers.refresh_models":
 		resources = []sectionID{sectionProviders, sectionModels}
 	case "providers.create", "providers.update", "providers.delete":
@@ -1440,7 +2141,9 @@ func (m *app) render() string {
 	header = lipgloss.JoinVertical(lipgloss.Left, header, contextLine)
 	bodyHeight := max(5, m.height-7)
 	var body string
-	if m.screenMode == 2 {
+	if m.mode != modeBrowse {
+		body = panel("[0] Main · "+m.active().definition.label, m.renderMainView(), width, bodyHeight, true)
+	} else if m.screenMode == 2 {
 		if m.focus == focusInspector {
 			body = panel("[0] Main · "+m.active().definition.label, m.renderMainView(), width, bodyHeight, true)
 		} else {
@@ -1566,17 +2269,73 @@ func (m *app) renderMainView() string {
 	switch m.mode {
 	case modeForm:
 		return m.renderForm()
+	case modeModelImport:
+		selected := 0
+		for _, model := range m.importPreview.Models {
+			if m.importSelected[model.ID] {
+				selected++
+			}
+		}
+		newCount := len(m.importPreview.Models) - len(m.importExisting)
+		completeness := "complete list"
+		if !m.importPreview.Complete {
+			completeness = "incomplete list; absent IDs remain unknown"
+		}
+		if m.importPreview.Truncated {
+			completeness += " · review limit reached"
+		}
+		catalogSummary := fmt.Sprintf("%d returned · %d new · %d already imported · %d selected · %s", m.importPreview.ModelsFound, newCount, len(m.importExisting), selected, completeness)
+		if !m.importBaselineKnown {
+			catalogSummary = fmt.Sprintf("%d returned · %d selected · existing catalog not loaded · %s", m.importPreview.ModelsFound, selected, completeness)
+		}
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Render("Review model import · connection "+m.importPreview.ConnectionID),
+			muted.Render(catalogSummary),
+			muted.Render(m.importPreview.Endpoint),
+			m.importPicker.View(),
+		)
+	case modeStrategyPicker:
+		selectedDetail := "Select a registered strategy to inspect its behavior and supported options."
+		if selected, ok := m.strategyPicker.SelectedItem().(entry); ok {
+			selectedDetail = selected.detail
+		}
+		return lipgloss.JoinVertical(lipgloss.Left,
+			lipgloss.NewStyle().Bold(true).Render("Strategy catalog"),
+			muted.Render("j/k navigate · / search · Enter select · Esc return without changing the model"),
+			m.strategyPicker.View(),
+			panel("Primitive contract", selectedDetail, m.strategyPicker.Width()+4, 8, false),
+		)
 	case modeSourcePicker:
+		if m.pickerTarget == "combo" {
+			value := m.pickerModel.(comboModel)
+			paneHeight := m.comboPickerPaneHeight()
+			memberPane := panel("Ordered members", m.memberPicker.View(), m.memberPicker.Width()+4, paneHeight, m.pickerFocus == 0)
+			candidatePane := panel("Physical / Combo candidates", m.picker.View(), m.picker.Width()+4, paneHeight, m.pickerFocus == 1)
+			content := []string{
+				lipgloss.NewStyle().Bold(true).Render("Edit Combo · " + value.Name),
+				muted.Render("h/l switch pane · j/k move · Space add/remove · K/J reorder · +/- weighted member weight · Enter inspect · ctrl+s save · Esc cancel"),
+				lipgloss.JoinHorizontal(lipgloss.Top, memberPane, candidatePane),
+			}
+			if m.pickerPreview != "" {
+				lines := strings.Split(m.pickerPreview, "\n")
+				if len(lines) > 3 {
+					lines = append(lines[:3], "…")
+				}
+				content = append(content, panel("Model details · Esc closes details", strings.Join(lines, "\n"), memberPaneWidth(m)+candidatePaneWidth(m), 6, false))
+			}
+			return lipgloss.JoinVertical(lipgloss.Left, content...)
+		}
 		return lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Bold(true).Render("Choose provider model variants"),
-			muted.Render("Search with / · Space selects · Enter continues to the canonical model name"),
+			muted.Render("Search with / · Space toggles · K/J reorders selected Combo member · f cycles source fidelity · Enter saves"),
 			m.picker.View(),
-			muted.Render(fmt.Sprintf("%d source variants selected", len(m.pickerSelected))),
+			m.pickerOrderSummary(),
+			muted.Render(fmt.Sprintf("%d candidates selected · alias is a manual identity assertion; compatible/dynamic require policy opt-in", len(m.pickerSelected))),
 		)
 	case modeConfirm:
 		return lipgloss.JoinVertical(lipgloss.Left, errorStyle.Bold(true).Render(m.confirmTitle), "", "This change is applied to the daemon immediately.", "", keyLine("y / enter", "confirm"), keyLine("n / esc", "cancel"))
 	case modeHelp:
-		return lipgloss.JoinVertical(lipgloss.Left, lipgloss.NewStyle().Bold(true).Render("Keyboard map"), "", "h / l  previous / next block", "j / k  move inside active context", "[ / ]  previous / next tab", "enter  open selected context in main view", "esc    return to parent view", "space  select item", "1–5    focus a block · 0 main view", "/      filter this context · n/N next match", "f      create Physical from discovered routes", "c      compose selected Physical models", "p      toggle exposure inline", "n/e/d  new / edit / delete", "t      test provider /models and import", "r      refresh current tab", "+ / _  cycle screen layout · H/L horizontal scroll", ":      command palette", "q      quit", "", muted.Render("Each tab retains its cursor, filter and selection."))
+		return lipgloss.JoinVertical(lipgloss.Left, lipgloss.NewStyle().Bold(true).Render("Keyboard map"), "", "h / l  previous / next block", "j / k  move inside active context", "[ / ]  previous / next tab", "enter  open selected context in main view", "esc    return to parent view", "space  select item", "1–5    focus a block · 0 main view", "/      filter this context · n/N next match", "f      create Physical from discovered routes / cycle fidelity in picker", "m      edit Physical sources or Combo members", "x      explain effective route order", "c      compose selected Physical models", "p      toggle exposure inline", "n/e/d  new / edit / delete", "t      test provider /models and import", "r      refresh current tab", "+ / _  cycle screen layout · H/L horizontal scroll", ":      command palette", "q      quit", "", muted.Render("Each tab retains its cursor, filter and selection."))
 	default:
 		if m.mode == modeCommand {
 			message := m.command.View()
@@ -1592,6 +2351,9 @@ func (m *app) renderMainView() string {
 	}
 }
 
+func memberPaneWidth(m *app) int    { return m.memberPicker.Width() + 4 }
+func candidatePaneWidth(m *app) int { return m.picker.Width() + 4 }
+
 func (m *app) renderForm() string {
 	if m.form == nil {
 		return ""
@@ -1602,7 +2364,11 @@ func (m *app) renderForm() string {
 		if !m.form.memberMode && index == m.form.active {
 			marker = "› "
 		}
-		lines = append(lines, selectedStyle.Render(marker)+muted.Render(spec.label), "   "+m.form.inputs[index].View())
+		label := spec.label
+		if spec.key == "strategy" || spec.key == "policy" {
+			label += " · Enter opens registered strategy catalog"
+		}
+		lines = append(lines, selectedStyle.Render(marker)+muted.Render(label), "   "+m.form.inputs[index].View())
 	}
 	if m.form.hasMembers() {
 		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Render("Ordered model members"))
@@ -1622,6 +2388,13 @@ func (m *app) renderForm() string {
 		}
 		lines = append(lines, "", muted.Render("tab to members · a add · d remove · K/J reorder"))
 	}
+	if m.form.method == "providers.create" {
+		preset := m.form.providerPreset
+		if preset == "" {
+			preset = "custom"
+		}
+		lines = append(lines, "", keyLine("ctrl+p", "switch provider preset · "+preset))
+	}
 	lines = append(lines, "", keyLine("tab / shift+tab", "next / previous"), keyLine("ctrl+s", "save"), keyLine("esc", "cancel"))
 	return strings.Join(lines, "\n")
 }
@@ -1640,8 +2413,21 @@ func (m *app) renderFooter(width int) string {
 	if m.mode == modeHelp {
 		return lipgloss.NewStyle().Width(width).Render(muted.Render("? / esc  close help"))
 	}
+	if m.mode == modeStrategyPicker {
+		return lipgloss.NewStyle().Width(width).Render(muted.Render("j/k move  ·  / filter  ·  Enter select  ·  Esc return to Combo/Physical editor"))
+	}
+	if m.mode == modeModelImport {
+		return lipgloss.NewStyle().Width(width).Render(muted.Render("j/k move  ·  / filter  ·  Space toggle  ·  a select visible  ·  A clear  ·  Enter apply/import  ·  Esc cancel"))
+	}
+	if m.mode == modeSourcePicker && m.pickerTarget == "combo" {
+		pane := "candidates"
+		if m.pickerFocus == 0 {
+			pane = "ordered members"
+		}
+		return lipgloss.NewStyle().Width(width).Render(muted.Render("Focus: " + pane + "  ·  h/l pane  ·  j/k move  ·  Space add/remove  ·  K/J reorder  ·  +/- weight  ·  Enter inspect  ·  ctrl+s save  ·  Esc cancel"))
+	}
 	if m.mode == modeForm || m.mode == modeSourcePicker {
-		return lipgloss.NewStyle().Width(width).Render(muted.Render("tab/shift+tab move  ·  Space selects members  ·  ctrl+s save  ·  esc cancel"))
+		return lipgloss.NewStyle().Width(width).Render(muted.Render("tab/shift+tab move  ·  Space toggles  ·  K/J reorder Combo members  ·  ctrl+s save  ·  esc cancel"))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left,
 		lipgloss.NewStyle().Width(width).Render(muted.Render(status)),
@@ -1651,7 +2437,10 @@ func (m *app) renderFooter(width int) string {
 
 func (m *app) String() string { return m.render() }
 
-type itemDelegate struct{ selected map[string]bool }
+type itemDelegate struct {
+	selected map[string]bool
+	ordered  map[string]int
+}
 
 func (itemDelegate) Height() int                         { return 1 }
 func (itemDelegate) Spacing() int                        { return 0 }
@@ -1669,10 +2458,27 @@ func (d itemDelegate) Render(writer io.Writer, model list.Model, index int, item
 	}
 	if d.selected[value.key] {
 		selectionMark = "[x]"
+		if order := d.ordered[modelReferenceKey(modelReference{Kind: value.modelKind, ID: value.modelRef})]; order > 0 {
+			selectionMark = fmt.Sprintf("[%d]", order)
+		}
 	}
 	width := max(8, model.Width()-8)
 	title := ansi.Truncate(value.title, width, "…")
 	_, _ = fmt.Fprint(writer, titleStyle.Render(marker+selectionMark+" "+title))
+}
+
+func (m *app) pickerOrderSummary() string {
+	if m.pickerTarget != "combo" {
+		return muted.Render("Selected candidates retain their selection while filtered")
+	}
+	if len(m.pickerMemberOrder) == 0 {
+		return muted.Render("Ordered Combo members: none")
+	}
+	labels := make([]string, 0, len(m.pickerMemberOrder))
+	for index, member := range m.pickerMemberOrder {
+		labels = append(labels, fmt.Sprintf("%d %s:%s", index+1, member.Kind, member.ID))
+	}
+	return lipgloss.NewStyle().Width(max(1, m.picker.Width())).Render("Order: " + strings.Join(labels, "  →  "))
 }
 
 func panel(title, content string, width, height int, focused bool) string {

@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type Kernel struct {
@@ -19,6 +17,9 @@ type Kernel struct {
 	Scheduler         *Scheduler
 	Adapters          map[string]ProviderAdapter
 	ErrorClassifiers  map[string]ErrorClassifier
+	UsageSources      map[string]UsageEnricher
+	SessionStores     map[string]SessionStore
+	RequestHooks      []RequestHook
 	Events            chan UsageEvent
 	ResolveCredential CredentialResolver
 	RefreshCredential CredentialRefresher
@@ -40,7 +41,7 @@ func New(initial Snapshot, gate Gate, buffer int) (*Kernel, error) {
 	if buffer < 1 {
 		buffer = 256
 	}
-	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[string]ErrorClassifier{}, Events: make(chan UsageEvent, buffer)}, nil
+	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[string]ErrorClassifier{}, UsageSources: map[string]UsageEnricher{}, SessionStores: map[string]SessionStore{}, Events: make(chan UsageEvent, buffer)}, nil
 }
 
 func (k *Kernel) Resolve(name string) (ResolvedModel, error) {
@@ -82,6 +83,14 @@ func (k *Kernel) Close() {
 // Execute is the single data-plane orchestration boundary. Provider adapters
 // own protocol details; the kernel owns public-model resolution and selection.
 func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential Credential, writer http.ResponseWriter) error {
+	for _, hook := range k.RequestHooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook.Apply(ctx, &req); err != nil {
+			return fmt.Errorf("request hook %q: %w", hook.ID(), err)
+		}
+	}
 	started := time.Now()
 	snapshot := k.Snapshots.Load()
 	root, err := ResolvePublicNode(snapshot, req.Model)
@@ -124,6 +133,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			continue
 		}
 		routes := k.Scheduler.RankRoutesForSession(resolveRouteMember(snapshot, member), time.Now(), requestClass(req), req.Session.ID)
+		if node.Kind == ModelPhysical && !PhysicalSourceAllowed(node, member) {
+			routes = nil
+		}
 		failureClass := ErrorRetryable
 		var memberErr error = ErrNoRoute
 		if preferred := req.Transport.PreferredConnectionID; preferred != "" {
@@ -138,11 +150,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if eligible, _ := Eligible(candidate, CompileRequirements(req)); !eligible {
 				continue
 			}
-			if !protocolMatchesRequest(req.SourceFormat, candidate.Protocol) {
-				continue
-			}
 			adapter := k.Adapters[candidate.AdapterID]
 			if adapter == nil {
+				continue
+			}
+			if negotiator, ok := adapter.(ClientFormatNegotiator); ok && !negotiator.NegotiateClientFormat(req.SourceFormat).Supported {
 				continue
 			}
 			if !k.Scheduler.Acquire(candidate, time.Now()) {
@@ -162,9 +174,23 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					continue
 				}
 			}
+			candidateRequest := req
+			sessionKey := requestSessionKey(req)
+			var sessionState SessionState
+			if sessionKey != "" && candidate.SessionStoreID != "" {
+				if sessionStore := k.SessionStores[candidate.SessionStoreID]; sessionStore != nil {
+					if saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey); loadErr == nil && found {
+						sessionState = saved
+						candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
+						if candidateRequest.Continuity.PreviousResponse == "" {
+							candidateRequest.Continuity.PreviousResponse = saved.ResponseID
+						}
+					}
+				}
+			}
 			refreshed := false
 		retryUpstream:
-			upstream, err := adapter.Prepare(ctx, req, candidate, selectedCredential)
+			upstream, err := adapter.Prepare(ctx, candidateRequest, candidate, selectedCredential)
 			if err != nil {
 				k.Scheduler.Release(candidate)
 				failureClass, memberErr = ErrorRetryable, err
@@ -231,7 +257,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			defer response.Body.Close()
 			var firstByteAt time.Time
 			emitEvent := responseEventSink(writer)
-			return adapter.TranslateStream(ctx, response, writer, req.SourceFormat, StreamHooks{OnError: func(streamErr error) {
+			return adapter.TranslateStream(ctx, response, writer, candidateRequest.SourceFormat, StreamHooks{OnError: func(streamErr error) {
 				k.Scheduler.Release(candidate)
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
@@ -242,8 +268,21 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
 			}, OnEvent: func(event ResponseEvent) {
+				if event.ResponseID != "" {
+					sessionState.ResponseID = event.ResponseID
+				}
 				if emitEvent != nil {
 					emitEvent(event)
+				}
+			}, OnSessionState: func(state SessionState) {
+				if state.ResponseID != "" {
+					sessionState.ResponseID = state.ResponseID
+				}
+				if len(state.ProviderData) > 0 {
+					sessionState.ProviderData = append([]byte(nil), state.ProviderData...)
+				}
+				if !state.ExpiresAt.IsZero() {
+					sessionState.ExpiresAt = state.ExpiresAt
 				}
 			}, OnFirstByte: func(at time.Time) {
 				firstByteAt = at
@@ -252,6 +291,16 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 			}, OnComplete: func(event UsageEvent) {
 				k.Scheduler.Release(candidate)
+				if sessionKey != "" && candidate.SessionStoreID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
+					if sessionStore := k.SessionStores[candidate.SessionStoreID]; sessionStore != nil {
+						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
+					}
+				}
+				if source := k.UsageSources[candidate.UsageSourceID]; source != nil {
+					if enriched, enrichErr := source.EnrichUsage(ctx, candidate, response.Headers, event); enrichErr == nil {
+						event = enriched
+					}
+				}
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
 				}
@@ -308,6 +357,29 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 		}
 	}
 	return ErrNoRoute
+}
+
+func requestSessionKey(request NormalizedRequest) string {
+	if request.Session.ID != "" {
+		return request.Session.ID
+	}
+	return request.Session.Conversation
+}
+
+func PhysicalSourceAllowed(node ModelNode, source MemberRef) bool {
+	if source.Fidelity == FidelityExact {
+		return true
+	}
+	if source.Fidelity == FidelityAlias {
+		return len(source.Evidence) > 0
+	}
+	if source.Fidelity == FidelityCompatible {
+		return node.AllowCompatibleSources
+	}
+	if source.Fidelity == FidelityDynamic {
+		return node.AllowDynamicSources
+	}
+	return false
 }
 
 type responseEventWriter interface{ ResponseEvent(ResponseEvent) }
@@ -371,19 +443,4 @@ func kernelErrorClass(err error) ErrorClass {
 		return ErrorRetryable
 	}
 	return ErrorCooldown
-}
-
-func protocolMatchesRequest(format normalize.Format, protocol Protocol) bool {
-	switch format {
-	case normalize.FormatAnthropic:
-		return protocol == ProtocolAnthropic
-	case normalize.FormatOpenAIResponses:
-		return protocol == ProtocolOpenAIResponses
-	case normalize.FormatGemini, normalize.FormatGeminiCLI, normalize.FormatAntigravity:
-		return protocol == ProtocolGemini
-	case normalize.FormatOpenAIChat:
-		return protocol == ProtocolOpenAIChat || protocol == ProtocolAnthropic
-	default:
-		return protocol == ProtocolOpenAIChat
-	}
 }

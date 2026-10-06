@@ -52,9 +52,10 @@ provider node + connection
   physical model merely because it exists upstream.
 - **Physical model**: stable user identity for one real model implemented by
   one or more discovered routes. It owns source order/policy and capabilities.
-- **Combo model**: routable model with ordered physical/combo members and a
-  typed execution strategy. Role names are ordinary combo names, not a special
-  kernel type.
+- **Combo model**: routable model with ordered physical/combo member edges, a
+  typed execution strategy and JSON-bound primitive options. Per-member weight
+  lives on the typed edge, not as a synthetic strategy-config key. Role names
+  are ordinary combo names, not a special kernel type.
 - **Model exposure**: an attribute on physical/combo models. Only exposed
   models appear in `/v1/models`; publication is not a separate user-managed
   catalog.
@@ -108,6 +109,41 @@ The kernel owns exposed-name resolution, capability/quota/health eligibility,
 candidate order, fallback boundaries and usage-event emission. Adapters own
 provider protocol details: request preparation, execution, error classification
 and response translation. No provider-name switch belongs in the kernel.
+
+### Protocol-neutral request and response boundaries
+
+```text
+client wire request
+  -> ingress normalization
+       PromptPlan (ordered instruction layers with origin/role)
+       conversation Messages (without system/developer prompt duplication)
+       typed tool calls, thinking intent, modalities, continuity, extensions
+  -> request hooks (typed IR; before route-specific encoding)
+  -> adapter request codec -> provider wire request
+  -> provider response codec -> client wire response
+```
+
+`PromptPlan` separates inline system/developer instructions from conversation
+history. Its origin enum also provides slots for harness-, provider- and
+user-supplied layers; current HTTP ingress populates inline layers, while
+configuration/harness injection is not yet wired. Each codec encodes the plan
+in its target dialect (for example a top-level system field or reconstructed
+role messages). Normalized tool calls have explicit state and opaque
+provider-data slots; semantic `Response`/`ResponsePart` types model text,
+thinking, tool calls, usage and opaque continuation data. Request hooks can
+transform typed request IR before provider encoding, the intended seam for
+future prompt/tool transformations.
+
+Client-wire compatibility is declared by the response codec through
+`ClientFormatSupport`; the kernel asks the adapter to negotiate ingress format
+instead of inferring render compatibility from provider protocol. Current
+declarations are conservative: OpenAI Chat emits Chat, OpenAI Responses emits
+Responses, Anthropic passes Anthropic through and translates to OpenAI Chat,
+and Gemini currently renders OpenAI Chat. Unsupported pairs are excluded from
+routing. This does not mean every adapter decodes upstream output into semantic
+`Response`: current stream codecs still render directly to the HTTP writer and
+expose `ResponseEvent` for observation. Full decode -> semantic hooks -> client
+renderer separation remains follow-up work.
 
 No lock is held across database I/O, token refresh or upstream I/O. Retry is
 allowed only before the response is committed to the client.

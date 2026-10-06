@@ -10,6 +10,8 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 )
 
 type fieldSpec struct {
@@ -18,18 +20,18 @@ type fieldSpec struct {
 }
 
 type formState struct {
-	title, method string
-	fields        []fieldSpec
-	inputs        []textinput.Model
-	active        int
-	comboMembers  []string
-	typedSources  []routeReference
-	typedMembers  []modelReference
-	memberInput   textinput.Model
-	memberMode    bool
-	addingMember  bool
-	memberCursor  int
-	extra         map[string]any
+	title, method  string
+	fields         []fieldSpec
+	inputs         []textinput.Model
+	active         int
+	typedSources   []routeReference
+	typedMembers   []modelReference
+	memberInput    textinput.Model
+	memberMode     bool
+	addingMember   bool
+	memberCursor   int
+	extra          map[string]any
+	providerPreset string
 }
 
 func buildForm(title, method string, specs []fieldSpec, values map[string]string) *formState {
@@ -43,6 +45,7 @@ func buildForm(title, method string, specs []fieldSpec, values map[string]string
 		input.SetValue(values[spec.key])
 		input.CharLimit = 512
 		if spec.secret {
+			input.CharLimit = 16 * 1024
 			input.EchoMode = textinput.EchoPassword
 			input.EchoCharacter = '•'
 		}
@@ -93,18 +96,27 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			f.extra["profile"] = value.Profile
 			return f
 		case physicalModel:
-			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.ID, "discoverable": strconv.FormatBool(value.Discoverable)})
+			options, err := strategyOptionsJSON(value.Policy.Config)
+			if err != nil {
+				return nil
+			}
+			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.ID, "policyOptions": options, "discoverable": strconv.FormatBool(value.Discoverable), "allowCompatibleSources": strconv.FormatBool(value.AllowCompatibleSources), "allowDynamicSources": strconv.FormatBool(value.AllowDynamicSources)})
 			f.extra["name"] = value.Name
 			f.extra["profile"] = value.Profile
 			f.extra["identity"] = value.Identity
 			f.extra["limits"] = value.Limits
 			f.extra["reasoning"] = value.Reasoning
 			f.extra["enabled"] = value.Enabled
-			f.extra["reasoning"] = value.Reasoning
+			f.extra["allowCompatibleSources"] = value.AllowCompatibleSources
+			f.extra["allowDynamicSources"] = value.AllowDynamicSources
 			f.typedSources = append([]routeReference(nil), value.Sources...)
 			return f
 		case comboModel:
-			f := buildForm("Edit combo model", "combo_models.upsert", comboModelEditFields(), map[string]string{"strategy": value.Strategy.ID, "discoverable": strconv.FormatBool(value.Discoverable)})
+			options, err := strategyOptionsJSON(value.Strategy.Config)
+			if err != nil {
+				return nil
+			}
+			f := buildForm("Edit combo model", "combo_models.upsert", comboModelEditFields(), map[string]string{"strategy": value.Strategy.ID, "strategyOptions": options, "discoverable": strconv.FormatBool(value.Discoverable)})
 			f.extra["name"] = value.Name
 			f.extra["enabled"] = value.Enabled
 			f.typedMembers = append([]modelReference(nil), value.Members...)
@@ -114,30 +126,72 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 
 	switch sectionID(section) {
 	case sectionProviders:
-		values = map[string]string{"protocol": "openai_chat", "definitionID": "openai-compatible-chat", "modelsPath": "/models", "authMode": "api_key"}
-		return buildForm("Add provider", "providers.create", providerFields(), values)
+		return newProviderPresetForm("openai")
 	case sectionConnections:
-		values = map[string]string{"providerNodeID": providerID, "credentialType": "api_key", "priority": "100"}
+		values = map[string]string{"providerNodeID": providerID, "priority": "100"}
 		return buildForm("Add connection", "connections.create", connectionFields(), values)
 	case sectionModels:
 		return buildForm("Add physical model", "custom_models.upsert", modelFields(), map[string]string{"kind": "custom", "providerNodeID": providerID})
 	case sectionPhysical:
-		return buildForm("Create physical model", "physical_models.upsert", physicalModelFields(), map[string]string{"policy": "ordered-fallback", "discoverable": "false"})
+		return buildForm("Create physical model", "physical_models.upsert", physicalModelFields(), map[string]string{"policy": "ordered-fallback", "policyOptions": "{}", "discoverable": "false"})
 	case sectionComboModels:
-		return buildForm("Create combo model", "combo_models.upsert", comboModelFields(), map[string]string{"strategy": "ordered-fallback", "discoverable": "false"})
+		return buildForm("Create combo model", "combo_models.upsert", comboModelFields(), map[string]string{"strategy": "ordered-fallback", "strategyOptions": "{}", "discoverable": "false"})
 	default:
 		return nil
 	}
 }
 
+func newProviderPresetForm(preset string) *formState {
+	values := map[string]string{"protocol": "openai_chat", "modelsPath": "/models"}
+	if profile, ok := provider.ProfileFor(preset); ok {
+		values["name"] = profile.DisplayName
+		values["prefix"] = profile.ID
+		values["baseURL"] = profile.BaseURL
+		values["protocol"] = profile.Protocol
+		values["modelsPath"] = profile.ModelsPath
+		values["authMode"] = profile.AuthMode
+	}
+	form := buildForm("Add provider", "providers.create", providerFields(), values)
+	form.providerPreset = preset
+	return form
+}
+
+func (f *formState) cycleProviderPreset() {
+	if f == nil || f.method != "providers.create" {
+		return
+	}
+	next := map[string]string{"openai": "anthropic", "anthropic": "custom", "custom": "openai"}[f.providerPreset]
+	if next == "" {
+		next = "openai"
+	}
+	replacement := newProviderPresetForm(next)
+	active := min(f.active, len(replacement.inputs)-1)
+	for index := range replacement.inputs {
+		replacement.inputs[index].Blur()
+	}
+	replacement.active = active
+	replacement.inputs[active].Focus()
+	*f = *replacement
+}
+
+func newConnectionForm(node providerNode) *formState {
+	credentialType := node.AuthMode
+	if credentialType == "" {
+		credentialType = "api_key"
+	}
+	return buildForm("Add connection", "connections.create", connectionFields(), map[string]string{
+		"providerNodeID": node.ID, "credentialType": credentialType, "priority": "100",
+	})
+}
+
 func physicalModelFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Physical model name", placeholder: "qwen-3.7-max"}, {key: "policy", label: "Source policy primitive", placeholder: "ordered-fallback"}, {key: "discoverable", label: "Expose in /v1/models", placeholder: "true | false"}}
+	return []fieldSpec{{key: "name", label: "Physical model name", placeholder: "qwen-3.7-max"}, {key: "policy", label: "Source policy primitive", placeholder: "choose registered strategy with Enter"}, {key: "policyOptions", label: "Policy options (JSON object)", placeholder: "{}"}, {key: "discoverable", label: "Expose in /v1/models", placeholder: "true | false"}, {key: "allowCompatibleSources", label: "Allow compatible revisions", placeholder: "true | false"}, {key: "allowDynamicSources", label: "Allow dynamic source routes", placeholder: "true | false"}}
 }
 
 func physicalModelEditFields() []fieldSpec { return physicalModelFields()[1:] }
 
 func comboModelFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Combo model name", placeholder: "junior"}, {key: "strategy", label: "Strategy primitive", placeholder: "ordered-fallback"}, {key: "discoverable", label: "Expose in /v1/models", placeholder: "true | false"}}
+	return []fieldSpec{{key: "name", label: "Combo model name", placeholder: "junior"}, {key: "strategy", label: "Strategy primitive", placeholder: "choose registered strategy with Enter"}, {key: "strategyOptions", label: "Strategy options (JSON object)", placeholder: "{}"}, {key: "discoverable", label: "Expose in /v1/models", placeholder: "true | false"}}
 }
 
 func comboModelEditFields() []fieldSpec { return comboModelFields()[1:] }
@@ -156,12 +210,23 @@ func newComboModelForm(members []modelReference) *formState {
 	return f
 }
 
+func strategyOptionsJSON(options map[string]any) (string, error) {
+	if len(options) == 0 {
+		return "{}", nil
+	}
+	data, err := json.Marshal(options)
+	if err != nil {
+		return "", fmt.Errorf("encode strategy options: %w", err)
+	}
+	return string(data), nil
+}
+
 func providerFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Name", placeholder: "OpenRouter"}, {key: "prefix", label: "Prefix", placeholder: "openrouter"}, {key: "baseURL", label: "Base URL", placeholder: "https://api.example/v1"}, {key: "protocol", label: "Protocol", placeholder: "openai_chat | openai_responses | anthropic"}, {key: "definitionID", label: "Provider definition", placeholder: "openai-compatible-chat"}, {key: "modelsPath", label: "Models path", placeholder: "/models"}, {key: "authMode", label: "Auth mode", placeholder: "api_key"}}
+	return []fieldSpec{{key: "name", label: "Name", placeholder: "OpenRouter"}, {key: "prefix", label: "Prefix", placeholder: "openrouter"}, {key: "baseURL", label: "Base URL", placeholder: "https://api.example/v1"}, {key: "protocol", label: "Protocol", placeholder: "openai_chat | openai_responses | anthropic"}, {key: "definitionID", label: "Provider definition", placeholder: "leave blank · derived from protocol"}, {key: "modelsPath", label: "Models path", placeholder: "/models"}, {key: "authMode", label: "Auth mode", placeholder: "api_key | oauth2 | none"}}
 }
 
 func connectionFields() []fieldSpec {
-	return []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "select a provider, then press c"}, {key: "name", label: "Name", placeholder: "personal key"}, {key: "credentialType", label: "Credential type", placeholder: "api_key"}, {key: "secret", label: "API key", placeholder: "secret is hidden", secret: true}, {key: "priority", label: "Priority", placeholder: "100"}}
+	return []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "select a provider, then press c"}, {key: "name", label: "Name", placeholder: "personal key"}, {key: "credentialType", label: "Credential type", placeholder: "api_key | oauth2 | none"}, {key: "secret", label: "Credential secret", placeholder: "API key or OAuth token JSON; blank for none", secret: true}, {key: "priority", label: "Priority", placeholder: "100"}}
 }
 
 func connectionEditFields() []fieldSpec {
@@ -176,30 +241,14 @@ func modelEditFields() []fieldSpec {
 	return []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "provider"}, {key: "kind", label: "Kind", placeholder: "custom"}, {key: "externalID", label: "Upstream model ID", placeholder: "model-name"}, {key: "displayName", label: "Display name", placeholder: "Model name"}}
 }
 
-func logicalFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Logical name", placeholder: "deepseek-v4-flash"}, {key: "targetRef", label: "Target reference", placeholder: "openrouter/model-id"}}
-}
-
-func comboFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Canonical model name", placeholder: "qwen-3.7-max or junior"}, {key: "strategy", label: "Selection strategy", placeholder: "fallback | round_robin | round_robin_fallback | weighted"}, {key: "stickyLimit", label: "Sticky limit", placeholder: "1"}}
-}
-
-func comboEditFields() []fieldSpec {
-	return []fieldSpec{{key: "strategy", label: "Strategy", placeholder: "fallback | round_robin | round_robin_fallback | weighted"}, {key: "stickyLimit", label: "Sticky limit", placeholder: "1"}}
-}
-
-func publishFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Public model name", placeholder: "junior"}, {key: "targetRef", label: "Target reference", placeholder: "combo:junior"}, {key: "ownedBy", label: "Owned by", placeholder: "gobroom"}}
-}
-
-func publishEditFields() []fieldSpec {
-	return []fieldSpec{{key: "targetRef", label: "Target reference", placeholder: "combo:junior"}, {key: "ownedBy", label: "Owned by", placeholder: "gobroom"}}
-}
-
 func (f *formState) Update(msg tea.Msg) (*formState, tea.Cmd, bool, map[string]any, error) {
 	keyMsg, isKey := msg.(tea.KeyPressMsg)
 	if isKey {
 		key := keyMsg.String()
+		if key == "ctrl+p" && f.method == "providers.create" {
+			f.cycleProviderPreset()
+			return f, nil, false, nil, nil
+		}
 		if key == "esc" {
 			if f.addingMember {
 				f.addingMember = false
@@ -305,13 +354,13 @@ func (f *formState) moveMember(delta int) {
 	case "combo_models.upsert":
 		f.typedMembers[f.memberCursor], f.typedMembers[to] = f.typedMembers[to], f.typedMembers[f.memberCursor]
 	default:
-		f.comboMembers[f.memberCursor], f.comboMembers[to] = f.comboMembers[to], f.comboMembers[f.memberCursor]
+		return
 	}
 	f.memberCursor = to
 }
 
 func (f *formState) hasMembers() bool {
-	return f.method == "combos.upsert" || f.method == "physical_models.upsert" || f.method == "combo_models.upsert"
+	return f.method == "physical_models.upsert" || f.method == "combo_models.upsert"
 }
 
 func (f *formState) memberCount() int {
@@ -321,7 +370,7 @@ func (f *formState) memberCount() int {
 	case "combo_models.upsert":
 		return len(f.typedMembers)
 	default:
-		return len(f.comboMembers)
+		return 0
 	}
 }
 
@@ -336,11 +385,15 @@ func (f *formState) memberLabels() []string {
 	case "combo_models.upsert":
 		result := make([]string, 0, len(f.typedMembers))
 		for _, member := range f.typedMembers {
-			result = append(result, member.Kind+":"+member.ID)
+			label := member.Kind + ":" + member.ID
+			if member.Weight > 0 {
+				label += fmt.Sprintf(" (weight %d)", member.Weight)
+			}
+			result = append(result, label)
 		}
 		return result
 	default:
-		return append([]string(nil), f.comboMembers...)
+		return nil
 	}
 }
 
@@ -361,7 +414,7 @@ func (f *formState) addMember(raw string) error {
 		}
 		f.typedMembers = append(f.typedMembers, member)
 	default:
-		f.comboMembers = append(f.comboMembers, raw)
+		return fmt.Errorf("this editor does not accept members")
 	}
 	f.memberCursor = f.memberCount() - 1
 	return nil
@@ -377,7 +430,7 @@ func (f *formState) removeMember() {
 	case "combo_models.upsert":
 		f.typedMembers = append(f.typedMembers[:f.memberCursor], f.typedMembers[f.memberCursor+1:]...)
 	default:
-		f.comboMembers = append(f.comboMembers[:f.memberCursor], f.comboMembers[f.memberCursor+1:]...)
+		return
 	}
 	if f.memberCursor >= f.memberCount() {
 		f.memberCursor = max(0, f.memberCount()-1)
@@ -436,18 +489,38 @@ func (f *formState) Params() (map[string]any, error) {
 			return nil, fmt.Errorf("%s is required", required)
 		}
 	}
+	if f.method == "connections.create" {
+		credentialType, _ := params["credentialType"].(string)
+		if credentialType != "none" {
+			if secret, ok := params["secret"].(string); !ok || secret == "" {
+				return nil, fmt.Errorf("credential secret is required for %q auth", credentialType)
+			}
+		}
+	}
 	if f.method == "custom_models.upsert" {
 		if _, exists := params["providerNodeID"]; !exists {
 			return nil, fmt.Errorf("choose a provider before adding a physical model")
 		}
 	}
-	if f.method == "combos.upsert" {
-		params["members"] = append([]string(nil), f.comboMembers...)
-	}
 	if f.method == "physical_models.upsert" {
 		policy, _ := params["policy"].(string)
 		delete(params, "policy")
-		params["policy"] = strategySpec{ID: policy}
+		options, err := strategyOptionsFromParams(params, "policyOptions")
+		if err != nil {
+			return nil, err
+		}
+		if err := kernel.ValidateStrategyConfig(policy, options); err != nil {
+			return nil, err
+		}
+		params["policy"] = strategySpec{ID: policy, Config: options}
+		for _, key := range []string{"allowCompatibleSources", "allowDynamicSources"} {
+			value, _ := params[key].(string)
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				parsed = false
+			}
+			params[key] = parsed
+		}
 		params["sources"] = append([]routeReference(nil), f.typedSources...)
 		if identity, ok := f.extra["identity"]; ok {
 			params["identity"] = identity
@@ -468,7 +541,14 @@ func (f *formState) Params() (map[string]any, error) {
 	if f.method == "combo_models.upsert" {
 		strategy, _ := params["strategy"].(string)
 		delete(params, "strategy")
-		params["strategy"] = strategySpec{ID: strategy}
+		options, err := strategyOptionsFromParams(params, "strategyOptions")
+		if err != nil {
+			return nil, err
+		}
+		if err := kernel.ValidateStrategyConfig(strategy, options); err != nil {
+			return nil, err
+		}
+		params["strategy"] = strategySpec{ID: strategy, Config: options}
 		params["members"] = append([]modelReference(nil), f.typedMembers...)
 		if reasoning, ok := f.extra["reasoning"]; ok {
 			params["reasoning"] = reasoning
@@ -480,6 +560,22 @@ func (f *formState) Params() (map[string]any, error) {
 	return params, nil
 }
 
+func strategyOptionsFromParams(params map[string]any, key string) (map[string]any, error) {
+	optionsText, _ := params[key].(string)
+	delete(params, key)
+	options := map[string]any{}
+	if strings.TrimSpace(optionsText) == "" {
+		return options, nil
+	}
+	if err := json.Unmarshal([]byte(optionsText), &options); err != nil {
+		return nil, fmt.Errorf("strategy options must be a JSON object: %w", err)
+	}
+	if options == nil {
+		return nil, fmt.Errorf("strategy options must be a JSON object, not null")
+	}
+	return options, nil
+}
+
 func requiredFields(method string) []string {
 	switch method {
 	case "providers.create":
@@ -487,7 +583,7 @@ func requiredFields(method string) []string {
 	case "providers.update":
 		return []string{"id"}
 	case "connections.create":
-		return []string{"providerNodeID", "name", "credentialType", "secret"}
+		return []string{"providerNodeID", "name", "credentialType"}
 	case "connections.update":
 		return []string{"id"}
 	case "custom_models.upsert":
@@ -507,9 +603,4 @@ func newCatalogID() (string, error) {
 		return "", err
 	}
 	return "model_" + hex.EncodeToString(value[:]), nil
-}
-
-func encodeMembersJSON(members []string) string {
-	data, _ := json.Marshal(members)
-	return string(data)
 }

@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -36,23 +37,30 @@ type PublicModel struct {
 }
 
 type Route struct {
-	ID                string
-	NodeID            string
-	DisplayPrefix     string
-	ExternalModel     string
-	Protocol          Protocol
-	AdapterID         string
-	DefinitionID      string
-	ErrorClassifierID string
-	QuotaSourceID     string
-	Capabilities      map[string]bool
-	Profile           CapabilityProfile
-	Limits            TokenLimits
-	Weight            int
-	Enabled           bool
-	BaseURL           string
-	CredentialID      string
-	CredentialType    string
+	ID                   string
+	NodeID               string
+	DisplayPrefix        string
+	ExternalModel        string
+	Protocol             Protocol
+	AdapterID            string
+	DefinitionID         string
+	AuthFlowID           string
+	ErrorClassifierID    string
+	QuotaSourceID        string
+	QuotaEndpointID      string
+	QuotaTransportID     string
+	QuotaEndpointOptions EndpointOptions
+	QuotaWindowName      string
+	UsageSourceID        string
+	UsageOptions         UsageSourceOptions
+	SessionStoreID       string
+	Profile              CapabilityProfile
+	Limits               TokenLimits
+	Weight               int
+	Enabled              bool
+	BaseURL              string
+	CredentialID         string
+	CredentialType       string
 }
 
 type Snapshot struct {
@@ -103,13 +111,15 @@ const (
 )
 
 type ModelNode struct {
-	ID          string
-	Kind        ModelNodeKind
-	Strategy    Strategy
-	StickyLimit int
-	Members     []MemberRef
-	Identity    PhysicalIdentity
-	Reasoning   NormalizedRequestReasoning
+	ID                     string
+	Kind                   ModelNodeKind
+	Strategy               Strategy
+	StickyLimit            int
+	Members                []MemberRef
+	Identity               PhysicalIdentity
+	Reasoning              NormalizedRequestReasoning
+	AllowCompatibleSources bool
+	AllowDynamicSources    bool
 }
 
 type NormalizedRequestReasoning = normalize.ThinkingIntent
@@ -125,6 +135,7 @@ type StrategyState struct {
 	Cursor      int
 	StickyIndex int
 	StickyCount int
+	StickyLimit int
 }
 
 type StrategyFailure struct {
@@ -278,6 +289,27 @@ type ProviderAdapter interface {
 	TranslateStream(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error
 }
 
+// ClientFormatNegotiator declares which ingress contracts an adapter can
+// render. Route eligibility belongs to this capability, not a kernel protocol
+// switch. An adapter without a declaration is treated as externally managed
+// (useful for test/custom adapters); production composed codecs must declare it.
+type ClientFormatNegotiator interface {
+	NegotiateClientFormat(normalize.Format) CompatibilityDecision
+}
+
+type CompatibilityDecision struct {
+	Supported bool
+	Lossless  bool
+	Reason    string
+}
+
+// RequestHook runs on normalized semantics before a route adapter encodes the
+// provider dialect. Hooks must not mutate shared state outside the request.
+type RequestHook interface {
+	ID() string
+	Apply(context.Context, *NormalizedRequest) error
+}
+
 type ErrorClassifier interface {
 	ClassifyError(status int, body []byte) ErrorClass
 }
@@ -292,16 +324,19 @@ type Credential struct {
 	Secret       string
 	RefreshToken string
 	ExpiresAt    time.Time
+	ClientID     string
+	ClientSecret string
 }
 
 type CredentialResolver func(context.Context, Route) (Credential, error)
 type CredentialRefresher func(context.Context, Route, Credential) (Credential, error)
 
 type StreamHooks struct {
-	OnFirstByte func(time.Time)
-	OnEvent     func(ResponseEvent)
-	OnComplete  func(UsageEvent)
-	OnError     func(error)
+	OnFirstByte    func(time.Time)
+	OnEvent        func(ResponseEvent)
+	OnComplete     func(UsageEvent)
+	OnError        func(error)
+	OnSessionState func(SessionState)
 }
 
 type ResponseEventKind string
@@ -351,6 +386,28 @@ type UsageEvent struct {
 	InputTokens           int64
 	OutputTokens          int64
 	EstimatedCost         float64
+}
+
+type UsageSourceOptions struct {
+	InputTokensHeader   string `json:"inputTokensHeader,omitempty"`
+	OutputTokensHeader  string `json:"outputTokensHeader,omitempty"`
+	EstimatedCostHeader string `json:"estimatedCostHeader,omitempty"`
+}
+
+type UsageEnricher interface {
+	EnrichUsage(context.Context, Route, http.Header, UsageEvent) (UsageEvent, error)
+}
+
+type SessionState struct {
+	ResponseID   string          `json:"responseId,omitempty"`
+	ProviderData json.RawMessage `json:"providerData,omitempty"`
+	ExpiresAt    time.Time       `json:"-"`
+}
+
+type SessionStore interface {
+	ID() string
+	Load(context.Context, Route, string) (SessionState, bool, error)
+	Save(context.Context, Route, string, SessionState) error
 }
 
 var (

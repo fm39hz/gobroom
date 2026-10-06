@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,8 +10,12 @@ import (
 )
 
 func (r *RuntimeRegistry) LoadDefinitionJSON(data []byte) error {
-	var definitions []ProviderDefinition
-	if err := json.Unmarshal(data, &definitions); err == nil {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var definitions []ProviderDefinition
+		if err := decodeStrictJSON(data, &definitions); err != nil {
+			return fmt.Errorf("decode provider definitions: %w", err)
+		}
 		for _, definition := range definitions {
 			if err := r.Primitives.RegisterDefinition(definition); err != nil {
 				return err

@@ -2,6 +2,8 @@
 
 ## Start here
 
+- [Product use cases and acceptance](USE_CASES.md) — end-to-end journeys,
+  observable outcomes, current gaps and usability gates.
 - [Vision](VISION.md) — product intent, core workflow, portability boundaries
   and explicit non-goals.
 - [Implementation roadmap](IMPLEMENTATION_PLAN.md) — milestone status, next

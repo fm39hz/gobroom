@@ -33,7 +33,11 @@ type HandlerOptions struct {
 }
 
 func NewServer(s *store.Store) *Server {
-	manager, err := controlplane.NewManager(s)
+	return NewServerWithRuntimeBindings(s, nil)
+}
+
+func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding) *Server {
+	manager, err := controlplane.NewManagerWithRuntimeBindings(s, bindings)
 	if err != nil {
 		manager = nil
 	}
@@ -184,12 +188,16 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if input.DefinitionID == "" {
-			input.DefinitionID = "openai-compatible-chat"
+			if input.Protocol != "" {
+				input.DefinitionID = store.DefaultDefinitionForProtocol(input.Protocol)
+			} else if current, err := s.store.ProviderNode(input.ID); err == nil {
+				input.DefinitionID = current.DefinitionID
+			}
 		}
 		prefixes := provider.NewPrefixRegistry()
 		for _, node := range mustProviderNodes(s.store) {
 			if node.ID != input.ID {
-				if err := prefixes.AddCustom(node.Prefix, node.ID); err != nil {
+				if err := prefixes.AddNode(node.Prefix, node.DefinitionID); err != nil {
 					writeError(w, err)
 					return
 				}
@@ -223,7 +231,7 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if input.DefinitionID == "" {
-		input.DefinitionID = "openai-compatible-chat"
+		input.DefinitionID = store.DefaultDefinitionForProtocol(input.Protocol)
 	}
 	prefixes := provider.NewPrefixRegistry()
 	existing, err := s.store.ProviderNodes()
@@ -232,7 +240,7 @@ func (s *Server) providerCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, node := range existing {
-		if err := prefixes.AddCustom(node.Prefix, node.ID); err != nil {
+		if err := prefixes.AddNode(node.Prefix, node.DefinitionID); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
@@ -441,10 +449,6 @@ func (w *trackingWriter) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
-}
-
-func (s *Server) notImplemented(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, map[string]any{"error": map[string]string{"message": "routing execution is not implemented yet"}})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

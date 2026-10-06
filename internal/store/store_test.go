@@ -1,10 +1,12 @@
 package store
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+	"time"
 
-import "github.com/fm39hz/gobroom/internal/kernel"
-
-import "time"
+	"github.com/fm39hz/gobroom/internal/kernel"
+)
 
 func TestConnectionsAreManagedWithoutExposingSecrets(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
@@ -27,8 +29,27 @@ func TestConnectionsAreManagedWithoutExposingSecrets(t *testing.T) {
 	if !ok || credential.Secret != "do-not-return" {
 		t.Fatalf("credential=%#v ok=%v", credential, ok)
 	}
+	primary, ok := s.ConnectionCredential("node-a")
+	if !ok || primary.ID != item.ID || primary.Secret != "do-not-return" {
+		t.Fatalf("provider credential=%#v ok=%v", primary, ok)
+	}
 	if err := s.DeleteConnection(item.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCreateProviderNodeDefaultsGeminiDefinition(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	item, err := s.CreateProviderNode(CreateProviderNodeInput{Name: "Gemini", Prefix: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta", Protocol: "gemini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.DefinitionID != "gemini" {
+		t.Fatalf("definition ID=%q", item.DefinitionID)
 	}
 }
 
@@ -77,8 +98,12 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	if err := s.SaveProviderExtension(ProviderExtension{ConnectionID: "conn-a", Namespace: "test", Data: map[string]any{"project": "p"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveProviderSession(ProviderSession{ConnectionID: "conn-a", Namespace: "gemini", SessionKey: "session-a", State: map[string]any{"signature": "opaque"}, ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)}); err != nil {
+	if err := s.SaveProviderSession(ProviderSession{ConnectionID: "conn-a", Namespace: "gemini", SessionKey: "session-a", State: kernel.SessionState{ResponseID: "resp-a", ProviderData: json.RawMessage(`{"signature":"opaque"}`), ExpiresAt: time.Now().Add(time.Hour).UTC()}}); err != nil {
 		t.Fatal(err)
+	}
+	sessions, err := s.ProviderSessions()
+	if err != nil || len(sessions) != 1 || sessions[0].State.ResponseID != "resp-a" || string(sessions[0].State.ProviderData) != `{"signature":"opaque"}` || sessions[0].State.ExpiresAt.IsZero() {
+		t.Fatalf("provider sessions=%#v err=%v", sessions, err)
 	}
 	if err := s.SaveUsageEvent(kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5}); err != nil {
 		t.Fatal(err)

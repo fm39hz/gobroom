@@ -42,6 +42,48 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	}
 }
 
+func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {
+	body := `{"id":"msg_live","type":"message","model":"claude-opus-4-8","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":10370,"output_tokens":4}}`
+	recorder := httptest.NewRecorder()
+	var usage kernel.UsageEvent
+	err := (Messages{}).TranslateStream(context.Background(), kernel.UpstreamResponse{
+		Status:  http.StatusOK,
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    io.NopCloser(strings.NewReader(body)),
+	}, recorder, normalize.FormatAnthropic, kernel.StreamHooks{OnComplete: func(event kernel.UsageEvent) { usage = event }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Body.String() != body {
+		t.Fatalf("Anthropic passthrough body changed: %s", recorder.Body.String())
+	}
+	if usage.Status != "ok" || usage.InputTokens != 10370 || usage.OutputTokens != 4 {
+		t.Fatalf("usage=%#v", usage)
+	}
+}
+
+func TestAnthropicPassthroughStreamReportsUsageWithoutChangingEvents(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":21}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	recorder := httptest.NewRecorder()
+	var usage kernel.UsageEvent
+	err := (Messages{}).TranslateStream(context.Background(), kernel.UpstreamResponse{
+		Status:  http.StatusOK,
+		Headers: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:    io.NopCloser(strings.NewReader(body)),
+	}, recorder, normalize.FormatAnthropic, kernel.StreamHooks{OnComplete: func(event kernel.UsageEvent) { usage = event }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Body.String() != body {
+		t.Fatalf("Anthropic SSE passthrough body changed: %s", recorder.Body.String())
+	}
+	if usage.Status != "ok" || usage.InputTokens != 21 || usage.OutputTokens != 7 {
+		t.Fatalf("usage=%#v", usage)
+	}
+}
+
 func TestAnthropicPrepareTranslatesReasoningWithoutMetadataShim(t *testing.T) {
 	request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"messages": []any{}}, Thinking: normalize.ThinkingIntent{Mode: "level", Effort: "high"}}
 	prepared, err := (Messages{}).Prepare(context.Background(), request, kernel.Route{ID: "route", BaseURL: "https://provider.test", ExternalModel: "claude"}, kernel.Credential{})
@@ -62,5 +104,34 @@ func TestAnthropicPrepareTranslatesReasoningWithoutMetadataShim(t *testing.T) {
 	output, ok := body["output_config"].(map[string]any)
 	if !ok || output["effort"] != "high" {
 		t.Fatalf("output_config=%#v", body["output_config"])
+	}
+}
+
+func TestAnthropicRequestMapsPromptPlanToTopLevelSystem(t *testing.T) {
+	request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptInline, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
+	prepared, err := (Messages{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test", ExternalModel: "claude"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	system, ok := body["system"].([]any)
+	if !ok || len(system) != 1 || system[0].(map[string]any)["text"] != "policy" {
+		t.Fatalf("system=%#v", body["system"])
+	}
+}
+
+func TestAnthropicCodecDeclaresPassThroughAndChatTranslation(t *testing.T) {
+	codec := messagesResponseCodec{}
+	if got := codec.SupportsClientFormat(normalize.FormatAnthropic); !got.Supported || !got.Lossless {
+		t.Fatalf("Anthropic support=%#v", got)
+	}
+	if got := codec.SupportsClientFormat(normalize.FormatOpenAIChat); !got.Supported || got.Lossless {
+		t.Fatalf("Chat translation=%#v", got)
+	}
+	if codec.SupportsClientFormat(normalize.FormatOpenAIResponses).Supported {
+		t.Fatal("must not claim Responses rendering")
 	}
 }

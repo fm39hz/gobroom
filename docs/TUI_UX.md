@@ -1,7 +1,9 @@
 # TUI interaction and model-management design
 
-Status: target UX contract. The current Bubble Tea implementation is an early
-slice and does not yet implement this complete context hierarchy.
+Status: interaction contract and implementation guide. LazyGit-style top-level
+blocks/tabs, keyboard navigation, the separate Combo member/candidate editor,
+and its expose-to-`/v1/models` flow are implemented/tested. Provider onboarding
+and guided Physical curation remain partial and are tracked in the roadmap.
 
 ## Mental model
 
@@ -88,6 +90,60 @@ The dot-separated names in a frame are tabs in one panel, analogous to
 LazyGit's Files/Worktrees/Submodules or Branches/Remotes/Tags groups. A layer
 may later be promoted to its own block without changing its context contract.
 
+## Provider and connection onboarding
+
+The intended setup is account-specific and inspectable:
+
+```text
+Providers: create provider + endpoint
+  -> Connections: create account/credential
+  -> select that connection, press t
+  -> read-only /models test and bounded model preview
+  -> press i to review the connection catalog; select IDs and import a subset
+  -> add a custom ID if the provider omitted it
+```
+
+The selected-account flow keeps test, review and mutation separate. A complete
+catalog snapshot can establish both available and not-listed evidence for that
+connection; an incomplete snapshot can establish only positive availability.
+Unknown entitlement is not the same as absent. Custom IDs added at provider
+scope are explicit user assertions. Returned IDs start checked and existing
+catalog IDs are labeled; deselect unwanted route imports. Clearing all and
+applying records connection availability without importing route IDs. The
+existing development catalog is not backfilled to accounts automatically;
+review/refresh each connection to establish evidence. The provider-row `t`
+shortcut remains a
+convenience operation using the highest-priority enabled connection and imports
+all returned IDs; it is not a substitute for reviewing a selected account.
+CLI equivalents: `gobroom connections test --connection-id ID`,
+`gobroom connections preview-models --connection-id ID`, and
+`gobroom connections refresh-models --node-id NODE --connection-id ID` with
+repeated `--model-id UPSTREAM_ID` flags to import a reviewed subset; omit
+`--model-id` to import all IDs returned by that connection, or use
+`--entitlements-only` to update evidence without adding IDs to the catalog.
+Catalog review/import only adds Discovered routes; it does not create Physical
+models, Combos or expose models. The UI must identify the selected connection,
+show entitlement certainty and preserve model IDs exactly.
+
+For direct OpenAI and Anthropic API-key setup, the provider form starts with
+the OpenAI preset; press `Ctrl+P` to cycle OpenAI → Anthropic → Custom. The
+presets fill name, prefix, base URL, protocol, models path and API-key auth
+mode. Leave the provider definition blank so the daemon derives it from the
+protocol:
+
+| Field | OpenAI | Anthropic |
+|---|---|---|
+| Name / prefix | `OpenAI` / `openai` | `Anthropic` / `anthropic` |
+| Base URL | `https://api.openai.com/v1` | `https://api.anthropic.com/v1` |
+| Protocol | `openai_chat` | `anthropic` |
+| Models path | `/models` | `/models` |
+| Auth mode | `api_key` (daemon default) | `api_key` (daemon default) |
+
+Create the connection from the selected provider row; the TUI masks the key.
+OpenAI discovery uses Bearer auth. Anthropic discovery uses `x-api-key` and
+`anthropic-version`. These settings cover the provider/model route, not full
+protocol parity; see the [compatibility matrix](COMPATIBILITY_MATRIX.md).
+
 ## Models workspace
 
 ### Discovered tab
@@ -124,18 +180,21 @@ context:
 
 ```text
 Discovered    provider name, prefix, upstream ID, capabilities
-Physical      physical name, source routes, capabilities, exposure
+Physical      physical name, source routes/prefixes, capabilities, exposure
 Combos        combo name, member names, strategy, exposure
 Members       current ordered members
-Picker        eligible candidate members
+Picker        eligible canonical Physical/Combo members; Physical sources are prefix-search keys, not duplicate rows
 ```
 
 Typing a known prefix such as `g4f/`, `orca/` or `ocg/` immediately narrows
-provider routes. Filtering is a projection: it does not mutate membership or
-order. Selected items stay selected when hidden by a filter, and the UI states
-the total and matching counts.
+provider routes in Discovered/source selection. In a Combo candidate picker,
+those prefixes match through each Physical model's discovered routes, while the
+result remains one prefix-free Physical row. Filtering is a projection: it
+does not mutate membership or order. Selected items stay selected when hidden
+by a filter, and the UI states the total and matching counts. A matched source
+may appear as secondary context, never as a separate Combo candidate.
 
-An editor may split the main view into ordered members and candidates:
+The Combo editor splits the main view into ordered members and candidates:
 
 ```text
 ┌─ Combo members ──────────────┬─ Physical/combo picker ─────────┐
@@ -145,10 +204,29 @@ An editor may split the main view into ordered members and candidates:
 └──────────────────────────────┴──────────────────────────────────┘
 ```
 
-Within this subcontext, `h/l` changes member/picker focus, `j/k` moves within
-the focused list, `Space` toggles membership, `Enter` drills into a model and
-`Esc` returns while preserving editor state. Reordering is explicit and never a
-side effect of filtering.
+Within this subcontext, the Combo editor renders the two independently
+focusable lists shown above: `h/l` changes member/candidate pane and `j/k` moves
+only within the focused list. `Space` removes the focused member or toggles a
+candidate into/out of membership. `K/J` reorders only the focused member in the
+ordered-members pane. `Enter` opens its details without losing editor state;
+`Esc` closes details first, then cancels the unsaved editor. `ctrl+s` saves.
+Filtering is scoped to the focused list and never mutates membership/order.
+Existing order survives opening the editor, filtering, adding/removing
+candidates and saving. New candidates append in selection order; the saved
+Combo order is exactly the visible member sequence, not candidate sort order.
+
+Strategy is an execution primitive on the Combo. Primitive-level options are a
+JSON object and must round-trip unchanged when editing another field. Member
+weight is a typed property of each ordered member edge, not a synthetic key in
+the strategy-options object; weighted fallback reads that property, and other
+strategies ignore it. The member pane makes weight visible and `+/-` changes
+the focused member's weight without changing identity/order. The Combo form
+binds strategy options as a JSON object. Focusing the strategy field and
+pressing `Enter` opens the searchable registered-strategy catalog. `j/k`
+navigates, `/` filters, `Enter` selects, and the inspector shows semantics plus
+option schema/defaults. Selecting a primitive replaces incompatible options
+with that primitive's defaults; validation errors keep the form open and point
+to the offending option.
 
 ## Acceptance rules
 
@@ -159,6 +237,14 @@ side effect of filtering.
 - No separate Published Models panel is required; exposure is edited on the
   model.
 - A combo appears as an OpenAI-compatible model when exposed.
+- Testing a selected connection is read-only; importing is a separate action
+  and uses that same connection.
+- Combo candidates are canonical Physical/Combo identities. Prefix search may
+  match a Physical model's source routes, but it never creates duplicate
+  provider-route rows in the Combo member list.
+- Combo membership edits use separate ordered-member and candidate panes;
+  filtering cannot reorder or remove members, and only `ctrl+s` persists the
+  edited order.
 - Cursor, filter and selection state are local to a context.
 - Help and footer actions are generated from the focused context.
 - Narrow layouts preserve the same context graph even when blocks are stacked

@@ -19,6 +19,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/quota"
 	runtimehealth "github.com/fm39hz/gobroom/internal/runtime"
+	sessionruntime "github.com/fm39hz/gobroom/internal/runtime/sessionstore"
 	"github.com/fm39hz/gobroom/internal/store"
 	usageworker "github.com/fm39hz/gobroom/internal/usage"
 )
@@ -43,10 +44,16 @@ type Daemon struct {
 	http                *http.Server
 	httpControl         *http.Server
 	kernel              *kernel.Kernel
+	providerBindings    map[string]provider.RuntimeBinding
+	authFlows           map[string]provider.AuthFlow
+	providerAuthModes   map[string]string
+	providerAuthFlowIDs map[string]string
+	sessionCache        *sessionruntime.Cache
 	policy              *runtimehealth.PolicyGate
 	usageCancel         context.CancelFunc
 	mu                  sync.Mutex
 	credentialRefreshMu sync.Mutex
+	credentialRefreshes map[string]*sync.Mutex
 	logMu               sync.RWMutex
 	logs                []LogRecord
 	stop                func()
@@ -81,7 +88,36 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.store = s
 	d.appendLog("info", "daemon starting")
-	d.server = api.NewServer(s)
+	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
+	d.sessionCache, err = sessionruntime.New(s)
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
+	if err := runtimeRegistry.ReplaceSessionStore(d.sessionCache); err != nil {
+		_ = s.Close()
+		return err
+	}
+	if d.config.ProviderManifestDir != "" {
+		if err := runtimeRegistry.LoadDefinitionDir(d.config.ProviderManifestDir); err != nil {
+			_ = s.Close()
+			return fmt.Errorf("load provider manifests: %w", err)
+		}
+	}
+	runtimeBindings, err := runtimeRegistry.BuildBindings()
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
+	d.providerBindings = runtimeBindings
+	d.authFlows = runtimeRegistry.AuthFlowsForBindings(runtimeBindings)
+	d.providerAuthModes = runtimeRegistry.DefaultCredentialTypes()
+	d.providerAuthFlowIDs = runtimeRegistry.AuthFlowIDsByDefinition()
+	d.server = api.NewServerWithRuntimeBindings(s, runtimeBindings)
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	started := false
@@ -95,101 +131,121 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("cannot initialize control plane")
 	}
 	d.policy = runtimehealth.NewPolicyGate()
+	d.policy.SetEnrichmentContext(ctx)
 	if snapshots, loadErr := d.store.QuotaSnapshots(); loadErr == nil {
 		for _, snapshot := range snapshots {
 			d.policy.SetQuota(snapshot)
 		}
 	}
+	quotaPersistence := runtimehealth.NewQuotaSnapshotQueue(d.store, 512, func(snapshot quota.Snapshot, err error) {
+		d.appendLog("error", fmt.Sprintf("persist quota evidence %s/%s/%s/%s: %v", snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, err))
+	})
+	d.policy.SetOutcomeQuotaObserver(func(snapshot quota.Snapshot) {
+		if !quotaPersistence.Enqueue(snapshot) {
+			d.appendLog("warn", "quota evidence persistence queue is full; latest snapshot was not queued")
+		}
+	})
 	d.kernel, err = kernel.New(d.server.Control().Snapshot(), d.policy, 256)
 	if err != nil {
 		_ = s.Close()
 		return err
 	}
-	runtimeRegistry, err := provider.NewRuntimeRegistry()
-	if err != nil {
-		_ = s.Close()
-		return err
-	}
-	if d.config.ProviderManifestDir != "" {
-		if err := runtimeRegistry.LoadDefinitionDir(d.config.ProviderManifestDir); err != nil {
-			_ = s.Close()
-			return fmt.Errorf("load provider manifests: %w", err)
-		}
-	}
-	if _, err := runtimeRegistry.BuildBindings(); err != nil {
-		_ = s.Close()
-		return err
-	}
-	d.kernel.Adapters = runtimeRegistry.Adapters()
-	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiers()
+	d.kernel.Adapters = runtimeRegistry.AdaptersForBindings(runtimeBindings)
+	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiersForBindings(runtimeBindings)
+	d.kernel.UsageSources = runtimeRegistry.UsageSources()
+	d.kernel.SessionStores = runtimeRegistry.SessionStores()
 	opportunisticQuota := &runtimehealth.OpportunisticQuota{
-		Sources: runtimeRegistry.QuotaSources(),
+		Sources:    runtimeRegistry.QuotaSources(),
+		Endpoints:  runtimeRegistry.Endpoints(),
+		Transports: runtimeRegistry.Transports(),
 		Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
 			credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
 			if !ok {
 				return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
 			}
-			flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(credential.Type))
+			flow, ok := d.authFlows[route.AuthFlowID]
 			if !ok {
-				return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", credential.Type)
+				return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
 			}
 			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 		},
 		Record: func(snapshot quota.Snapshot) {
 			d.policy.SetQuota(snapshot)
-			_ = d.store.SaveQuotaSnapshot(snapshot)
+			if !quotaPersistence.Enqueue(snapshot) {
+				d.appendLog("warn", "opportunistic quota snapshot persistence queue is full")
+			}
 		},
 	}
 	d.policy.SetQuotaEnricher(opportunisticQuota.Trigger)
-	go (runtimehealth.QuotaPoller{
-		Sources:  runtimeRegistry.QuotaSources(),
-		Snapshot: func() kernel.Snapshot { return d.kernel.Snapshots.Load() },
-		Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
-			credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
-			if !ok {
-				return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
-			}
-			flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(credential.Type))
-			if !ok {
-				return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", credential.Type)
-			}
-			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
-		},
-		Record: func(snapshot quota.Snapshot) {
-			d.policy.SetQuota(snapshot)
-			_ = d.store.SaveQuotaSnapshot(snapshot)
-		},
-		Enabled: d.config.QuotaPolling,
-	}).Run(ctx)
+	quotaPersistenceDone := make(chan struct{})
+	go func() {
+		defer close(quotaPersistenceDone)
+		quotaPersistence.Run()
+	}()
+	quotaPollerDone := make(chan struct{})
+	go func() {
+		defer close(quotaPollerDone)
+		(runtimehealth.QuotaPoller{
+			Sources:    runtimeRegistry.QuotaSources(),
+			Endpoints:  runtimeRegistry.Endpoints(),
+			Transports: runtimeRegistry.Transports(),
+			Snapshot:   func() kernel.Snapshot { return d.kernel.Snapshots.Load() },
+			Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
+				credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
+				if !ok {
+					return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
+				}
+				flow, ok := d.authFlows[route.AuthFlowID]
+				if !ok {
+					return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
+				}
+				return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
+			},
+			Record: func(snapshot quota.Snapshot) {
+				d.policy.SetQuota(snapshot)
+				if !quotaPersistence.Enqueue(snapshot) {
+					d.appendLog("warn", "quota poll snapshot persistence queue is full")
+				}
+			},
+			Enabled: d.config.QuotaPolling,
+		}).Run(ctx)
+	}()
 	d.kernel.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
 		credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
 		if !ok {
 			return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
 		}
-		flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(credential.Type))
+		flow, ok := d.authFlows[route.AuthFlowID]
 		if !ok {
-			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", credential.Type)
+			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
 		}
 		return flow.Resolve(context.Background(), provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 	}
 	d.kernel.RefreshCredential = func(ctx context.Context, route kernel.Route, current kernel.Credential) (kernel.Credential, error) {
-		d.credentialRefreshMu.Lock()
-		defer d.credentialRefreshMu.Unlock()
-		flow, ok := runtimeRegistry.Auth.Resolve(authFlowID(current.Type))
+		unlock := d.lockCredentialRefresh(route.CredentialID)
+		defer unlock()
+		stored, ok := d.store.ConnectionCredentialByID(route.CredentialID)
 		if !ok {
-			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", current.Type)
+			return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
+		}
+		flow, ok := d.authFlows[route.AuthFlowID]
+		if !ok {
+			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
+		}
+		latest, err := flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: stored.Type, Secret: stored.Secret})
+		if err != nil {
+			return kernel.Credential{}, err
+		}
+		if latest.Secret != "" && latest.Secret != current.Secret {
+			return latest, nil
 		}
 		refreshed, err := flow.Refresh(ctx, current)
 		if err != nil {
 			return kernel.Credential{}, err
 		}
-		secret := refreshed.Secret
-		if refreshed.RefreshToken != "" {
-			encoded, encodeErr := json.Marshal(map[string]any{"access_token": refreshed.Secret, "refresh_token": refreshed.RefreshToken, "expires_at": refreshed.ExpiresAt})
-			if encodeErr != nil {
-				return kernel.Credential{}, encodeErr
-			}
-			secret = string(encoded)
+		secret, err := refreshedCredentialSecret(refreshed)
+		if err != nil {
+			return kernel.Credential{}, err
 		}
 		if err := d.store.UpdateConnectionSecret(route.CredentialID, secret); err != nil {
 			return kernel.Credential{}, err
@@ -209,7 +265,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			if route.CredentialID != item.ConnectionID {
 				continue
 			}
-			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError})
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeConnection})
 		}
 	}
 	availabilityRows, _ := d.store.ModelAvailabilities()
@@ -222,18 +278,30 @@ func (d *Daemon) Start(ctx context.Context) error {
 			if route.CredentialID != item.ConnectionID || route.ExternalModel != item.ModelRef {
 				continue
 			}
-			state := runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: blockedUntil, LastError: item.LastError}
+			state := runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: blockedUntil, LastError: item.LastError, LastCause: kernel.OutcomeCause(item.Reason), LastScope: kernel.OutcomeScope(item.ErrorCode)}
 			d.policy.Health.Restore(route, state)
 		}
 	}
+	healthEventsDone := make(chan struct{})
 	go func() {
+		defer close(healthEventsDone)
+		persist := func(event healthEvent) {
+			_ = d.store.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: event.route.CredentialID, Status: healthStatus(event.state), ConsecutiveFailures: event.state.Failures, CooldownUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError, ErrorCode: string(event.state.LastCause)})
+			_ = d.store.SaveModelAvailability(store.ModelAvailability{ConnectionID: event.route.CredentialID, ModelRef: event.route.ExternalModel, Status: healthStatus(event.state), BlockedUntil: formatTime(event.state.CooldownUntil), Reason: string(event.state.LastCause), ErrorCode: string(event.state.LastScope), LastError: event.state.LastError, ConsecutiveFailures: event.state.Failures})
+		}
 		for {
 			select {
 			case <-ctx.Done():
-				return
+				for {
+					select {
+					case event := <-healthEvents:
+						persist(event)
+					default:
+						return
+					}
+				}
 			case event := <-healthEvents:
-				_ = d.store.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: event.route.CredentialID, Status: healthStatus(event.state), ConsecutiveFailures: event.state.Failures, CooldownUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError, ErrorCode: string(event.state.LastCause)})
-				_ = d.store.SaveModelAvailability(store.ModelAvailability{ConnectionID: event.route.CredentialID, ModelRef: event.route.ExternalModel, Status: healthStatus(event.state), BlockedUntil: formatTime(event.state.CooldownUntil), Reason: string(event.state.LastCause), ErrorCode: string(event.state.LastScope), LastError: event.state.LastError, ConsecutiveFailures: event.state.Failures})
+				persist(event)
 			}
 		}
 	}()
@@ -244,6 +312,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	usageCtx, usageCancel := context.WithCancel(ctx)
 	d.usageCancel = usageCancel
 	go (usageworker.Worker{Store: s, Events: d.kernel.Events}).Run(usageCtx)
+	sessionDone := make(chan struct{})
+	go func() {
+		defer close(sessionDone)
+		d.sessionCache.Run(ctx)
+	}()
 
 	d.stop = func() {
 		cancel()
@@ -253,6 +326,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if d.kernel != nil {
 			d.kernel.Close()
 		}
+		<-sessionDone
+		<-healthEventsDone
+		<-quotaPollerDone
+		quotaPersistence.Close()
+		<-quotaPersistenceDone
 		_ = d.store.Close()
 	}
 
@@ -284,6 +362,44 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	started = true
 	return nil
+}
+
+func (d *Daemon) lockCredentialRefresh(connectionID string) func() {
+	d.credentialRefreshMu.Lock()
+	if d.credentialRefreshes == nil {
+		d.credentialRefreshes = make(map[string]*sync.Mutex)
+	}
+	lock := d.credentialRefreshes[connectionID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		d.credentialRefreshes[connectionID] = lock
+	}
+	d.credentialRefreshMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (d *Daemon) providerNodeForConnection(connectionID string) (string, error) {
+	if connectionID == "" {
+		return "", fmt.Errorf("connectionID is required")
+	}
+	connections, err := d.store.Connections("")
+	if err != nil {
+		return "", err
+	}
+	for _, connection := range connections {
+		if connection.ID == connectionID && connection.Enabled {
+			return connection.ProviderNodeID, nil
+		}
+	}
+	return "", fmt.Errorf("enabled connection %q was not found", connectionID)
+}
+
+func refreshedCredentialSecret(credential kernel.Credential) (string, error) {
+	if credential.RefreshToken == "" && credential.ClientSecret == "" && credential.ExpiresAt.IsZero() {
+		return credential.Secret, nil
+	}
+	return provider.EncodeOAuthCredential(credential)
 }
 
 func (d *Daemon) Wait(ctx context.Context) error { <-ctx.Done(); return d.Stop(context.Background()) }
@@ -380,11 +496,28 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		return success(request, items)
 	case "providers.refresh_models":
-		nodeID := stringParam(request.Params, "nodeID")
-		if nodeID == "" {
+		var input struct {
+			NodeID       string   `json:"nodeID"`
+			ConnectionID string   `json:"connectionID"`
+			ModelIDs     []string `json:"modelIDs"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		if input.NodeID == "" {
 			return fail(request, "nodeID is required")
 		}
-		result, err := (discovery.Service{Store: d.store}).RefreshNode(ctx, nodeID)
+		service := discovery.Service{Store: d.store, Bindings: d.providerBindings}
+		var result discovery.Result
+		var err error
+		if input.ConnectionID == "" {
+			if input.ModelIDs != nil {
+				return fail(request, "selective model import requires a connection ID")
+			}
+			result, err = service.RefreshNode(ctx, input.NodeID)
+		} else {
+			result, err = service.ImportConnectionModels(ctx, input.NodeID, input.ConnectionID, input.ModelIDs)
+		}
 		if err != nil {
 			return fail(request, err.Error())
 		}
@@ -465,7 +598,8 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &input); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.validatePrefix(input.Prefix, input.DefinitionID); err != nil {
+		d.applyProviderDefaults(&input)
+		if err := d.validatePrefix(input.Prefix, input.DefinitionID, input.Protocol); err != nil {
 			return fail(request, err.Error())
 		}
 		item, err := d.store.CreateProviderNode(input)
@@ -483,6 +617,11 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		if input.ID == "" {
 			return fail(request, "id is required")
+		}
+		if input.DefinitionID != "" && input.AuthMode == "" {
+			if credentialType := d.providerAuthModes[input.DefinitionID]; credentialType != "" {
+				input.AuthMode = credentialType
+			}
 		}
 		if input.Prefix != "" {
 			if err := d.validatePrefixUpdate(input.ID, input.Prefix, input.DefinitionID); err != nil {
@@ -519,9 +658,39 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "connections.test":
+		connectionID := stringParam(request.Params, "connectionID")
+		nodeID, err := d.providerNodeForConnection(connectionID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings}).TestConnection(ctx, nodeID, connectionID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
+	case "connections.preview_models":
+		connectionID := stringParam(request.Params, "connectionID")
+		nodeID, err := d.providerNodeForConnection(connectionID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings}).PreviewConnectionModels(ctx, nodeID, connectionID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
 	case "connections.create":
 		var input store.CreateConnectionInput
 		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		if input.CredentialType == "" {
+			if node, err := d.store.ProviderNode(input.ProviderNodeID); err == nil {
+				input.CredentialType = node.AuthMode
+			}
+		}
+		if err := d.validateConnectionSecret(ctx, input.ProviderNodeID, input.CredentialType, input.Secret); err != nil {
 			return fail(request, err.Error())
 		}
 		item, err := d.store.CreateConnection(input)
@@ -539,6 +708,35 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		if input.ID == "" {
 			return fail(request, "id is required")
+		}
+		connections, err := d.store.Connections("")
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		var existing *store.ConnectionRecord
+		for index := range connections {
+			if connections[index].ID == input.ID {
+				existing = &connections[index]
+				break
+			}
+		}
+		if existing == nil {
+			return fail(request, fmt.Sprintf("connection %q not found", input.ID))
+		}
+		if input.CredentialType == "" {
+			input.CredentialType = existing.CredentialType
+		}
+		node, err := d.store.ProviderNode(existing.ProviderNodeID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if input.CredentialType != node.AuthMode {
+			return fail(request, fmt.Sprintf("credential type %q does not match provider auth mode %q", input.CredentialType, node.AuthMode))
+		}
+		if input.Secret != "" {
+			if err := d.validateConnectionSecret(ctx, existing.ProviderNodeID, input.CredentialType, input.Secret); err != nil {
+				return fail(request, err.Error())
+			}
 		}
 		item, err := d.store.UpdateConnection(input)
 		if err != nil {
@@ -580,7 +778,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		snapshot := d.server.Control().Snapshot()
 		for index := range items {
 			var routes []kernel.Route
+			node := kernel.ModelNode{Kind: kernel.ModelPhysical, AllowCompatibleSources: items[index].AllowCompatibleSources, AllowDynamicSources: items[index].AllowDynamicSources}
 			for _, source := range items[index].Sources {
+				member := kernel.MemberRef{Fidelity: source.Fidelity, Evidence: source.Evidence}
+				if !kernel.PhysicalSourceAllowed(node, member) {
+					continue
+				}
 				for id, route := range snapshot.Routes {
 					base := id
 					if at := strings.IndexByte(base, '@'); at >= 0 {
@@ -591,7 +794,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 					}
 				}
 			}
-			items[index].Projection = kernel.ProjectProfiles(routes)
+			items[index].Projection = kernel.ProjectProfiles(items[index].Profile, routes)
 		}
 		return success(request, items)
 	case "physical_models.upsert":
@@ -624,6 +827,8 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "strategies.list":
+		return success(request, kernel.StrategyDefinitions())
 	case "combo_models.upsert":
 		var item store.ComboModel
 		if err := decodeParams(request.Params, &item); err != nil {
@@ -680,6 +885,41 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	}
 }
 
+func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) {
+	if input.DefinitionID == "" {
+		input.DefinitionID = store.DefaultDefinitionForProtocol(input.Protocol)
+	}
+	if input.AuthMode == "" {
+		input.AuthMode = d.providerAuthModes[input.DefinitionID]
+	}
+}
+
+func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, credentialType, secret string) error {
+	node, err := d.store.ProviderNode(providerNodeID)
+	if err != nil {
+		return fmt.Errorf("provider node: %w", err)
+	}
+	if node.ID == "" {
+		return fmt.Errorf("provider node %q not found", providerNodeID)
+	}
+	if credentialType != node.AuthMode {
+		return fmt.Errorf("credential type %q does not match provider auth mode %q", credentialType, node.AuthMode)
+	}
+	if credentialType == "none" && secret != "" {
+		return fmt.Errorf("provider auth mode none does not accept credential secret")
+	}
+	flowID := d.providerAuthFlowIDs[node.DefinitionID]
+	flow, ok := d.authFlows[flowID]
+	if flowID == "" || !ok {
+		return fmt.Errorf("auth flow for provider definition %q is unavailable", node.DefinitionID)
+	}
+	_, err = flow.Resolve(ctx, provider.AuthInput{Type: credentialType, Secret: secret})
+	if err != nil {
+		return fmt.Errorf("validate connection credential: %w", err)
+	}
+	return nil
+}
+
 func success(request IPCRequest, result any) IPCResponse {
 	return IPCResponse{ID: request.ID, OK: true, Result: result}
 }
@@ -698,19 +938,19 @@ func stringParam(params map[string]any, key string) string {
 	return value
 }
 
-func (d *Daemon) validatePrefix(prefix, definitionID string) error {
+func (d *Daemon) validatePrefix(prefix, definitionID, protocol string) error {
 	registry := provider.NewPrefixRegistry()
 	items, err := d.store.ProviderNodes()
 	if err != nil {
 		return err
 	}
 	for _, item := range items {
-		if err := registry.AddCustom(item.Prefix, item.ID); err != nil {
+		if err := registry.AddNode(item.Prefix, item.DefinitionID); err != nil {
 			return err
 		}
 	}
 	if definitionID == "" {
-		definitionID = "openai-compatible-chat"
+		definitionID = store.DefaultDefinitionForProtocol(protocol)
 	}
 	return registry.AddNode(prefix, definitionID)
 }
@@ -723,9 +963,12 @@ func (d *Daemon) validatePrefixUpdate(id, prefix, definitionID string) error {
 	}
 	for _, item := range items {
 		if item.ID == id {
+			if definitionID == "" {
+				definitionID = item.DefinitionID
+			}
 			continue
 		}
-		if err := registry.AddCustom(item.Prefix, item.ID); err != nil {
+		if err := registry.AddNode(item.Prefix, item.DefinitionID); err != nil {
 			return err
 		}
 	}
@@ -744,7 +987,7 @@ func DefaultConfig() (Config, error) {
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713"}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713", ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers")}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }
@@ -772,13 +1015,4 @@ func healthStatus(state runtimehealth.RouteHealth) string {
 		return "cooldown"
 	}
 	return "available"
-}
-
-func authFlowID(credentialType string) string {
-	switch credentialType {
-	case "api_key", "apikey", "bearer", "access_token", "static-secret":
-		return "static-secret"
-	default:
-		return credentialType
-	}
 }

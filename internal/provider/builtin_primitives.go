@@ -10,10 +10,13 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 		ids  []string
 	}{
 		{PrimitiveEndpoint, []string{"http-json"}},
-		{PrimitiveAuth, []string{"static-secret"}},
+		{PrimitiveTransport, []string{"http"}},
+		{PrimitiveAuth, []string{"static-secret", "none"}},
 		{PrimitiveRequestCodec, []string{"openai-chat-json", "openai-responses-json", "anthropic-messages-json", "gemini-json"}},
 		{PrimitiveResponseCodec, []string{"openai-sse", "openai-responses-sse", "anthropic-sse", "gemini-json", "json"}},
-		{PrimitiveModelSource, []string{"openai-models", "static-models"}},
+		{PrimitiveModelSource, []string{"openai-models", "anthropic-models", "static-models"}},
+		{PrimitiveUsageSource, []string{"http-header-usage"}},
+		{PrimitiveSessionStore, []string{"session"}},
 		{PrimitiveErrorClassifier, []string{"http-json"}},
 	}
 	for _, group := range primitives {
@@ -26,22 +29,23 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 	definitions := []ProviderDefinition{
 		{
 			ID: "gemini", Version: "1", DisplayName: "Google Gemini", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
-			Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, RuntimeAdapterID: "gemini", RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "gemini-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "gemini-json"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}}},
+			Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "gemini-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "gemini-json"}, UsageSource: PrimitiveRef{Kind: PrimitiveUsageSource, ID: "http-header-usage"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}}},
 		},
 		{
 			ID: "openai-compatible-chat", Version: "1", DisplayName: "OpenAI-compatible Chat",
 			Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
 			Operations: map[Operation]OperationBinding{
-				OperationChat:   {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, RuntimeAdapterID: "openai-chat", RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "openai-sse"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}},
-				OperationModels: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, ModelSource: PrimitiveRef{Kind: PrimitiveModelSource, ID: "openai-models"}},
+				OperationChat:   {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "openai-sse"}, UsageSource: PrimitiveRef{Kind: PrimitiveUsageSource, ID: "http-header-usage"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}},
+				OperationModels: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, ModelSource: PrimitiveRef{Kind: PrimitiveModelSource, ID: "openai-models"}},
 			},
 			Capabilities: CapabilitySet{Chat: true, Streaming: true, Tools: true},
 		},
 		{
 			ID: "openai-compatible-responses", Version: "1", DisplayName: "OpenAI-compatible Responses",
-			Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+			Auth:    PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+			Session: PrimitiveRef{Kind: PrimitiveSessionStore, ID: "session"},
 			Operations: map[Operation]OperationBinding{
-				OperationResponses: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, RuntimeAdapterID: "openai-responses", RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-responses-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "openai-responses-sse"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}},
+				OperationResponses: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-responses-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "openai-responses-sse"}, UsageSource: PrimitiveRef{Kind: PrimitiveUsageSource, ID: "http-header-usage"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}},
 			},
 			Capabilities: CapabilitySet{Responses: true, Streaming: true, Tools: true},
 		},
@@ -49,7 +53,8 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 			ID: "anthropic-messages", Version: "1", DisplayName: "Anthropic Messages",
 			Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
 			Operations: map[Operation]OperationBinding{
-				OperationMessages: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, RuntimeAdapterID: "anthropic-messages", RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "anthropic-messages-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "anthropic-sse"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}},
+				OperationMessages: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "anthropic-messages-json"}, ResponseCodec: PrimitiveRef{Kind: PrimitiveResponseCodec, ID: "anthropic-sse"}, UsageSource: PrimitiveRef{Kind: PrimitiveUsageSource, ID: "http-header-usage"}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"}},
+				OperationModels:   {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, ModelSource: PrimitiveRef{Kind: PrimitiveModelSource, ID: "anthropic-models"}},
 			},
 			Capabilities: CapabilitySet{Messages: true, Streaming: true, Tools: true, Thinking: true},
 		},

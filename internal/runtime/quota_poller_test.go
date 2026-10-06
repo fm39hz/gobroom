@@ -12,16 +12,19 @@ import (
 type testQuotaSource struct{}
 
 func (testQuotaSource) ID() string { return "test" }
-func (testQuotaSource) Fetch(_ context.Context, _ kernel.Credential, route kernel.Route) ([]quota.Snapshot, error) {
+func (testQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) ([]quota.Snapshot, error) {
+	route := request.Route
 	return []quota.Snapshot{{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: "test", Source: "test"}}, nil
 }
 
 func TestQuotaPollerResolvesRouteSourceAndRecordsSnapshot(t *testing.T) {
 	got := 0
 	poller := QuotaPoller{
-		Sources: map[string]provider.QuotaSource{"test": testQuotaSource{}},
+		Sources:    map[string]provider.QuotaSource{"test": testQuotaSource{}},
+		Endpoints:  map[string]kernel.Endpoint{"http-json": kernel.HTTPJSONEndpoint{}},
+		Transports: map[string]kernel.Transport{"http": kernel.HTTPTransport{}},
 		Snapshot: func() kernel.Snapshot {
-			return kernel.Snapshot{Routes: map[string]kernel.Route{"r": {NodeID: "node", CredentialID: "conn", ExternalModel: "model", QuotaSourceID: "test", Enabled: true}}}
+			return kernel.Snapshot{Routes: map[string]kernel.Route{"r": {NodeID: "node", CredentialID: "conn", ExternalModel: "model", QuotaSourceID: "test", QuotaEndpointID: "http-json", QuotaTransportID: "http", Enabled: true}}}
 		},
 		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
 			return kernel.Credential{Secret: "secret"}, nil

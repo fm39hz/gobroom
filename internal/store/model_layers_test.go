@@ -40,7 +40,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 		Name:     "qwen-3.7-max",
 		Identity: kernel.PhysicalIdentity{CanonicalName: "qwen-3.7-max"},
 		Sources:  []RouteReference{{RouteID: "route-b", Fidelity: kernel.FidelityUnknown}, {RouteID: "route-a", Fidelity: kernel.FidelityUnknown}},
-		Policy:   StrategySpec{ID: "rotating-fallback", Config: map[string]any{"stickyLimit": 2}},
+		Policy:   StrategySpec{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 2}},
 		Profile:  map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
 	}
 	if err := s.UpsertPhysicalModel(physical); err != nil {
@@ -50,14 +50,14 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotPhysical.Sources, physical.Sources) || gotPhysical.Policy.ID != "rotating-fallback" || gotPhysical.Discoverable {
+	if !reflect.DeepEqual(gotPhysical.Sources, physical.Sources) || gotPhysical.Policy.ID != "round-robin-fallback" || gotPhysical.Discoverable {
 		t.Fatalf("physical=%#v", gotPhysical)
 	}
 
 	combo := ComboModel{
 		Name:         "junior",
-		Members:      []ModelReference{{Kind: PhysicalReference, ID: "qwen-3.7-max"}},
-		Strategy:     StrategySpec{ID: "weighted-fallback", Config: map[string]any{"weights": []int{3}}},
+		Members:      []ModelReference{{Kind: PhysicalReference, ID: "qwen-3.7-max", Weight: 3}},
+		Strategy:     StrategySpec{ID: "weighted-fallback"},
 		Discoverable: true, Enabled: true,
 	}
 	if err := s.UpsertComboModel(combo); err != nil {
@@ -156,5 +156,67 @@ func TestMigrationAddsModelLayerTablesWithoutReplacingCatalog(t *testing.T) {
 	}
 	if tables != 4 {
 		t.Fatalf("typed model tables=%d, want 4", tables)
+	}
+}
+
+func TestModelLayerWritesRejectUnknownStrategyIDsAndOptions(t *testing.T) {
+	s, err := Open(t.TempDir() + "/strategy-validation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, strategy := range []StrategySpec{
+		{ID: "round_robin_fallback"},
+		{ID: "weighted-fallback", Config: map[string]any{"stickyLimit": 2}},
+		{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 1001}},
+	} {
+		if err := s.UpsertComboModel(ComboModel{Name: "invalid", Strategy: strategy}); err == nil {
+			t.Fatalf("invalid strategy config was accepted: %#v", strategy)
+		}
+	}
+	if err := s.UpsertComboModel(ComboModel{Name: "valid", Strategy: StrategySpec{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 2}}}); err != nil {
+		t.Fatalf("valid registered strategy/options rejected: %v", err)
+	}
+}
+
+func TestDiscoveredRouteExpandsOnlyToPositivelyEntitledConnections(t *testing.T) {
+	s, err := Open(t.TempDir() + "/connection-catalog.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`
+INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('node','Provider','https://provider.test/v1','openai_chat','p');
+INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route','node','discovered','model-x','Model X');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-a','node','A','api_key','a'),('conn-b','node','B','api_key','b');`); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := s.Routes()
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("unknown account entitlements must not become routes: routes=%#v err=%v", routes, err)
+	}
+	if err := s.RecordConnectionModelSnapshot("conn-a", "node", []string{"model-x"}, true, "models_endpoint"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordConnectionModelSnapshot("conn-b", "node", []string{}, true, "models_endpoint"); err != nil {
+		t.Fatal(err)
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-a" {
+		t.Fatalf("route expanded outside positive entitlement: routes=%#v err=%v", routes, err)
+	}
+	if err := s.RecordConnectionModelSnapshot("conn-a", "node", []string{}, false, "incomplete_page"); err != nil {
+		t.Fatal(err)
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-a" {
+		t.Fatalf("incomplete snapshot revoked positive evidence: routes=%#v err=%v", routes, err)
+	}
+	if err := s.RecordConnectionModelSnapshot("conn-a", "node", []string{}, true, "models_endpoint"); err != nil {
+		t.Fatal(err)
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("complete absent snapshot did not revoke route: routes=%#v err=%v", routes, err)
 	}
 }

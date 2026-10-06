@@ -1,15 +1,16 @@
 # Physical model contract
 
-Status: target domain, management and consumption contract. Typed Physical and
-Combo persistence exists. The kernel now has typed support states,
-request-requirement compilation, TokenLimits, Physical identity and source
-fidelity/evidence persistence through catalog, discovered route, Physical and
-snapshot boundaries. Route-effective projections and cross-protocol reasoning
-translation remain incomplete. Declared/guaranteed/available projections and
-their route source explanations are available in the Physical control/TUI
-view. Cross-protocol reasoning translation remains in M6; the first normalized
-intent and Anthropic dialect translation slice is now implemented. Track
-implementation status in [the roadmap](IMPLEMENTATION_PLAN.md).
+Status: implemented core contract with bounded execution semantics. Typed
+Physical and Combo persistence, request-requirement compilation, TokenLimits,
+identity revision, source fidelity/evidence and declared/guaranteed/available
+projections are wired through control plane, immutable snapshot, kernel and
+TUI. The kernel routes Physical sources only when fidelity is exact, or
+evidence-backed alias, or explicitly opted-in compatible/dynamic. Missing,
+conditional and emulated capability evidence does not pass hard request
+eligibility; unsupported conditions are not guessed. Route-level typed profile
+and limits remain separate from Physical identity. Reasoning dialect behavior
+is tracked in M6. See [the roadmap](IMPLEMENTATION_PLAN.md) for milestone
+status and remaining work.
 
 ## Purpose
 
@@ -79,10 +80,11 @@ PhysicalSource {
 }
 ```
 
-Default Physical fallback uses `exact` and `alias`. `compatible` is opt-in.
-Dynamic routes such as `auto`, `free` or an upstream router are not exact
-Physical implementations; they belong in a Combo or an explicitly dynamic
-model node.
+Default Physical routing uses `exact` and evidence-backed `alias` sources.
+`compatible` and `dynamic` sources require explicit Physical policy opt-in;
+`unknown` sources are retained for review but excluded from routing. Dynamic
+routes such as `auto`, `free` or an upstream router are not exact Physical
+implementations; they belong in a Combo or an explicitly dynamic model node.
 
 ## Typed support state
 
@@ -597,14 +599,20 @@ Example extension:
 8. Add adaptive source policies only after eligibility is correct.
 9. Complete Physical profile, comparison, filter and reverse-reference UX.
 
-## Current implementation gaps
+## Remaining boundaries
 
-- Physical capability storage is still `map[string]bool`.
-- Identity revision, source fidelity, evidence and route profile patches are missing.
-- Token limits are not compiled into request eligibility.
-- Reasoning normalization does not yet cover Anthropic `output_config` or
-  Gemini/Antigravity shapes.
-- Cross-protocol Anthropic reasoning currently lacks a real adaptive/budget translator.
-- Runtime usage records do not distinguish requested and effective effort.
-- Performance observation and confidence-aware ranking are not implemented.
-- `/v1/models` does not yet publish aggregate profile extensions.
+- A capability marked `conditional` has no general condition evaluator yet;
+  emulated transformations are not planned by the kernel. Both are therefore
+  excluded from hard eligibility rather than treated as native.
+- Profile format/parameter details are retained as evidence, but eligibility
+  currently gates on support state and token limits; it does not yet negotiate
+  every provider-specific format or parameter constraint.
+- A user assertion is explicit evidence for a manually grouped alias, not an
+  independently verified claim. The TUI exposes fidelity so the user can
+  correct that assertion; compatible/dynamic sources require explicit policy.
+- Aggregate profile projections are available through the management view;
+  extending `/v1/models` with a stable metadata schema remains a separate API
+  decision and is not required for OpenAI-compatible model discovery.
+- Reasoning mapping, requested/effective effort accounting and adaptive
+  runtime ranking have their own M6/M8 contracts; they must not be represented
+  as immutable Physical facts.

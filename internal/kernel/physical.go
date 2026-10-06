@@ -76,27 +76,30 @@ type ProfileProjection struct {
 // guaranteed capability is present on every route; an available capability is
 // present on at least one route. Limits are conservative for guaranteed use
 // and optimistic only for the explicitly available view.
-func ProjectProfiles(routes []Route) ProfileProjection {
+func ProjectProfiles(declared CapabilityProfile, routes []Route) ProfileProjection {
 	projection := ProfileProjection{Declared: CapabilityProfile{}, Guaranteed: CapabilityProfile{}, Available: CapabilityProfile{}, CapabilitySources: map[string][]string{}, LimitSources: map[string][]string{}}
 	if len(routes) == 0 {
+		for name, capability := range declared {
+			projection.Declared[name] = capability
+		}
 		return projection
 	}
+	for name, capability := range declared {
+		projection.Declared[name] = capability
+	}
+	availableNames := map[string]bool{}
 	for _, route := range routes {
-		for name, capability := range route.Profile {
+		for name := range route.Profile {
+			availableNames[name] = true
 			projection.CapabilitySources[name] = append(projection.CapabilitySources[name], route.ID)
-			if existing, ok := projection.Declared[name]; !ok || capabilityRank(capability.State) > capabilityRank(existing.State) {
-				projection.Declared[name] = capability
-			}
 		}
 	}
-	names := make(map[string]bool)
-	for name := range projection.Declared {
-		names[name] = true
+	for name := range declared {
+		availableNames[name] = true
 	}
-	for name := range names {
+	for name := range availableNames {
 		available := SupportUnsupported
-		guaranteed := SupportUnsupported
-		count := 0
+		guaranteed := SupportNative
 		for _, route := range routes {
 			capability, ok := route.Profile[name]
 			state := SupportUnknown
@@ -106,12 +109,7 @@ func ProjectProfiles(routes []Route) ProfileProjection {
 			if capabilityRank(state) > capabilityRank(available) {
 				available = state
 			}
-			if count == 0 {
-				guaranteed = state
-			} else if guaranteed != state {
-				guaranteed = SupportUnknown
-			}
-			count++
+			guaranteed = restrictiveSupport(guaranteed, state)
 		}
 		projection.Available[name] = Capability{State: available}
 		projection.Guaranteed[name] = Capability{State: guaranteed}
@@ -131,6 +129,22 @@ func ProjectProfiles(routes []Route) ProfileProjection {
 	return projection
 }
 
+func restrictiveSupport(left, right SupportState) SupportState {
+	if left == SupportUnsupported || right == SupportUnsupported {
+		return SupportUnsupported
+	}
+	if left == SupportUnknown || right == SupportUnknown {
+		return SupportUnknown
+	}
+	if left == SupportConditional || right == SupportConditional {
+		return SupportConditional
+	}
+	if left == SupportEmulated || right == SupportEmulated {
+		return SupportEmulated
+	}
+	return SupportNative
+}
+
 func capabilityRank(state SupportState) int {
 	switch state {
 	case SupportNative:
@@ -140,7 +154,7 @@ func capabilityRank(state SupportState) int {
 	case SupportConditional:
 		return 3
 	case SupportUnsupported:
-		return 1
+		return -1
 	default:
 		return 0
 	}
@@ -257,30 +271,21 @@ func protocolForFormat(format normalize.Format) Protocol {
 }
 
 // Eligible evaluates typed profile evidence. A typed profile is conservative:
-// unknown cannot satisfy a hard request requirement. Routes without a typed
-// profile use the existing explicit boolean catalog fields until profile
-// discovery is wired into storage.
+// unknown, emulated and conditional cannot satisfy a hard requirement unless
+// a future evaluator explicitly implements their translation/conditions.
 func Eligible(route Route, requirements RequestRequirements) (bool, string) {
-	if route.Protocol != "" && requirements.Protocol != "" && route.Protocol != requirements.Protocol && !(requirements.Protocol == ProtocolOpenAIChat && route.Protocol == ProtocolAnthropic) {
+	if route.Protocol != "" && requirements.Protocol != "" && route.Protocol != requirements.Protocol && !(requirements.Protocol == ProtocolOpenAIChat && (route.Protocol == ProtocolAnthropic || route.Protocol == ProtocolGemini)) {
 		return false, fmt.Sprintf("protocol %s is not accepted", requirements.Protocol)
 	}
 	if len(route.Profile) > 0 {
 		for _, capability := range requirements.Capabilities {
 			item, ok := route.Profile[capability]
-			if !ok || item.State == "" || item.State == SupportUnknown || item.State == SupportUnsupported {
-				return false, capability + " is not proven supported"
+			if !ok || item.State != SupportNative {
+				return false, capability + " lacks a native, unconditional implementation"
 			}
 		}
-	} else {
-		checks := map[string]bool{CapabilityVision: route.Capabilities["vision"], CapabilityAudio: route.Capabilities["audio"], CapabilityVideo: route.Capabilities["video"], CapabilityPDF: route.Capabilities["pdf"]}
-		for _, capability := range requirements.Capabilities {
-			if capability == CapabilityTools {
-				continue
-			}
-			if needed := checks[capability]; !needed {
-				return false, capability + " is not declared"
-			}
-		}
+	} else if len(requirements.Capabilities) > 0 {
+		return false, "typed capability profile is unknown"
 	}
 	limits := route.Limits
 	if limits.MaxInputTokens > 0 && requirements.EstimatedInputTokens > limits.MaxInputTokens {

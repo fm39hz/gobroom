@@ -1,6 +1,9 @@
 package normalize
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Format string
 
@@ -19,6 +22,7 @@ type Request struct {
 	SourceFormat Format          `json:"-"`
 	Stream       bool            `json:"stream,omitempty"`
 	Messages     []Message       `json:"messages,omitempty"`
+	Prompt       PromptPlan      `json:"prompt,omitempty"`
 	Tools        []Tool          `json:"tools,omitempty"`
 	Thinking     ThinkingIntent  `json:"thinking,omitempty"`
 	Session      SessionContext  `json:"-"`
@@ -27,6 +31,28 @@ type Request struct {
 	Transport    TransportHints  `json:"-"`
 	Extensions   map[string]any  `json:"-"`
 	Raw          map[string]any  `json:"-"`
+}
+
+// PromptPlan keeps instructions distinct from the conversation transcript.
+// Layers retain precedence and origin; adapters choose their wire encoding.
+type PromptPlan struct {
+	Layers []PromptLayer `json:"layers,omitempty"`
+}
+type PromptOrigin string
+
+const (
+	PromptHarness      PromptOrigin = "harness"
+	PromptProvider     PromptOrigin = "provider"
+	PromptUser         PromptOrigin = "user"
+	PromptConversation PromptOrigin = "conversation"
+	PromptInline       PromptOrigin = "inline"
+)
+
+type PromptLayer struct {
+	Origin PromptOrigin  `json:"origin"`
+	Role   string        `json:"role,omitempty"`
+	Text   string        `json:"text,omitempty"`
+	Parts  []ContentPart `json:"parts,omitempty"`
 }
 
 type Message struct {
@@ -48,10 +74,54 @@ type ContentPart struct {
 }
 
 type ToolCall struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Name      string `json:"name,omitempty"`
-	Arguments any    `json:"arguments,omitempty"`
+	ID           string          `json:"id"`
+	Type         string          `json:"type"`
+	Name         string          `json:"name,omitempty"`
+	Arguments    any             `json:"arguments,omitempty"`
+	State        ToolCallState   `json:"-"`
+	ProviderData json.RawMessage `json:"-"`
+	Metadata     map[string]any  `json:"-"`
+}
+
+type ToolCallState string
+
+const (
+	ToolCallProposed ToolCallState = "proposed"
+	ToolCallRunning  ToolCallState = "running"
+	ToolCallResult   ToolCallState = "result"
+	ToolCallFailed   ToolCallState = "failed"
+)
+
+// Response is the semantic result independent of the client's wire protocol.
+// Opaque carries provider-only continuation/signature data without interpreting it.
+type Response struct {
+	ID         string          `json:"id,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	Content    []ResponsePart  `json:"content,omitempty"`
+	StopReason string          `json:"stop_reason,omitempty"`
+	Usage      Usage           `json:"usage,omitempty"`
+	Opaque     json.RawMessage `json:"opaque,omitempty"`
+}
+type ResponsePart struct {
+	Kind     ResponsePartKind `json:"kind"`
+	Text     string           `json:"text,omitempty"`
+	Thinking string           `json:"thinking,omitempty"`
+	ToolCall *ToolCall        `json:"tool_call,omitempty"`
+	Opaque   json.RawMessage  `json:"opaque,omitempty"`
+}
+type ResponsePartKind string
+
+const (
+	ResponseText     ResponsePartKind = "text"
+	ResponseThinking ResponsePartKind = "thinking"
+	ResponseToolCall ResponsePartKind = "tool_call"
+	ResponseOpaque   ResponsePartKind = "opaque"
+)
+
+type Usage struct {
+	InputTokens       int64 `json:"input_tokens,omitempty"`
+	OutputTokens      int64 `json:"output_tokens,omitempty"`
+	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
 }
 
 type Tool struct {
@@ -69,9 +139,10 @@ type ThinkingIntent struct {
 }
 
 type SessionContext struct {
-	ID           string
-	Client       string
-	Conversation string
+	ID            string
+	Client        string
+	Conversation  string
+	ProviderState json.RawMessage
 }
 
 type ContinuityState struct {

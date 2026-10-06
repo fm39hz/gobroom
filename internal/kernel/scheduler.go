@@ -30,8 +30,12 @@ func NewScheduler(gate Gate) *Scheduler {
 	if gate == nil {
 		gate = AlwaysOpenGate{}
 	}
+	strategies := make(map[Strategy]StrategyPrimitive, len(builtinStrategyDefinitions))
+	for _, definition := range builtinStrategyDefinitions {
+		strategies[definition.Runtime] = definition.Primitive
+	}
 	return &Scheduler{cursors: map[string]int{}, sticky: map[string]stickyState{}, gate: gate,
-		strategies: map[Strategy]StrategyPrimitive{StrategyFallback: OrderedFallback{}, StrategyRotatingFallback: RotatingFallback{}, StrategyRoundRobin: RotatingFallback{}, StrategyRoundRobinFallback: RotatingFallback{}, StrategyWeighted: WeightedFallback{}}, modelState: map[string]*StrategyState{}, stateLocks: map[string]*sync.Mutex{}}
+		strategies: strategies, modelState: map[string]*StrategyState{}, stateLocks: map[string]*sync.Mutex{}}
 }
 
 func (s *Scheduler) RegisterStrategy(name Strategy, primitive StrategyPrimitive) {
@@ -48,6 +52,10 @@ func (s *Scheduler) Plan(node ModelNode) []MemberRef {
 	primitive, state, stateLock := s.strategyState(node)
 	s.mu.Unlock()
 	stateLock.Lock()
+	state.StickyLimit = node.StickyLimit
+	if state.StickyLimit < 1 {
+		state.StickyLimit = 1
+	}
 	planned := primitive.Plan(node.ID, append([]MemberRef(nil), node.Members...), state)
 	stateLock.Unlock()
 	return planned
@@ -116,7 +124,20 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 	if ranker, ok := s.gate.(RouteRanker); ok {
 		available = ranker.RankRoutes(available, now)
 	}
-	if len(available) < 2 || model.Strategy == StrategyFallback {
+	if len(available) == 0 || model.Strategy == StrategyFallback {
+		return available
+	}
+	if model.Strategy == StrategyRoundRobin {
+		if len(available) == 1 {
+			return available
+		}
+		s.mu.Lock()
+		index := s.cursors[model.PublicName] % len(available)
+		s.cursors[model.PublicName] = (index + 1) % len(available)
+		s.mu.Unlock()
+		return []Route{available[index]}
+	}
+	if len(available) < 2 {
 		return available
 	}
 
@@ -124,7 +145,7 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 	defer s.mu.Unlock()
 	key := model.PublicName
 	start := s.cursors[key] % len(available)
-	if model.Strategy == StrategyRoundRobin || model.Strategy == StrategyRoundRobinFallback {
+	if model.Strategy == StrategyRoundRobinFallback {
 		limit := model.StickyLimit
 		if limit < 1 {
 			limit = 1

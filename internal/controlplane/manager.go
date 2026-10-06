@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
@@ -14,15 +15,20 @@ type Manager struct {
 	snapshots *kernel.SnapshotStore
 	mu        sync.Mutex
 	version   uint64
+	bindings  map[string]provider.RuntimeBinding
 }
 
 func NewManager(s *store.Store) (*Manager, error) {
+	return NewManagerWithRuntimeBindings(s, nil)
+}
+
+func NewManagerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding) (*Manager, error) {
 	initial := kernel.Snapshot{PublicModels: map[string]kernel.PublicModel{}, Routes: map[string]kernel.Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, Nodes: map[string]kernel.ModelNode{}}
 	snapshots, err := kernel.NewSnapshotStore(initial)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{store: s, snapshots: snapshots}
+	m := &Manager{store: s, snapshots: snapshots, bindings: bindings}
 	if raw, ok, err := s.Setting("snapshot_version"); err == nil && ok {
 		m.version, _ = strconv.ParseUint(raw, 10, 64)
 	}
@@ -36,7 +42,7 @@ func (m *Manager) Reload() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	nextVersion := m.version + 1
-	snapshot, err := (Loader{Store: m.store}).LoadSnapshot(nextVersion)
+	snapshot, err := (Loader{Store: m.store, Bindings: m.bindings}).LoadSnapshot(nextVersion)
 	if err != nil {
 		return err
 	}

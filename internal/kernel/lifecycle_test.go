@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,18 @@ type committedFailureAdapter struct{ attempts *atomic.Int32 }
 
 type cancelAdapter struct{ started chan struct{} }
 type fastAdapter struct{ attempts *atomic.Int32 }
+
+type usageSourceAdapter struct{}
+
+type usageSourceFixture struct{}
+
+func (usageSourceFixture) EnrichUsage(_ context.Context, _ Route, headers http.Header, event UsageEvent) (UsageEvent, error) {
+	value, err := strconv.ParseInt(headers.Get("X-Usage-Input-Tokens"), 10, 64)
+	if err == nil {
+		event.InputTokens = value
+	}
+	return event, err
+}
 
 func (a cancelAdapter) ID() string         { return "cancel" }
 func (a cancelAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
@@ -75,6 +88,51 @@ func (a committedFailureAdapter) TranslateStream(_ context.Context, response Ups
 	return err
 }
 
+func (usageSourceAdapter) ID() string         { return "usage-source-fixture" }
+func (usageSourceAdapter) Protocol() Protocol { return ProtocolOpenAIChat }
+func (usageSourceAdapter) Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error) {
+	return UpstreamRequest{Method: http.MethodPost, URL: "test://usage"}, nil
+}
+func (usageSourceAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResponse, error) {
+	return UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"X-Usage-Input-Tokens": []string{"23"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+func (usageSourceAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
+func (usageSourceAdapter) TranslateStream(_ context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(UsageEvent{Status: "ok"})
+	}
+	return nil
+}
+
+func TestKernelAppliesSelectedUsageSourceBeforeEmission(t *testing.T) {
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
+		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
+		Routes:       []Route{{ID: "route", NodeID: "provider", AdapterID: "usage-source-fixture", UsageSourceID: "usage-fixture", Protocol: ProtocolOpenAIChat, Enabled: true}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	k.Adapters["usage-source-fixture"] = usageSourceAdapter{}
+	k.UsageSources["usage-fixture"] = usageSourceFixture{}
+	if err := k.Execute(context.Background(), NormalizedRequest{Model: "model", SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-k.Events:
+		if event.InputTokens != 23 {
+			t.Fatalf("usage source was not applied before emission: %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("usage event not emitted")
+	}
+}
+
 func TestKernelDoesNotSwitchAfterResponseCommitment(t *testing.T) {
 	attempts := &atomic.Int32{}
 	snapshot, err := BuildSnapshot(SnapshotInput{
@@ -102,7 +160,7 @@ func TestKernelDoesNotSwitchAfterResponseCommitment(t *testing.T) {
 
 func TestKernelPropagatesCancellationDuringUpstreamExecution(t *testing.T) {
 	started := make(chan struct{})
-	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route"}}}}, Routes: []Route{{ID: "route", AdapterID: "cancel", Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
+	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}}, Routes: []Route{{ID: "route", AdapterID: "cancel", Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +189,7 @@ func TestKernelPropagatesCancellationDuringUpstreamExecution(t *testing.T) {
 
 func TestKernelConcurrentRequestsDoNotSerializeProviderExecution(t *testing.T) {
 	attempts := &atomic.Int32{}
-	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route"}}}}, Routes: []Route{{ID: "route", AdapterID: "fast", Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
+	snapshot, err := BuildSnapshot(SnapshotInput{PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}}, Nodes: []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}}, Routes: []Route{{ID: "route", AdapterID: "fast", Protocol: ProtocolOpenAIChat, Enabled: true}}}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

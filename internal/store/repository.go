@@ -6,6 +6,7 @@ package store
 // tests before being supported.
 type SnapshotRepository interface {
 	Routes() ([]RouteRecord, error)
+	DiscoveredRoutes(providerNodeID string) ([]DiscoveredRoute, error)
 	PhysicalModels() ([]PhysicalModel, error)
 	ComboModels() ([]ComboModel, error)
 }

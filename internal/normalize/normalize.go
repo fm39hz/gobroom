@@ -24,11 +24,13 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	}
 
 	r := Request{
-		Model: model, SourceFormat: format, Stream: boolValue(body["stream"], true),
+		Model: model, SourceFormat: format, Stream: boolValue(body["stream"], false),
 		Tools: normalizeTools(body["tools"]), Extensions: map[string]any{}, Raw: body,
 		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id")},
 	}
 	r.Messages = normalizeMessages(body, format)
+	r.Prompt = inlinePromptPlan(r.Messages)
+	r.Messages = conversationMessages(r.Messages)
 	r.Thinking = normalizeThinking(body)
 	r.Session = SessionContext{ID: stringValue(headers.Get("x-session-id")), Client: headers.Get("user-agent"), Conversation: stringValue(body["conversation_id"])}
 	r.Continuity = normalizeContinuity(body)
@@ -40,6 +42,31 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	}
 	normalizeToolCalls(&r)
 	return Result{Request: r, ReceivedAt: time.Now()}, nil
+}
+
+func inlinePromptPlan(messages []Message) PromptPlan {
+	var plan PromptPlan
+	for _, message := range messages {
+		if message.Role != "system" && message.Role != "developer" {
+			continue
+		}
+		layer := PromptLayer{Origin: PromptInline, Role: message.Role}
+		if text, ok := message.Content.(string); ok {
+			layer.Text = text
+		}
+		plan.Layers = append(plan.Layers, layer)
+	}
+	return plan
+}
+
+func conversationMessages(messages []Message) []Message {
+	result := make([]Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role != "system" && message.Role != "developer" {
+			result = append(result, message)
+		}
+	}
+	return result
 }
 
 func normalizeMessages(body map[string]any, format Format) []Message {
@@ -79,7 +106,7 @@ func messagesFromArray(raw []any) []Message {
 			for _, rawCall := range calls {
 				c, _ := rawCall.(map[string]any)
 				fn, _ := c["function"].(map[string]any)
-				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: stringValue(c["id"]), Type: stringValue(c["type"]), Name: stringValue(fn["name"]), Arguments: fn["arguments"]})
+				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: stringValue(c["id"]), Type: stringValue(c["type"]), Name: stringValue(fn["name"]), Arguments: fn["arguments"], Metadata: c})
 			}
 		}
 		result = append(result, msg)

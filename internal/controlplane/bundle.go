@@ -16,10 +16,17 @@ type ConfigBundle struct {
 }
 
 type BundleDiff struct {
-	ProvidersAdded, ProvidersRemoved, ConnectionsAdded, ConnectionsRemoved int      `json:"providersAdded"`
-	ModelsAdded, ModelsRemoved, PhysicalAdded, PhysicalRemoved             int      `json:"modelsAdded"`
-	CombosAdded, CombosRemoved                                             int      `json:"combosAdded"`
-	Changes                                                                []string `json:"changes"`
+	ProvidersAdded     int      `json:"providersAdded"`
+	ProvidersRemoved   int      `json:"providersRemoved"`
+	ConnectionsAdded   int      `json:"connectionsAdded"`
+	ConnectionsRemoved int      `json:"connectionsRemoved"`
+	ModelsAdded        int      `json:"modelsAdded"`
+	ModelsRemoved      int      `json:"modelsRemoved"`
+	PhysicalAdded      int      `json:"physicalAdded"`
+	PhysicalRemoved    int      `json:"physicalRemoved"`
+	CombosAdded        int      `json:"combosAdded"`
+	CombosRemoved      int      `json:"combosRemoved"`
+	Changes            []string `json:"changes"`
 }
 
 func ExportBundle(s *store.Store) (ConfigBundle, error) {
@@ -85,16 +92,65 @@ func ValidateBundle(bundle ConfigBundle) error {
 			if !models[source.RouteID] {
 				return fmt.Errorf("physical %q references unknown route %q", item.Name, source.RouteID)
 			}
+			switch source.Fidelity {
+			case "", "exact", "alias", "compatible", "dynamic", "unknown":
+			default:
+				return fmt.Errorf("physical %q has invalid fidelity %q", item.Name, source.Fidelity)
+			}
+			if source.Fidelity == "alias" && len(source.Evidence) == 0 {
+				return fmt.Errorf("physical %q alias source %q needs evidence", item.Name, source.RouteID)
+			}
 		}
 	}
+	combos := map[string]store.ComboModel{}
 	for _, item := range bundle.Combos {
 		if item.Name == "" {
 			return fmt.Errorf("combo model name is required")
 		}
+		if _, exists := combos[item.Name]; exists {
+			return fmt.Errorf("duplicate combo %q", item.Name)
+		}
+		combos[item.Name] = item
 		for _, member := range item.Members {
 			if member.Kind == store.PhysicalReference && !physical[member.ID] {
 				return fmt.Errorf("combo %q references unknown physical %q", item.Name, member.ID)
 			}
+			if member.Kind == store.ComboReference && member.ID == "" {
+				return fmt.Errorf("combo %q has empty combo reference", item.Name)
+			}
+			if member.Kind != store.ComboReference && member.Kind != store.PhysicalReference {
+				return fmt.Errorf("combo %q has invalid member kind %q", item.Name, member.Kind)
+			}
+		}
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var visit func(string) error
+	visit = func(name string) error {
+		if visiting[name] {
+			return fmt.Errorf("combo graph cycle at %q", name)
+		}
+		if visited[name] {
+			return nil
+		}
+		item, ok := combos[name]
+		if !ok {
+			return fmt.Errorf("combo references unknown combo %q", name)
+		}
+		visiting[name] = true
+		for _, member := range item.Members {
+			if member.Kind == store.ComboReference {
+				if err := visit(member.ID); err != nil {
+					return err
+				}
+			}
+		}
+		delete(visiting, name)
+		visited[name] = true
+		return nil
+	}
+	for name := range combos {
+		if err := visit(name); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -157,7 +213,7 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle) error {
 		policy, _ := json.Marshal(item.Policy)
 		profile, _ := json.Marshal(item.Profile)
 		limits, _ := json.Marshal(item.Limits)
-		if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), string(policy), string(profile), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+		if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,allow_compatible_sources,allow_dynamic_sources,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,allow_compatible_sources=excluded.allow_compatible_sources,allow_dynamic_sources=excluded.allow_dynamic_sources,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), boolInt(item.AllowCompatibleSources), boolInt(item.AllowDynamicSources), string(policy), string(profile), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {

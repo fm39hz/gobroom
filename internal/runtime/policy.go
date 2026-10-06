@@ -11,13 +11,15 @@ import (
 )
 
 type PolicyGate struct {
-	Health      *HealthGate
-	Performance *PerformanceBook
-	mu          sync.RWMutex
-	quotas      map[string]quota.Snapshot
-	enrich      func(context.Context, kernel.Route)
-	affinityMu  sync.Mutex
-	affinity    map[string]sessionRoute
+	Health        *HealthGate
+	Performance   *PerformanceBook
+	mu            sync.RWMutex
+	quotas        map[string]quota.Snapshot
+	enrich        func(context.Context, kernel.Route)
+	enrichCtx     context.Context
+	quotaObserver func(quota.Snapshot)
+	affinityMu    sync.Mutex
+	affinity      map[string]sessionRoute
 }
 
 type sessionRoute struct {
@@ -35,7 +37,7 @@ type RouteExplanation struct {
 }
 
 func NewPolicyGate() *PolicyGate {
-	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}, affinity: map[string]sessionRoute{}}
+	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}, affinity: map[string]sessionRoute{}, enrichCtx: context.Background()}
 }
 func (g *PolicyGate) Usable(route kernel.Route, now time.Time) bool {
 	if !g.Health.Usable(route, now) {
@@ -58,12 +60,32 @@ func (g *PolicyGate) MarkFailureAfter(route kernel.Route, class kernel.ErrorClas
 }
 func (g *PolicyGate) MarkSuccess(route kernel.Route) { g.Health.MarkSuccess(route) }
 
-func (g *PolicyGate) SetQuotaEnricher(enrich func(context.Context, kernel.Route)) { g.enrich = enrich }
+func (g *PolicyGate) SetQuotaEnricher(enrich func(context.Context, kernel.Route)) {
+	g.mu.Lock()
+	g.enrich = enrich
+	g.mu.Unlock()
+}
+func (g *PolicyGate) SetEnrichmentContext(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	g.mu.Lock()
+	g.enrichCtx = ctx
+	g.mu.Unlock()
+}
+func (g *PolicyGate) SetOutcomeQuotaObserver(observer func(quota.Snapshot)) {
+	g.mu.Lock()
+	g.quotaObserver = observer
+	g.mu.Unlock()
+}
 
 func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.ClassifiedOutcome) {
 	g.Health.ObserveOutcome(route, outcome)
-	if (outcome.Cause == kernel.CauseQuotaExhausted || outcome.Cause == kernel.CauseRateLimited) && g.enrich != nil {
-		g.enrich(context.Background(), route)
+	g.mu.RLock()
+	enrich, enrichCtx := g.enrich, g.enrichCtx
+	g.mu.RUnlock()
+	if (outcome.Cause == kernel.CauseQuotaExhausted || outcome.Cause == kernel.CauseRateLimited) && enrich != nil {
+		enrich(enrichCtx, route)
 	}
 	for _, limit := range outcome.Limits {
 		if limit.Name == "" {
@@ -75,6 +97,12 @@ func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 			snapshot.Used = *limit.Used
 		}
 		g.SetQuota(snapshot)
+		g.mu.RLock()
+		observer := g.quotaObserver
+		g.mu.RUnlock()
+		if observer != nil {
+			observer(snapshot)
+		}
 	}
 }
 
