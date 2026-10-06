@@ -11,22 +11,26 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/controlplane"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
-	store           *store.Store
-	control         *controlplane.Manager
-	started         time.Time
-	executor        func(context.Context, normalize.Request, http.ResponseWriter) error
-	reloadHook      func() error
-	dataPlaneToken  string
-	ingress         map[string]OperationIngress
-	providerCatalog []provider.DefinitionMetadata
+	store            *store.Store
+	control          *controlplane.Manager
+	started          time.Time
+	executor         func(context.Context, normalize.Request, http.ResponseWriter) error
+	reloadHook       func() error
+	dataPlaneToken   string
+	ingress          map[string]OperationIngress
+	providerCatalog  []provider.DefinitionMetadata
+	extensionCatalog extensions.CatalogView
+	operations       *operations.Snapshot
 }
 
 type HandlerOptions struct {
@@ -43,10 +47,11 @@ func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.R
 	if err != nil {
 		manager = nil
 	}
-	server := &Server{store: s, control: manager, started: time.Now(), ingress: map[string]OperationIngress{}}
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", Operation: normalize.OperationChatGenerate, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", Operation: normalize.OperationChatGenerate, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", Operation: normalize.OperationChatGenerate, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
+	operationSnapshot, _ := operations.BuiltinSnapshot()
+	server := &Server{store: s, control: manager, started: time.Now(), ingress: map[string]OperationIngress{}, operations: operationSnapshot}
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
 	return server
 }
 
@@ -56,6 +61,12 @@ func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.R
 func (s *Server) RegisterOperationIngress(codec OperationIngress) error {
 	if err := validateOperationIngress(codec); err != nil {
 		return err
+	}
+	if s.operations == nil {
+		return fmt.Errorf("operation catalog is unavailable")
+	}
+	if _, ok := s.operations.Resolve(codec.OperationRef()); !ok {
+		return fmt.Errorf("operation %q contract %d is not registered", codec.OperationRef().ID, codec.OperationRef().ContractVersion)
 	}
 	if s.ingress == nil {
 		s.ingress = map[string]OperationIngress{}
@@ -76,6 +87,19 @@ func (s *Server) RegisterOperationIngress(codec OperationIngress) error {
 	return nil
 }
 
+func (s *Server) SetOperationSnapshot(snapshot *operations.Snapshot) error {
+	if s == nil || snapshot == nil {
+		return fmt.Errorf("server and operation snapshot are required")
+	}
+	for _, codec := range s.ingress {
+		if _, ok := snapshot.Resolve(codec.OperationRef()); !ok {
+			return fmt.Errorf("ingress codec %q references missing operation %s", codec.ID(), codec.OperationRef().Key())
+		}
+	}
+	s.operations = snapshot
+	return nil
+}
+
 func (s *Server) Handler() http.Handler {
 	return s.HandlerWithOptions(HandlerOptions{ControlPlane: true, DataPlane: true})
 }
@@ -86,6 +110,7 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 		r.Get("/api/status", s.status)
 		r.Get("/api/kernel/resolve", s.resolve)
 		r.Get("/api/provider-definitions", s.providerDefinitions)
+		r.Get("/api/extensions", s.extensions)
 		r.HandleFunc("/api/providers", s.providerCollection)
 		r.HandleFunc("/api/connections", s.connectionsCollection)
 		r.HandleFunc("/api/models", s.models)
@@ -118,6 +143,16 @@ func (s *Server) SetProviderDefinitionCatalog(catalog []provider.DefinitionMetad
 
 func (s *Server) providerDefinitions(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"definitions": s.providerCatalog})
+}
+
+func (s *Server) SetExtensionCatalog(catalog extensions.CatalogView) {
+	if s != nil {
+		s.extensionCatalog = catalog
+	}
+}
+
+func (s *Server) extensions(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.extensionCatalog)
 }
 
 func (s *Server) SetDataPlaneToken(token string) { s.dataPlaneToken = token }
@@ -474,6 +509,10 @@ func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, reque
 		tracked := &trackingWriter{ResponseWriter: w}
 		if err := s.executor(r.Context(), request, tracked); err != nil && !tracked.committed {
 			status := http.StatusBadGateway
+			var operationInput *operations.InputError
+			if errors.As(err, &operationInput) {
+				status = http.StatusBadRequest
+			}
 			if errors.Is(err, kernel.ErrModelNotPublished) {
 				status = http.StatusNotFound
 			}

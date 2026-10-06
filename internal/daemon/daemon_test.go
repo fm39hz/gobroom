@@ -16,6 +16,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/auth"
 	"github.com/fm39hz/gobroom/internal/discovery"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
@@ -37,7 +38,14 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog}
+	if _, err := registry.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	extensionCatalog, err := registry.ExtensionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog, extensionCatalog: extensionCatalog}
 	response := d.handleIPC(nil, IPCRequest{ID: "1", Method: "providers.create", Params: map[string]any{"name": "G4F", "prefix": "g4f", "baseUrl": "https://example.test/v1", "protocol": "openai_chat"}})
 	if !response.OK {
 		t.Fatal(response.Error)
@@ -77,6 +85,11 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	}
 	if !foundOpenAI {
 		t.Fatal("provider catalog did not expose generic auth setup metadata")
+	}
+	response = d.handleIPC(nil, IPCRequest{ID: "5", Method: "extensions.catalog"})
+	view, ok := response.Result.(extensions.CatalogView)
+	if !response.OK || !ok || view.Fingerprint == "" || len(view.Schemas) < 4 {
+		t.Fatalf("extension catalog=%#v error=%q", response.Result, response.Error)
 	}
 }
 
@@ -236,17 +249,16 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	definition := provider.ProviderDefinition{
-		ID: "quota-fixture", Version: "1", DisplayName: "Quota fixture",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret"},
+	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "quota-fixture", Version: "1", DisplayName: "Quota fixture",
+		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
 			Protocol:        kernel.ProtocolOpenAIChat,
-			Task:            "chat.generate",
-			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
-			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
-			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json"},
-			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse"},
-			ErrorClassifier: provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json"},
+			TaskRef:         provider.OperationRef("chat.generate", 1),
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+			ErrorClassifier: provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1},
 			ErrorClassifierOptions: provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
 				QuotaScope: kernel.ScopeConnection,
 				CodePath:   "/fault/reason", MessagePath: "/fault/explanation", ResetAtPath: "/fault/reopens_at",
@@ -254,9 +266,9 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 				QuotaWindowKind: "requests", QuotaCodes: []string{"PLAN_DRAINED"}, QuotaMessageTokens: []string{"budget exhausted"},
 			}},
 		}, provider.OperationModels: {
-			Endpoint:    provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
-			Transport:   provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
-			ModelSource: provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "openai-models"},
+			Endpoint:    provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:   provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			ModelSource: provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "openai-models", ContractVersion: 1},
 		}},
 	}
 	manifest, err := provider.EncodeProviderDefinitionJSON(definition)

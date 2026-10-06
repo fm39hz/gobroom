@@ -11,12 +11,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 )
 
 func testPrimitiveRegistry() *PrimitiveRegistry {
 	r := NewPrimitiveRegistry()
+	if err := operations.RegisterChatGenerate(r.catalog, r.Operations); err != nil {
+		panic(err)
+	}
 	for _, item := range []struct {
 		kind PrimitiveKind
 		id   string
@@ -38,19 +43,19 @@ func testPrimitiveRegistry() *PrimitiveRegistry {
 
 func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 	r := testPrimitiveRegistry()
-	err := r.RegisterDefinition(ProviderDefinition{
-		ID:          "openai-compatible",
+	err := r.RegisterDefinition(ProviderDefinition{ContractVersion: 1, ID: "openai-compatible",
 		Version:     "1",
 		DisplayName: "OpenAI-compatible",
-		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[Operation]OperationBinding{
 			OperationChat: {
-				Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"},
-				Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-				RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"},
-				ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
-				ModelSource:     PrimitiveRef{Kind: PrimitiveModelSource, ID: "openai-models"},
-				ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"},
+				TaskRef:         OperationRef(normalize.OperationChatGenerate, 1),
+				Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+				RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+				ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+				ModelSource:     PrimitiveRef{Kind: PrimitiveModelSource, ID: "openai-models", ContractVersion: 1},
+				ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1},
 			},
 		},
 	})
@@ -64,11 +69,11 @@ func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 
 func TestPrimitiveRegistryRejectsUnknownPrimitiveAndDuplicateDefinition(t *testing.T) {
 	r := NewPrimitiveRegistry()
-	if err := r.RegisterDefinition(ProviderDefinition{ID: "bad", Version: "1", DisplayName: "Bad", Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "missing"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "missing"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "missing"}}}}); err == nil {
+	if err := r.RegisterDefinition(ProviderDefinition{ContractVersion: 1, ID: "bad", Version: "1", DisplayName: "Bad", Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "missing", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "missing", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "missing", ContractVersion: 1}}}}); err == nil {
 		t.Fatal("expected unknown primitive error")
 	}
 	r = testPrimitiveRegistry()
-	definition := ProviderDefinition{ID: "same", Version: "1", DisplayName: "Same", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"}, Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"}}}}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "same", Version: "1", DisplayName: "Same", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Operations: map[Operation]OperationBinding{OperationChat: {TaskRef: OperationRef(normalize.OperationChatGenerate, 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}}}}
 	if err := r.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +97,7 @@ func TestRuntimeRegistryRejectsNilCodecImplementation(t *testing.T) {
 
 func TestProviderDefinitionJSONBindingRoundTripsTypedContract(t *testing.T) {
 	r := testPrimitiveRegistry()
-	definition := ProviderDefinition{ID: "json-provider", Version: "1", DisplayName: "JSON Provider", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"}, Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"}}}}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "json-provider", Version: "1", DisplayName: "JSON Provider", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Operations: map[Operation]OperationBinding{OperationChat: {TaskRef: OperationRef(normalize.OperationChatGenerate, 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}}}}
 	data, err := EncodeProviderDefinitionJSON(definition)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +116,7 @@ func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"id":"external-chat","version":"1","displayName":"External Chat","auth":{"kind":"auth","id":"static-secret"},"operations":{"chat":{"endpoint":{"kind":"endpoint","id":"http-json"},"transport":{"kind":"transport","id":"http"},"requestCodec":{"kind":"request_codec","id":"openai-chat-json"},"responseDecoder":{"kind":"response_decoder","id":"openai-sse"},"errorClassifier":{"kind":"error_classifier","id":"http-json"}}}}`)
+	data := []byte(`{"contractVersion":1,"id":"external-chat","version":"1","displayName":"External Chat","auth":{"kind":"auth","id":"static-secret","contractVersion":1},"operations":{"chat":{"task":{"kind":"operation","id":"chat.generate","contractVersion":1},"endpoint":{"kind":"endpoint","id":"http-json","contractVersion":1},"transport":{"kind":"transport","id":"http","contractVersion":1},"requestCodec":{"kind":"request_codec","id":"openai-chat-json","contractVersion":1},"responseDecoder":{"kind":"response_decoder","id":"openai-sse","contractVersion":1},"errorClassifier":{"kind":"error_classifier","id":"http-json","contractVersion":1}}}}`)
 	if err := runtime.LoadDefinitionJSON(data); err != nil {
 		t.Fatal(err)
 	}
@@ -125,15 +130,15 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{
-		ID: "custom-errors", Version: "1", DisplayName: "Custom error envelope",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "custom-errors", Version: "1", DisplayName: "Custom error envelope",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[Operation]OperationBinding{OperationChat: {
-			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"},
-			Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-			RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"},
-			ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
-			ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"},
+			TaskRef:         OperationRef(normalize.OperationChatGenerate, 1),
+			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+			ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1},
 			ErrorClassifierOptions: ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{
 				CodePath: "/failure/reason", MessagePath: "/failure/explanation", ResetAtPath: "/failure/reopens_at",
 				WindowNamePath: "/failure/window", WindowLimitPath: "/failure/budget", WindowUsedPath: "/failure/spent", WindowRemainingPath: "/failure/left",
@@ -186,15 +191,15 @@ func TestManifestRejectsInvalidErrorEvidencePointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{
-		ID: "bad-error-path", Version: "1", DisplayName: "Bad error path",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "bad-error-path", Version: "1", DisplayName: "Bad error path",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[Operation]OperationBinding{OperationChat: {
-			Endpoint:               PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"},
-			Transport:              PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-			RequestCodec:           PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"},
-			ResponseDecoder:        PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
-			ErrorClassifier:        PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json"},
+			TaskRef:                OperationRef(normalize.OperationChatGenerate, 1),
+			Endpoint:               PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:              PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:           PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder:        PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+			ErrorClassifier:        PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1},
 			ErrorClassifierOptions: ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{ResetAtPath: "error.reset"}},
 		}},
 	}
@@ -211,6 +216,48 @@ func TestProviderManifestRejectsUnknownAndRemovedFields(t *testing.T) {
 	data := []byte(`{"id":"old-shape","version":"1","displayName":"Old shape","operations":{"chat":{"endpoint":{"kind":"endpoint","id":"http-json"},"transport":{"kind":"transport","id":"http"},"requestCodec":{"kind":"request_codec","id":"openai-chat-json"},"responseDecoder":{"kind":"response_decoder","id":"openai-sse"},"runtimeAdapterId":"openai-chat"}}}`)
 	if err := registry.LoadDefinitionJSON(data); err == nil {
 		t.Fatal("unknown/removed runtimeAdapterId field must not be silently ignored")
+	}
+}
+
+func TestPrimitiveReferencesRequireTheExactContractVersion(t *testing.T) {
+	registry := NewPrimitiveRegistry()
+	for _, primitive := range []struct {
+		kind PrimitiveKind
+		id   string
+	}{
+		{PrimitiveAuth, "static-secret"},
+		{PrimitiveEndpoint, "http-json"},
+		{PrimitiveTransport, "http"},
+	} {
+		if err := registry.RegisterPrimitiveVersion(primitive.kind, primitive.id, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "versioned-provider", Version: "1", DisplayName: "Versioned provider",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[Operation]OperationBinding{OperationChat: {
+			Endpoint:  PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"},
+			Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+		}},
+	}
+	definition.ContractVersion = 0
+	if err := registry.RegisterDefinition(definition); err == nil || !strings.Contains(err.Error(), "contractVersion 1") {
+		t.Fatalf("unsupported or missing provider contract version was accepted: %v", err)
+	}
+	definition.ContractVersion = 1
+	if err := registry.RegisterDefinition(definition); err == nil || !strings.Contains(err.Error(), "contractVersion") {
+		t.Fatalf("reference without contractVersion was accepted: %v", err)
+	}
+	binding := definition.Operations[OperationChat]
+	binding.Endpoint.ContractVersion = 2
+	definition.Operations[OperationChat] = binding
+	if err := registry.RegisterDefinition(definition); err == nil || !strings.Contains(err.Error(), "contract 2") {
+		t.Fatalf("unsupported primitive contract version was accepted: %v", err)
+	}
+	binding.Endpoint.ContractVersion = 1
+	definition.Operations[OperationChat] = binding
+	if err := registry.RegisterDefinition(definition); err != nil {
+		t.Fatalf("exact registered primitive contract was rejected: %v", err)
 	}
 }
 
@@ -310,13 +357,13 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{
-		ID: "oauth-provider", Version: "1", DisplayName: "OAuth provider",
-		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "oauth-provider", Version: "1", DisplayName: "OAuth provider",
+		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
 		AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token", Scopes: []string{"models.read"}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
-			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
+			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
+			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
 		}},
 	}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
@@ -344,14 +391,13 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{
-		ID: "catalog-oauth", Version: "2", DisplayName: "Catalog OAuth", Aliases: []string{"co"},
-		Auth:         PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "catalog-oauth", Version: "2", DisplayName: "Catalog OAuth", Aliases: []string{"co"},
+		Auth:         PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
 		AuthOptions:  AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "not-returned", AuthURL: "https://auth.test", TokenURL: "https://token.test"}, Options: json.RawMessage(`{"client_secret":"not-returned"}`)},
 		Defaults:     map[string]any{"apiKey": "not-returned", "baseUrl": "https://upstream.test"},
 		Capabilities: CapabilitySet{Chat: true, Streaming: true},
 		Operations: map[Operation]OperationBinding{
-			OperationChat: {Protocol: kernel.Protocol("vendor.chat.v1"), Task: "chat.generate", ProviderFormat: normalize.Format("vendor-wire"), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"}},
+			OperationChat: {Protocol: kernel.Protocol("vendor.chat.v1"), TaskRef: OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.Format("vendor-wire"), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}},
 		},
 	}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
@@ -376,7 +422,7 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 	if got == nil || got.Auth.ID != "oauth2" || len(got.Auth.SetupSchema.Fields) == 0 || len(got.Operations) != 1 {
 		t.Fatalf("generic provider setup metadata missing: %#v", got)
 	}
-	if got.Operations[0].Protocol != "vendor.chat.v1" || got.Operations[0].Primitives["responseDecoder"] != "openai-sse" {
+	if got.Operations[0].Protocol != "vendor.chat.v1" || got.Operations[0].Primitives["responseDecoder"].ID != "openai-sse" || got.Operations[0].Primitives["responseDecoder"].ContractVersion != 1 {
 		t.Fatalf("operation binding metadata=%#v", got.Operations[0])
 	}
 	encoded, err := json.Marshal(got)
@@ -395,12 +441,12 @@ func TestProviderMustDeclareNoAuthExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{
-		ID: "public-provider", Version: "1", DisplayName: "Public provider",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "public-provider", Version: "1", DisplayName: "Public provider",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1},
 		Operations: map[Operation]OperationBinding{OperationChat: {
-			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
+			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
+			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
 		}},
 	}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
@@ -459,6 +505,9 @@ func (e *runtimeTestTransport) Execute(context.Context, kernel.UpstreamRequest) 
 type runtimeTestRequestCodec struct{}
 
 func (runtimeTestRequestCodec) ID() string { return "test-request" }
+func (runtimeTestRequestCodec) DescribeCompatibility(kernel.CompatibilityContext) []kernel.FacetMapping {
+	return []kernel.FacetMapping{{Facet: kernel.FacetWireRequest, Paths: []string{"fixture.request"}, Disposition: kernel.FacetPreserved}}
+}
 func (runtimeTestRequestCodec) Prepare(context.Context, kernel.NormalizedRequest, kernel.Route, kernel.Credential) (kernel.UpstreamRequest, error) {
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: "/request-codec"}, nil
 }
@@ -466,15 +515,33 @@ func (runtimeTestRequestCodec) Prepare(context.Context, kernel.NormalizedRequest
 type runtimeTestResponseDecoder struct{}
 
 func (runtimeTestResponseDecoder) ID() string { return "test-response" }
+func (runtimeTestResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return []kernel.ResponseEventKind{kernel.EventTextDelta, kernel.EventContentBlockEnd, kernel.EventResponseComplete}
+}
 
 type runtimeTestRenderer struct{}
 
 func (runtimeTestRenderer) ID() normalize.Format { return normalize.Format("vendor-test") }
-func (runtimeTestRenderer) SupportsResponse(options kernel.ResponseRenderContext) kernel.CompatibilityDecision {
+func (runtimeTestRenderer) SupportsResponse(options kernel.ResponseRenderContext) kernel.CompatibilityPlan {
 	if options.ClientFormat != normalize.Format("vendor-test") {
-		return kernel.CompatibilityDecision{Fidelity: kernel.FidelityUnsupported}
+		return kernel.CompatibilityPlan{Fidelity: kernel.FidelityUnsupported}
 	}
-	return kernel.CompatibilityDecision{Supported: true, Fidelity: kernel.FidelityTranslated}
+	reports := [][]kernel.FacetMapping{{{
+		Facet: kernel.FacetWireResponse, Paths: []string{"fixture.response"}, Disposition: kernel.FacetTranslated,
+	}}}
+	policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetWireResponse}}
+	for _, event := range options.RequiredEvents {
+		facet := kernel.ResponseEventFacet(event)
+		policy.RequiredFacets = append(policy.RequiredFacets, facet)
+		disposition := kernel.FacetUnsupported
+		for _, emitted := range options.ProviderEvents {
+			if emitted == event && (event == kernel.EventTextDelta || event == kernel.EventResponseComplete) {
+				disposition = kernel.FacetTranslated
+			}
+		}
+		reports = append(reports, []kernel.FacetMapping{{Facet: facet, Paths: []string{"fixture.events"}, Disposition: disposition}})
+	}
+	return kernel.ComposeCompatibilityPlan(reports, policy)
 }
 func (runtimeTestRenderer) Begin(_ context.Context, options kernel.ResponseRenderContext, writer http.ResponseWriter) (kernel.ResponseRenderSession, error) {
 	writer.Header().Set("Content-Type", "application/vnd.vendor.test+text")
@@ -522,6 +589,13 @@ func TestRuntimeBindingExecutesSelectedEndpointAndCodecs(t *testing.T) {
 	}
 	endpoint := &runtimeTestEndpoint{}
 	transport := &runtimeTestTransport{}
+	endpointSchema, err := endpointOptionsSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterPrimitiveOptionsSchema(PrimitiveEndpoint, endpoint.ID(), 1, endpointOptionsSchemaRef, endpointSchema); err != nil {
+		t.Fatal(err)
+	}
 	for _, err := range []error{
 		registry.RegisterEndpoint(endpoint),
 		registry.RegisterTransport(transport),
@@ -533,16 +607,16 @@ func TestRuntimeBindingExecutesSelectedEndpointAndCodecs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	definition := ProviderDefinition{
-		ID: "composed-test", Version: "1", DisplayName: "Composed test",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "composed-test", Version: "1", DisplayName: "Composed test",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[Operation]OperationBinding{OperationChat: {
+			TaskRef:         OperationRef(normalize.OperationChatGenerate, 1),
 			ProviderFormat:  "test-native",
-			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: endpoint.ID()},
+			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: endpoint.ID(), ContractVersion: 1},
 			EndpointOptions: kernel.EndpointOptions{Path: "/manifest-path", Query: map[string]string{"api-version": "v2"}},
-			Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: transport.ID()},
-			RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "test-request"},
-			ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "test-response"},
+			Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: transport.ID(), ContractVersion: 1},
+			RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "test-request", ContractVersion: 1},
+			ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "test-response", ContractVersion: 1},
 		}},
 	}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
@@ -601,8 +675,16 @@ func TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch(t *te
 		}
 	}
 	const operation Operation = "audio.transcribe.v1"
-	definition := ProviderDefinition{ID: "media-extension", Version: "1", DisplayName: "Media extension", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret"}, Operations: map[Operation]OperationBinding{
-		operation: {Protocol: kernel.Protocol("vendor.audio.v1"), Task: normalize.Operation(operation), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: endpoint.ID()}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: transport.ID()}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "test-request"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "test-response"}},
+	if err := registry.Primitives.Operations.RegisterRawPayload(
+		extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: 1},
+		"Audio transcription", "Transcribe an audio payload",
+		json.RawMessage(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`),
+		operations.ReplayNever,
+	); err != nil {
+		t.Fatal(err)
+	}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "media-extension", Version: "1", DisplayName: "Media extension", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Operations: map[Operation]OperationBinding{
+		operation: {Protocol: kernel.Protocol("vendor.audio.v1"), TaskRef: OperationRef(normalize.Operation(operation), 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: endpoint.ID(), ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: transport.ID(), ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "test-request", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "test-response", ContractVersion: 1}},
 	}}
 	manifest, err := EncodeProviderDefinitionJSON(definition)
 	if err != nil {
@@ -615,7 +697,7 @@ func TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Adapter == nil || binding.AdapterID != "media-extension:audio.transcribe.v1" || binding.Task != normalize.Operation(operation) || binding.Protocol != "vendor.audio.v1" {
+	if binding.Adapter == nil || binding.AdapterID != "media-extension:audio.transcribe.v1" || binding.TaskRef.ID != string(operation) || binding.TaskRef.ContractVersion != 1 || binding.Protocol != "vendor.audio.v1" {
 		t.Fatalf("operation binding=%#v", binding)
 	}
 }
@@ -641,7 +723,7 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 		{"anthropic", OperationMessages, kernel.ProtocolAnthropic},
 	} {
 		binding := bindings[RuntimeBindingKey(test.definition, test.operation)]
-		if binding.Protocol != test.protocol || binding.Task != normalize.OperationChatGenerate || binding.Adapter == nil {
+		if binding.Protocol != test.protocol || binding.TaskRef.ID != string(normalize.OperationChatGenerate) || binding.TaskRef.ContractVersion != 1 || binding.Adapter == nil {
 			t.Errorf("%s/%s binding=%#v", test.definition, test.operation, binding)
 		}
 	}

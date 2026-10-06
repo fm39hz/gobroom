@@ -14,6 +14,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/controlplane"
 	"github.com/fm39hz/gobroom/internal/discovery"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
@@ -47,6 +48,7 @@ type Daemon struct {
 	providerBindings    map[string]provider.RuntimeBinding
 	providerRegistry    *provider.RuntimeRegistry
 	providerCatalog     []provider.DefinitionMetadata
+	extensionCatalog    extensions.CatalogView
 	authFlows           map[string]provider.AuthFlow
 	providerAuthModes   map[string]string
 	providerAuthFlowIDs map[string]string
@@ -121,12 +123,27 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return err
 	}
+	operationSnapshot, err := runtimeRegistry.OperationSnapshot()
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("build operation catalog: %w", err)
+	}
+	d.extensionCatalog, err = runtimeRegistry.ExtensionCatalog()
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("build extension catalog: %w", err)
+	}
 	d.providerBindings = runtimeBindings
 	d.authFlows = runtimeRegistry.AuthFlowsForBindings(runtimeBindings)
 	d.providerAuthModes = runtimeRegistry.DefaultCredentialTypes()
 	d.providerAuthFlowIDs = runtimeRegistry.AuthFlowIDsByDefinition()
 	d.server = api.NewServerWithRuntimeBindings(s, runtimeBindings)
 	d.server.SetProviderDefinitionCatalog(d.providerCatalog)
+	d.server.SetExtensionCatalog(d.extensionCatalog)
+	if err := d.server.SetOperationSnapshot(operationSnapshot); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind data-plane operation catalog: %w", err)
+	}
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	started := false
@@ -159,6 +176,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return err
 	}
+	d.kernel.Operations = operationSnapshot
 	d.kernel.Adapters = runtimeRegistry.AdaptersForBindings(runtimeBindings)
 	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiersForBindings(runtimeBindings)
 	d.kernel.UsageSources = runtimeRegistry.UsageSources()
@@ -509,6 +527,11 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, "provider definitions unavailable")
 		}
 		return success(request, d.providerCatalog)
+	case "extensions.catalog":
+		if d.providerRegistry == nil {
+			return fail(request, "extension catalog unavailable")
+		}
+		return success(request, d.extensionCatalog)
 	case "providers.refresh_models":
 		var input struct {
 			NodeID       string   `json:"nodeID"`

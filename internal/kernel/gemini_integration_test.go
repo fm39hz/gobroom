@@ -85,7 +85,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "assistant-role", TargetRef: "assistant-role"}},
-		Routes:       []kernel.Route{{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}},
+		Routes:       []kernel.Route{{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}},
 		Nodes:        []kernel.ModelNode{{ID: "assistant-role", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini:gemini-3-flash", Fidelity: kernel.FidelityExact}}}},
 	}, 1)
 	if err != nil {
@@ -160,7 +160,7 @@ func TestGeminiRuntimeBindingPropagatesRequestCancellation(t *testing.T) {
 	}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
-		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-model", Enabled: true}},
+		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-model", Enabled: true}},
 		Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini:model", Fidelity: kernel.FidelityExact}}}},
 	}, 1)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestGeminiRuntimeBindingTranslatesNonStreamingTextCompletion(t *testing.T) 
 	}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
-		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-flash", Enabled: true}},
+		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-flash", Enabled: true}},
 		Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini:model", Fidelity: kernel.FidelityExact}}}},
 	}, 1)
 	if err != nil {
@@ -290,8 +290,8 @@ func newGeminiFallbackGateway(t *testing.T, baseURL string, stream bool) (*kerne
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
 		Routes: []kernel.Route{
-			{ID: "route:limited", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "limited", Enabled: true},
-			{ID: "route:healthy", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "healthy", Enabled: true},
+			{ID: "route:limited", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "limited", Enabled: true},
+			{ID: "route:healthy", NodeID: "gemini", DefinitionID: "gemini", Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "healthy", Enabled: true},
 		},
 		Nodes: []kernel.ModelNode{
 			{ID: "physical-limited", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route:limited", Fidelity: kernel.FidelityExact}}},

@@ -14,23 +14,28 @@ import (
 
 type RequestCodec interface {
 	ID() string
+	DescribeCompatibility(CompatibilityContext) []FacetMapping
 	Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error)
 }
 
 type ResponseDecoder interface {
 	ID() string
+	PossibleEvents() []ResponseEventKind
 	ClassifyError(status int, body []byte) ErrorClass
 	Decode(context.Context, UpstreamResponse, func(ResponseEvent) error, StreamHooks) error
 }
 
 type ResponseRenderContext struct {
-	Status            int
-	Headers           http.Header
-	ClientFormat      normalize.Format
-	ProviderFormat    normalize.Format
-	Streaming         bool
-	ProviderStreaming bool
-	Model             string
+	Status                  int
+	Headers                 http.Header
+	ClientFormat            normalize.Format
+	ProviderFormat          normalize.Format
+	Streaming               bool
+	ProviderStreaming       bool
+	SemanticTransformActive bool
+	ProviderEvents          []ResponseEventKind
+	RequiredEvents          []ResponseEventKind
+	Model                   string
 }
 
 type ResponseRenderSession interface {
@@ -40,7 +45,7 @@ type ResponseRenderSession interface {
 
 type ResponseRenderer interface {
 	ID() normalize.Format
-	SupportsResponse(ResponseRenderContext) CompatibilityDecision
+	SupportsResponse(ResponseRenderContext) CompatibilityPlan
 	Begin(context.Context, ResponseRenderContext, http.ResponseWriter) (ResponseRenderSession, error)
 }
 
@@ -116,13 +121,77 @@ type ComposedAdapter struct {
 }
 
 func (a ComposedAdapter) ID() string { return a.AdapterID }
-func (a ComposedAdapter) NegotiateClientFormat(format normalize.Format, streaming bool) CompatibilityDecision {
+func (a ComposedAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	format := input.Request.SourceFormat
+	streaming := input.Request.Stream
 	renderer, ok := a.Renderers[format]
 	if !ok {
-		return CompatibilityDecision{Reason: "no client renderer is registered for the requested format"}
+		requestReport := a.Request.DescribeCompatibility(input)
+		responseReport := []FacetMapping{{Facet: FacetWireResponse, Paths: []string{"response"}, Disposition: FacetUnsupported, Reason: "no client renderer is registered for the requested format"}}
+		return ComposeCompatibilityPlan([][]FacetMapping{requestReport, responseReport}, withRequiredFacet(input.Policy, FacetWireResponse))
 	}
-	return renderer.SupportsResponse(ResponseRenderContext{ClientFormat: format, ProviderFormat: a.ProviderFormat, Streaming: streaming, ProviderStreaming: streaming})
+	providerEvents := a.Response.PossibleEvents()
+	requiredEvents := RequiredResponseEvents(input.Request)
+	decoderMappings := responseEventMappings(providerEvents)
+	declaredEvents := make(map[ResponseEventKind]bool, len(providerEvents))
+	for _, event := range providerEvents {
+		declaredEvents[event] = true
+	}
+	for _, event := range requiredEvents {
+		if !declaredEvents[event] {
+			decoderMappings = append(decoderMappings, FacetMapping{
+				Facet: ResponseEventFacet(event), Paths: []string{"upstream.response.events"}, Disposition: FacetUnsupported,
+				Reason: fmt.Sprintf("response decoder %q does not declare required event %q", a.Response.ID(), event),
+			})
+		}
+	}
+	responseContext := ResponseRenderContext{
+		ClientFormat: format, ProviderFormat: a.ProviderFormat, Streaming: streaming, ProviderStreaming: streaming,
+		SemanticTransformActive: input.ActiveResponseTransform, ProviderEvents: providerEvents, RequiredEvents: requiredEvents,
+	}
+	decision := renderer.SupportsResponse(responseContext)
+	policy := input.Policy
+	policy.RequiredFacets = append(policy.RequiredFacets, FacetWireResponse)
+	for _, event := range requiredEvents {
+		policy.RequiredFacets = append(policy.RequiredFacets, ResponseEventFacet(event))
+	}
+	if !decision.Supported {
+		responseReport := []FacetMapping{{Facet: FacetWireResponse, Paths: []string{"response"}, Disposition: FacetUnsupported, Reason: decision.Reason}}
+		for _, event := range requiredEvents {
+			responseReport = append(responseReport, FacetMapping{Facet: ResponseEventFacet(event), Paths: []string{"response.events"}, Disposition: FacetUnsupported, Reason: decision.Reason})
+		}
+		return ComposeCompatibilityPlan([][]FacetMapping{a.Request.DescribeCompatibility(input), decoderMappings, responseReport}, policy)
+	}
+	disposition := FacetTranslated
+	if decision.Fidelity == FidelityNative {
+		disposition = FacetPreserved
+	}
+	if decision.Fidelity == FidelityLossy || len(decision.Losses) > 0 {
+		disposition = FacetDegraded
+	}
+	mapping := FacetMapping{Facet: FacetWireResponse, Paths: []string{"response"}, Disposition: disposition, LossIDs: append([]string(nil), decision.Losses...), Reason: decision.Reason}
+	responseReport := []FacetMapping{mapping}
+	if len(decision.Mappings) > 0 {
+		responseReport = append([]FacetMapping(nil), decision.Mappings...)
+	}
+	declared := make(map[string]bool, len(responseReport))
+	for _, item := range responseReport {
+		declared[item.Facet] = true
+	}
+	for _, event := range requiredEvents {
+		facet := ResponseEventFacet(event)
+		if !declared[facet] {
+			responseReport = append(responseReport, FacetMapping{Facet: facet, Paths: []string{"response.events"}, Disposition: FacetUnknown, Reason: "response renderer has no declaration for this required event"})
+		}
+	}
+	return ComposeCompatibilityPlan([][]FacetMapping{a.Request.DescribeCompatibility(input), decoderMappings, responseReport}, policy)
 }
+
+func withRequiredFacet(policy CompatibilityPolicy, facet string) CompatibilityPolicy {
+	policy.RequiredFacets = append(append([]string(nil), policy.RequiredFacets...), facet)
+	return policy
+}
+
 func (a ComposedAdapter) Prepare(ctx context.Context, req NormalizedRequest, route Route, credential Credential) (UpstreamRequest, error) {
 	upstream, err := a.Request.Prepare(ctx, req, route, credential)
 	if err != nil {
@@ -149,7 +218,10 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		return fmt.Errorf("adapter %q has no renderer for client format %q", a.AdapterID, source)
 	}
 	providerStreaming := strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream")
-	session, err := renderer.Begin(ctx, ResponseRenderContext{Status: response.Status, Headers: response.Headers, ClientFormat: source, ProviderFormat: a.ProviderFormat, Streaming: hooks.Streaming, ProviderStreaming: providerStreaming, Model: hooks.Model}, writer)
+	session, err := renderer.Begin(ctx, ResponseRenderContext{
+		Status: response.Status, Headers: response.Headers, ClientFormat: source, ProviderFormat: a.ProviderFormat,
+		Streaming: hooks.Streaming, ProviderStreaming: providerStreaming, SemanticTransformActive: hooks.TransformResponse != nil, Model: hooks.Model,
+	}, writer)
 	if err != nil {
 		return err
 	}

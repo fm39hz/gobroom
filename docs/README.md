@@ -12,6 +12,12 @@
   and package responsibilities.
 - [Solution architecture contract](SOLUTION_ARCHITECTURE.md) — normative
   operation/IR/codec/policy extension points and architecture-readiness tests.
+- [Semantic extension contracts](EXTENSION_CONTRACTS.md) — decided descriptor,
+  payload/artifact, compatibility, transform, auth session and replay contracts.
+- [M15 conformance evidence](M15_CONFORMANCE.md) — current composition coverage
+  and the stronger semantic closure acceptance cases.
+- [Dependency policy](DEPENDENCIES.md) — pinned runtime libraries and the
+  extension schema validator.
 - [Physical model contract](PHYSICAL_MODELS.md) — identity and source fidelity,
   capability/limit/reasoning profiles, harness consumption and routing rules.
 - [TUI interaction and model management](TUI_UX.md) — LazyGit-style context

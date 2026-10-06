@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 )
 
 type Kernel struct {
@@ -24,6 +25,7 @@ type Kernel struct {
 	Transforms         *RequestTransformRegistry
 	ResponseTransforms *ResponseTransformRegistry
 	Features           *FeatureRegistry
+	Operations         *operations.Snapshot
 	Events             chan UsageEvent
 	ResolveCredential  CredentialResolver
 	RefreshCredential  CredentialRefresher
@@ -45,7 +47,11 @@ func New(initial Snapshot, gate Gate, buffer int) (*Kernel, error) {
 	if buffer < 1 {
 		buffer = 256
 	}
-	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[string]ErrorClassifier{}, UsageSources: map[string]UsageEnricher{}, SessionStores: map[string]SessionStore{}, Features: NewFeatureRegistry(), Transforms: NewRequestTransformRegistry(), ResponseTransforms: NewResponseTransformRegistry(), Events: make(chan UsageEvent, buffer)}, nil
+	operationSnapshot, err := operations.BuiltinSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("build operation catalog: %w", err)
+	}
+	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[string]ErrorClassifier{}, UsageSources: map[string]UsageEnricher{}, SessionStores: map[string]SessionStore{}, Features: NewFeatureRegistry(), Operations: operationSnapshot, Transforms: NewRequestTransformRegistry(), ResponseTransforms: NewResponseTransformRegistry(), Events: make(chan UsageEvent, buffer)}, nil
 }
 
 func (k *Kernel) transformResponse(ctx context.Context, event ResponseEvent) (ResponseEvent, error) {
@@ -94,8 +100,24 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if req.Operation == "" {
 		return ErrOperationRequired
 	}
-	if err := k.Transforms.Apply(ctx, &req); err != nil {
+	if k.Operations == nil {
+		return fmt.Errorf("operation catalog is not initialized")
+	}
+	externalRequirements := append([]normalize.FeatureRequirement(nil), req.Requirements...)
+	preparedOperation, err := k.Operations.Prepare(req)
+	if err != nil {
 		return err
+	}
+	req.Requirements = mergeRequirements(externalRequirements, preparedOperation.Requirements)
+	if k.Transforms.Active() {
+		if err := k.Transforms.Apply(ctx, &req); err != nil {
+			return err
+		}
+		preparedOperation, err = k.Operations.Prepare(req)
+		if err != nil {
+			return err
+		}
+		req.Requirements = mergeRequirements(externalRequirements, preparedOperation.Requirements)
 	}
 	started := time.Now()
 	snapshot := k.Snapshots.Load()
@@ -103,12 +125,27 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if err != nil {
 		return err
 	}
-	return k.executeNode(ctx, snapshot, root, req, credential, writer, started, map[string]bool{})
+	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, credential, writer, started, map[string]bool{})
 }
 
-func (k *Kernel) adapterForRoute(route Route, operation normalize.Operation, clientFormat normalize.Format, streaming bool) ProviderAdapter {
+func mergeRequirements(required, derived []normalize.FeatureRequirement) []normalize.FeatureRequirement {
+	result := make([]normalize.FeatureRequirement, 0, len(required)+len(derived))
+	seen := make(map[string]struct{}, cap(result))
+	for _, requirement := range append(append([]normalize.FeatureRequirement(nil), required...), derived...) {
+		key := requirement.ID + "\x00" + string(requirement.Constraints)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, requirement)
+	}
+	return result
+}
+
+func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements) ProviderAdapter {
+	operation := requirements.Operation
 	operationBinding, ok := route.OperationBindings[operation]
-	if !ok {
+	if !ok || requirements.OperationContractVersion == 0 || operationBinding.ContractVersion != requirements.OperationContractVersion {
 		return nil
 	}
 	adapterIDs := operationBinding.AdapterIDs
@@ -117,8 +154,19 @@ func (k *Kernel) adapterForRoute(route Route, operation normalize.Operation, cli
 		if adapter == nil {
 			continue
 		}
-		decision := adapter.NegotiateClientFormat(clientFormat, streaming)
-		if !decision.Supported || (decision.Fidelity != FidelityNative && decision.Fidelity != FidelityTranslated) || len(decision.Losses) > 0 {
+		compatibilityContext := CompatibilityContext{
+			Request: request, Route: route, Operation: operation, Requirements: requirements,
+			ActiveResponseTransform: k.ResponseTransforms.Active(),
+		}
+		compatibilityContext.Policy.RequiredFacets = RequiredRequestFacets(request)
+		for _, event := range RequiredResponseEvents(request) {
+			compatibilityContext.Policy.RequiredFacets = append(compatibilityContext.Policy.RequiredFacets, ResponseEventFacet(event))
+		}
+		plan := adapter.PlanCompatibility(compatibilityContext)
+		policy := compatibilityContext.Policy
+		policy.RequiredFacets = append(policy.RequiredFacets, FacetWireResponse)
+		plan = ComposeCompatibilityPlan([][]FacetMapping{plan.Mappings}, policy)
+		if !plan.Supported || (plan.Fidelity != FidelityNative && plan.Fidelity != FidelityTranslated) || len(plan.Losses) > 0 {
 			continue
 		}
 		return adapter
@@ -126,7 +174,7 @@ func (k *Kernel) adapterForRoute(route Route, operation normalize.Operation, cli
 	return nil
 }
 
-func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
+func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
 	if stack[node.ID] {
 		return fmt.Errorf("model cycle at %q", node.ID)
 	}
@@ -146,7 +194,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if !ok {
 				return fmt.Errorf("unknown model node %q", member.ID)
 			}
-			err := k.executeNode(ctx, snapshot, child, req, credential, writer, started, stack)
+			err := k.executeNode(ctx, snapshot, child, req, replaySafety, credential, writer, started, stack)
 			if err == nil {
 				return nil
 			} else if !errors.Is(err, ErrNoRoute) {
@@ -175,7 +223,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 		for _, candidate := range routes {
 			requirements := CompileRequirements(req)
 			operationBinding, ok := candidate.OperationBindings[requirements.Operation]
-			if !ok {
+			if !ok || operationBinding.ContractVersion != requirements.OperationContractVersion {
 				continue
 			}
 			candidate.ErrorClassifierID = operationBinding.ErrorClassifierID
@@ -188,7 +236,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if eligible, _ := k.Features.Evaluate(candidate, requirements.Features); !eligible {
 				continue
 			}
-			adapter := k.adapterForRoute(candidate, requirements.Operation, req.SourceFormat, req.Stream)
+			adapter := k.adapterForRoute(candidate, req, requirements)
 			if adapter == nil {
 				continue
 			}
@@ -239,23 +287,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				failureClass, memberErr = kernelErrorClass(err), err
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Effect: EffectUnknown, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, kernelErrorClass(err), err)
 				}
-				continue
-			}
-			if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil {
-				refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
-				if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {
-					_ = response.Body.Close()
-					selectedCredential = refreshedCredential
-					refreshed = true
-					goto retryUpstream
-				}
+				return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: err}
 			}
 			if response.Status >= 400 {
-				k.Scheduler.Release(candidate)
 				body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 				class := adapter.ClassifyError(response.Status, body)
 				outcome := classifyOutcome(adapter, response.Status, response.Headers, body, class)
@@ -266,6 +304,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 				}
 				outcome.Class = class
+				if outcome.Effect == "" {
+					outcome.Effect = inferUpstreamEffect(response.Status, outcome.Cause)
+				}
+				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canReplayAfterDispatch(replaySafety, outcome.Effect) {
+					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
+					if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {
+						_ = response.Body.Close()
+						selectedCredential = refreshedCredential
+						refreshed = true
+						goto retryUpstream
+					}
+				}
+				k.Scheduler.Release(candidate)
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, outcome)
 				}
@@ -278,6 +329,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 				}
 				_ = response.Body.Close()
+				if !canReplayAfterDispatch(replaySafety, outcome.Effect) {
+					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: outcome.Effect, Cause: memberErr}
+				}
 				if class == ErrorTerminal {
 					terminalErr := fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body)))
 					failure := StrategyFailure{NodeID: node.ID, Member: member, Class: class, Err: terminalErr}
@@ -293,6 +347,10 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			var firstByteAt time.Time
 			emitEvent := responseEventSink(writer)
 			streamWriter := &responseCommitWriter{ResponseWriter: writer}
+			var responseTransform func(context.Context, ResponseEvent) (ResponseEvent, error)
+			if k.ResponseTransforms.Active() {
+				responseTransform = k.transformResponse
+			}
 			attemptReleased := false
 			releaseAttempt := func() {
 				if !attemptReleased {
@@ -300,13 +358,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					attemptReleased = true
 				}
 			}
-			renderErr := adapter.RenderResponse(ctx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, TransformResponse: k.transformResponse, OnError: func(streamErr error) {
+			renderErr := adapter.RenderResponse(ctx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, TransformResponse: responseTransform, OnError: func(streamErr error) {
 				releaseAttempt()
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
 				}
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Effect: EffectAccepted, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
@@ -345,7 +403,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 				}
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Effect: EffectAccepted, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
 				}
 				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
 					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
@@ -404,11 +462,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					feedback.MarkFailure(candidate, ErrorRetryable, renderErr)
 				}
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if streamWriter.committed {
 				return renderErr
 			}
-			failureClass, memberErr = ErrorRetryable, renderErr
-			continue
+			return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectAccepted, Cause: renderErr}
 		}
 		failure := StrategyFailure{NodeID: node.ID, Member: member, Class: failureClass, Err: memberErr}
 		if k.Scheduler.OnFailure(node, failure) == FailureStop {
@@ -479,6 +539,9 @@ func classifyOutcome(adapter ProviderAdapter, status int, headers http.Header, b
 	if rich, ok := adapter.(OutcomeClassifier); ok {
 		outcome := rich.ClassifyOutcome(status, headers, body)
 		outcome.Class = class
+		if outcome.Effect == "" {
+			outcome.Effect = inferUpstreamEffect(status, outcome.Cause)
+		}
 		return outcome
 	}
 	outcome := ClassifiedOutcome{Class: class, Scope: ScopeRoute, Confidence: 0.5, Evidence: []EvidenceSource{EvidenceErrorBody}, StatusCode: status, Message: strings.TrimSpace(string(body))}
@@ -494,7 +557,27 @@ func classifyOutcome(adapter ProviderAdapter, status int, headers http.Header, b
 	default:
 		outcome.Cause, outcome.Retry = CauseUnknown, RetryUnknown
 	}
+	outcome.Effect = inferUpstreamEffect(status, outcome.Cause)
 	return outcome
+}
+
+func inferUpstreamEffect(status int, cause OutcomeCause) UpstreamEffect {
+	if status >= http.StatusOK && status < http.StatusMultipleChoices {
+		return EffectAccepted
+	}
+	if status < 400 || status >= 500 || status == http.StatusRequestTimeout || status == http.StatusConflict {
+		return EffectUnknown
+	}
+	switch cause {
+	case CauseRequestInvalid, CauseCapability, CauseModelNotFound, CauseAuth, CausePermission, CauseQuotaExhausted, CauseRateLimited:
+		return EffectRejected
+	default:
+		return EffectUnknown
+	}
+}
+
+func canReplayAfterDispatch(safety operations.ReplaySafety, effect UpstreamEffect) bool {
+	return safety == operations.ReplayOnRejection && effect == EffectRejected
 }
 
 func kernelErrorClass(err error) ErrorClass {

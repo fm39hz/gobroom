@@ -18,6 +18,9 @@ import (
 type pipelineRequest struct{}
 
 func (pipelineRequest) ID() string { return "fixture-request" }
+func (pipelineRequest) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
+	return []kernel.FacetMapping{{Facet: kernel.FacetWireRequest, Paths: []string{"fixture.request"}, Disposition: kernel.FacetPreserved}}
+}
 func (pipelineRequest) Prepare(context.Context, kernel.NormalizedRequest, kernel.Route, kernel.Credential) (kernel.UpstreamRequest, error) {
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: "/generate"}, nil
 }
@@ -48,6 +51,9 @@ func (uppercaseSemanticText) ApplyResponse(_ context.Context, event kernel.Respo
 }
 
 func (d scriptedResponseDecoder) ID() string { return d.name }
+func (d scriptedResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return []kernel.ResponseEventKind{kernel.EventTextDelta, kernel.EventContentBlockEnd, kernel.EventResponseComplete}
+}
 func (d scriptedResponseDecoder) ClassifyError(int, []byte) kernel.ErrorClass {
 	return kernel.ErrorRetryable
 }
@@ -71,15 +77,15 @@ func (d scriptedResponseDecoder) Decode(_ context.Context, _ kernel.UpstreamResp
 	return emit(kernel.ResponseEvent{Kind: kernel.EventResponseComplete})
 }
 
-func TestComposedSemanticResponsePipelineRetriesOnlyBeforeRendererCommit(t *testing.T) {
+func TestComposedSemanticPipelineDoesNotReplayAcceptedUpstreamResponse(t *testing.T) {
 	buildKernel := func(t *testing.T, failAfterWrite bool) (*kernel.Kernel, *[]string) {
 		t.Helper()
 		snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 			PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
 			Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelCombo, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "broken-route"}, {Kind: kernel.MemberRoute, ID: "good-route"}}}},
 			Routes: []kernel.Route{
-				{ID: "broken-route", Protocol: kernel.Protocol("vendor.v1"), BaseURL: "https://provider.test/v1", Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"broken"}}}},
-				{ID: "good-route", Protocol: kernel.Protocol("vendor.v1"), BaseURL: "https://provider.test/v1", Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"good"}}}},
+				{ID: "broken-route", Protocol: kernel.Protocol("vendor.v1"), BaseURL: "https://provider.test/v1", Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"broken"}}}},
+				{ID: "good-route", Protocol: kernel.Protocol("vendor.v1"), BaseURL: "https://provider.test/v1", Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"good"}}}},
 			},
 		}, 1)
 		if err != nil {
@@ -104,12 +110,14 @@ func TestComposedSemanticResponsePipelineRetriesOnlyBeforeRendererCommit(t *test
 		t.Fatal(err)
 	}
 	precommitWriter := httptest.NewRecorder()
-	request := kernel.NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}
-	if err := precommitKernel.Execute(context.Background(), request, kernel.Credential{}, precommitWriter); err != nil {
-		t.Fatal(err)
+	request := kernel.NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+	err := precommitKernel.Execute(context.Background(), request, kernel.Credential{}, precommitWriter)
+	var suppressed *kernel.ReplaySuppressedError
+	if !errors.As(err, &suppressed) || suppressed.Effect != kernel.EffectAccepted {
+		t.Fatalf("accepted response should suppress retry, got %v", err)
 	}
 	precommitKernel.Close()
-	if len(*precommitAttempts) != 2 || (*precommitAttempts)[0] != "broken" || (*precommitAttempts)[1] != "good" || !strings.Contains(precommitWriter.Body.String(), "RECOVERED") {
+	if len(*precommitAttempts) != 1 || (*precommitAttempts)[0] != "broken" || precommitWriter.Body.Len() != 0 {
 		t.Fatalf("pre-commit attempts=%v body=%q", *precommitAttempts, precommitWriter.Body.String())
 	}
 
@@ -117,7 +125,7 @@ func TestComposedSemanticResponsePipelineRetriesOnlyBeforeRendererCommit(t *test
 	committedWriter := httptest.NewRecorder()
 	streamRequest := request
 	streamRequest.Stream = true
-	err := committedKernel.Execute(context.Background(), streamRequest, kernel.Credential{}, committedWriter)
+	err = committedKernel.Execute(context.Background(), streamRequest, kernel.Credential{}, committedWriter)
 	committedKernel.Close()
 	if err == nil || len(*committedAttempts) != 1 || !strings.Contains(committedWriter.Body.String(), "partial") {
 		t.Fatalf("post-commit err=%v attempts=%v body=%q", err, *committedAttempts, committedWriter.Body.String())

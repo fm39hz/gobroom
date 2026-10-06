@@ -13,6 +13,16 @@ import (
 )
 
 type attemptAdapter struct{ attempts *[]string }
+type undeclaredCompatibilityAdapter struct{ attemptAdapter }
+type ambiguousExecutionAdapter struct{ attemptAdapter }
+
+func (undeclaredCompatibilityAdapter) PlanCompatibility(CompatibilityContext) CompatibilityPlan {
+	return CompatibilityPlan{Supported: true, Fidelity: FidelityNative}
+}
+func (a ambiguousExecutionAdapter) Execute(_ context.Context, request UpstreamRequest) (UpstreamResponse, error) {
+	*a.attempts = append(*a.attempts, request.URL)
+	return UpstreamResponse{}, errors.New("connection closed after upstream dispatch")
+}
 
 type observingStrategy struct{ failedNodes *[]string }
 
@@ -41,10 +51,9 @@ func (s observingStrategy) OnFailure(failure StrategyFailure, _ *StrategyState) 
 	return FailureContinue
 }
 
-func (a attemptAdapter) ID() string         { return "test" }
-func (a attemptAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision {
-	if format != normalize.FormatOpenAIChat { return CompatibilityDecision{Fidelity: FidelityUnsupported} }
-	return CompatibilityDecision{Supported: true, Fidelity: FidelityNative}
+func (a attemptAdapter) ID() string { return "test" }
+func (a attemptAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 }
 func (a attemptAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
@@ -52,7 +61,7 @@ func (a attemptAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Ro
 func (a attemptAdapter) Execute(_ context.Context, request UpstreamRequest) (UpstreamResponse, error) {
 	*a.attempts = append(*a.attempts, request.URL)
 	if strings.HasPrefix(request.URL, "child-") {
-		return UpstreamResponse{Status: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("retry"))}, nil
+		return UpstreamResponse{Status: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader("retry"))}, nil
 	}
 	return UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
 }
@@ -70,9 +79,9 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 			{ID: "physical", Kind: ModelPhysical, Strategy: "observing", Members: []MemberRef{{Kind: MemberRoute, ID: "child-a", Fidelity: FidelityExact}, {Kind: MemberRoute, ID: "child-b", Fidelity: FidelityExact}}},
 		},
 		Routes: []Route{
-			{ID: "child-a", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
-			{ID: "child-b", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
-			{ID: "outer-route", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
+			{ID: "child-a", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
+			{ID: "child-b", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
+			{ID: "outer-route", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"test"}}}, Protocol: ProtocolOpenAIChat, Enabled: true},
 		},
 	}, 1)
 	if err != nil {
@@ -88,7 +97,7 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 	kernel.Adapters["test"] = attemptAdapter{attempts: &attempts}
 	kernel.Scheduler.RegisterStrategy("observing", observingStrategy{failedNodes: &failedNodes})
 	kernel.Scheduler.RegisterStrategy("observing-ordered", orderedObservingStrategy{failedNodes: &failedNodes})
-	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
 
 	for i, want := range [][]string{{"child-a", "child-b", "outer-route"}, {"child-b", "child-a", "outer-route"}, {"child-a", "child-b", "outer-route"}} {
 		attempts = attempts[:0]
@@ -114,6 +123,61 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 		if failedNodes[i] != "physical" || failedNodes[i+1] != "physical" || failedNodes[i+2] != "role" {
 			t.Fatalf("failure transitions crossed policy boundaries: %v", failedNodes)
 		}
+	}
+}
+
+func TestKernelRejectsAdapterWithoutRequiredFacetDeclarationBeforeDispatch(t *testing.T) {
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
+		Nodes:        []ModelNode{{ID: "role", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "route"}}}},
+		Routes: []Route{{ID: "route", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"undeclared"}},
+		}}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := New(snapshot, nil, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	attempts := []string{}
+	k.Adapters["undeclared"] = undeclaredCompatibilityAdapter{attemptAdapter{attempts: &attempts}}
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+	err = k.Execute(context.Background(), request, Credential{}, httptest.NewRecorder())
+	if !errors.Is(err, ErrNoRoute) || len(attempts) != 0 {
+		t.Fatalf("adapter without a required facet declaration dispatched: err=%v attempts=%v", err, attempts)
+	}
+}
+
+func TestKernelDoesNotFallbackAfterAmbiguousDispatchedRequest(t *testing.T) {
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
+		Nodes:        []ModelNode{{ID: "role", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "first"}, {Kind: MemberRoute, ID: "second"}}}},
+		Routes: []Route{
+			{ID: "first", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"ambiguous"}}}},
+			{ID: "second", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"ambiguous"}}}},
+		},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := New(snapshot, nil, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	attempts := []string{}
+	k.Adapters["ambiguous"] = ambiguousExecutionAdapter{attemptAdapter{attempts: &attempts}}
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+	err = k.Execute(context.Background(), request, Credential{}, httptest.NewRecorder())
+	var suppressed *ReplaySuppressedError
+	if !errors.As(err, &suppressed) || suppressed.Effect != EffectUnknown {
+		t.Fatalf("ambiguous dispatched attempt did not suppress replay: %v", err)
+	}
+	if len(attempts) != 1 || attempts[0] != "first" {
+		t.Fatalf("ambiguous request may have executed twice: attempts=%v", attempts)
 	}
 }
 

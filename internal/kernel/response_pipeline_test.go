@@ -19,10 +19,9 @@ type precommitFailureAdapter struct {
 	fail     bool
 }
 
-func (a precommitFailureAdapter) ID() string         { return a.name }
-func (a precommitFailureAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision {
-	if format != normalize.FormatOpenAIChat { return CompatibilityDecision{Fidelity: FidelityUnsupported} }
-	return CompatibilityDecision{Supported: true, Fidelity: FidelityTranslated}
+func (a precommitFailureAdapter) ID() string { return a.name }
+func (a precommitFailureAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityTranslated)
 }
 func (a precommitFailureAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
 	*a.attempts = append(*a.attempts, route.ID)
@@ -48,13 +47,13 @@ func (a precommitFailureAdapter) RenderResponse(_ context.Context, _ UpstreamRes
 	return nil
 }
 
-func TestKernelRetriesSemanticFailureOnlyBeforeResponseCommit(t *testing.T) {
+func TestKernelDoesNotReplayAcceptedResponseAfterSemanticFailure(t *testing.T) {
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
 		Nodes:        []ModelNode{{ID: "role", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "first"}, {Kind: MemberRoute, ID: "second"}}}},
 		Routes: []Route{
-			{ID: "first", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"decoder-fails"}}}},
-			{ID: "second", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"renderer-succeeds"}}}},
+			{ID: "first", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"decoder-fails"}}}},
+			{ID: "second", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"renderer-succeeds"}}}},
 		},
 	}, 1)
 	if err != nil {
@@ -69,11 +68,13 @@ func TestKernelRetriesSemanticFailureOnlyBeforeResponseCommit(t *testing.T) {
 	k.Adapters["decoder-fails"] = precommitFailureAdapter{name: "decoder-fails", attempts: &attempts, fail: true}
 	k.Adapters["renderer-succeeds"] = precommitFailureAdapter{name: "renderer-succeeds", attempts: &attempts}
 	writer := httptest.NewRecorder()
-	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat}
-	if err := k.Execute(context.Background(), request, Credential{}, writer); err != nil {
-		t.Fatal(err)
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+	err = k.Execute(context.Background(), request, Credential{}, writer)
+	var suppressed *ReplaySuppressedError
+	if !errors.As(err, &suppressed) || suppressed.Effect != EffectAccepted {
+		t.Fatalf("accepted upstream response should suppress retry, got %v", err)
 	}
-	if len(attempts) != 2 || attempts[0] != "first" || attempts[1] != "second" || writer.Body.String() != "rendered" {
+	if len(attempts) != 1 || attempts[0] != "first" || writer.Body.String() != "" {
 		t.Fatalf("attempts=%v body=%q", attempts, writer.Body.String())
 	}
 }

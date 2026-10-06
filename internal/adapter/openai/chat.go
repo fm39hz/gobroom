@@ -22,15 +22,49 @@ func (Chat) ID() string { return "openai-chat" }
 type chatRequestCodec struct{ adapter Chat }
 
 func (c chatRequestCodec) ID() string { return "openai-chat-json" }
+func (c chatRequestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
+	return openAIChatFacetReport(input, normalize.FormatOpenAIChat)
+}
 func (c chatRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
+}
+
+func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat normalize.Format) []kernel.FacetMapping {
+	native := input.Request.SourceFormat == nativeFormat
+	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
+	for _, facet := range input.Policy.RequiredFacets {
+		if kernel.IsResponseCompatibilityFacet(facet) {
+			continue
+		}
+		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Chat request codec has no declared mapping for this input facet"}
+		if native {
+			switch facet {
+			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetReasoningIntent, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "the OpenAI Chat request is forwarded in its native wire contract"
+			}
+		}
+		result = append(result, mapping)
+	}
+	return result
 }
 
 type chatResponseDecoder struct{ adapter Chat }
 
 func (c chatResponseDecoder) ID() string { return "openai-sse" }
+func (c chatResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return openAIResponseEvents()
+}
 func (c chatResponseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
+}
+
+func openAIResponseEvents() []kernel.ResponseEventKind {
+	return []kernel.ResponseEventKind{
+		kernel.EventRawFrame, kernel.EventResponseStarted, kernel.EventContentBlockStart,
+		kernel.EventContentBlockEnd, kernel.EventTextDelta, kernel.EventThinkingDelta,
+		kernel.EventToolCallDelta, kernel.EventUsage, kernel.EventResponseComplete,
+	}
 }
 func (c chatResponseDecoder) Decode(ctx context.Context, response kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
 	return c.adapter.DecodeResponse(ctx, response, normalize.FormatOpenAIChat, emit, hooks)

@@ -214,17 +214,18 @@ const (
 )
 
 type RequestRequirements struct {
-	Operation            normalize.Operation
-	Capabilities         []string
-	Features             []normalize.FeatureRequirement
-	Streaming            bool
-	Reasoning            bool
-	EstimatedInputTokens int64
-	ReservedOutputTokens int64
+	Operation                normalize.Operation
+	OperationContractVersion uint64
+	Capabilities             []string
+	Features                 []normalize.FeatureRequirement
+	Streaming                bool
+	Reasoning                bool
+	EstimatedInputTokens     int64
+	ReservedOutputTokens     int64
 }
 
 func CompileRequirements(req NormalizedRequest) RequestRequirements {
-	result := RequestRequirements{Operation: req.Operation, Features: append([]normalize.FeatureRequirement(nil), req.Requirements...), Streaming: req.Stream, Reasoning: req.Thinking.Effort != "" || req.Thinking.Mode == "level" || req.Thinking.Mode == "budget", EstimatedInputTokens: estimateInputTokens(req), ReservedOutputTokens: requestedOutputTokens(req)}
+	result := RequestRequirements{Operation: req.Operation, OperationContractVersion: req.OperationContractVersion, Features: append([]normalize.FeatureRequirement(nil), req.Requirements...), Streaming: req.Stream, Reasoning: req.Thinking.Effort != "" || req.Thinking.Mode == "level" || req.Thinking.Mode == "budget", EstimatedInputTokens: estimateInputTokens(req), ReservedOutputTokens: requestedOutputTokens(req)}
 	if req.Modalities.Vision {
 		result.Capabilities = append(result.Capabilities, CapabilityVision)
 	}

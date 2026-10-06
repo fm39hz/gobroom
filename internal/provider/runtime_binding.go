@@ -1,17 +1,23 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
+func extensionRef(ref PrimitiveRef) extensions.Ref {
+	return extensions.Ref{Kind: string(ref.Kind), ID: ref.ID, ContractVersion: ref.ContractVersion}
+}
+
 type RuntimeBinding struct {
 	DefinitionID      string
 	Operation         Operation
-	Task              normalize.Operation
+	TaskRef           extensions.Ref
 	Protocol          kernel.Protocol
 	ProviderFormat    normalize.Format
 	EndpointID        string
@@ -43,13 +49,14 @@ type RuntimeBinding struct {
 // options and arbitrary defaults while exposing the schemas needed to build
 // generic setup forms.
 type DefinitionMetadata struct {
-	ID           string              `json:"id"`
-	Version      string              `json:"version"`
-	DisplayName  string              `json:"displayName"`
-	Aliases      []string            `json:"aliases,omitempty"`
-	Capabilities CapabilitySet       `json:"capabilities"`
-	Auth         AuthMetadata        `json:"auth"`
-	Operations   []OperationMetadata `json:"operations"`
+	ContractVersion uint64              `json:"contractVersion"`
+	ID              string              `json:"id"`
+	Version         string              `json:"version"`
+	DisplayName     string              `json:"displayName"`
+	Aliases         []string            `json:"aliases,omitempty"`
+	Capabilities    CapabilitySet       `json:"capabilities"`
+	Auth            AuthMetadata        `json:"auth"`
+	Operations      []OperationMetadata `json:"operations"`
 }
 
 type AuthMetadata struct {
@@ -58,11 +65,11 @@ type AuthMetadata struct {
 }
 
 type OperationMetadata struct {
-	ID             Operation           `json:"id"`
-	Protocol       kernel.Protocol     `json:"protocol,omitempty"`
-	Task           normalize.Operation `json:"task,omitempty"`
-	ProviderFormat normalize.Format    `json:"providerFormat,omitempty"`
-	Primitives     map[string]string   `json:"primitives"`
+	ID             Operation               `json:"id"`
+	Protocol       kernel.Protocol         `json:"protocol,omitempty"`
+	TaskRef        *extensions.Ref         `json:"task,omitempty"`
+	ProviderFormat normalize.Format        `json:"providerFormat,omitempty"`
+	Primitives     map[string]PrimitiveRef `json:"primitives"`
 }
 
 // DefinitionCatalog returns deterministic, secret-free metadata for generic
@@ -81,7 +88,8 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 			return nil, fmt.Errorf("provider %q auth metadata: %w", definition.ID, err)
 		}
 		item := DefinitionMetadata{
-			ID: definition.ID, Version: definition.Version,
+			ContractVersion: definition.ContractVersion,
+			ID:              definition.ID, Version: definition.Version,
 			DisplayName:  definition.DisplayName,
 			Aliases:      append([]string(nil), definition.Aliases...),
 			Capabilities: definition.Capabilities,
@@ -96,23 +104,23 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 		for _, rawOperation := range operations {
 			operation := Operation(rawOperation)
 			binding := definition.Operations[operation]
-			primitives := map[string]string{
-				"endpoint":        binding.Endpoint.ID,
-				"transport":       binding.Transport.ID,
-				"requestCodec":    binding.RequestCodec.ID,
-				"responseDecoder": binding.ResponseDecoder.ID,
-				"modelSource":     binding.ModelSource.ID,
-				"usageSource":     binding.UsageSource.ID,
-				"quotaSource":     binding.QuotaSource.ID,
-				"errorClassifier": binding.ErrorClassifier.ID,
+			primitives := map[string]PrimitiveRef{
+				"endpoint":        binding.Endpoint,
+				"transport":       binding.Transport,
+				"requestCodec":    binding.RequestCodec,
+				"responseDecoder": binding.ResponseDecoder,
+				"modelSource":     binding.ModelSource,
+				"usageSource":     binding.UsageSource,
+				"quotaSource":     binding.QuotaSource,
+				"errorClassifier": binding.ErrorClassifier,
 			}
-			for primitive, id := range primitives {
-				if id == "" {
+			for primitive, ref := range primitives {
+				if ref.ID == "" {
 					delete(primitives, primitive)
 				}
 			}
 			item.Operations = append(item.Operations, OperationMetadata{
-				ID: operation, Protocol: binding.Protocol, Task: binding.Task,
+				ID: operation, Protocol: binding.Protocol, TaskRef: binding.TaskRef,
 				ProviderFormat: binding.ProviderFormat, Primitives: primitives,
 			})
 		}
@@ -129,9 +137,42 @@ func NewRuntimeBindingBuilder(registry *RuntimeRegistry) *RuntimeBindingBuilder 
 	return &RuntimeBindingBuilder{registry: registry}
 }
 
+func (b *RuntimeBindingBuilder) bindPrimitive(ref PrimitiveRef) (any, error) {
+	return b.bindPrimitiveOptions(ref, json.RawMessage(`{}`))
+}
+
+func (b *RuntimeBindingBuilder) bindPrimitiveOptions(ref PrimitiveRef, options json.RawMessage) (any, error) {
+	snapshot, err := b.registry.FreezeCatalog()
+	if err != nil {
+		return nil, err
+	}
+	_, implementation, err := snapshot.Bind(extensionRef(ref), options)
+	return implementation, err
+}
+
+func bindPrimitiveAs[T any](builder *RuntimeBindingBuilder, ref PrimitiveRef) (T, error) {
+	return bindPrimitiveAsOptions[T](builder, ref, json.RawMessage(`{}`))
+}
+
+func bindPrimitiveAsOptions[T any](builder *RuntimeBindingBuilder, ref PrimitiveRef, options json.RawMessage) (T, error) {
+	var zero T
+	implementation, err := builder.bindPrimitiveOptions(ref, options)
+	if err != nil {
+		return zero, err
+	}
+	resolved, ok := implementation.(T)
+	if !ok {
+		return zero, fmt.Errorf("primitive %s/%q implementation has type %T", ref.Kind, ref.ID, implementation)
+	}
+	return resolved, nil
+}
+
 func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) (RuntimeBinding, error) {
 	if b == nil || b.registry == nil || b.registry.Primitives == nil {
 		return RuntimeBinding{}, fmt.Errorf("runtime binding registry is not initialized")
+	}
+	if _, err := b.registry.FreezeCatalog(); err != nil {
+		return RuntimeBinding{}, fmt.Errorf("freeze extension catalog: %w", err)
 	}
 	definition, ok := b.registry.Primitives.Definition(definitionID)
 	if !ok {
@@ -144,43 +185,52 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	var auth AuthFlow
 	authFlowID := ""
 	if definition.Auth.ID != "" {
-		var err error
-		auth, err = b.registry.Auth.Build(definition.Auth.ID, definition.AuthOptions)
+		authOptions, err := json.Marshal(definition.AuthOptions)
 		if err != nil {
-			return RuntimeBinding{}, fmt.Errorf("build auth flow %q: %w", definition.Auth.ID, err)
+			return RuntimeBinding{}, fmt.Errorf("encode auth options for %q: %w", definition.Auth.ID, err)
+		}
+		auth, err = bindPrimitiveAsOptions[AuthFlow](b, definition.Auth, authOptions)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("bind auth flow %q: %w", definition.Auth.ID, err)
 		}
 		authFlowID = AuthBindingKey(definition.ID, auth.ID())
 	}
+	var err error
 	var modelSource ModelSource
 	if binding.ModelSource.ID != "" {
-		var found bool
-		modelSource, found = b.registry.modelSources[binding.ModelSource.ID]
-		if !found {
-			return RuntimeBinding{}, fmt.Errorf("model source %q is not registered", binding.ModelSource.ID)
+		modelSource, err = bindPrimitiveAs[ModelSource](b, binding.ModelSource)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve model source %q: %w", binding.ModelSource.ID, err)
 		}
 	}
 	var sessionStore kernel.SessionStore
 	sessionStoreID := ""
 	if definition.Session.ID != "" {
-		var found bool
-		sessionStore, found = b.registry.sessionStores[definition.Session.ID]
-		if !found {
-			return RuntimeBinding{}, fmt.Errorf("session store %q is not registered", definition.Session.ID)
+		sessionStore, err = bindPrimitiveAs[kernel.SessionStore](b, definition.Session)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve session store %q: %w", definition.Session.ID, err)
 		}
 		sessionStoreID = definition.Session.ID
 	}
 	if binding.UsageSource.ID != "" {
-		if _, found := b.registry.usageSources[binding.UsageSource.ID]; !found {
-			return RuntimeBinding{}, fmt.Errorf("usage source %q is not registered", binding.UsageSource.ID)
+		options, marshalErr := json.Marshal(binding.UsageOptions)
+		if marshalErr != nil {
+			return RuntimeBinding{}, fmt.Errorf("encode usage options: %w", marshalErr)
+		}
+		if _, err := bindPrimitiveAsOptions[UsageSource](b, binding.UsageSource, options); err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve usage source %q: %w", binding.UsageSource.ID, err)
 		}
 	}
 	var classifier ErrorClassifier
 	errorClassifierID := binding.ErrorClassifier.ID
 	if binding.ErrorClassifier.ID != "" {
-		var found bool
-		classifier, found = b.registry.errorClassifiers[binding.ErrorClassifier.ID]
-		if !found {
-			return RuntimeBinding{}, fmt.Errorf("error classifier %q is not registered", binding.ErrorClassifier.ID)
+		options, marshalErr := json.Marshal(binding.ErrorClassifierOptions)
+		if marshalErr != nil {
+			return RuntimeBinding{}, fmt.Errorf("encode error classifier options: %w", marshalErr)
+		}
+		classifier, err = bindPrimitiveAsOptions[ErrorClassifier](b, binding.ErrorClassifier, options)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve error classifier %q: %w", binding.ErrorClassifier.ID, err)
 		}
 		if options := binding.ErrorClassifierOptions.HTTPJSON; options != nil && !options.Empty() {
 			configurable, ok := classifier.(ConfigurableErrorClassifier)
@@ -197,41 +247,46 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	}
 	var quotaSource QuotaSource
 	if binding.QuotaSource.ID != "" {
-		var found bool
-		quotaSource, found = b.registry.quotaSources[binding.QuotaSource.ID]
-		if !found {
-			return RuntimeBinding{}, fmt.Errorf("quota source %q is not registered", binding.QuotaSource.ID)
+		quotaSource, err = bindPrimitiveAs[QuotaSource](b, binding.QuotaSource)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve quota source %q: %w", binding.QuotaSource.ID, err)
 		}
 	}
-	endpoint, ok := b.registry.endpoints[binding.Endpoint.ID]
-	if !ok {
-		return RuntimeBinding{}, fmt.Errorf("endpoint %q is not registered", binding.Endpoint.ID)
-	}
-	transport, ok := b.registry.transports[binding.Transport.ID]
-	if !ok {
-		return RuntimeBinding{}, fmt.Errorf("transport %q is not registered", binding.Transport.ID)
-	}
+	endpointOptions := binding.EndpointOptions
 	query := make(map[string]string, len(binding.EndpointOptions.Query))
 	for key, value := range binding.EndpointOptions.Query {
 		query[key] = value
 	}
-	endpointOptions := binding.EndpointOptions
 	endpointOptions.Query = query
-	task := binding.Task
-	if task == "" && binding.RequestCodec.ID != "" {
-		task = normalize.Operation(operation)
+	endpointOptionsJSON, err := json.Marshal(endpointOptions)
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("encode endpoint options: %w", err)
 	}
-	result := RuntimeBinding{DefinitionID: definitionID, Operation: operation, Task: task, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, Transport: transport, RequestCodecID: binding.RequestCodec.ID, ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
+	endpoint, err := bindPrimitiveAsOptions[kernel.Endpoint](b, binding.Endpoint, endpointOptionsJSON)
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("resolve endpoint %q: %w", binding.Endpoint.ID, err)
+	}
+	transport, err := bindPrimitiveAs[kernel.Transport](b, binding.Transport)
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("resolve transport %q: %w", binding.Transport.ID, err)
+	}
+	taskRef := extensions.Ref{}
+	if binding.TaskRef != nil {
+		taskRef = *binding.TaskRef
+	} else if binding.RequestCodec.ID != "" {
+		return RuntimeBinding{}, fmt.Errorf("provider %q %q inference binding requires a semantic task ref", definitionID, operation)
+	}
+	result := RuntimeBinding{DefinitionID: definitionID, Operation: operation, TaskRef: taskRef, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, Transport: transport, RequestCodecID: binding.RequestCodec.ID, ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
 	if binding.RequestCodec.ID == "" && binding.ResponseDecoder.ID == "" {
 		return result, nil
 	}
-	requestCodec, ok := b.registry.requestCodecs[binding.RequestCodec.ID]
-	if !ok {
-		return RuntimeBinding{}, fmt.Errorf("request codec %q is not registered", binding.RequestCodec.ID)
+	requestCodec, err := bindPrimitiveAs[kernel.RequestCodec](b, binding.RequestCodec)
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("resolve request codec %q: %w", binding.RequestCodec.ID, err)
 	}
-	responseDecoder, ok := b.registry.responseDecoders[binding.ResponseDecoder.ID]
-	if !ok {
-		return RuntimeBinding{}, fmt.Errorf("response codec %q is not registered", binding.ResponseDecoder.ID)
+	responseDecoder, err := bindPrimitiveAs[kernel.ResponseDecoder](b, binding.ResponseDecoder)
+	if err != nil {
+		return RuntimeBinding{}, fmt.Errorf("resolve response decoder %q: %w", binding.ResponseDecoder.ID, err)
 	}
 	result.AdapterID = RuntimeBindingKey(definitionID, operation)
 	if result.Protocol == "" {
@@ -268,6 +323,9 @@ func AuthBindingKey(definitionID, authFlowID string) string {
 }
 
 func (r *RuntimeRegistry) BuildBindings() (map[string]RuntimeBinding, error) {
+	if _, err := r.FreezeCatalog(); err != nil {
+		return nil, err
+	}
 	builder := NewRuntimeBindingBuilder(r)
 	result := map[string]RuntimeBinding{}
 	for _, definition := range r.Primitives.Definitions() {

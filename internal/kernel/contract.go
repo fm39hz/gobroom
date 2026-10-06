@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -64,6 +65,7 @@ type Route struct {
 }
 
 type RouteOperationBinding struct {
+	ContractVersion   uint64
 	AdapterIDs        []string
 	ErrorClassifierID string
 	UsageSourceID     string
@@ -221,6 +223,15 @@ const (
 	ScopeProvider        OutcomeScope = "provider"
 )
 
+type UpstreamEffect string
+
+const (
+	EffectUnknown       UpstreamEffect = "unknown"
+	EffectNotDispatched UpstreamEffect = "not_dispatched"
+	EffectRejected      UpstreamEffect = "confirmed_rejection"
+	EffectAccepted      UpstreamEffect = "accepted"
+)
+
 type EvidenceSource string
 
 const (
@@ -254,6 +265,7 @@ type LimitWindow struct {
 type ClassifiedOutcome struct {
 	Class      ErrorClass
 	Cause      OutcomeCause
+	Effect     UpstreamEffect
 	Scope      OutcomeScope
 	Retry      RetryAction
 	RetryAt    time.Time
@@ -262,6 +274,31 @@ type ClassifiedOutcome struct {
 	Limits     []LimitWindow
 	StatusCode int
 	Message    string
+}
+
+type ReplaySuppressedError struct {
+	Operation normalize.Operation
+	Safety    string
+	Effect    UpstreamEffect
+	Cause     error
+}
+
+func (e *ReplaySuppressedError) Error() string {
+	if e == nil {
+		return "operation replay was suppressed"
+	}
+	message := fmt.Sprintf("operation %q replay suppressed after upstream effect %q (safety %q)", e.Operation, e.Effect, e.Safety)
+	if e.Cause != nil {
+		message += ": " + e.Cause.Error()
+	}
+	return message
+}
+
+func (e *ReplaySuppressedError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
 }
 
 type OutcomeObserver interface {
@@ -291,18 +328,20 @@ type RouteAdmission interface {
 
 type ProviderAdapter interface {
 	ID() string
-	NegotiateClientFormat(normalize.Format, bool) CompatibilityDecision
+	PlanCompatibility(CompatibilityContext) CompatibilityPlan
 	Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error)
 	Execute(context.Context, UpstreamRequest) (UpstreamResponse, error)
 	ClassifyError(status int, body []byte) ErrorClass
 	RenderResponse(context.Context, UpstreamResponse, http.ResponseWriter, normalize.Format, StreamHooks) error
 }
 
-type CompatibilityDecision struct {
-	Supported bool
-	Fidelity  CompatibilityFidelity
-	Losses    []string
-	Reason    string
+type CompatibilityContext struct {
+	Request                 NormalizedRequest
+	Route                   Route
+	Operation               normalize.Operation
+	Requirements            RequestRequirements
+	Policy                  CompatibilityPolicy
+	ActiveResponseTransform bool
 }
 
 type CompatibilityFidelity string

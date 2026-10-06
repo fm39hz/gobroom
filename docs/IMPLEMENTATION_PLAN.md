@@ -67,11 +67,11 @@ but must not introduce provider-specific branches into the kernel.
 | M8 | Passive health, limits, performance and usage | Partial (runtime core; typed classifier options wired) | Typed outcomes, scoped feedback, reset-aware policy, bounded ranking, TTFT/throughput, EWMA, half-open trials, session affinity, durable health/usage IPC/TUI and retention/logging are implemented. Rich `ClassifyOutcome` survives registry wrapping; common typed HTTP error envelopes, quota reset/retry delay, Retry-After dates, rate-limit headers and manifest JSON pointers/signals/named windows feed route eligibility. The bounded coalescing writer persists asynchronously and flushes after producers stop; a daemon start → configured manifest HTTP 429 → two windows + connection scope → stop/reopen → restored route gating/cause fixture passes. Remaining: broader provider reset/error envelopes, scope precedence across simultaneous sources and state behavior on classifier/storage failure; add specialized extractors only when typed options cannot express the shape. |
 | M9 | Provider presets and discovery expansion | Partial (executable shared composition) | Definitions now bind endpoint, transport, request/response codecs, static/OAuth/no-auth auth, model discovery, passive usage enrichment, session store, configurable error evidence and quota API operations. Quota polling resolves the dedicated quota operation's endpoint/transport/parser and remains opt-in/opportunistic. Session state is connection/definition/physical-model/client-session scoped, cached in memory and persisted asynchronously; OpenAI Responses restores stored continuity only with a client session key. Connection model-list snapshots now persist positive entitlement evidence and completeness; only positively observed discovered routes expand to that connection, while complete snapshots mark prior routes not listed and incomplete snapshots do not revoke evidence. Remaining: dedicated provider usage-report operations, custom per-connection availability editing and wider real-provider fixtures. |
 | M10 | Physical identity, capability and modality policies | Done (physical core) | Typed support states, request-requirement compilation, profile persistence, typed TokenLimits, Physical identity/revision fields, source fidelity/evidence persistence, declared/guaranteed/available projections, projection source explanations and Physical IPC/TUI display are implemented and tested. Exact/alias sources are eligible by default; compatible/dynamic require opt-in and unknown fidelity is excluded. Conditional/emulated capability evidence does not satisfy hard requirements until an evaluator exists. Cross-protocol reasoning remains in M6. |
-| M11 | Typed request/response transformation primitives | Planned/deferred | Named transform stages/effects are required by the architecture contract; individual transforms remain opt-in and are implemented only for demonstrated need. They must be bounded and unable to mutate route identity or bypass cancellation. |
+| M11 | Typed request/response transformation primitives | Partial (registry seams) | Request/response registries and semantic transform fixtures exist. Scoped opt-in bindings, schema/options, transactional fail-open, full effect validation and passthrough coordination are specified in [Semantic extension contracts](EXTENSION_CONTRACTS.md) and remain to implement under M15. Individual production compression transforms stay deferred until a demonstrated need. |
 | M12 | Secondary operation implementations and integrations | Out of core | Operation-neutral routing is an architectural requirement; embeddings/media/search implementations, tunnels, MITM/DNS and IDE integrations may remain separate services/sidecars and are not initial core feature commitments. |
 | M13 | Canonical configuration bundle and sync | Done (single-writer core) | Versioned secret-free typed bundle export, validation, diff/dry-run and atomic apply/import are implemented. Existing connection secrets are preserved by stable connection ID and never exported. Multi-writer conflict-free sync is intentionally not promised. |
 | M14 | Portable operations and remote hosting | Done (local/remote boundary core) | Explicit paths/listeners, bounded logs/retention, optional bearer auth, journald guidance, TLS/reverse-proxy boundary and snapshot repository interface are documented/implemented. Alternate database backends remain an optional follow-up until a named backend is selected. |
-| M15 | Architecture catch-up conformance | Complete (extension gate; not feature parity) | `make test-conformance` exercises provider/API-key discovery, OAuth factories, secret-safe provider setup metadata across control surfaces, operation ingress/bindings, feature evaluators, registered strategies, request/response transforms, semantic decoder/renderer composition, quota evidence and response commitment. Kernel/provider-name and adapter direct-write audits pass. This establishes the architecture extension gate only; it does not imply complete TUI onboarding or drop-in feature parity. See [M15 conformance evidence](M15_CONFORMANCE.md). |
+| M15 | Architecture catch-up conformance | Partial (catalog, compatibility planning and replay admission in progress) | `make test-conformance` covers registration/schema binding, exact provider/operation refs, typed non-chat schema admission, IPC/HTTP/CLI projection, request/response facet planning, transform-aware passthrough and the first dispatch-effect replay rules. Remaining C1 work: catalog integration for feature/strategy/transform implementations, side-by-side primitive versions, event/artifact ownership and bounded body references, plus declarative binding and bundle dependency round trips. Full compatibility planning, interactive auth, scoped transforms, issuer-scoped idempotency and operation/job replay fixtures remain to implement and prove with SG1–SG7 in [M15 conformance evidence](M15_CONFORMANCE.md). |
 
 ## Milestone review and recommended order
 
@@ -90,11 +90,11 @@ discoverable model → client request → upstream auth/response. Fake-upstream
 vertical fixtures now cover both request paths and Anthropic model discovery;
 live credentials are not required for deterministic acceptance.
 
-0. **M15 architecture conformance:** passed for the extension change
-   simulations listed in [`M15_CONFORMANCE.md`](M15_CONFORMANCE.md), runnable
-   with `make test-conformance`. This is architecture readiness, not a claim
-   that omitted provider implementations, TUI onboarding or drop-in parity are
-   complete.
+0. **M15 semantic closure:** the existing `make test-conformance` passes its
+   composition subset. The stronger SG1–SG7 gate remains pending. Follow the
+   ordered slices below to implement the fixed contracts; do not infer full
+   architecture readiness from auth factories, operation IDs or renderer
+   registration alone.
 1. **OpenAI/Anthropic API-key readiness:** fake-upstream fixtures now cover
    OpenAI Chat bearer-key routing, Anthropic `/v1/messages` key routing, and
    Anthropic model discovery. Broader SSE/auth-failure conformance and live
@@ -133,6 +133,72 @@ product. M13's bundle is the portability contract; do not sync database tables.
 M13/M14 are architecture-enabling work, not reasons to delay usable local
 SQLite, IPC and journald defaults. A second database or remote log sink should
 be implemented only against a named need and testable contract.
+
+## M15 semantic closure delivery
+
+The design is fixed in [Semantic extension contracts](EXTENSION_CONTRACTS.md).
+These slices implement that design; they do not reopen the model graph or
+introduce provider-specific core workflows. C1 has started; C2–C6 remain
+pending.
+
+1. **C1 — catalog and semantic envelope (in progress):** the local-schema,
+   versioned descriptor/factory catalog freezes with the provider runtime;
+   provider, primitive and task refs pin exact contracts. Built-in endpoint,
+   usage, classifier and OAuth options are schema-validated. Operation
+   definitions own typed payload schemas, requirement compilers and replay
+   declarations; ingress, provider task bindings, immutable routes and kernel
+   execution resolve one exact operation version. The descriptor/schema
+   catalog is available through IPC/HTTP/CLI. Remaining: unify feature,
+   strategy and transform implementation registries with this catalog, allow
+   multiple primitive contract versions side by side, and add versioned
+   content/event artifacts, bounded body references, declarative binding
+   storage and atomic bundle dependency resolution.
+2. **C2 — full compatibility planning (in progress):** the kernel now asks
+   adapters for a request/route/operation-scoped `CompatibilityPlan` and
+   recomputes admission from immutable facet declarations rather than trusting
+   a boolean. Ordered facet composition, fail-closed required facets, named
+   loss grants/denials and fidelity aggregation are implemented; the composed
+   adapter now combines request-codec declarations with the response-wire
+   facet and composes decoder event declarations with renderer event coverage.
+   OpenAI Chat, OpenAI Responses, Anthropic Messages and Gemini declare bounded
+   request facets; the response decoders enumerate event families and renderers
+   must declare each request-required family. Missing text/completion/tool/
+   thinking coverage now fails admission. Active semantic transforms disable
+   native wire passthrough; OpenAI Chat re-encodes semantic events while raw
+   passthrough renderers reject the plan. Remaining: bind loss policy from
+   model nodes, include scoped transforms and artifact transfers in the plan,
+   retain route-level explanations and build semantic client renderers needed
+   by SG1/SG4, including Anthropic output.
+3. **C3 — transform plan compilation:** opt-in scoped bindings and options,
+   branch/attempt working copies, recomputed requirements, immutable pinned
+   chains, validated effects/bounds and transactional fail-open. Native
+   passthrough selection must honor active semantic mutation. Keep original
+   provider observations separate from rendered projections.
+4. **C4 — daemon auth coordinator:** opaque credential leases and prepared
+   request auth application/signing; interactive session state machine,
+   typed frontend actions, device polling, PKCE/callback, cancellation and
+   credential-generation-safe persistence. No frontend is needed for polling
+   or refresh. Validate actual lifecycle fixtures, not token-only stubs.
+5. **C5 — attempt replay and operation execution (in progress):** operation
+   replay declarations now reach the kernel attempt executor. Ambiguous transport
+   failure and accepted-response decode/render failure stop instead of trying a
+   second upstream route; `confirmed_rejection_only` may continue after an
+   explicitly classified rejection such as 429. Missing effect evidence is
+   unsafe. Remaining: actual issuer-scoped idempotency-key binding, provider
+   operation replay overrides, async job effects, and a real non-chat
+   payload/result through the shared graph executor while preserving the
+   pre/post-client-commit boundary.
+6. **C6 — integrated extension proof:** implement SG1–SG7 with a provider module
+   that uses the completed contracts without changing kernel graph types,
+   core schema or generic request/frontend workflow. Add all cases to
+   `make test-conformance`; run ordinary integration checks, install delivered
+   binaries and exercise the matching CLI/control operations.
+
+Completion of C1–C6 proves runtime architecture closure for the declared
+scope. It does not change M2/M6/M7/M8/M9 feature completeness automatically;
+update those milestones only against their own exit criteria. Secondary
+operation fixtures prove architecture without committing to ship every media
+product feature. No legacy compatibility path is retained during these changes.
 
 ## Architectural invariants
 

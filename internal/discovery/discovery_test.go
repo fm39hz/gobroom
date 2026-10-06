@@ -250,13 +250,12 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := provider.ProviderDefinition{
-		ID: "static-catalog", Version: "1", DisplayName: "Static catalog",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret"},
+	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "static-catalog", Version: "1", DisplayName: "Static catalog",
+		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationModels: {
-			Endpoint:    provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
-			Transport:   provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
-			ModelSource: provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "static-models"},
+			Endpoint:    provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:   provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			ModelSource: provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "static-models", ContractVersion: 1},
 		}},
 	}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {

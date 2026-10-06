@@ -12,11 +12,17 @@ import (
 	"github.com/fm39hz/gobroom/internal/adapter/gemini"
 	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 )
 
 type Operation string
+
+func OperationRef(task normalize.Operation, contractVersion uint64) *extensions.Ref {
+	return &extensions.Ref{Kind: "operation", ID: string(task), ContractVersion: contractVersion}
+}
 
 const (
 	OperationChat       Operation = "chat"
@@ -48,8 +54,9 @@ const (
 )
 
 type PrimitiveRef struct {
-	Kind PrimitiveKind `json:"kind"`
-	ID   string        `json:"id"`
+	Kind            PrimitiveKind `json:"kind"`
+	ID              string        `json:"id"`
+	ContractVersion uint64        `json:"contractVersion"`
 }
 
 // ErrorClassifierOptions configure a shared classifier for a provider's
@@ -149,7 +156,7 @@ func validJSONPointer(path string) bool {
 
 type OperationBinding struct {
 	Protocol               kernel.Protocol           `json:"protocol,omitempty"`
-	Task                   normalize.Operation       `json:"task,omitempty"`
+	TaskRef                *extensions.Ref           `json:"task,omitempty"`
 	ProviderFormat         normalize.Format          `json:"providerFormat,omitempty"`
 	Endpoint               PrimitiveRef              `json:"endpoint"`
 	EndpointOptions        kernel.EndpointOptions    `json:"endpointOptions,omitempty"`
@@ -195,17 +202,18 @@ type AuthOptions struct {
 }
 
 type ProviderDefinition struct {
-	ID           string                         `json:"id"`
-	Version      string                         `json:"version"`
-	DisplayName  string                         `json:"displayName"`
-	Aliases      []string                       `json:"aliases,omitempty"`
-	Operations   map[Operation]OperationBinding `json:"operations"`
-	Auth         PrimitiveRef                   `json:"auth"`
-	AuthOptions  AuthOptions                    `json:"authOptions,omitempty"`
-	Session      PrimitiveRef                   `json:"session,omitempty"`
-	Extensions   []PrimitiveRef                 `json:"extensions,omitempty"`
-	Capabilities CapabilitySet                  `json:"capabilities"`
-	Defaults     map[string]any                 `json:"defaults,omitempty"`
+	ContractVersion uint64                         `json:"contractVersion"`
+	ID              string                         `json:"id"`
+	Version         string                         `json:"version"`
+	DisplayName     string                         `json:"displayName"`
+	Aliases         []string                       `json:"aliases,omitempty"`
+	Operations      map[Operation]OperationBinding `json:"operations"`
+	Auth            PrimitiveRef                   `json:"auth"`
+	AuthOptions     AuthOptions                    `json:"authOptions,omitempty"`
+	Session         PrimitiveRef                   `json:"session,omitempty"`
+	Extensions      []PrimitiveRef                 `json:"extensions,omitempty"`
+	Capabilities    CapabilitySet                  `json:"capabilities"`
+	Defaults        map[string]any                 `json:"defaults,omitempty"`
 }
 
 func DecodeProviderDefinitionJSON(data []byte) (ProviderDefinition, error) {
@@ -241,22 +249,26 @@ type PrimitivePlugin interface {
 
 type PrimitiveRegistry struct {
 	definitions map[string]ProviderDefinition
-	primitives  map[PrimitiveKind]map[string]struct{}
+	primitives  map[PrimitiveKind]map[string]uint64
+	catalog     *extensions.Catalog
+	Operations  *operations.Registry
 }
 
 type RuntimeRegistry struct {
-	Primitives       *PrimitiveRegistry
-	Auth             *AuthRegistry
-	endpoints        map[string]kernel.Endpoint
-	transports       map[string]kernel.Transport
-	requestCodecs    map[string]kernel.RequestCodec
-	responseDecoders map[string]kernel.ResponseDecoder
-	renderers        map[normalize.Format]kernel.ResponseRenderer
-	modelSources     map[string]ModelSource
-	usageSources     map[string]UsageSource
-	sessionStores    map[string]kernel.SessionStore
-	errorClassifiers map[string]ErrorClassifier
-	quotaSources     map[string]QuotaSource
+	Primitives        *PrimitiveRegistry
+	Auth              *AuthRegistry
+	extensionSnapshot *extensions.Snapshot
+	operationSnapshot *operations.Snapshot
+	endpoints         map[string]kernel.Endpoint
+	transports        map[string]kernel.Transport
+	requestCodecs     map[string]kernel.RequestCodec
+	responseDecoders  map[string]kernel.ResponseDecoder
+	renderers         map[normalize.Format]kernel.ResponseRenderer
+	modelSources      map[string]ModelSource
+	usageSources      map[string]UsageSource
+	sessionStores     map[string]kernel.SessionStore
+	errorClassifiers  map[string]ErrorClassifier
+	quotaSources      map[string]QuotaSource
 }
 
 func NewRuntimeRegistry() (*RuntimeRegistry, error) {
@@ -265,6 +277,15 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 		return nil, err
 	}
 	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[string]kernel.Endpoint{}, transports: map[string]kernel.Transport{}, requestCodecs: map[string]kernel.RequestCodec{}, responseDecoders: map[string]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[string]ModelSource{}, usageSources: map[string]UsageSource{}, sessionStores: map[string]kernel.SessionStore{}, errorClassifiers: map[string]ErrorClassifier{}, quotaSources: map[string]QuotaSource{}}
+	oauthSchema, err := oauthOptionsSchema()
+	if err != nil {
+		return nil, err
+	}
+	for _, authID := range []string{"static-secret", "none"} {
+		if err := runtime.registerAuthImplementation(authID); err != nil {
+			return nil, err
+		}
+	}
 	requestCodec, responseDecoder := openai.NewChatCodecs()
 	registrations := []error{
 		runtime.RegisterEndpoint(kernel.HTTPJSONEndpoint{}), runtime.RegisterTransport(kernel.HTTPTransport{}),
@@ -282,7 +303,7 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 		runtime.RegisterUsageSource(HTTPHeaderUsageSource{}),
 		runtime.RegisterErrorClassifier(HTTPJSONErrorClassifier{}),
 		runtime.RegisterQuotaSource(NoopQuotaSource{}), runtime.RegisterQuotaSource(HTTPJSONQuotaSource{}),
-		runtime.RegisterAuthFactory("oauth2", OAuthAuthFactory),
+		runtime.RegisterAuthFactoryWithOptionsSchema("oauth2", 1, oauthOptionsSchemaRef, oauthSchema, OAuthAuthFactory),
 	)
 	for _, renderer := range egress.Builtins() {
 		registrations = append(registrations, runtime.RegisterResponseRenderer(renderer))
@@ -305,6 +326,13 @@ func (r *RuntimeRegistry) RegisterResponseRenderer(renderer kernel.ResponseRende
 	if _, exists := r.renderers[renderer.ID()]; exists {
 		return fmt.Errorf("response renderer for %q is already registered", renderer.ID())
 	}
+	ref := extensions.Ref{Kind: "client-renderer", ID: string(renderer.ID()), ContractVersion: 1}
+	if err := r.Primitives.catalog.Register(extensions.Descriptor{
+		Ref: ref, ImplementationVersion: "1", DisplayName: string(renderer.ID()),
+		Description: "Client response wire renderer.",
+	}, func(json.RawMessage) (any, error) { return renderer, nil }); err != nil {
+		return err
+	}
 	r.renderers[renderer.ID()] = renderer
 	return nil
 }
@@ -317,17 +345,33 @@ func (r *RuntimeRegistry) ResponseRenderers() map[normalize.Format]kernel.Respon
 	return result
 }
 
-func (r *RuntimeRegistry) registerImplementation(kind PrimitiveKind, id string) error {
+func (r *RuntimeRegistry) registerImplementation(kind PrimitiveKind, id string, factory extensions.Factory) error {
 	if r == nil || r.Primitives == nil {
 		return fmt.Errorf("runtime registry is not initialized")
 	}
-	if id == "" {
-		return fmt.Errorf("%s primitive ID is required", kind)
+	if id == "" || factory == nil {
+		return fmt.Errorf("%s primitive ID and factory are required", kind)
 	}
-	if r.Primitives.hasPrimitive(PrimitiveRef{Kind: PrimitiveKind(kind), ID: id}) {
-		return nil
+	ref := PrimitiveRef{Kind: kind, ID: id, ContractVersion: 1}
+	if !r.Primitives.hasPrimitive(ref) {
+		if version, exists := r.Primitives.primitives[kind][id]; exists {
+			return fmt.Errorf("runtime implementation %s/%q is contract 1; registered contract is %d", kind, id, version)
+		}
+		if err := r.Primitives.RegisterPrimitiveVersion(kind, id, 1); err != nil {
+			return err
+		}
 	}
-	return r.Primitives.RegisterPrimitive(PrimitiveKind(kind), id)
+	return r.Primitives.catalog.RegisterFactory(extensionRef(ref), factory)
+}
+
+// RegisterPrimitiveOptionsSchema binds JSON Schema metadata to a primitive
+// contract before its implementation is registered. Provider modules use it
+// for their operation-specific option payloads.
+func (r *RuntimeRegistry) RegisterPrimitiveOptionsSchema(kind PrimitiveKind, id string, contractVersion uint64, schemaRef extensions.Ref, schema json.RawMessage) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	return r.Primitives.RegisterPrimitiveWithOptionsSchema(kind, id, contractVersion, schemaRef, schema)
 }
 
 func (r *RuntimeRegistry) ensureReady() error {
@@ -335,6 +379,60 @@ func (r *RuntimeRegistry) ensureReady() error {
 		return fmt.Errorf("runtime registry is not initialized")
 	}
 	return nil
+}
+
+// FreezeCatalog resolves exact extension references and compiles the complete
+// schema set once during daemon startup. Repeated callers receive the same
+// immutable snapshot.
+func (r *RuntimeRegistry) FreezeCatalog() (*extensions.Snapshot, error) {
+	if err := r.ensureReady(); err != nil {
+		return nil, err
+	}
+	if r.extensionSnapshot != nil {
+		return r.extensionSnapshot, nil
+	}
+	snapshot, err := r.Primitives.catalog.Freeze()
+	if err != nil {
+		return nil, err
+	}
+	if r.Primitives.Operations != nil {
+		r.operationSnapshot, err = r.Primitives.Operations.Seal(snapshot)
+		if err != nil {
+			return nil, err
+		}
+	}
+	r.extensionSnapshot = snapshot
+	return snapshot, nil
+}
+
+func (r *RuntimeRegistry) OperationSnapshot() (*operations.Snapshot, error) {
+	if _, err := r.FreezeCatalog(); err != nil {
+		return nil, err
+	}
+	if r.operationSnapshot == nil {
+		return nil, fmt.Errorf("operation catalog is unavailable")
+	}
+	return r.operationSnapshot, nil
+}
+
+func (r *RuntimeRegistry) ExtensionCatalog() (extensions.CatalogView, error) {
+	snapshot, err := r.FreezeCatalog()
+	if err != nil {
+		return extensions.CatalogView{}, err
+	}
+	return snapshot.View(), nil
+}
+
+func (r *RuntimeRegistry) registerAuthImplementation(id string) error {
+	return r.registerImplementation(PrimitiveAuth, id, func(raw json.RawMessage) (any, error) {
+		var options AuthOptions
+		if len(raw) > 0 {
+			if err := decodeStrictJSON(raw, &options); err != nil {
+				return nil, err
+			}
+		}
+		return r.Auth.Build(id, options)
+	})
 }
 
 func (r *RuntimeRegistry) RegisterEndpoint(endpoint kernel.Endpoint) error {
@@ -347,7 +445,7 @@ func (r *RuntimeRegistry) RegisterEndpoint(endpoint kernel.Endpoint) error {
 	if _, exists := r.endpoints[endpoint.ID()]; exists {
 		return fmt.Errorf("endpoint %q is already registered", endpoint.ID())
 	}
-	if err := r.registerImplementation(PrimitiveEndpoint, endpoint.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveEndpoint, endpoint.ID(), func(json.RawMessage) (any, error) { return endpoint, nil }); err != nil {
 		return err
 	}
 	r.endpoints[endpoint.ID()] = endpoint
@@ -364,7 +462,7 @@ func (r *RuntimeRegistry) RegisterTransport(transport kernel.Transport) error {
 	if _, exists := r.transports[transport.ID()]; exists {
 		return fmt.Errorf("transport %q is already registered", transport.ID())
 	}
-	if err := r.registerImplementation(PrimitiveTransport, transport.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveTransport, transport.ID(), func(json.RawMessage) (any, error) { return transport, nil }); err != nil {
 		return err
 	}
 	r.transports[transport.ID()] = transport
@@ -381,7 +479,7 @@ func (r *RuntimeRegistry) RegisterRequestCodec(codec kernel.RequestCodec) error 
 	if _, exists := r.requestCodecs[codec.ID()]; exists {
 		return fmt.Errorf("request codec %q is already registered", codec.ID())
 	}
-	if err := r.registerImplementation(PrimitiveRequestCodec, codec.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveRequestCodec, codec.ID(), func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
 		return err
 	}
 	r.requestCodecs[codec.ID()] = codec
@@ -398,7 +496,7 @@ func (r *RuntimeRegistry) RegisterResponseDecoder(codec kernel.ResponseDecoder) 
 	if _, exists := r.responseDecoders[codec.ID()]; exists {
 		return fmt.Errorf("response codec %q is already registered", codec.ID())
 	}
-	if err := r.registerImplementation(PrimitiveResponseDecoder, codec.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveResponseDecoder, codec.ID(), func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
 		return err
 	}
 	r.responseDecoders[codec.ID()] = codec
@@ -415,7 +513,7 @@ func (r *RuntimeRegistry) RegisterModelSource(source ModelSource) error {
 	if _, exists := r.modelSources[source.ID()]; exists {
 		return fmt.Errorf("model source %q is already registered", source.ID())
 	}
-	if err := r.registerImplementation(PrimitiveModelSource, source.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveModelSource, source.ID(), func(json.RawMessage) (any, error) { return source, nil }); err != nil {
 		return err
 	}
 	r.modelSources[source.ID()] = source
@@ -432,7 +530,7 @@ func (r *RuntimeRegistry) RegisterUsageSource(source UsageSource) error {
 	if _, exists := r.usageSources[source.ID()]; exists {
 		return fmt.Errorf("usage source %q is already registered", source.ID())
 	}
-	if err := r.registerImplementation(PrimitiveUsageSource, source.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveUsageSource, source.ID(), func(json.RawMessage) (any, error) { return source, nil }); err != nil {
 		return err
 	}
 	r.usageSources[source.ID()] = source
@@ -449,7 +547,7 @@ func (r *RuntimeRegistry) RegisterSessionStore(sessionStore kernel.SessionStore)
 	if _, exists := r.sessionStores[sessionStore.ID()]; exists {
 		return fmt.Errorf("session store %q is already registered", sessionStore.ID())
 	}
-	if err := r.registerImplementation(PrimitiveSessionStore, sessionStore.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveSessionStore, sessionStore.ID(), func(json.RawMessage) (any, error) { return sessionStore, nil }); err != nil {
 		return err
 	}
 	r.sessionStores[sessionStore.ID()] = sessionStore
@@ -467,6 +565,10 @@ func (r *RuntimeRegistry) ReplaceSessionStore(sessionStore kernel.SessionStore) 
 	}
 	if _, exists := r.sessionStores[sessionStore.ID()]; !exists {
 		return fmt.Errorf("session store %q is not registered", sessionStore.ID())
+	}
+	ref := extensions.Ref{Kind: string(PrimitiveSessionStore), ID: sessionStore.ID(), ContractVersion: 1}
+	if err := r.Primitives.catalog.ReplaceFactory(ref, func(json.RawMessage) (any, error) { return sessionStore, nil }); err != nil {
+		return err
 	}
 	r.sessionStores[sessionStore.ID()] = sessionStore
 	return nil
@@ -506,7 +608,7 @@ func (r *RuntimeRegistry) RegisterErrorClassifier(classifier ErrorClassifier) er
 	if _, exists := r.errorClassifiers[classifier.ID()]; exists {
 		return fmt.Errorf("error classifier %q is already registered", classifier.ID())
 	}
-	if err := r.registerImplementation(PrimitiveErrorClassifier, classifier.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveErrorClassifier, classifier.ID(), func(json.RawMessage) (any, error) { return classifier, nil }); err != nil {
 		return err
 	}
 	r.errorClassifiers[classifier.ID()] = classifier
@@ -523,7 +625,7 @@ func (r *RuntimeRegistry) RegisterQuotaSource(source QuotaSource) error {
 	if _, exists := r.quotaSources[source.ID()]; exists {
 		return fmt.Errorf("quota source %q is already registered", source.ID())
 	}
-	if err := r.registerImplementation(PrimitiveQuotaSource, source.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveQuotaSource, source.ID(), func(json.RawMessage) (any, error) { return source, nil }); err != nil {
 		return err
 	}
 	r.quotaSources[source.ID()] = source
@@ -537,20 +639,43 @@ func (r *RuntimeRegistry) RegisterAuthFlow(flow AuthFlow) error {
 	if flow == nil {
 		return fmt.Errorf("auth flow implementation is nil")
 	}
-	if err := r.registerImplementation(PrimitiveAuth, flow.ID()); err != nil {
+	if err := r.registerImplementation(PrimitiveAuth, flow.ID(), func(json.RawMessage) (any, error) { return flow, nil }); err != nil {
 		return err
 	}
 	return r.Auth.Register(flow)
 }
 
 func (r *RuntimeRegistry) RegisterAuthFactory(id string, factory AuthFlowFactory) error {
+	return r.registerAuthFactory(id, 1, nil, nil, factory)
+}
+
+func (r *RuntimeRegistry) RegisterAuthFactoryWithOptionsSchema(id string, contractVersion uint64, schemaRef extensions.Ref, schema json.RawMessage, factory AuthFlowFactory) error {
+	return r.registerAuthFactory(id, contractVersion, &schemaRef, schema, factory)
+}
+
+func (r *RuntimeRegistry) registerAuthFactory(id string, contractVersion uint64, schemaRef *extensions.Ref, schema json.RawMessage, factory AuthFlowFactory) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if err := r.registerImplementation(PrimitiveAuth, id); err != nil {
+	if factory == nil || id == "" {
+		return fmt.Errorf("auth factory and ID are required")
+	}
+	if schemaRef != nil {
+		if err := r.Primitives.RegisterPrimitiveWithOptionsSchema(PrimitiveAuth, id, contractVersion, *schemaRef, schema); err != nil {
+			return err
+		}
+	} else if !r.Primitives.hasPrimitive(PrimitiveRef{Kind: PrimitiveAuth, ID: id, ContractVersion: contractVersion}) {
+		if err := r.Primitives.RegisterPrimitiveVersion(PrimitiveAuth, id, contractVersion); err != nil {
+			return err
+		}
+	}
+	if err := r.Auth.RegisterFactory(id, factory); err != nil {
 		return err
 	}
-	return r.Auth.RegisterFactory(id, factory)
+	if err := r.registerAuthImplementation(id); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *RuntimeRegistry) AdaptersForBindings(bindings map[string]RuntimeBinding) map[string]kernel.ProviderAdapter {
@@ -663,41 +788,78 @@ func (c outcomeClassifierAdapter) ClassifyOutcome(status int, headers http.Heade
 }
 
 func NewPrimitiveRegistry() *PrimitiveRegistry {
+	catalog := extensions.NewCatalog()
+	operationRegistry, _ := operations.NewRegistry(catalog)
 	return &PrimitiveRegistry{
 		definitions: map[string]ProviderDefinition{},
-		primitives: map[PrimitiveKind]map[string]struct{}{
+		primitives: map[PrimitiveKind]map[string]uint64{
 			PrimitiveEndpoint: {}, PrimitiveTransport: {}, PrimitiveAuth: {}, PrimitiveRequestCodec: {},
 			PrimitiveResponseDecoder: {}, PrimitiveModelSource: {}, PrimitiveUsageSource: {},
 			PrimitiveQuotaSource: {}, PrimitiveSessionStore: {},
 			PrimitiveErrorClassifier: {}, PrimitiveExtension: {},
 		},
+		catalog:    catalog,
+		Operations: operationRegistry,
 	}
 }
 
 func (r *PrimitiveRegistry) RegisterPrimitive(kind PrimitiveKind, id string) error {
-	if r == nil {
-		return fmt.Errorf("primitive registry is nil")
+	return r.RegisterPrimitiveVersion(kind, id, 1)
+}
+
+// RegisterPrimitiveVersion pins the executable contract version for a
+// primitive ID. A runtime currently registers one version per kind/ID; a
+// manifest must always select that exact version.
+func (r *PrimitiveRegistry) RegisterPrimitiveVersion(kind PrimitiveKind, id string, contractVersion uint64) error {
+	return r.registerPrimitiveContract(kind, id, contractVersion, nil)
+}
+
+func (r *PrimitiveRegistry) RegisterPrimitiveWithOptionsSchema(kind PrimitiveKind, id string, contractVersion uint64, schemaRef extensions.Ref, schema json.RawMessage) error {
+	if r == nil || r.catalog == nil {
+		return fmt.Errorf("primitive registry catalog is not initialized")
 	}
-	if id == "" {
-		return fmt.Errorf("primitive ID is required")
+	if err := r.catalog.RegisterSchema(schemaRef, schema); err != nil {
+		return err
+	}
+	return r.registerPrimitiveContract(kind, id, contractVersion, &schemaRef)
+}
+
+func (r *PrimitiveRegistry) registerPrimitiveContract(kind PrimitiveKind, id string, contractVersion uint64, optionsSchemaRef *extensions.Ref) error {
+	if r == nil || id == "" || contractVersion == 0 {
+		return fmt.Errorf("primitive registry, ID and positive contractVersion are required")
 	}
 	set, ok := r.primitives[kind]
 	if !ok {
 		return fmt.Errorf("unknown primitive kind %q", kind)
 	}
-	if _, exists := set[id]; exists {
-		return fmt.Errorf("primitive %s/%q already registered", kind, id)
+	if previous, exists := set[id]; exists {
+		return fmt.Errorf("primitive %s/%q already registered at contract %d", kind, id, previous)
 	}
-	set[id] = struct{}{}
+	ref := extensions.Ref{Kind: string(kind), ID: id, ContractVersion: contractVersion}
+	if err := r.catalog.RegisterDescriptor(extensions.Descriptor{
+		Ref: ref, ImplementationVersion: fmt.Sprintf("contract-%d", contractVersion),
+		DisplayName: string(kind) + ": " + id, Description: "Runtime provider primitive contract.",
+		OptionsSchemaRef: optionsSchemaRef,
+	}); err != nil {
+		return err
+	}
+	set[id] = contractVersion
 	return nil
+}
+
+func (r *PrimitiveRegistry) ContractCatalog() *extensions.Catalog {
+	if r == nil {
+		return nil
+	}
+	return r.catalog
 }
 
 func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	if r == nil {
 		return fmt.Errorf("primitive registry is nil")
 	}
-	if def.ID == "" || def.Version == "" || def.DisplayName == "" {
-		return fmt.Errorf("provider definition requires ID, version and display name")
+	if def.ContractVersion != 1 || def.ID == "" || def.Version == "" || def.DisplayName == "" {
+		return fmt.Errorf("provider definition requires supported contractVersion 1, ID, version and display name")
 	}
 	if _, exists := r.definitions[def.ID]; exists {
 		return fmt.Errorf("provider definition %q already registered", def.ID)
@@ -707,6 +869,9 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	}
 	if def.Auth.ID == "" {
 		return fmt.Errorf("provider %q must bind an auth primitive explicitly (use %q when no credential is needed)", def.ID, "none")
+	}
+	if err := validatePrimitiveRef(def.Auth); err != nil {
+		return fmt.Errorf("provider %q auth reference: %w", def.ID, err)
 	}
 	if !r.hasPrimitive(def.Auth) {
 		return fmt.Errorf("provider %q references unknown auth primitive %q", def.ID, def.Auth.ID)
@@ -721,6 +886,13 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		requestResponseOperation := binding.RequestCodec.ID != "" || binding.ResponseDecoder.ID != ""
 		if requestResponseOperation && (binding.RequestCodec.ID == "" || binding.ResponseDecoder.ID == "") {
 			return fmt.Errorf("provider %q has incomplete %q codec binding", def.ID, operation)
+		}
+		if binding.TaskRef == nil {
+			if requestResponseOperation {
+				return fmt.Errorf("provider %q %q inference binding requires a semantic task ref", def.ID, operation)
+			}
+		} else if err := binding.TaskRef.Validate(); err != nil || binding.TaskRef.Kind != "operation" || r.Operations == nil || !r.Operations.Contains(*binding.TaskRef) {
+			return fmt.Errorf("provider %q %q references an unknown or invalid semantic task ref", def.ID, operation)
 		}
 		if operation == OperationQuota && binding.QuotaSource.ID == "" {
 			return fmt.Errorf("provider %q quota operation requires a quotaSource", def.ID)
@@ -740,8 +912,14 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 			}
 		}
 		for _, ref := range []PrimitiveRef{binding.Endpoint, binding.Transport, binding.RequestCodec, binding.ResponseDecoder, binding.ModelSource, binding.UsageSource, binding.QuotaSource, binding.ErrorClassifier} {
-			if ref.ID != "" && !r.hasPrimitive(ref) {
-				return fmt.Errorf("provider %q references unknown %s primitive %q", def.ID, ref.Kind, ref.ID)
+			if ref.ID == "" {
+				continue
+			}
+			if err := validatePrimitiveRef(ref); err != nil {
+				return fmt.Errorf("provider %q operation %q: %w", def.ID, operation, err)
+			}
+			if !r.hasPrimitive(ref) {
+				return fmt.Errorf("provider %q references unknown %s primitive %q contract %d", def.ID, ref.Kind, ref.ID, ref.ContractVersion)
 			}
 		}
 	}
@@ -775,13 +953,20 @@ func (r *PrimitiveRegistry) Definitions() []ProviderDefinition {
 }
 
 func (r *PrimitiveRegistry) hasPrimitive(ref PrimitiveRef) bool {
-	if ref.ID == "" {
+	if ref.ID == "" || ref.ContractVersion == 0 {
 		return false
 	}
 	set, ok := r.primitives[ref.Kind]
 	if !ok {
 		return false
 	}
-	_, exists := set[ref.ID]
-	return exists
+	version, exists := set[ref.ID]
+	return exists && version == ref.ContractVersion
+}
+
+func validatePrimitiveRef(ref PrimitiveRef) error {
+	if ref.Kind == "" || ref.ID == "" || ref.ContractVersion == 0 {
+		return fmt.Errorf("primitive ref requires kind, ID and positive contractVersion")
+	}
+	return nil
 }

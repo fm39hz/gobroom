@@ -20,6 +20,26 @@ func (Responses) ID() string { return "openai-responses" }
 type responsesRequestCodec struct{ adapter Responses }
 
 func (c responsesRequestCodec) ID() string { return "openai-responses-json" }
+func (c responsesRequestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
+	native := input.Request.SourceFormat == normalize.FormatOpenAIResponses
+	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
+	for _, facet := range input.Policy.RequiredFacets {
+		if kernel.IsResponseCompatibilityFacet(facet) {
+			continue
+		}
+		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Responses request codec cannot safely translate this facet from the client contract"}
+		switch {
+		case native && (facet == kernel.FacetWireRequest || facet == kernel.FacetPromptLayers || facet == kernel.FacetToolDefinitions || facet == kernel.FacetToolHistory || facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity || facet == kernel.FacetVisionInput || facet == kernel.FacetAudioInput || facet == kernel.FacetVideoInput || facet == kernel.FacetDocumentInput || facet == kernel.FacetGenerationOptions):
+			mapping.Disposition = kernel.FacetPreserved
+			mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
+		case !native && (facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity):
+			mapping.Disposition = kernel.FacetTranslated
+			mapping.Reason = "the canonical reasoning or previous-response value is encoded as an OpenAI Responses field"
+		}
+		result = append(result, mapping)
+	}
+	return result
+}
 func (c responsesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
@@ -27,6 +47,9 @@ func (c responsesRequestCodec) Prepare(ctx context.Context, request kernel.Norma
 type responsesResponseDecoder struct{ adapter Responses }
 
 func (c responsesResponseDecoder) ID() string { return "openai-responses-sse" }
+func (c responsesResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return openAIResponseEvents()
+}
 func (c responsesResponseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
 }

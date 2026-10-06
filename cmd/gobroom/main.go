@@ -57,6 +57,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	resolve.Flags().StringVar(&resolveModel, "model", "", "published model name")
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
+	root.AddCommand(extensionCommands())
 	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
 	return root
 }
@@ -252,6 +253,12 @@ func resourceCommands() []*cobra.Command {
 	typedCombos.AddCommand(typedComboUpsert, idCommand("delete", "delete combo model", "combo_models.delete", "name", &typedComboName))
 
 	return []*cobra.Command{providers, connections, models, physical, typedCombos}
+}
+
+func extensionCommands() *cobra.Command {
+	command := &cobra.Command{Use: "extensions", Short: "inspect versioned extension contracts"}
+	command.AddCommand(listCommand("catalog", "extensions.catalog", nil))
+	return command
 }
 
 func healthCommand() *cobra.Command {

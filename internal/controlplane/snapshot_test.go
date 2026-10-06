@@ -3,7 +3,9 @@ package controlplane
 import (
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -36,38 +38,40 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Primitives.RegisterDefinition(provider.ProviderDefinition{
-		ID: "manifest-selected-provider", Version: "1", DisplayName: "Manifest selected",
-		Auth:    provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret"},
-		Session: provider.PrimitiveRef{Kind: provider.PrimitiveSessionStore, ID: "session"},
+	if err := registry.Primitives.Operations.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: "audio.transcribe.v1", ContractVersion: 1}, "Audio transcription", "Transcribe audio input", []byte(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Primitives.RegisterDefinition(provider.ProviderDefinition{ContractVersion: 1, ID: "manifest-selected-provider", Version: "1", DisplayName: "Manifest selected",
+		Auth:    provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Session: provider.PrimitiveRef{Kind: provider.PrimitiveSessionStore, ID: "session", ContractVersion: 1},
 		Operations: map[provider.Operation]provider.OperationBinding{
 			provider.OperationChat: {
 				Protocol:        kernel.ProtocolOpenAIChat,
-				Task:            "chat.generate",
-				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
-				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
-				RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "anthropic-messages-json"},
-				ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "anthropic-sse"},
-				UsageSource:     provider.PrimitiveRef{Kind: provider.PrimitiveUsageSource, ID: "http-header-usage"},
+				TaskRef:         provider.OperationRef("chat.generate", 1),
+				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+				RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "anthropic-messages-json", ContractVersion: 1},
+				ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "anthropic-sse", ContractVersion: 1},
+				UsageSource:     provider.PrimitiveRef{Kind: provider.PrimitiveUsageSource, ID: "http-header-usage", ContractVersion: 1},
 				UsageOptions:    kernel.UsageSourceOptions{InputTokensHeader: "X-Input-Count"},
-				ErrorClassifier: provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json"},
+				ErrorClassifier: provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1},
 				ErrorClassifierOptions: provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
 					CodePath: "/fault/code", ResetAtPath: "/fault/retry_at", QuotaCodes: []string{"weekly_limit"},
 				}},
 			},
 			provider.Operation("audio.transcribe.v1"): {
 				Protocol:        kernel.Protocol("vendor.audio.v1"),
-				Task:            "audio.transcribe.v1",
-				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
-				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
-				RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "gemini-json"},
-				ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "gemini-json"},
+				TaskRef:         provider.OperationRef("audio.transcribe.v1", 1),
+				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+				RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "gemini-json", ContractVersion: 1},
+				ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "gemini-json", ContractVersion: 1},
 			},
 			provider.OperationQuota: {
-				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json"},
+				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
 				EndpointOptions: kernel.EndpointOptions{Path: "/account/quota"},
-				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http"},
-				QuotaSource:     provider.PrimitiveRef{Kind: provider.PrimitiveQuotaSource, ID: "http-json-quota"},
+				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+				QuotaSource:     provider.PrimitiveRef{Kind: provider.PrimitiveQuotaSource, ID: "http-json-quota", ContractVersion: 1},
 				QuotaWindowName: "account",
 			},
 		},
@@ -89,7 +93,7 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	if physical.Kind != kernel.ModelPhysical || len(physical.Members) != 1 || physical.Members[0].Kind != kernel.MemberRouteGroup {
 		t.Fatalf("physical node=%#v", physical)
 	}
-	if route := snapshot.Routes["route:a@account-a"]; len(route.OperationBindings["chat.generate"].AdapterIDs) != 1 || route.OperationBindings["chat.generate"].AdapterIDs[0] != "manifest-selected-provider:chat" || route.AuthFlowID != "manifest-selected-provider:static-secret" || route.SessionStoreID != "session" || route.ErrorClassifierID != provider.RuntimeErrorClassifierKey("manifest-selected-provider", provider.OperationChat, "http-json") || route.UsageSourceID != "http-header-usage" || route.UsageOptions.InputTokensHeader != "X-Input-Count" || route.QuotaSourceID != "http-json-quota" || route.QuotaEndpointOptions.Path != "/account/quota" || route.QuotaWindowName != "account" {
+	if route := snapshot.Routes["route:a@account-a"]; route.OperationBindings["chat.generate"].ContractVersion != 1 || len(route.OperationBindings["chat.generate"].AdapterIDs) != 1 || route.OperationBindings["chat.generate"].AdapterIDs[0] != "manifest-selected-provider:chat" || route.AuthFlowID != "manifest-selected-provider:static-secret" || route.SessionStoreID != "session" || route.ErrorClassifierID != provider.RuntimeErrorClassifierKey("manifest-selected-provider", provider.OperationChat, "http-json") || route.UsageSourceID != "http-header-usage" || route.UsageOptions.InputTokensHeader != "X-Input-Count" || route.QuotaSourceID != "http-json-quota" || route.QuotaEndpointOptions.Path != "/account/quota" || route.QuotaWindowName != "account" {
 		t.Fatalf("route did not use provider runtime binding: %#v", route)
 	}
 	mediaRoute := snapshot.Routes["route:audio"]

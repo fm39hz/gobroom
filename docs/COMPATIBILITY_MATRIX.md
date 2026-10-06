@@ -24,11 +24,11 @@ Feature parity is not the same as architecture readiness. Architecture is
 ready when implementing a missing 9router behavior only adds configuration or
 a reusable/provider-specific module behind stable contracts; it does not
 require a new kernel model category, schema concept, request lifecycle or
-provider branch. This criterion is **verified for the representative M15
-change simulations** by `make test-conformance`; see the
-[conformance evidence](M15_CONFORMANCE.md). This establishes architecture
-readiness for those extension categories, not provider/protocol completeness
-or drop-in parity.
+provider branch. `make test-conformance` verifies the current M15 composition
+subset. Full semantic architecture closure is still pending SG1–SG7 in the
+[conformance evidence](M15_CONFORMANCE.md); its decisions are fixed in
+[Semantic extension contracts](EXTENSION_CONTRACTS.md). Provider/protocol
+completeness and drop-in parity remain separate claims.
 
 ## Model and route configuration
 
@@ -56,7 +56,7 @@ or drop-in parity.
 
 | Behavior in 9router | GoBroom contract/status | Notes |
 |---|---|---|
-| Shared request normalization and provider dispatch | Partial | GoBroom has operation/client-wire separation, provider response decoders, semantic events, registered renderers and request/response transform seams. The M15 architecture extension gate passes; protocol event-family parity remains incomplete. |
+| Shared request normalization and provider dispatch | Partial | GoBroom has operation/client-wire separation, provider response decoders, semantic events, registered renderers and request/response transform seams. The M15 composition subset passes; full semantic closure and protocol event-family parity remain incomplete. |
 | OpenAI Chat endpoint | Implemented (core; provider matrix partial) | Streaming/JSON, cancellation, usage, tool events and retry boundary have focused tests; more upstream-specific fixtures are needed. |
 | OpenAI Responses endpoint/continuity | Implemented (core; edge compatibility partial) | Responses adapter and client-session continuity are wired; complete item/tool/error compatibility still needs fixtures. |
 | Anthropic Messages | Partial | Text/tool/thinking paths exist; broad content-block, cache, stop-reason and usage parity needs fixtures. |

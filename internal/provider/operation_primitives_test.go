@@ -54,7 +54,7 @@ func TestHTTPJSONErrorClassifierExtractsQuotaResetFromStructuredBody(t *testing.
 	reset := time.Now().Add(4 * time.Minute).UTC().Truncate(time.Second)
 	body := []byte(`{"error":{"type":"insufficient_quota","code":"insufficient_quota","message":"You exceeded your current quota","reset_at":"` + reset.Format(time.RFC3339) + `"}}`)
 	outcome := (HTTPJSONErrorClassifier{}).ClassifyOutcome(http.StatusTooManyRequests, http.Header{}, body)
-	if outcome.Class != kernel.ErrorCooldown || outcome.Cause != kernel.CauseQuotaExhausted || outcome.Retry != kernel.RetryAfter {
+	if outcome.Class != kernel.ErrorCooldown || outcome.Cause != kernel.CauseQuotaExhausted || outcome.Retry != kernel.RetryAfter || outcome.Effect != kernel.EffectRejected {
 		t.Fatalf("quota outcome=%#v", outcome)
 	}
 	if delta := outcome.RetryAt.Sub(reset); delta < -time.Second || delta > time.Second {
@@ -114,7 +114,7 @@ func TestHTTPJSONErrorClassifierKeeps429RateLimitAndRetryAfterHeader(t *testing.
 	headers.Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
 	body := []byte(`{"error":{"type":"rate_limit_error","message":"Too many requests"}}`)
 	outcome := (HTTPJSONErrorClassifier{}).ClassifyOutcome(http.StatusTooManyRequests, headers, body)
-	if outcome.Cause != kernel.CauseRateLimited || len(outcome.Limits) != 1 || outcome.Limits[0].Name != "rate_limit" {
+	if outcome.Cause != kernel.CauseRateLimited || outcome.Effect != kernel.EffectRejected || len(outcome.Limits) != 1 || outcome.Limits[0].Name != "rate_limit" {
 		t.Fatalf("rate limit outcome=%#v", outcome)
 	}
 	if delta := outcome.RetryAt.Sub(reset); delta < -time.Second || delta > time.Second {

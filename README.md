@@ -119,6 +119,8 @@ In another terminal:
 ```sh
 ./gobroom           # open the bundled TUI
 ./gobroom status    # query the daemon
+./gobroom extensions catalog  # inspect configured extension schemas
+./gobroom providers catalog   # inspect provider setup metadata
 ./gobroom --help
 ```
 

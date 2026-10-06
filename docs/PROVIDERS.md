@@ -2,8 +2,9 @@
 
 Status: executable manifest composition for endpoint, transport, request
 encoders, provider response decoders, discovery/auth/error/quota binding and
-client renderer registration is implemented. The representative M15 extension
-conformance gate passes; this does not claim complete provider behavior. See
+client renderer registration is implemented. The M15 composition subset
+passes; semantic closure remains pending under the fixed
+[extension contracts](EXTENSION_CONTRACTS.md). See
 the [implementation roadmap](IMPLEMENTATION_PLAN.md). The
 normative extension architecture is the
 [solution architecture contract](SOLUTION_ARCHITECTURE.md).
@@ -18,26 +19,27 @@ manifests rather than duplicating another provider.
 
 ## Provider definition
 
-A JSON provider definition identifies a provider and binds operations to typed
-primitive references. Relevant contract types are in
+A JSON provider definition pins `contractVersion: 1` and binds operations to
+primitive refs that each pin their own exact `contractVersion`. Missing or
+unknown versions fail closed; runtime lookup never selects a default version.
+Relevant contract types are in
 `internal/provider/primitives.go`.
 
 ```json
 {
   "chat": {
     "protocol": "openai_chat",
-    "task": "chat.generate",
+      "task": {"kind": "operation", "id": "chat.generate", "contractVersion": 1},
     "providerFormat": "openai",
-    "endpoint": {"kind": "endpoint", "id": "http-json"},
+    "endpoint": {"kind": "endpoint", "id": "http-json", "contractVersion": 1},
     "endpointOptions": {
       "path": "/chat/completions",
       "query": {"api-version": "v1"}
     },
-    "transport": {"kind": "transport", "id": "http"},
-      "requestCodec": {"kind": "request_codec", "id": "openai-chat-json"},
-      "providerFormat": "openai",
-      "responseDecoder": {"kind": "response_decoder", "id": "openai-sse"},
-      "errorClassifier": {"kind": "error_classifier", "id": "http-json"},
+    "transport": {"kind": "transport", "id": "http", "contractVersion": 1},
+      "requestCodec": {"kind": "request_codec", "id": "openai-chat-json", "contractVersion": 1},
+      "responseDecoder": {"kind": "response_decoder", "id": "openai-sse", "contractVersion": 1},
+      "errorClassifier": {"kind": "error_classifier", "id": "http-json", "contractVersion": 1},
       "errorClassifierOptions": {
         "httpJson": {
           "codePath": "/failure/reason",
@@ -134,8 +136,11 @@ The selected client renderer comes from the ingress contract and the daemon's
 renderer registry; it is not copied into every provider definition. The
 composed adapter decodes to semantic events, applies registered response
 transforms, and renders the client contract. Native same-format responses use
-an explicit wire-frame passthrough renderer. Other cross-format pairs require
-the decoder to declare support and a registered renderer.
+an explicit wire-frame passthrough renderer. Other cross-format pairs need a
+usable semantic decoder and registered renderer. The target full per-facet
+compatibility negotiation is specified in
+[Semantic extension contracts](EXTENSION_CONTRACTS.md); the current format-level
+negotiation does not prove all semantic paths.
 
 An operation binding independently selects `endpoint`, `transport`,
 `requestCodec` and `responseDecoder`. `endpointOptions` can override the relative
@@ -221,6 +226,20 @@ contract. A module may add build-time registration but must not add a
 provider-name branch to the kernel, a provider-specific storage schema, or a
 provider-specific branch in generic management UI. See the architectural
 [change simulations](SOLUTION_ARCHITECTURE.md#architectural-change-simulations).
+
+The target auth contract uses connection-scoped opaque leases, a prepared
+request apply/sign stage and an optional interactive authorization driver.
+The daemon coordinator owns sessions, polling, callback/PKCE, generation-safe
+secret replacement and generic frontend actions. Current `Resolve/Refresh`
+factories and token-state forms implement only a subset; the complete contract
+is fixed in [Auth driver and interactive session](EXTENSION_CONTRACTS.md#5-auth-driver-and-interactive-session).
+
+All configurable primitives contribute the same versioned descriptor/schema
+metadata. User definitions and enabled bindings are part of portable bundles;
+compiled-module dependencies are checked before application. Credentials and
+live auth sessions remain excluded. See
+[configuration binding](EXTENSION_CONTRACTS.md#1-extension-descriptor-and-configuration-binding)
+for the target contract; current bundles do not yet carry this complete catalog.
 
 Interactive authorization-code/device-flow start/callback handling, usage
 extraction, provider sessions, quota APIs, embeddings/media operations and

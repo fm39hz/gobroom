@@ -15,8 +15,10 @@ type continuitySessionAdapter struct {
 	previousResponse string
 }
 
-func (*continuitySessionAdapter) ID() string         { return "continuity-session" }
-func (*continuitySessionAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision { return CompatibilityDecision{Supported: format == normalize.FormatOpenAIChat, Fidelity: FidelityNative} }
+func (*continuitySessionAdapter) ID() string { return "continuity-session" }
+func (*continuitySessionAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
+}
 func (a *continuitySessionAdapter) Prepare(_ context.Context, request NormalizedRequest, _ Route, _ Credential) (UpstreamRequest, error) {
 	a.previousResponse = request.Continuity.PreviousResponse
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://continuity"}, nil
@@ -36,7 +38,7 @@ func (*continuitySessionAdapter) RenderResponse(_ context.Context, _ UpstreamRes
 }
 
 func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
-	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"continuity-session"}, SessionStoreID: "session"}}, Protocol: ProtocolOpenAIChat, Enabled: true}
+	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreID: "session"}}, Protocol: ProtocolOpenAIChat, Enabled: true}
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
 		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
@@ -57,7 +59,7 @@ func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	if err := sessions.Save(context.Background(), route, "client-session", SessionState{ResponseID: "response-previous"}); err != nil {
 		t.Fatal(err)
 	}
-	request := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatOpenAIChat, Session: normalize.SessionContext{ID: "client-session"}}
+	request := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Session: normalize.SessionContext{ID: "client-session"}}
 	if err := k.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err != nil {
 		t.Fatal(err)
 	}

@@ -1,10 +1,12 @@
 # Data-plane kernel contract
 
-Status: hierarchical execution boundary implemented, with remaining policy
-semantics tracked by M4 in the [roadmap](IMPLEMENTATION_PLAN.md). This is the
+Status: hierarchical execution and semantic response composition implemented;
+full semantic closure is pending M15 in the [roadmap](IMPLEMENTATION_PLAN.md). This is the
 current kernel contract; the normative target for operation-neutral routing,
 compatibility plans and adapter boundaries is the
 [solution architecture](SOLUTION_ARCHITECTURE.md).
+Detailed target contracts are fixed in
+[Semantic extension contracts](EXTENSION_CONTRACTS.md).
 
 ## Ownership
 
@@ -34,18 +36,23 @@ and request-requirement rules in [the Physical model contract](PHYSICAL_MODELS.m
 Snapshots carry connection identifiers and routing metadata, never connection
 secrets. Credentials are resolved for the selected route at execution time.
 
-## Execution sequence
+## Target execution sequence
+
+This sequence implements the normative semantic contracts. Current execution
+contains the graph/adapter core but does not yet implement every plan stage.
 
 ```text
 semantic invocation
   -> resolve exposed model name
   -> enter physical/combo model node
+  -> compose model-path defaults and enabled invocation transforms
+  -> prepare candidate-local defaults/transforms and final requirements
+  -> negotiate complete semantic compatibility and artifact transfer
   -> apply operation/capability/health/quota eligibility
-  -> ask the node's strategy for an execution plan
-  -> recursively execute the selected member
-  -> negotiate provider+client compatibility and fidelity
-  -> resolve route credential
-  -> provider encode and transport
+  -> ask each node's strategy to order eligible members
+  -> recursively retain the selected member's policy boundary
+  -> acquire route credential lease
+  -> provider encode + endpoint resolution + auth apply/sign + transport
   -> provider decode into semantic response events
   -> optional response transform and client rendering
   -> classify attempt evidence
@@ -69,6 +76,10 @@ Fallback is permitted only before response commitment. If an adapter has
 written/flushed response bytes, subsequent errors cannot transparently move to
 another candidate. A terminal error stops candidate fallback; retryable and
 cooldown outcomes may continue according to policy.
+Before commitment, replay additionally depends on dispatch/effect state and
+the operation/binding's declared safety. An unknown unsafe effect cannot be
+repeated merely because no client bytes were emitted. See
+[Attempt replay and commitment](EXTENSION_CONTRACTS.md#6-attempt-replay-and-commitment).
 
 ## Adapter boundary
 
@@ -100,16 +111,17 @@ persistent usage workers consume events independently of response delivery.
 
 Adapters may additionally emit the canonical `ResponseEvent` stream through
 `StreamHooks.OnEvent`: response start, text/thinking delta, tool-call delta,
-usage, completion and error. Today this stream is primarily observational;
-the target contract makes semantic events the shared response path consumed by
-transforms and client renderers.
+usage, completion and error. Semantic events are already the shared response
+path consumed by registered transforms and client renderers. The full target
+adds versioned operation events/artifacts, compiled opt-in chains and separate
+original-versus-rendered observations.
 Malformed SSE payloads are protocol errors: adapters emit a canonical error
 event and return the error instead of silently discarding the payload.
 
 ## Stable error classes
 
-The following are current migration-era classes, not the target passive outcome
-taxonomy:
+The following compact execution actions coexist with the richer passive
+outcome taxonomy:
 
 ```text
 terminal   do not retry another route
@@ -119,7 +131,7 @@ auth       credential/authentication failure policy
 ```
 
 Provider-specific status/body heuristics belong in classifier primitives, not
-kernel branches. They will be replaced by cause/scope/retry/deadline-rich
-outcomes described in [Passive health](PASSIVE_HEALTH_ROUTING.md). Exact
+kernel branches. Cause/scope/retry/deadline-rich outcomes are described in
+[Passive health](PASSIVE_HEALTH_ROUTING.md). Exact
 precedence, 401 refresh and post-commit behavior remain explicit test
 obligations.

@@ -179,6 +179,14 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	default:
 		outcome.Cause, outcome.Retry, outcome.Confidence = kernel.CauseSuccess, kernel.RetryNow, 1
 	}
+	switch {
+	case status >= http.StatusOK && status < http.StatusMultipleChoices:
+		outcome.Effect = kernel.EffectAccepted
+	case status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusConflict:
+		outcome.Effect = kernel.EffectRejected
+	default:
+		outcome.Effect = kernel.EffectUnknown
+	}
 	if c.Options != nil {
 		switch outcome.Cause {
 		case kernel.CauseAuth, kernel.CausePermission:

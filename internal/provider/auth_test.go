@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/operations"
 )
 
 type deviceOAuthFixture struct{ issuer string }
@@ -47,7 +49,17 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.RegisterAuthFactory("vendor.device-oauth.v1", func(options AuthOptions) (AuthFlow, error) {
+	const operationID = "audio.transcribe.v1"
+	if err := registry.Primitives.Operations.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: operationID, ContractVersion: 1}, "Audio transcription", "Transcribe audio input", json.RawMessage(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	const deviceAuthID = "vendor.device-oauth.v1"
+	deviceSchemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "vendor.example.device-oauth-options", ContractVersion: 1}
+	deviceSchema, err := bindSchemaDocument(deviceSchemaRef, json.RawMessage(`{"type":"object","properties":{"options":{"type":"object","properties":{"issuer":{"type":"string","minLength":1}},"required":["issuer"],"additionalProperties":false}},"required":["options"],"additionalProperties":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterAuthFactoryWithOptionsSchema(deviceAuthID, 1, deviceSchemaRef, deviceSchema, func(options AuthOptions) (AuthFlow, error) {
 		var config struct {
 			Issuer string `json:"issuer"`
 		}
@@ -61,15 +73,15 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 	}); err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{ID: "media-oauth", Version: "1", DisplayName: "Media OAuth", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "vendor.device-oauth.v1"}, AuthOptions: AuthOptions{Options: json.RawMessage(`{"issuer":"login.example"}`)}, Operations: map[Operation]OperationBinding{Operation("audio.transcribe.v1"): {
-		Protocol: kernel.Protocol("vendor.audio.v1"), Task: "audio.transcribe.v1",
-		Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-		RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "media-oauth", Version: "1", DisplayName: "Media OAuth", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: deviceAuthID, ContractVersion: 1}, AuthOptions: AuthOptions{Options: json.RawMessage(`{"issuer":"login.example"}`)}, Operations: map[Operation]OperationBinding{Operation(operationID): {
+		Protocol: kernel.Protocol("vendor.audio.v1"), TaskRef: OperationRef(operationID, 1),
+		Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+		RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
 	}}}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, Operation("audio.transcribe.v1"))
+	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, Operation(operationID))
 	if err != nil {
 		t.Fatal(err)
 	}

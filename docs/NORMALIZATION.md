@@ -5,16 +5,20 @@ manifest-bound response decode → semantic events → renderer are implemented
 for registered adapters. Semantic family coverage remains adapter-specific and
 incomplete. The normative extension contract is in the
 [solution architecture](SOLUTION_ARCHITECTURE.md).
+The detailed target contracts for compatibility composition, artifacts,
+transforms and replay are fixed in
+[Semantic extension contracts](EXTENSION_CONTRACTS.md).
 
-## Pipeline
+## Target pipeline
 
 ```text
 client wire request
   -> ingress codec: wire format → Invocation IR
-  -> opt-in request transforms
-  -> compile operation/capability requirements
-  -> resolve model graph and negotiate candidate compatibility
-  -> provider encoder → transport/auth → upstream
+  -> prepare model-path defaults and opt-in invocation transforms
+  -> candidate-local defaults and opt-in attempt transforms
+  -> compile final operation/capability requirements and compatibility plans
+  -> filter candidates, then apply hierarchical model strategies
+  -> provider encoder → endpoint → auth apply/sign → transport → upstream
   -> provider decoder → semantic response events
   -> opt-in response transforms → client renderer
   -> client wire response
@@ -30,10 +34,12 @@ extensibility rules are defined in the
 is `normalize.Request` in `internal/normalize/types.go` and remains an initial
 subset, not the full target contract.
 
-Operation and wire format are separate. An operation describes the semantic
-task (`chat.generate`, `embeddings.create`, etc.); a wire format describes the
-client envelope (OpenAI Chat, Responses, Anthropic Messages, Gemini, etc.).
-Neither determines the selected provider by itself.
+Operation and wire format are separate. A versioned operation ref describes
+the semantic task (`chat.generate@1`, `embeddings.create@1`, etc.); a wire
+format describes the client envelope (OpenAI Chat, Responses, Anthropic
+Messages, Gemini, etc.). Neither determines the selected provider by itself.
+The ingress codec selects the exact operation version and route binding must
+match that version.
 
 `PromptPlan` separates system/developer instructions from conversation and
 records their origin and order. The contract provides harness-, provider-,
@@ -72,8 +78,12 @@ must be visible at a policy boundary. See the
 [solution architecture](SOLUTION_ARCHITECTURE.md) for the contract.
 
 An optimized lossless passthrough may bypass semantic re-encoding only when
-the compatibility plan proves that it preserves the client's contract. It is
-not a general fallback for missing codecs.
+the compatibility plan proves that it preserves the client's contract and
+there is no active semantic response mutation. Enabling a text/tool transform
+forces semantic rendering or rejects the candidate when that renderer is
+unsupported. Observations consume original upstream events independently of
+rendered projections. See the
+[compatibility algebra](EXTENSION_CONTRACTS.md#3-compatibility-plan-and-policy-algebra).
 
 Present adapters include OpenAI Chat, OpenAI Responses, Anthropic Messages and
 Gemini paths. Their tested subsets differ. The composed runtime decodes
@@ -91,6 +101,8 @@ and adapter fixtures.
 - stream errors after commitment terminate/report the stream, not restart it;
 - usage and health reporting cannot block first byte or stream writes;
 - tool-call state must remain correct when arguments arrive across chunks.
+- precommit replay after dispatch also requires operation/binding replay
+  safety; ambiguous effects of unsafe upstream operations prohibit fallback.
 
 These are architectural requirements. A completed implementation must use one
 semantic event model for streaming and non-stream aggregation, retain partial

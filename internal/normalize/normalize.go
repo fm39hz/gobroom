@@ -24,7 +24,7 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	}
 
 	r := Request{
-		Model: model, Operation: OperationChatGenerate, SourceFormat: format, Stream: boolValue(body["stream"], false),
+		Model: model, Operation: OperationChatGenerate, OperationContractVersion: 1, SourceFormat: format, Stream: boolValue(body["stream"], false),
 		Tools: normalizeTools(body["tools"]), Extensions: map[string]any{}, Raw: body,
 		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id")},
 	}
@@ -186,7 +186,7 @@ func normalizeToolCalls(r *Request) {
 
 func isCoreKey(k string) bool {
 	switch k {
-	case "model", "messages", "input", "contents", "stream", "tools", "reasoning_effort", "thinking", "reasoning", "conversation_id", "response_id", "previous_response_id":
+	case "model", "messages", "input", "contents", "stream", "tools", "reasoning_effort", "thinking", "reasoning", "conversation_id", "response_id", "previous_response_id", "operationPayload":
 		return true
 	}
 	return false

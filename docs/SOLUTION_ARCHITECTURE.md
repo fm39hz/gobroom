@@ -1,9 +1,11 @@
 # Solution architecture contract
 
-Status: normative target design. This document defines the architecture
-required for feature catch-up to remain implementation work rather than core
-redesign. It does not claim that the current kernel or adapters implement every
-contract below; implementation status remains in
+Status: normative target design, with semantic extension decisions fixed in
+[Semantic extension contracts](EXTENSION_CONTRACTS.md). This document defines
+the topology required for feature catch-up to remain implementation work.
+The detailed contract defines compatibility composition, operation/artifact
+schemas, auth sessions, transform bindings and replay safety. Runtime closure
+is still pending the stronger M15 gate; implementation status remains in
 [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
 
 ## Success criterion
@@ -19,6 +21,12 @@ The compatibility target is architectural, not that every provider or feature
 already exists. A feature absent from the implementation may be added later;
 the question is whether its semantics already have a stable place in the
 system.
+
+Architecture design closure means the owner, data contract, lifecycle,
+configuration binding and failure behavior are specified for each extension.
+Runtime closure additionally requires semantic integration fixtures proving
+that those contracts compose. Registration/composition tests are necessary
+evidence but do not by themselves establish runtime closure.
 
 ## Domain model
 
@@ -65,10 +73,11 @@ boundary; it must not flatten a role into an untyped list of provider strings.
 
 ## Operation-neutral data plane
 
-The gateway's routing lifecycle is operation-neutral. An **operation** names
-the semantic task (for example `chat.generate`, `embeddings.create`,
-`images.generate`, `audio.transcribe`, `audio.synthesize`, `search.query`, or
-`fetch.read`). An ingress/egress **wire contract** names how a client encodes
+The gateway's routing lifecycle is operation-neutral. An **operation** is an
+exact versioned ref naming the semantic task (for example
+`chat.generate@1`, `embeddings.create@1`, `audio.transcribe@1`,
+`audio.synthesize@1`, `search.query@1`, or `fetch.read@1`). An ingress/egress
+**wire contract** names how a client encodes
 that operation (for example OpenAI Chat, OpenAI Responses, Anthropic Messages,
 or Gemini). These are different dimensions: a wire format is not a provider,
 and a provider protocol does not dictate the client's response format.
@@ -79,6 +88,12 @@ control-plane metadata. The kernel consumes generic operation IDs and typed
 requirements; adding (for example) an audio operation or a new capability does
 not add a kernel struct field or node kind. Common interactions remain
 first-class typed values; novel payloads use the versioned artifact contract.
+
+Operation definitions own input/result/event schemas, payload validation,
+requirement compilation and replay semantics. Artifact ownership, scope,
+sensitivity, expiration and binary-body lifetime are specified in
+[operation and artifact contracts](EXTENSION_CONTRACTS.md#2-operation-payloads-content-and-artifacts).
+New event/content kinds use registered artifacts rather than new kernel fields.
 
 The canonical request envelope is `Invocation` (a concrete implementation may
 call it `Request`):
@@ -144,6 +159,12 @@ a declared degradation policy at the relevant model/policy boundary. Secrets,
 continuity artifacts and provider-private signatures are never silently
 rewritten for a different provider.
 
+The [compatibility policy algebra](EXTENSION_CONTRACTS.md#3-compatibility-plan-and-policy-algebra)
+defines per-facet mapping composition, conditional support, loss grants and
+denials, and native passthrough selection. The planner receives the effective
+invocation and active transform chains; renderer format support alone cannot
+admit a candidate.
+
 Provider codec, client codec and renderer are separate contracts:
 
 ```text
@@ -160,6 +181,9 @@ Non-stream responses are an aggregation of the same semantic event stream,
 not a separate translation architecture. A truly lossless same-protocol path
 may bypass semantic re-encoding only when the compatibility plan explicitly
 proves pass-through safety and observability can still consume bounded events.
+An active semantic response mutation forces semantic rendering. Signing/auth
+application occurs after provider encoding and endpoint resolution, before
+transport; auth is not embedded separately into every provider encoder.
 
 ## Extension stages and effects
 
@@ -167,14 +191,14 @@ The lifecycle exposes named stages; extensions declare stage, scope,
 configuration schema, required capabilities, effects and failure behavior.
 
 1. **Ingress decode** — client protocol modules produce `Invocation`.
-2. **Request transforms** — ordered, opt-in transformations operate on typed
-   prompt/input/tool semantics before requirements are compiled. This is the
-   seam for compression or prompt layering.
-3. **Requirement compilation** — derive hard needs from the transformed
-   invocation (operation, modalities, tools, reasoning, limits, continuity).
-4. **Model policy** — resolve public name and traverse Combo/Physical policy.
-5. **Candidate negotiation** — filter by operation, capability, fidelity,
-   connection entitlement and runtime health/quota, then apply ordering/policy.
+2. **Model-path preparation** — compose defaults and enabled invocation
+   transforms on immutable branch-local input, preserving prompt provenance.
+3. **Candidate preparation** — compose provider/connection defaults and enabled
+   attempt transforms; compile final requirements from the resulting payload.
+4. **Candidate negotiation** — compose the complete compatibility plan and
+   filter by operation, capabilities, fidelity, entitlement and health/quota.
+5. **Model policy** — prune ineligible members, then apply each graph node's
+   strategy without flattening nested policy boundaries.
 6. **Provider encode/execute** — auth, endpoint and transport stay separate
    from semantic routing.
 7. **Outcome classification** — convert status, headers, body and timing to a
@@ -191,6 +215,11 @@ material degradation. Extensions are bounded and cancellable. Observer hooks
 cannot block first byte or stream delivery; transform errors fail explicitly
 unless that transform declares a safe fail-open policy.
 
+[Transform binding and lifecycle](EXTENSION_CONTRACTS.md#4-transform-bindings-and-execution-lifecycle)
+fixes scope order, candidate-local stages, options, transactional fail-open,
+resource budgets and original-versus-rendered accounting. Registration never
+implicitly enables a transformation.
+
 ## Routing policy and runtime evidence
 
 Combo member selection and Physical source selection are applications of the
@@ -205,6 +234,11 @@ they may produce an explainable effective order but never rewrite user order.
 Real calls are the default source of evidence. Synthetic checks and quota
 polling require explicit policy. Retry/fallback is forbidden after client
 response commitment.
+
+Before client commitment, replay also requires the operation/provider's
+declared safety after dispatch. An ambiguous upstream effect is not permission
+to repeat an unsafe operation. The [attempt contract](EXTENSION_CONTRACTS.md#6-attempt-replay-and-commitment)
+owns this distinction, including issuer-scoped idempotency keys and job artifacts.
 
 Capabilities use a namespaced `FeatureID` with typed/versioned constraints and
 an evaluator registered for the feature. Standard features (text, image,
@@ -235,6 +269,14 @@ provider-specific setup is allowed only as a declared extension view, not an
 implicit frontend branch. Auth flows cover validation, request credentials,
 refresh and optional interactive authorization lifecycle. Secrets remain in
 connection-scoped secret storage and are resolved only for an attempt.
+
+The [extension descriptor](EXTENSION_CONTRACTS.md#1-extension-descriptor-and-configuration-binding)
+is the common schema/version/dependency contract for operations, features,
+policies, transforms and provider primitives. Portable bundles include user
+definitions and declarative bindings, with compiled-module dependencies
+validated before apply. The [auth lifecycle](EXTENSION_CONTRACTS.md#5-auth-driver-and-interactive-session)
+separates credential acquire/apply/refresh from daemon-owned authorization
+sessions and generic frontend actions.
 
 This design does not require dynamic Go plugins. Static registration is the
 default so binaries remain portable and deployment predictable. Provider

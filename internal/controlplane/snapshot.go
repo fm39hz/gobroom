@@ -59,8 +59,13 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if len(routeBindings) > 0 {
 			binding = routeBindings[0]
 			for _, routeBinding := range routeBindings {
-				if routeBinding.Task != "" {
-					operationBinding := operationBindings[routeBinding.Task]
+				if routeBinding.TaskRef.ID != "" {
+					operation := normalize.Operation(routeBinding.TaskRef.ID)
+					operationBinding := operationBindings[operation]
+					if operationBinding.ContractVersion != 0 && operationBinding.ContractVersion != routeBinding.TaskRef.ContractVersion {
+						return kernel.Snapshot{}, fmt.Errorf("provider %q binds operation %q at mixed contract versions", row.DefinitionID, routeBinding.TaskRef.ID)
+					}
+					operationBinding.ContractVersion = routeBinding.TaskRef.ContractVersion
 					operationBinding.AdapterIDs = append(operationBinding.AdapterIDs, routeBinding.AdapterID)
 					if operationBinding.ErrorClassifierID == "" {
 						operationBinding.ErrorClassifierID = routeBinding.ErrorClassifierID
@@ -68,7 +73,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 						operationBinding.UsageOptions = routeBinding.UsageOptions
 						operationBinding.SessionStoreID = routeBinding.SessionStoreID
 					}
-					operationBindings[routeBinding.Task] = operationBinding
+					operationBindings[operation] = operationBinding
 				}
 			}
 		}

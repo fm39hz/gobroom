@@ -3,6 +3,7 @@ package gemini
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,6 +32,80 @@ func TestPrepareMapsReasoningToGeminiThinkingConfig(t *testing.T) {
 	}
 	if prepared.URL != "/models/gemini-2:generateContent" || prepared.Headers.Get("x-goog-api-key") != "key" {
 		t.Fatalf("prepared=%#v", prepared)
+	}
+}
+
+func TestGeminiCompatibilityPlanRejectsUnsupportedRequestFacetsBeforeDispatch(t *testing.T) {
+	cases := []struct {
+		name    string
+		request normalize.Request
+		facet   string
+	}{
+		{
+			name:    "provider-scoped continuity",
+			request: normalize.Request{Model: "gemini", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: "hello"}}, Continuity: normalize.ContinuityState{PreviousResponse: "resp_1"}},
+			facet:   kernel.FacetContinuity,
+		},
+		{
+			name:    "strict tool schema",
+			request: normalize.Request{Model: "gemini", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Tools: []normalize.Tool{{Type: "function", Function: map[string]any{"name": "lookup", "strict": true}}}},
+			facet:   kernel.FacetToolDefinitions,
+		},
+		{
+			name:    "remote image URL",
+			request: normalize.Request{Model: "gemini", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://images.example/image.png"}}}}}, Modalities: normalize.Modalities{Vision: true}},
+			facet:   kernel.FacetVisionInput,
+		},
+		{
+			name:    "unsupported generation option",
+			request: normalize.Request{Model: "gemini", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"model": "gemini", "messages": []any{}, "logprobs": true}},
+			facet:   kernel.FacetGenerationOptions,
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			context := kernel.CompatibilityContext{Request: test.request, Operation: normalize.OperationChatGenerate}
+			context.Policy.RequiredFacets = append(kernel.RequiredRequestFacets(test.request), kernel.FacetWireResponse)
+			plan := NewAdapter().PlanCompatibility(context)
+			if plan.Supported || plan.Fidelity != kernel.FidelityUnsupported {
+				t.Fatalf("unsupported request reached an eligible plan: %#v", plan)
+			}
+			for _, mapping := range plan.Mappings {
+				if mapping.Facet == test.facet && mapping.Disposition == kernel.FacetUnsupported && mapping.Reason != "" {
+					return
+				}
+			}
+			t.Fatalf("plan omitted an explained rejection for facet %q: %#v", test.facet, plan)
+		})
+	}
+}
+
+func TestKernelRejectsGeminiContinuityBeforePreparingUpstreamRequest(t *testing.T) {
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
+		Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelCombo, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini-route"}}}},
+		Routes: []kernel.Route{{ID: "gemini-route", Enabled: true, BaseURL: "https://must-not-be-called.invalid", ExternalModel: "gemini-test", OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"gemini"}},
+		}}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	adapter := NewAdapter()
+	gateway.Adapters[adapter.ID()] = adapter
+	request := normalize.Request{
+		Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: "hello"}},
+		Continuity: normalize.ContinuityState{PreviousResponse: "resp_1"},
+	}
+	err = gateway.Execute(context.Background(), request, kernel.Credential{}, httptest.NewRecorder())
+	if !errors.Is(err, kernel.ErrNoRoute) {
+		t.Fatalf("continuity-incompatible Gemini route was not rejected during admission: %v", err)
 	}
 }
 

@@ -25,6 +25,85 @@ func (Messages) ID() string { return "anthropic-messages" }
 type messagesRequestCodec struct{ adapter Messages }
 
 func (c messagesRequestCodec) ID() string { return "anthropic-messages-json" }
+func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
+	native := input.Request.SourceFormat == normalize.FormatAnthropic
+	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
+	for _, facet := range input.Policy.RequiredFacets {
+		if kernel.IsResponseCompatibilityFacet(facet) {
+			continue
+		}
+		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "Anthropic Messages request codec has no declared mapping for this facet"}
+		switch facet {
+		case kernel.FacetWireRequest:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+			} else {
+				mapping.Disposition = kernel.FacetTranslated
+			}
+		case kernel.FacetPromptLayers:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+			} else if anthropicPromptLayersRepresentable(input.Request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "text prompt layers are mapped to Anthropic's system field"
+			} else {
+				mapping.Reason = "Anthropic system conversion cannot preserve structured prompt parts"
+			}
+		case kernel.FacetToolDefinitions:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+			} else if anthropicToolDefinitionsRepresentable(input.Request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "function definitions are mapped to Anthropic tool declarations"
+			} else {
+				mapping.Reason = "one or more function declarations have no representable name"
+			}
+		case kernel.FacetReasoningIntent:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+			} else {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "canonical thinking intent is mapped to Anthropic thinking fields"
+			}
+		case kernel.FacetToolHistory, kernel.FacetContinuity:
+			if native && facet == kernel.FacetToolHistory {
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "tool history is forwarded in native Anthropic messages"
+			}
+		case kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "the native Anthropic payload is forwarded without rewriting"
+			}
+		}
+		result = append(result, mapping)
+	}
+	return result
+}
+
+func anthropicPromptLayersRepresentable(request kernel.NormalizedRequest) bool {
+	for _, layer := range request.Prompt.Layers {
+		if len(layer.Parts) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func anthropicToolDefinitionsRepresentable(request kernel.NormalizedRequest) bool {
+	for _, tool := range request.Tools {
+		name := tool.Name
+		if tool.Function != nil {
+			if functionName, ok := tool.Function["name"].(string); ok && functionName != "" {
+				name = functionName
+			}
+		}
+		if name == "" {
+			return false
+		}
+	}
+	return true
+}
 func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
@@ -32,6 +111,13 @@ func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.Normal
 type messagesResponseDecoder struct{ adapter Messages }
 
 func (c messagesResponseDecoder) ID() string { return "anthropic-sse" }
+func (c messagesResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return []kernel.ResponseEventKind{
+		kernel.EventRawFrame, kernel.EventResponseStarted, kernel.EventContentBlockStart,
+		kernel.EventContentBlockEnd, kernel.EventTextDelta, kernel.EventThinkingDelta,
+		kernel.EventToolCallDelta, kernel.EventUsage, kernel.EventResponseComplete,
+	}
+}
 func (c messagesResponseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
 }

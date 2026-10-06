@@ -77,6 +77,16 @@ func NewResponseTransformRegistry() *ResponseTransformRegistry {
 	return &ResponseTransformRegistry{transforms: map[string]ResponseTransform{}}
 }
 
+func (r *ResponseTransformRegistry) Active() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	active := len(r.ordered) > 0
+	r.mu.RUnlock()
+	return active
+}
+
 func (r *ResponseTransformRegistry) Register(transform ResponseTransform) error {
 	if r == nil || transform == nil {
 		return fmt.Errorf("response transform registry and transform are required")
@@ -155,6 +165,16 @@ func responseTransformHasEffect(definition ResponseTransformDefinition, effects 
 
 func NewRequestTransformRegistry() *RequestTransformRegistry {
 	return &RequestTransformRegistry{transforms: map[string]RequestTransform{}}
+}
+
+func (r *RequestTransformRegistry) Active() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	active := len(r.transforms) > 0
+	r.mu.RUnlock()
+	return active
 }
 
 func (r *RequestTransformRegistry) Register(transform RequestTransform) error {

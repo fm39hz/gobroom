@@ -10,6 +10,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/auth"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 func TestOAuthAuthParsesTokenState(t *testing.T) {
@@ -104,13 +105,13 @@ func TestDefinitionBoundOAuthFlowRefreshesWithConnectionSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{
-		ID: "bound-oauth", Version: "1", DisplayName: "Bound OAuth",
-		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2"},
+	definition := ProviderDefinition{ContractVersion: 1, ID: "bound-oauth", Version: "1", DisplayName: "Bound OAuth",
+		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
 		AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "http://" + listener.Addr().String()}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
-			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http"},
-			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json"}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse"},
+			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
+			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
 		}},
 	}
 	manifest, err := EncodeProviderDefinitionJSON(definition)

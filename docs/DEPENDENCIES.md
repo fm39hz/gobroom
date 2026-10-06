@@ -1,6 +1,8 @@
 # GoBroom dependency policy
 
 Snapshot checked: 2026-09-19.
+The JSON Schema row below was added after a targeted upstream release check on
+2026-10-06; the existing rows retain their original check date.
 
 The goal is to reduce handwritten infrastructure code without turning
 GoBroom into a dependency-heavy framework. The standard library remains the
@@ -14,6 +16,7 @@ default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 | SQL generation | `github.com/sqlc-dev/sqlc` | `v1.31.1` | adopt as separate build tool | generates typed repositories from SQL and removes repetitive scan/row mapping code |
 | HTTP routing | `github.com/go-chi/chi/v5` | `v5.3.2` | adopt when API surface grows | small middleware/router layer on top of `net/http`; avoids a custom route framework |
 | OAuth | `golang.org/x/oauth2` | `v0.37.0` | adopt | standard OAuth2/token transport, PKCE and device/auth helpers |
+| Extension option schemas | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` (checked 2026-10-06) | adopted | compile JSON Schema 2020-12 at catalog freeze and validate typed module options at bind time; custom refs resolve only from the local catalog |
 | CLI | `github.com/spf13/cobra` | `v1.10.2` | adopt for `gobroom` | command tree, flags, help and completion without custom CLI plumbing |
 | TUI runtime | `charm.land/bubbletea/v2` | `v2.0.9` | adopted | Elm-style state/update/view model; bundled into the `gobroom` control client |
 | TUI components | `charm.land/bubbles/v2` | `v2.2.1` | adopted | Official fuzzy list, text input, viewport and help components; avoids custom terminal input/filter machinery |
@@ -30,6 +33,8 @@ The official repositories report the versions above for the checked date:
 The Go module proxy currently lists `modernc.org/sqlite` v1.59.0 and
 `golang.org/x/oauth2` v0.37.0 as the newest versions available at the check
 date. These should be rechecked immediately before pinning a release.
+The validator pin is verified from the maintainer's
+[v6.0.3 release](https://github.com/santhosh-tekuri/jsonschema/releases/tag/v6.0.3).
 
 ## Keep optional
 

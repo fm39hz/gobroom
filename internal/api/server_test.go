@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -142,7 +144,30 @@ func TestNamespacedOperationIngressRegistersWithoutServerRouteBranch(t *testing.
 	}
 	defer s.Close()
 	server := NewServer(s)
-	codec := JSONOperationIngress{CodecID: "audio-transcription-v1", Operation: "audio.transcribe.v1", Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}
+	operationCatalog := extensions.NewCatalog()
+	operationRegistry, err := operations.NewRegistry(operationCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operations.RegisterChatGenerate(operationCatalog, operationRegistry); err != nil {
+		t.Fatal(err)
+	}
+	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe.v1", ContractVersion: 1}
+	if err := operationRegistry.RegisterRawPayload(operationRef, "Transcribe audio", "Audio payload contract", json.RawMessage(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	extensionSnapshot, err := operationCatalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationSnapshot, err := operationRegistry.Seal(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.SetOperationSnapshot(operationSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	codec := JSONOperationIngress{CodecID: "audio-transcription-v1", Operation: "audio.transcribe.v1", OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}
 	if err := server.RegisterOperationIngress(codec); err != nil {
 		t.Fatal(err)
 	}
@@ -150,16 +175,68 @@ func TestNamespacedOperationIngressRegistersWithoutServerRouteBranch(t *testing.
 		t.Fatal("duplicate operation path registration must fail")
 	}
 	var got normalize.Operation
+	var gotVersion uint64
+	var gotPayload json.RawMessage
 	server.SetExecutor(func(_ context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		got = request.Operation
+		gotVersion = request.OperationContractVersion
+		gotPayload = request.OperationPayload
 		_, err := writer.Write([]byte(`{"ok":true}`))
 		return err
 	})
-	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewBufferString(`{"model":"asr-model","input":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewBufferString(`{"model":"asr-model","operationPayload":{"audio":"hello"}}`))
 	recorder := httptest.NewRecorder()
 	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK || got != "audio.transcribe.v1" {
-		t.Fatalf("status=%d operation=%q response=%s", recorder.Code, got, recorder.Body.String())
+	if recorder.Code != http.StatusOK || got != "audio.transcribe.v1" || gotVersion != 1 || string(gotPayload) != `{"audio":"hello"}` {
+		t.Fatalf("status=%d operation=%q version=%d payload=%s response=%s", recorder.Code, got, gotVersion, gotPayload, recorder.Body.String())
+	}
+}
+
+func TestOperationSchemaFailureUsesClientErrorBoundary(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/operation-validation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	catalog := extensions.NewCatalog()
+	registry, err := operations.NewRegistry(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operations.RegisterChatGenerate(catalog, registry); err != nil {
+		t.Fatal(err)
+	}
+	const operationID = "audio.transcribe.v1"
+	if err := registry.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: operationID, ContractVersion: 1}, "Transcribe audio", "Audio payload schema fixture.", json.RawMessage(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	extensionSnapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationSnapshot, err := registry.Seal(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(s)
+	if err := server.SetOperationSnapshot(operationSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.RegisterOperationIngress(JSONOperationIngress{CodecID: "audio-json", Operation: operationID, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}); err != nil {
+		t.Fatal(err)
+	}
+	server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
+		if _, err := operationSnapshot.Prepare(request); err != nil {
+			return err
+		}
+		_, err := writer.Write([]byte(`{"ok":true}`))
+		return err
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", bytes.NewBufferString(`{"model":"asr","operationPayload":{"unexpected":"field"}}`))
+	recorder := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("invalid operation payload status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -177,8 +254,16 @@ func TestProviderDefinitionMetadataIsAvailableThroughGenericControlAPI(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := registry.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	extensionCatalog, err := registry.ExtensionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := NewServer(s)
 	server.SetProviderDefinitionCatalog(metadata)
+	server.SetExtensionCatalog(extensionCatalog)
 	recorder := httptest.NewRecorder()
 	server.HandlerWithOptions(HandlerOptions{ControlPlane: true}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/provider-definitions", nil))
 	if recorder.Code != http.StatusOK {
@@ -199,6 +284,59 @@ func TestProviderDefinitionMetadataIsAvailableThroughGenericControlAPI(t *testin
 		}
 	}
 	t.Fatal("provider metadata endpoint omitted auth setup schema")
+}
+
+func TestExtensionCatalogEndpointExposesContractVersionsAndOptionsSchemas(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/extension-catalog.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := registry.ExtensionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := NewServer(s)
+	server.SetExtensionCatalog(catalog)
+	recorder := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{ControlPlane: true}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/extensions", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("extension catalog status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var got struct {
+		Fingerprint string `json:"fingerprint"`
+		Descriptors []struct {
+			Ref struct {
+				ContractVersion uint64 `json:"contractVersion"`
+			} `json:"ref"`
+			OptionsSchemaRef *struct {
+				ID string `json:"id"`
+			} `json:"optionsSchemaRef"`
+		} `json:"descriptors"`
+		Schemas []struct {
+			Ref struct {
+				ID string `json:"id"`
+			} `json:"ref"`
+		} `json:"schemas"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Fingerprint == "" || len(got.Descriptors) == 0 || len(got.Schemas) < 4 {
+		t.Fatalf("extension catalog is incomplete: fingerprint=%q descriptors=%d schemas=%d", got.Fingerprint, len(got.Descriptors), len(got.Schemas))
+	}
+	for _, descriptor := range got.Descriptors {
+		if descriptor.Ref.ContractVersion == 0 {
+			t.Fatal("extension descriptor omitted its contract version")
+		}
+	}
 }
 
 func TestOpenAIChatVerticalSliceReachesUpstream(t *testing.T) {

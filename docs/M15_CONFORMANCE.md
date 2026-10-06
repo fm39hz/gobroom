@@ -1,26 +1,35 @@
 # M15 architecture conformance evidence
 
-M15 asks whether representative new behaviors compose through stable
-extensions—not whether every upstream has already been implemented. Run the
-executable gate with:
+Status: composition simulations implemented; full semantic closure gate
+pending. M15 asks whether new behaviors compose through stable contracts.
+The [semantic extension design](EXTENSION_CONTRACTS.md) fixes the remaining
+contracts. Run the existing composition subset with:
 
 ```sh
 make test-conformance
 ```
 
-The gate exercises the following change simulations:
+The command currently exercises the following composition simulations. It
+must not be described as the complete semantic closure suite until the
+acceptance cases below are implemented.
 
 | Change simulation | Executable evidence |
 |---|---|
 | API-key provider, `/models`, operation bindings and reusable primitives | `TestGenericProviderManifestBindsProtocolsAndSemanticTasks`; daemon manifest/discovery path in `TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart` |
-| Provider-specific OAuth/device auth flow | `TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract`; `TestDefinitionBuildsConfiguredOAuthAuthFlow` |
+| Provider-specific auth factory and credential resolution | `TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract`; `TestDefinitionBuildsConfiguredOAuthAuthFlow`; these do not exercise device authorization or polling |
 | Safe provider configuration metadata for generic control clients and schema-driven TUI auth forms | `TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets`; `TestProviderDefinitionMetadataIsAvailableThroughGenericControlAPI`; daemon IPC catalog assertion in `TestIPCControlCRUDUsesDaemonServices`; `TestConnectionFormUsesProviderAuthSetupSchema` |
-| New ingress operation and provider operation binding | `TestNamespacedOperationIngressRegistersWithoutServerRouteBranch`; `TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch` |
+| Versioned provider/primitive refs and schema catalog through IPC/HTTP/CLI | `TestPrimitiveReferencesRequireTheExactContractVersion`; `TestCatalogPinsSchemaAndModuleVersionsAndValidatesBeforeFactory`; `TestExtensionCatalogEndpointExposesContractVersionsAndOptionsSchemas`; `TestIPCControlCRUDUsesDaemonServices`; `TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary`; installed CLI smoke is part of the C1 check |
+| Versioned operation definition, request payload schema and replay declaration | `TestChatDefinitionCompilesTypedInputAndPinsReplayContract`; `TestRegisteredNonChatOperationValidatesItsOwnPayload`; `TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch`; `TestKernelRoutesNewOperationUsingGenericRouteTaskContract`; `TestOperationSchemaFailureUsesClientErrorBoundary`; custom ingress version/payload assertion in `TestNamespacedOperationIngressRegistersWithoutServerRouteBranch` |
+| Versioned ingress operation, provider task ref and route binding | `TestNamespacedOperationIngressRegistersWithoutServerRouteBranch`; `TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch`; `TestKernelRoutesNewOperationUsingGenericRouteTaskContract`; these prove JSON payload schema admission and exact version selection, not a real media wire/result |
 | New capability evaluator and route eligibility | `TestNewFeatureExtensionNegotiatesTypedConstraintsWithoutKernelBranch`; `TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest` |
 | New fallback strategy | `TestNewStrategyExtensionAppearsInCatalogAndSchedulerWithoutKernelBranch` |
 | Request/response transform extension | `TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding`; `TestRuntimeBindingExecutesSelectedEndpointAndCodecs` |
-| Provider decoder → semantic events → client renderer, including commit boundary | `TestRuntimeBindingExecutesSelectedEndpointAndCodecs`; `TestComposedSemanticResponsePipelineRetriesOnlyBeforeRendererCommit` |
+| Provider decoder → semantic events → client renderer, including commit boundary | `TestRuntimeBindingExecutesSelectedEndpointAndCodecs`; `TestComposedSemanticPipelineDoesNotReplayAcceptedUpstreamResponse`; `TestKernelDoesNotReplayAcceptedResponseAfterSemanticFailure` |
 | New quota/error envelope and restart-persistent routing effect | `TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart` |
+| Compatibility facet composition and fail-closed route admission | `TestCompatibilityPlanComposesFacetMappingsInStageOrder`; `TestCompatibilityPlanFailsClosedForRequiredUnknownOrUnsupportedFacet`; `TestCompatibilityPlanRequiresNamedAndGrantedLosses`; `TestCompatibilityPlanIgnoresUnrequestedUnsupportedFacet`; `TestCompatibilityPlanRejectsUnscopedDegradationAndInvalidDeclarations`; `TestKernelRejectsAdapterWithoutRequiredFacetDeclarationBeforeDispatch` |
+| Request-codec facet declaration and candidate preflight | `TestGeminiCompatibilityPlanRejectsUnsupportedRequestFacetsBeforeDispatch`; `TestKernelRejectsGeminiContinuityBeforePreparingUpstreamRequest`; OpenAI Chat, OpenAI Responses and Anthropic Messages now publish request-facet declarations through the same interface |
+| Response decoder → event IR → renderer contract and passthrough boundary | `TestComposedAdapterRejectsRendererEventMissingFromDecoderContract`; `TestOpenAIChatRendererPlansRequiredSemanticEvents`; `TestActiveSemanticTransformDisablesOpenAIWirePassthrough`; `TestWirePassthroughRejectsSemanticResponseTransform` |
+| Operation replay safety at dispatch/effect boundary | `TestReplaySafetyAllowsPostDispatchReplayOnlyForConfirmedRejection`; `TestKernelDoesNotFallbackAfterAmbiguousDispatchedRequest`; explicit 429 fallback remains covered by Gemini quota/rate-limit integration fixtures |
 
 The provider definition catalog contains only display/operation metadata,
 primitive references, capabilities and the auth flow's declared setup schema.
@@ -28,10 +37,75 @@ It excludes auth options, connection secrets, endpoint options and arbitrary
 provider defaults. Both IPC and the optional HTTP control API serve this same
 projection; `gobroom providers catalog` exposes it for headless clients.
 
+The current primitive catalog additionally contains exact versioned endpoint,
+transport, codec, auth, discovery, usage, classifier, quota and client renderer
+descriptors. Built-in endpoint/usage/error/OAuth option schemas and compiled
+fingerprints are available from IPC `extensions.catalog`, HTTP control
+`/api/extensions` and CLI `gobroom extensions catalog`.
+The provider runtime currently registers one implementation version per
+primitive ID; side-by-side module versions and catalog-backed operation,
+feature and strategy descriptors remain in C1.
+
 The implementation adds no provider-name branch to the kernel and no
 provider-specific persistence field. The existing physical/combo graph,
 snapshot lifecycle and request executor are reused by these simulations.
-These checks establish the architecture extension gate only. They do not
-establish full provider/protocol parity, complete TUI onboarding, or drop-in
-replacement status; see the [implementation roadmap](IMPLEMENTATION_PLAN.md)
-and [compatibility evidence](COMPATIBILITY_MATRIX.md).
+These checks establish the composition subset. They do not prove complete
+semantic closure, provider parity, TUI onboarding or drop-in replacement.
+
+The compatibility planner evaluates immutable declarations in request/route/
+operation context and recomputes admission from facet mappings. It composes
+ordered mappings, requires named losses and explicit grants, gives denials
+precedence, and rejects undeclared required facets before dispatch. Production
+request codecs now report the request facets they preserve, translate or
+reject; a Gemini end-to-end fixture proves continuity rejection happens before
+request preparation. Response decoders now enumerate possible canonical event
+families, renderers negotiate request-required families, and missing decoder or
+renderer declarations fail closed. A registered semantic response transform
+forces the OpenAI Chat renderer's semantic path and makes raw-only passthrough
+ineligible. Operation/artifact-specific event schemas, transform effect reports,
+artifact transfer and node-bound loss policy remain unimplemented. Therefore
+this slice is not SG1 evidence.
+
+The attempt executor now consumes the operation's replay-safety declaration.
+An ambiguous transport failure is treated as an unknown upstream effect; a
+successful upstream response followed by a pre-client-commit decoder failure
+is still an accepted upstream effect. Neither case triggers a second provider
+attempt under the current contracts. Only an explicitly classified rejection
+can satisfy `confirmed_rejection_only`; 5xx, timeout, network failure and a
+successful response are not treated as rejection. Scoped idempotency replay
+and real non-chat job execution remain unimplemented, so SG6 is still pending.
+
+## Full semantic closure gate
+
+The following cases are required in addition to the existing subset. They use
+deterministic upstream/callback fixtures; live credentials are not required.
+Each assertion checks observable behavior through the ordinary control and
+serving boundaries, not merely registry acceptance.
+
+| Case | Required proof |
+|---|---|
+| SG1: full compatibility composition | A request with tools, reasoning budget and scoped continuity is evaluated across encoder, decoder, renderer and transforms. Exact intent excludes incompatible candidates before dispatch; permitted clamping records a named loss. Undeclared support fails closed. Both OpenAI and Anthropic client rendering are exercised from semantic events. |
+| SG2: interactive auth lifecycle | Device authorization displays code/URL, polls, honors slow-down and completes without a frontend. Authorization-code fixtures exercise state/PKCE, callback replay rejection, cancellation/expiry and concurrent connection isolation. Credential application includes a request-bound signing fixture. Atomic setup/refresh generation checks preserve newer credentials. |
+| SG3: operation/artifact semantics | A non-chat operation consumes a genuine multipart/binary input and emits its typed result plus registered semantic events. Its compiler derives requirements from that input. Required unknown events, expired artifacts and wrong-issuer signatures are rejected; portable artifacts survive an allowed transfer. The current JSON audio-shaped fixture proves schema admission only; it does not prove media framing/result semantics. |
+| SG4: native wire versus transforms | Unmodified native JSON/SSE output is preserved with bounded observations. Enabling a text/tool semantic transform forces re-encoding, changes the client output and preserves tool correlation. Missing semantic renderer support rejects the route before dispatch. |
+| SG5: configured transform lifecycle | Catalog registration alone leaves a transform inactive. Bindings/options survive config round trip; model-path and attempt chains have deterministic order, recompute requirements and do not run twice on fallback. Undeclared mutations fail; fail-open rolls back; cancellation and bounds are enforced. Original provider accounting is unchanged by client projection. |
+| SG6: replay safety | A safe precommit failure can fallback. An unsafe dispatched operation with ambiguous timeout cannot duplicate an upstream job. Issuer-local idempotency does not authorize cross-provider replay. No operation switches routes after client commitment. |
+| SG7: extension configuration and isolation | Versioned feature/policy/auth/operation schemas drive validation and generic control clients. A bundle includes user definitions/bindings and excludes secrets/session state. Missing compiled dependencies fail atomically. Reload pins existing streams to their old catalog/snapshot. Multiple long streams do not block control/auth actions. |
+
+After the generic contracts are implemented, the synthetic/captured provider
+used by these cases must be introduced using module implementations, static
+composition-root registration, descriptors, manifests and fixtures only. Its
+addition must leave kernel graph types, core storage schema, generic request
+orchestration and frontend workflow unchanged. Implementing the generic
+contracts themselves is planned core work; passing their unit tests alone is
+not this change simulation.
+
+Completion requires every SG case plus the existing composition subset,
+ordinary integration checks and installed CLI verification for delivered
+control surfaces. The full cases must join `make test-conformance` when they
+exist. Never replace an absent case with a test name implying stronger
+coverage than its assertions provide.
+
+See the [implementation roadmap](IMPLEMENTATION_PLAN.md) for ordered slices.
+Vendor completeness and measured resource/latency performance remain separate
+gates even after semantic closure passes.

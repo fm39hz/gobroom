@@ -16,21 +16,21 @@ import (
 type OpenAIChat struct{}
 
 func (OpenAIChat) ID() normalize.Format { return normalize.FormatOpenAIChat }
-func (OpenAIChat) SupportsResponse(options kernel.ResponseRenderContext) kernel.CompatibilityDecision {
+func (OpenAIChat) SupportsResponse(options kernel.ResponseRenderContext) kernel.CompatibilityPlan {
 	if options.ClientFormat != normalize.FormatOpenAIChat {
-		return kernel.CompatibilityDecision{Reason: "OpenAI Chat renderer cannot render this client format"}
+		return unsupportedResponsePlan(options, "OpenAI Chat renderer cannot render this client format")
 	}
-	fidelity := kernel.FidelityTranslated
-	if options.ProviderFormat == options.ClientFormat && options.ProviderStreaming == options.Streaming {
-		fidelity = kernel.FidelityNative
+	passthrough := options.ProviderFormat == options.ClientFormat && options.ProviderStreaming == options.Streaming && !options.SemanticTransformActive
+	if passthrough && !containsEvent(options.ProviderEvents, kernel.EventRawFrame) {
+		return unsupportedResponsePlan(options, "native wire response requires a decoder that exposes raw frames")
 	}
-	return kernel.CompatibilityDecision{Supported: true, Fidelity: fidelity}
+	return responseEventPlan(options, passthrough, openAIChatEvents(), "OpenAI Chat")
 }
 func (OpenAIChat) Begin(_ context.Context, options kernel.ResponseRenderContext, writer http.ResponseWriter) (kernel.ResponseRenderSession, error) {
 	if options.ClientFormat != normalize.FormatOpenAIChat {
 		return nil, fmt.Errorf("OpenAI Chat renderer cannot render %q", options.ClientFormat)
 	}
-	passthrough := options.ProviderFormat == options.ClientFormat && options.ProviderStreaming == options.Streaming
+	passthrough := options.ProviderFormat == options.ClientFormat && options.ProviderStreaming == options.Streaming && !options.SemanticTransformActive
 	if passthrough {
 		copyHeaders(writer.Header(), options.Headers, true)
 		if options.Streaming {
@@ -243,18 +243,79 @@ func openAIFinishReason(reason string) string {
 type WirePassthrough struct{ Format normalize.Format }
 
 func (r WirePassthrough) ID() normalize.Format { return r.Format }
-func (r WirePassthrough) SupportsResponse(options kernel.ResponseRenderContext) kernel.CompatibilityDecision {
-	if options.ClientFormat != r.Format || options.ProviderFormat != r.Format {
-		return kernel.CompatibilityDecision{Reason: "wire passthrough requires matching provider/client formats"}
+func (r WirePassthrough) SupportsResponse(options kernel.ResponseRenderContext) kernel.CompatibilityPlan {
+	if options.ClientFormat != r.Format || options.ProviderFormat != r.Format || options.Streaming != options.ProviderStreaming || options.SemanticTransformActive {
+		return unsupportedResponsePlan(options, "wire passthrough requires matching provider/client format and framing with no semantic response transform")
 	}
-	return kernel.CompatibilityDecision{Supported: true, Fidelity: kernel.FidelityNative}
+	if !containsEvent(options.ProviderEvents, kernel.EventRawFrame) {
+		return unsupportedResponsePlan(options, "wire passthrough requires a decoder that exposes raw frames")
+	}
+	return responseEventPlan(options, true, nil, "native wire passthrough")
 }
 func (r WirePassthrough) Begin(_ context.Context, options kernel.ResponseRenderContext, writer http.ResponseWriter) (kernel.ResponseRenderSession, error) {
-	if options.ClientFormat != r.Format || options.ProviderFormat != r.Format || options.Streaming != options.ProviderStreaming {
+	if options.ClientFormat != r.Format || options.ProviderFormat != r.Format || options.Streaming != options.ProviderStreaming || options.SemanticTransformActive {
 		return nil, fmt.Errorf("wire passthrough %q requires matching provider and client formats", r.Format)
 	}
 	copyHeaders(writer.Header(), options.Headers, false)
 	return &wireSession{writer: writer, status: options.Status, format: r.Format}, nil
+}
+
+func openAIChatEvents() map[kernel.ResponseEventKind]bool {
+	return map[kernel.ResponseEventKind]bool{
+		kernel.EventTextDelta: true, kernel.EventThinkingDelta: true, kernel.EventToolCallDelta: true,
+		kernel.EventUsage: true, kernel.EventResponseComplete: true, kernel.EventContentBlockEnd: true,
+	}
+}
+
+func responseEventPlan(options kernel.ResponseRenderContext, passthrough bool, supported map[kernel.ResponseEventKind]bool, label string) kernel.CompatibilityPlan {
+	reports := [][]kernel.FacetMapping{}
+	policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetWireResponse}}
+	disposition := kernel.FacetTranslated
+	if passthrough {
+		disposition = kernel.FacetPreserved
+	}
+	reports = append(reports, []kernel.FacetMapping{{Facet: kernel.FacetWireResponse, Paths: []string{"response.wire"}, Disposition: disposition}})
+	providerEvents := make(map[kernel.ResponseEventKind]bool, len(options.ProviderEvents))
+	for _, event := range options.ProviderEvents {
+		providerEvents[event] = true
+	}
+	for _, event := range options.RequiredEvents {
+		facet := kernel.ResponseEventFacet(event)
+		policy.RequiredFacets = append(policy.RequiredFacets, facet)
+		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"response.events"}, Disposition: kernel.FacetUnsupported}
+		switch {
+		case !providerEvents[event]:
+			mapping.Reason = fmt.Sprintf("%s cannot render %q because the provider decoder does not declare that event", label, event)
+		case passthrough:
+			mapping.Disposition = kernel.FacetPreserved
+		case supported[event]:
+			mapping.Disposition = kernel.FacetTranslated
+		default:
+			mapping.Reason = fmt.Sprintf("%s renderer does not support semantic event %q", label, event)
+		}
+		reports = append(reports, []kernel.FacetMapping{mapping})
+	}
+	return kernel.ComposeCompatibilityPlan(reports, policy)
+}
+
+func unsupportedResponsePlan(options kernel.ResponseRenderContext, reason string) kernel.CompatibilityPlan {
+	reports := [][]kernel.FacetMapping{{{Facet: kernel.FacetWireResponse, Paths: []string{"response.wire"}, Disposition: kernel.FacetUnsupported, Reason: reason}}}
+	policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetWireResponse}}
+	for _, event := range options.RequiredEvents {
+		facet := kernel.ResponseEventFacet(event)
+		policy.RequiredFacets = append(policy.RequiredFacets, facet)
+		reports = append(reports, []kernel.FacetMapping{{Facet: facet, Paths: []string{"response.events"}, Disposition: kernel.FacetUnsupported, Reason: reason}})
+	}
+	return kernel.ComposeCompatibilityPlan(reports, policy)
+}
+
+func containsEvent(events []kernel.ResponseEventKind, wanted kernel.ResponseEventKind) bool {
+	for _, event := range events {
+		if event == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 type wireSession struct {

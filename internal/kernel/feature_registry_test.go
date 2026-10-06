@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 )
 
 type structuredOutputFeature struct{}
@@ -80,11 +82,8 @@ type featureRouteAdapter struct {
 }
 
 func (a featureRouteAdapter) ID() string { return a.id }
-func (a featureRouteAdapter) NegotiateClientFormat(format normalize.Format, _ bool) CompatibilityDecision {
-	if format != normalize.FormatAnthropic {
-		return CompatibilityDecision{Fidelity: FidelityUnsupported, Reason: "unsupported test format"}
-	}
-	return CompatibilityDecision{Supported: true, Fidelity: FidelityNative}
+func (a featureRouteAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return fixtureCompatibilityPlan(input, normalize.FormatAnthropic, FidelityNative)
 }
 func (a featureRouteAdapter) Prepare(_ context.Context, request NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
 	*a.used = append(*a.used, route.ID)
@@ -118,8 +117,8 @@ func TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest(t *tes
 		PublicModels: []PublicModel{{Name: "public", TargetRef: "physical"}},
 		Nodes:        []ModelNode{{ID: "physical", Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "route-wrong", Fidelity: FidelityExact}, {Kind: MemberRoute, ID: "route-right", Fidelity: FidelityExact}}}},
 		Routes: []Route{
-			{ID: "route-wrong", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"wrong"}}}, Protocol: Protocol("vendor.protocol.one"), Enabled: true, Profile: CapabilityProfile{featureID: {State: SupportNative, Constraints: json.RawMessage(`{"formats":["json"]}`)}}},
-			{ID: "route-right", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"right"}}}, Protocol: Protocol("vendor.protocol.two"), Enabled: true, Profile: CapabilityProfile{featureID: {State: SupportNative, Constraints: json.RawMessage(`{"formats":["strict-json"]}`)}}},
+			{ID: "route-wrong", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"wrong"}}}, Protocol: Protocol("vendor.protocol.one"), Enabled: true, Profile: CapabilityProfile{featureID: {State: SupportNative, Constraints: json.RawMessage(`{"formats":["json"]}`)}}},
+			{ID: "route-right", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"right"}}}, Protocol: Protocol("vendor.protocol.two"), Enabled: true, Profile: CapabilityProfile{featureID: {State: SupportNative, Constraints: json.RawMessage(`{"formats":["strict-json"]}`)}}},
 		},
 	}, 1)
 	if err != nil {
@@ -133,7 +132,7 @@ func TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest(t *tes
 	var used []string
 	k.Adapters["wrong"] = featureRouteAdapter{id: "wrong", used: &used}
 	k.Adapters["right"] = featureRouteAdapter{id: "right", used: &used}
-	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatAnthropic, Requirements: []normalize.FeatureRequirement{{ID: featureID, Constraints: json.RawMessage(`{"format":"strict-json"}`)}}}
+	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatAnthropic, Requirements: []normalize.FeatureRequirement{{ID: featureID, Constraints: json.RawMessage(`{"format":"strict-json"}`)}}}
 	writer := httptest.NewRecorder()
 	if err := k.Execute(context.Background(), request, Credential{}, writer); err != nil {
 		t.Fatal(err)
@@ -148,6 +147,25 @@ func TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest(t *tes
 
 func TestKernelRoutesNewOperationUsingGenericRouteTaskContract(t *testing.T) {
 	const operation normalize.Operation = "audio.transcribe.v1"
+	operationCatalog := extensions.NewCatalog()
+	operationRegistry, err := operations.NewRegistry(operationCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operations.RegisterChatGenerate(operationCatalog, operationRegistry); err != nil {
+		t.Fatal(err)
+	}
+	if err := operationRegistry.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: 1}, "Transcribe audio", "Audio payload contract", json.RawMessage(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	extensionSnapshot, err := operationCatalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationSnapshot, err := operationRegistry.Seal(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "transcriber", TargetRef: "physical"}},
 		Nodes: []ModelNode{{ID: "physical", Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{
@@ -155,8 +173,8 @@ func TestKernelRoutesNewOperationUsingGenericRouteTaskContract(t *testing.T) {
 			{Kind: MemberRoute, ID: "audio-route", Fidelity: FidelityExact},
 		}}},
 		Routes: []Route{
-			{ID: "chat-route", Protocol: Protocol("vendor.chat.v9"), OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"chat"}}}, Enabled: true},
-			{ID: "audio-route", Protocol: Protocol("vendor.audio.v1"), OperationBindings: map[normalize.Operation]RouteOperationBinding{operation: {AdapterIDs: []string{"audio"}}}, Enabled: true},
+			{ID: "chat-route", Protocol: Protocol("vendor.chat.v9"), OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"chat"}}}, Enabled: true},
+			{ID: "audio-route", Protocol: Protocol("vendor.audio.v1"), OperationBindings: map[normalize.Operation]RouteOperationBinding{operation: {ContractVersion: 1, AdapterIDs: []string{"audio"}}}, Enabled: true},
 		},
 	}, 1)
 	if err != nil {
@@ -166,15 +184,30 @@ func TestKernelRoutesNewOperationUsingGenericRouteTaskContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	k.Operations = operationSnapshot
 	var attempted []string
 	k.Adapters["chat"] = featureRouteAdapter{id: "chat", used: &attempted}
 	k.Adapters["audio"] = featureRouteAdapter{id: "audio", used: &attempted}
 	writer := httptest.NewRecorder()
-	request := NormalizedRequest{Model: "transcriber", Operation: operation, SourceFormat: normalize.FormatAnthropic}
+	request := NormalizedRequest{Model: "transcriber", Operation: operation, OperationContractVersion: 1, OperationPayload: json.RawMessage(`{"audio":"sample"}`), SourceFormat: normalize.FormatAnthropic}
 	if err := k.Execute(context.Background(), request, Credential{}, writer); err != nil {
 		t.Fatal(err)
 	}
 	if len(attempted) != 1 || attempted[0] != "audio-route" || writer.Body.String() != "ok" {
 		t.Fatalf("attempted=%v response=%q", attempted, writer.Body.String())
+	}
+	attempted = nil
+	invalid := request
+	invalid.OperationPayload = json.RawMessage(`{"notAudio":"sample"}`)
+	if err := k.Execute(context.Background(), invalid, Credential{}, httptest.NewRecorder()); err == nil {
+		t.Fatal("payload that violates the registered operation schema was accepted")
+	}
+	if len(attempted) != 0 {
+		t.Fatalf("invalid operation payload reached routes: %v", attempted)
+	}
+	wrongVersion := request
+	wrongVersion.OperationContractVersion = 2
+	if err := k.Execute(context.Background(), wrongVersion, Credential{}, httptest.NewRecorder()); err == nil {
+		t.Fatal("unregistered operation version reached routing")
 	}
 }

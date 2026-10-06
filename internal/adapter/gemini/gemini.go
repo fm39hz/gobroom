@@ -24,13 +24,227 @@ type Gemini struct{ Client *http.Client }
 type requestCodec struct{ adapter Gemini }
 
 func (requestCodec) ID() string { return "gemini-json" }
+func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
+	request := input.Request
+	nativeIngress := request.SourceFormat == normalize.FormatOpenAIChat
+	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
+	for _, facet := range input.Policy.RequiredFacets {
+		if kernel.IsResponseCompatibilityFacet(facet) {
+			continue
+		}
+		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"invocation"}, Disposition: kernel.FacetUnsupported, Reason: "Gemini request codec has no safe mapping for this facet"}
+		if !nativeIngress {
+			result = append(result, mapping)
+			continue
+		}
+		switch facet {
+		case kernel.FacetWireRequest:
+			mapping.Disposition = kernel.FacetTranslated
+			mapping.Reason = "OpenAI Chat messages are converted to Gemini contents"
+		case kernel.FacetPromptLayers:
+			if geminiPromptLayersRepresentable(request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "text prompt layers are mapped to Gemini systemInstruction"
+			} else {
+				mapping.Reason = "Gemini systemInstruction conversion accepts text-only prompt layers"
+			}
+		case kernel.FacetToolDefinitions:
+			if geminiToolDefinitionsRepresentable(request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "function definitions are mapped to Gemini functionDeclarations"
+			} else {
+				mapping.Reason = "Gemini cannot guarantee strict function-schema semantics or map a declared tool"
+			}
+		case kernel.FacetToolHistory:
+			if geminiToolHistoryRepresentable(request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "tool calls and results are mapped to Gemini functionCall/functionResponse parts"
+			} else {
+				mapping.Reason = "tool history lacks a representable role, function name or JSON-object arguments"
+			}
+		case kernel.FacetReasoningIntent:
+			if _, err := geminiThinkingConfigFor(request.Thinking); err == nil {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "reasoning intent is mapped to Gemini thinkingConfig"
+			} else {
+				mapping.Reason = err.Error()
+			}
+		case kernel.FacetVisionInput:
+			if geminiVisionInputRepresentable(request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "base64 image data URIs are mapped to Gemini inlineData"
+			} else {
+				mapping.Reason = "Gemini vision input requires base64 image data URIs"
+			}
+		case kernel.FacetGenerationOptions:
+			if geminiGenerationOptionsRepresentable(request.Raw) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "the requested generation options have explicit Gemini mappings"
+			} else {
+				mapping.Reason = "one or more generation options are unsupported or have different semantics on Gemini"
+			}
+		}
+		result = append(result, mapping)
+	}
+	return result
+}
 func (c requestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
+}
+
+func geminiPromptLayersRepresentable(request kernel.NormalizedRequest) bool {
+	for _, layer := range request.Prompt.Layers {
+		if len(layer.Parts) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func geminiToolDefinitionsRepresentable(request kernel.NormalizedRequest) bool {
+	for _, tool := range request.Tools {
+		if tool.Type != "" && tool.Type != "function" {
+			return false
+		}
+		function := tool.Function
+		if function == nil {
+			return false
+		}
+		if strict, _ := function["strict"].(bool); strict {
+			return false
+		}
+		name, _ := function["name"].(string)
+		if name == "" {
+			name = tool.Name
+		}
+		if name == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func geminiToolHistoryRepresentable(request kernel.NormalizedRequest) bool {
+	callNames := make(map[string]string)
+	for _, message := range request.Messages {
+		for _, call := range message.ToolCalls {
+			if call.Name == "" || !geminiArgumentsObject(call.Arguments) {
+				return false
+			}
+			callNames[call.ID] = call.Name
+		}
+	}
+	for _, message := range request.Messages {
+		if message.Role == "system" || message.Role == "developer" {
+			continue
+		}
+		if message.Role == "tool" || message.Role == "function" {
+			if message.Name == "" && callNames[message.ToolCallID] == "" {
+				return false
+			}
+			continue
+		}
+		if _, err := geminiRole(message.Role); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func geminiArgumentsObject(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch arguments := value.(type) {
+	case string:
+		var object map[string]json.RawMessage
+		return json.Unmarshal([]byte(arguments), &object) == nil && object != nil
+	case json.RawMessage:
+		var object map[string]json.RawMessage
+		return json.Unmarshal(arguments, &object) == nil && object != nil
+	case map[string]any:
+		return arguments != nil
+	default:
+		return false
+	}
+}
+
+func geminiVisionInputRepresentable(request kernel.NormalizedRequest) bool {
+	foundImage := false
+	valid := true
+	var visit func(any)
+	visit = func(value any) {
+		switch item := value.(type) {
+		case []any:
+			for _, child := range item {
+				visit(child)
+			}
+		case map[string]any:
+			typeName, _ := item["type"].(string)
+			if typeName == "image_url" || typeName == "input_image" || typeName == "image" {
+				foundImage = true
+				url := ""
+				if nested, ok := item["image_url"].(map[string]any); ok {
+					url, _ = nested["url"].(string)
+				}
+				if url == "" {
+					url, _ = item["url"].(string)
+				}
+				valid = valid && strings.HasPrefix(url, "data:image/") && strings.Contains(url, ";base64,")
+			}
+			for key, child := range item {
+				if key != "image_url" || typeName != "image_url" {
+					visit(child)
+				}
+			}
+		}
+	}
+	for _, message := range request.Messages {
+		visit(message.Content)
+	}
+	return foundImage && valid
+}
+
+func geminiGenerationOptionsRepresentable(raw map[string]any) bool {
+	supported := map[string]bool{
+		"temperature": true, "top_p": true, "top_k": true, "max_tokens": true,
+		"max_completion_tokens": true, "presence_penalty": true, "frequency_penalty": true,
+		"seed": true, "stop": true, "n": true, "response_format": true, "tool_choice": true,
+	}
+	for key, value := range raw {
+		if key == "model" || key == "stream" || key == "messages" || key == "tools" || key == "reasoning_effort" || key == "thinking" || key == "reasoning" {
+			continue
+		}
+		if !supported[key] {
+			return false
+		}
+		if key == "n" {
+			if count, ok := value.(float64); ok && count != 1 {
+				return false
+			}
+		}
+		if key == "response_format" {
+			if format, ok := value.(map[string]any); ok {
+				if schema, ok := format["json_schema"].(map[string]any); ok {
+					if strict, _ := schema["strict"].(bool); strict {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
 }
 
 type responseDecoder struct{ adapter Gemini }
 
 func (responseDecoder) ID() string { return "gemini-json" }
+func (responseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return []kernel.ResponseEventKind{
+		kernel.EventContentBlockEnd, kernel.EventTextDelta, kernel.EventThinkingDelta,
+		kernel.EventToolCallDelta, kernel.EventUsage, kernel.EventResponseComplete,
+	}
+}
 func (c responseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
 	return c.adapter.ClassifyError(status, body)
 }

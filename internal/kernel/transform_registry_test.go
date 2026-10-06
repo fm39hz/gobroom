@@ -35,7 +35,7 @@ func TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "public", TargetRef: "physical"}},
 		Nodes:        []ModelNode{{ID: "physical", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
-		Routes:       []Route{{ID: "route", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {AdapterIDs: []string{"fixture"}}}}},
+		Routes:       []Route{{ID: "route", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"fixture"}}}}},
 	}, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding
 	if err := k.Transforms.Register(promptCompressionFixture{}); err != nil {
 		t.Fatal(err)
 	}
-	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, SourceFormat: normalize.FormatAnthropic, Messages: []Message{{Role: "user", Content: "very long fixture context"}}}
+	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatAnthropic, Messages: []Message{{Role: "user", Content: "very long fixture context"}}}
 	if err := k.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestRequestTransformCannotChangeResolvedModelOrOperation(t *testing.T) {
 	if err := registry.Register(invalidIdentityTransform{}); err != nil {
 		t.Fatal(err)
 	}
-	request := NormalizedRequest{Model: "chosen-role", Operation: normalize.OperationChatGenerate}
+	request := NormalizedRequest{Model: "chosen-role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1}
 	err := registry.Apply(context.Background(), &request)
 	if err == nil || !strings.Contains(err.Error(), "immutable request identity") {
 		t.Fatalf("identity mutation error=%v", err)
