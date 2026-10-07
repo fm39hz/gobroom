@@ -27,7 +27,11 @@ func (c OAuthConfig) Config() *oauth2.Config {
 }
 
 func (c OAuthConfig) AuthCodeURL(state, verifier string) string {
-	return c.Config().AuthCodeURL(state, oauth2.SetAuthURLParam("code_challenge", verifier), oauth2.SetAuthURLParam("code_challenge_method", "S256"))
+	challenge := oauth2.S256ChallengeFromVerifier(verifier)
+	return c.Config().AuthCodeURL(state,
+		oauth2.SetAuthURLParam("code_challenge", challenge),
+		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
+	)
 }
 
 func (c OAuthConfig) Exchange(ctx context.Context, code, verifier string) (*oauth2.Token, error) {

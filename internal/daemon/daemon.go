@@ -28,17 +28,17 @@ import (
 )
 
 type Config struct {
-	DBPath              string
-	IPCPath             string
-	HTTPEnabled         bool
-	HTTPAddr            string
-	HTTPControl         bool
-	HTTPControlAddr     string
-	HTTPToken           string
-	ProviderManifestDir string
-	QuotaPolling        bool
-	ArtifactStoreDir    string
-	ArtifactStoreMaxBytes int64
+	DBPath                    string
+	IPCPath                   string
+	HTTPEnabled               bool
+	HTTPAddr                  string
+	HTTPControl               bool
+	HTTPControlAddr           string
+	HTTPToken                 string
+	ProviderManifestDir       string
+	QuotaPolling              bool
+	ArtifactStoreDir          string
+	ArtifactStoreMaxBytes     int64
 	ArtifactStoreMaxBodyBytes int64
 }
 
@@ -64,6 +64,8 @@ type Daemon struct {
 	policy              *runtimehealth.PolicyGate
 	usageCancel         context.CancelFunc
 	mu                  sync.Mutex
+	oauthMu             sync.Mutex
+	oauth               *authorizationSessions
 	credentialRefreshMu sync.Mutex
 	credentialRefreshes map[string]*sync.Mutex
 	logMu               sync.RWMutex
@@ -562,6 +564,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	d.stop()
 	d.stop = nil
+	d.oauthMu.Lock()
+	d.oauth = nil
+	d.oauthMu.Unlock()
 	return nil
 }
 
@@ -835,6 +840,34 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
+	case "auth.authorization.start":
+		challenge, err := d.startAuthorization(stringParam(request.Params, "connectionID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, challenge)
+	case "auth.authorization.complete":
+		sessionID := stringParam(request.Params, "sessionID")
+		state := stringParam(request.Params, "state")
+		code := stringParam(request.Params, "code")
+		callbackURL := stringParam(request.Params, "callbackURL")
+		if callbackURL != "" {
+			parsedCode, parsedState, err := authorizationCallbackCode(callbackURL)
+			if err != nil {
+				return fail(request, err.Error())
+			}
+			code, state = parsedCode, parsedState
+		}
+		result, err := d.completeAuthorization(ctx, sessionID, state, code, callbackURL)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
+	case "auth.authorization.cancel":
+		if err := d.cancelAuthorization(stringParam(request.Params, "sessionID")); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"status": "cancelled"})
 	case "connections.test":
 		connectionID := stringParam(request.Params, "connectionID")
 		nodeID, err := d.providerNodeForConnection(connectionID)

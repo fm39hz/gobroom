@@ -3,9 +3,11 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,7 +24,14 @@ import (
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/quota"
 	"github.com/fm39hz/gobroom/internal/store"
+	"golang.org/x/oauth2"
 )
+
+type oauthRoundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f oauthRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	s, err := store.Open(t.TempDir() + "/test.db")
@@ -231,6 +240,100 @@ func TestRefreshedCredentialPersistenceRetainsOAuthClientSecret(t *testing.T) {
 	}
 	if state["access_token"] != credential.Secret || state["refresh_token"] != credential.RefreshToken || state["client_id"] != credential.ClientID || state["client_secret"] != credential.ClientSecret {
 		t.Fatalf("persisted OAuth state=%#v", state)
+	}
+}
+
+func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) {
+	transport := oauthRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		form, err := url.ParseQuery(string(body))
+		if err != nil {
+			return nil, err
+		}
+		if got := form.Get("grant_type"); got != "authorization_code" {
+			t.Errorf("grant_type=%q", got)
+		}
+		if got := form.Get("code_verifier"); got == "" {
+			t.Error("PKCE verifier missing from exchange")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"access_token":"issued-access","refresh_token":"issued-refresh","expires_in":3600,"token_type":"Bearer"}`)), Request: r}, nil
+	})
+
+	s, err := store.Open(t.TempDir() + "/oauth-coordinator.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "OAuth", Prefix: "oauth", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "oauth", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "test account", CredentialType: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{
+		store: s, server: api.NewServer(s),
+		providerAuthFlowIDs: map[string]string{"oauth": "oauth:oauth2"},
+		authFlows: map[string]provider.AuthFlow{"oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
+			ClientID: "client", AuthURL: "https://identity.test/authorize", TokenURL: "https://identity.test/token",
+			RedirectURL: "http://127.0.0.1:9876/oauth/callback", Scopes: []string{"models.read"},
+		}}},
+	}
+	started := d.handleIPC(context.Background(), IPCRequest{ID: "start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !started.OK {
+		t.Fatal(started.Error)
+	}
+	challenge := started.Result.(authorizationChallenge)
+	duplicate := d.handleIPC(context.Background(), IPCRequest{ID: "duplicate", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	if duplicate.OK {
+		t.Fatal("second pending OAuth session for the same connection was accepted")
+	}
+	parsedURL, err := url.Parse(challenge.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := parsedURL.Query().Get("state")
+	challengeValue := parsedURL.Query().Get("code_challenge")
+	if state != challenge.SessionID || challengeValue == "" || parsedURL.Query().Get("code_challenge_method") != "S256" {
+		t.Fatalf("authorization challenge does not carry daemon state + S256 PKCE: %#v", parsedURL.Query())
+	}
+	if _, err := d.completeAuthorization(context.Background(), challenge.SessionID, "wrong-state", "code", ""); err == nil {
+		t.Fatal("wrong OAuth state was accepted")
+	}
+	callback := "http://127.0.0.1:9876/oauth/callback?code=approved-code&state=" + url.QueryEscape(state)
+	wrongTarget := d.handleIPC(context.Background(), IPCRequest{ID: "wrong-target", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": challenge.SessionID, "callbackURL": "http://attacker.test/oauth/callback?code=approved-code&state=" + url.QueryEscape(state)}})
+	if wrongTarget.OK {
+		t.Fatal("callback from an unbound redirect target was accepted")
+	}
+	exchangeContext := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Transport: transport})
+	completed := d.handleIPC(exchangeContext, IPCRequest{ID: "complete", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": challenge.SessionID, "callbackURL": callback}})
+	if !completed.OK {
+		t.Fatal(completed.Error)
+	}
+	stored, ok := s.ConnectionCredentialByID(connection.ID)
+	if !ok {
+		t.Fatal("authorized connection not available")
+	}
+	tokenState, err := provider.DecodeOAuthTokenState(stored.Secret)
+	if err != nil || tokenState.AccessToken != "issued-access" || tokenState.RefreshToken != "issued-refresh" || tokenState.ClientID != "client" {
+		t.Fatalf("persisted OAuth token state=%#v err=%v", tokenState, err)
+	}
+	replay := d.handleIPC(context.Background(), IPCRequest{ID: "replay", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": challenge.SessionID, "state": state, "code": "approved-code"}})
+	if replay.OK {
+		t.Fatal("OAuth callback replay was accepted")
+	}
+	startedAgain := d.handleIPC(context.Background(), IPCRequest{ID: "start-again", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !startedAgain.OK {
+		t.Fatalf("new authorization after completion failed: %s", startedAgain.Error)
+	}
+	second := startedAgain.Result.(authorizationChallenge)
+	cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.authorization.cancel", Params: map[string]any{"sessionID": second.SessionID}})
+	if !cancelled.OK {
+		t.Fatalf("cancel authorization: %s", cancelled.Error)
 	}
 }
 

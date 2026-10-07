@@ -263,6 +263,16 @@ func (s *Store) ProviderNode(id string) (ProviderNode, error) {
 	return n, nil
 }
 
+// ProviderNodeByConnection resolves the owning provider without returning the
+// connection's secret material.
+func (s *Store) ProviderNodeByConnection(connectionID string) (ProviderNode, error) {
+	var nodeID string
+	if err := s.DB.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&nodeID); err != nil {
+		return ProviderNode{}, err
+	}
+	return s.ProviderNode(nodeID)
+}
+
 func (s *Store) DeleteProviderNode(id string) error {
 	if id == "" {
 		return fmt.Errorf("provider node ID is required")

@@ -419,6 +419,20 @@ redacted. Providers with non-token credentials store their own typed state
 behind the same secret handle; they do not add credential columns to the
 kernel or force every auth method into an access-token field.
 
+The daemon coordinator owns the state machine. The current authorization-code
+slice exposes `auth.authorization.start`, `auth.authorization.complete` and
+`auth.authorization.cancel` over local IPC (with matching headless CLI
+commands). Start returns a consent URL and opaque one-use session ID; the
+frontend opens the URL, then submits either the callback URL or code/state.
+The daemon holds the verifier in memory, enforces S256 PKCE, a ten-minute
+session TTL, a cap of 64 pending sessions, one pending session per connection,
+bounded callback/code sizes, redirect-target matching and a bounded exchange
+deadline, state matching and replay rejection. On success it persists the typed token
+state under that connection and reloads the serving snapshot. This first slice
+does not yet implement device polling, an embedded loopback callback listener,
+connection-generation fencing or the schema-driven TUI action flow; those
+remain explicit C4 work rather than implied support.
+
 The daemon coordinator owns the state machine:
 
 ```text

@@ -47,6 +47,8 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/provider -run '^(TestMultipartRequestCodecStreamsConfiguredArtifactFields|TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions|TestMultipartRequestCodecFailsClosedForUnmappedArtifactsAndStreamMode)$$' -count=1
 	go test ./internal/provider -run '^TestMultipartRequestCodecDeclaresExactArtifactRoleCompatibility$$' -count=1
 
+	go test ./internal/daemon -run '^TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay$$' -count=1
+
 test-v: ## verbose tests
 	go test ./... -count=1 -v
 

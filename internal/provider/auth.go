@@ -41,6 +41,14 @@ type AuthFlow interface {
 	Refresh(context.Context, kernel.Credential) (kernel.Credential, error)
 }
 
+// AuthorizationCodeFlow is an optional interactive capability. The daemon
+// owns state and PKCE verifier lifecycle; frontends only display the URL and
+// submit the callback code plus the returned session ID.
+type AuthorizationCodeFlow interface {
+	AuthorizationURL(state, verifier string) (string, error)
+	ExchangeAuthorizationCode(context.Context, string, string) (kernel.Credential, error)
+}
+
 type StaticSecretAuth struct{}
 
 func (StaticSecretAuth) ID() string { return "static-secret" }
@@ -157,6 +165,30 @@ func (a OAuthAuth) Refresh(ctx context.Context, credential kernel.Credential) (k
 		return kernel.Credential{}, err
 	}
 	return kernel.Credential{ConnectionID: credential.ConnectionID, Type: credential.Type, Secret: refreshed.AccessToken, RefreshToken: refreshed.RefreshToken, ExpiresAt: refreshed.Expiry, ClientID: config.ClientID, ClientSecret: config.ClientSecret}, nil
+}
+
+func (a OAuthAuth) AuthorizationURL(state, verifier string) (string, error) {
+	if state == "" || verifier == "" || a.Config.ClientID == "" || a.Config.AuthURL == "" || a.Config.TokenURL == "" || a.Config.RedirectURL == "" {
+		return "", fmt.Errorf("OAuth authorization requires state, PKCE verifier, client ID, auth/token URLs and redirect URL")
+	}
+	return a.Config.AuthCodeURL(state, verifier), nil
+}
+
+func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (kernel.Credential, error) {
+	if strings.TrimSpace(code) == "" || verifier == "" {
+		return kernel.Credential{}, fmt.Errorf("OAuth authorization code and PKCE verifier are required")
+	}
+	token, err := a.Config.Exchange(ctx, code, verifier)
+	if err != nil {
+		return kernel.Credential{}, fmt.Errorf("exchange OAuth authorization code: %w", err)
+	}
+	if token == nil || strings.TrimSpace(token.AccessToken) == "" {
+		return kernel.Credential{}, fmt.Errorf("OAuth token endpoint returned no access token")
+	}
+	return kernel.Credential{
+		Type: "oauth2", Secret: token.AccessToken, RefreshToken: token.RefreshToken,
+		ExpiresAt: token.Expiry, ClientID: a.Config.ClientID, ClientSecret: a.Config.ClientSecret,
+	}, nil
 }
 
 type AuthRegistry struct {
