@@ -754,8 +754,31 @@ func (s *Store) UpdateConnectionSecret(id, secret string) error {
 	if id == "" || secret == "" {
 		return fmt.Errorf("connection ID and secret are required")
 	}
-	_, err := s.DB.Exec(`UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, secret, id)
-	return err
+	result, err := s.DB.Exec(`UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, secret, id)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed == 0 {
+		return fmt.Errorf("connection %q not found", id)
+	}
+	return nil
+}
+
+// UpdateConnectionSecretIfUnchanged performs a credential-generation fence:
+// a delayed OAuth exchange or refresh cannot overwrite a credential that was
+// changed while its network request was in flight.
+func (s *Store) UpdateConnectionSecretIfUnchanged(id, expected, secret string) error {
+	if id == "" || secret == "" {
+		return fmt.Errorf("connection ID and replacement secret are required")
+	}
+	result, err := s.DB.Exec(`UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND secret_ref=?`, secret, id, expected)
+	if err != nil {
+		return err
+	}
+	if changed, _ := result.RowsAffected(); changed == 0 {
+		return fmt.Errorf("connection %q credential changed or connection was removed during authorization", id)
+	}
+	return nil
 }
 
 func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {

@@ -228,6 +228,7 @@ connection:
       "clientId": "public-client-id",
       "authUrl": "https://login.example/authorize",
       "tokenUrl": "https://login.example/token",
+      "deviceAuthUrl": "https://login.example/device/code",
       "scopes": ["models.read"]
     }
   }
@@ -239,6 +240,12 @@ The connection's secret is a JSON token state, for example
 also be supplied there to override the definition. It is not part of the
 provider manifest, routing snapshot, ordinary connection list or exported
 config bundle.
+
+`deviceAuthUrl` is optional. When the authorization server supports RFC 8628,
+`gobroom connections device-start --connection-id <id>` starts the device
+flow; the daemon retains and polls the private device code, while CLI/TUI show
+the user code and verification URL. Polling honors the server interval,
+`authorization_pending`, `slow_down` and expiry using the shared OAuth library.
 
 Providers that require no secret still bind auth explicitly with
 `{"kind":"auth","id":"none"}`; the connection can then exist without secret

@@ -106,6 +106,7 @@ func oauthOptionsSchema() (json.RawMessage, error) {
       "clientId":{"type":"string","minLength":1},
       "authUrl":{"type":"string","format":"uri"},
       "tokenUrl":{"type":"string","format":"uri"},
+      "deviceAuthUrl":{"type":"string","format":"uri"},
       "scopes":{"type":"array","items":{"type":"string","minLength":1}},
       "redirectUrl":{"type":"string","format":"uri"}
     },

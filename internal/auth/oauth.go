@@ -10,18 +10,19 @@ import (
 )
 
 type OAuthConfig struct {
-	ClientID     string
-	ClientSecret string
-	AuthURL      string
-	TokenURL     string
-	Scopes       []string
-	RedirectURL  string
+	ClientID      string
+	ClientSecret  string
+	AuthURL       string
+	TokenURL      string
+	DeviceAuthURL string
+	Scopes        []string
+	RedirectURL   string
 }
 
 func (c OAuthConfig) Config() *oauth2.Config {
 	return &oauth2.Config{
 		ClientID: c.ClientID, ClientSecret: c.ClientSecret,
-		Endpoint: oauth2.Endpoint{AuthURL: c.AuthURL, TokenURL: c.TokenURL},
+		Endpoint: oauth2.Endpoint{AuthURL: c.AuthURL, TokenURL: c.TokenURL, DeviceAuthURL: c.DeviceAuthURL},
 		Scopes:   c.Scopes, RedirectURL: c.RedirectURL,
 	}
 }

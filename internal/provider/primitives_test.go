@@ -377,7 +377,7 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "oauth-provider", Version: "1", DisplayName: "OAuth provider",
 		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
-		AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token", Scopes: []string{"models.read"}}},
+		AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token", DeviceAuthURL: "https://oauth.test/device", Scopes: []string{"models.read"}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
 			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -393,6 +393,9 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	}
 	if binding.Auth == nil || binding.Auth.ID() != "oauth2" || binding.AuthFlowID != AuthBindingKey("oauth-provider", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
 		t.Fatalf("auth binding=%#v", binding)
+	}
+	if oauth, ok := binding.Auth.(OAuthAuth); !ok || oauth.Config.DeviceAuthURL != "https://oauth.test/device" {
+		t.Fatalf("device authorization endpoint did not bind from provider definition: %#v", binding.Auth)
 	}
 	state := []byte(`{"access_token":"access","refresh_token":"refresh","client_secret":"per-connection-secret"}`)
 	credential, err := binding.Auth.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: string(state)})

@@ -154,6 +154,21 @@ func resourceCommands() []*cobra.Command {
 	}}
 	authorizeCancel.Flags().StringVar(&authorizationSessionID, "session-id", "", "authorization session ID")
 	connections.AddCommand(authorizeCancel)
+	deviceStart := &cobra.Command{Use: "device-start", Short: "begin daemon-polled OAuth device authorization", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("auth.device.start", map[string]any{"connectionID": connID})
+	}}
+	deviceStart.Flags().StringVar(&connID, "connection-id", "", "enabled OAuth connection ID")
+	connections.AddCommand(deviceStart)
+	deviceGet := &cobra.Command{Use: "device-get", Short: "show device authorization status", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("auth.device.get", map[string]any{"sessionID": authorizationSessionID})
+	}}
+	deviceGet.Flags().StringVar(&authorizationSessionID, "session-id", "", "device authorization session ID")
+	connections.AddCommand(deviceGet)
+	deviceCancel := &cobra.Command{Use: "device-cancel", Short: "cancel device authorization polling", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("auth.device.cancel", map[string]any{"sessionID": authorizationSessionID})
+	}}
+	deviceCancel.Flags().StringVar(&authorizationSessionID, "session-id", "", "device authorization session ID")
+	connections.AddCommand(deviceCancel)
 	previewConnModels := &cobra.Command{Use: "preview-models", Short: "review one connection's full model catalog without importing", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("connections.preview_models", map[string]any{"connectionID": connID})
 	}}

@@ -77,6 +77,35 @@ func TestConnectionsAreManagedWithoutExposingSecrets(t *testing.T) {
 	}
 }
 
+func TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential(t *testing.T) {
+	s, err := Open(t.TempDir() + "/credential-generation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(CreateProviderNodeInput{Name: "Provider", Prefix: "p", BaseURL: "https://provider.test", Protocol: "openai_chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := s.CreateConnection(CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "generation-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateConnection(UpdateConnectionInput{ID: connection.ID, Secret: "generation-b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateConnectionSecretIfUnchanged(connection.ID, "generation-a", "stale-oauth-result"); err == nil {
+		t.Fatal("stale authorization result overwrote a newer connection credential")
+	}
+	if err := s.UpdateConnectionSecretIfUnchanged(connection.ID, "generation-b", "generation-c"); err != nil {
+		t.Fatal(err)
+	}
+	stored, ok := s.ConnectionCredentialByID(connection.ID)
+	if !ok || stored.Secret != "generation-c" {
+		t.Fatalf("credential after compare-and-swap=%#v ok=%v", stored, ok)
+	}
+}
+
 func TestCreateProviderNodeDefaultsGeminiDefinition(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {

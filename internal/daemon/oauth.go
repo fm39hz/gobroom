@@ -22,12 +22,19 @@ const (
 )
 
 type authorizationSession struct {
-	connectionID string
-	flow         provider.AuthorizationCodeFlow
-	state        string
-	verifier     string
-	redirectURL  string
-	expiresAt    time.Time
+	kind           string
+	connectionID   string
+	flow           provider.AuthorizationCodeFlow
+	state          string
+	verifier       string
+	redirectURL    string
+	expectedSecret string
+	expiresAt      time.Time
+	deviceFlow     provider.DeviceAuthorizationFlow
+	device         provider.DeviceAuthorization
+	status         string
+	statusError    string
+	cancel         context.CancelFunc
 }
 
 type authorizationChallenge struct {
@@ -93,7 +100,7 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 		sessions.mu.Unlock()
 		return authorizationChallenge{}, fmt.Errorf("maximum pending authorization sessions (%d) reached", maxAuthorizationSessions)
 	}
-	sessions.byID[state] = authorizationSession{connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, expiresAt: expiresAt}
+	sessions.byID[state] = authorizationSession{kind: "authorization_code", connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, expectedSecret: connection.Secret, expiresAt: expiresAt, status: "awaiting_user"}
 	sessions.byConnection[connection.ID] = state
 	sessions.mu.Unlock()
 	return authorizationChallenge{SessionID: state, AuthorizationURL: authorizationURL, ExpiresAt: expiresAt}, nil
@@ -110,7 +117,7 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 	sessions.mu.Lock()
 	sessions.pruneLocked(time.Now())
 	session, exists := sessions.byID[sessionID]
-	if !exists || session.state != state {
+	if !exists || session.kind != "authorization_code" || session.state != state {
 		sessions.mu.Unlock()
 		return nil, fmt.Errorf("authorization session is missing, expired or has invalid state")
 	}
@@ -147,7 +154,7 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 		return nil, err
 	}
 	unlockCredential := d.lockCredentialRefresh(session.connectionID)
-	if err := d.store.UpdateConnectionSecret(session.connectionID, encoded); err != nil {
+	if err := d.store.UpdateConnectionSecretIfUnchanged(session.connectionID, session.expectedSecret, encoded); err != nil {
 		unlockCredential()
 		sessions.mu.Lock()
 		delete(sessions.inFlight, sessionID)
@@ -221,8 +228,26 @@ func (d *Daemon) authorizationSessions() *authorizationSessions {
 func (s *authorizationSessions) pruneLocked(now time.Time) {
 	for id, session := range s.byID {
 		if !session.expiresAt.After(now) && !s.inFlight[id] {
+			if session.cancel != nil {
+				session.cancel()
+			}
+			if session.kind == "device_code" && (session.status == "awaiting_user" || session.status == "polling") {
+				session.cancel = nil
+				session.device.DeviceCode = ""
+				session.deviceFlow = nil
+				session.status = "expired"
+				session.statusError = "device authorization expired before approval"
+				session.expiresAt = now.Add(deviceAuthorizationRetention)
+				s.byID[id] = session
+				if s.byConnection[session.connectionID] == id {
+					delete(s.byConnection, session.connectionID)
+				}
+				continue
+			}
 			delete(s.byID, id)
-			delete(s.byConnection, session.connectionID)
+			if s.byConnection[session.connectionID] == id {
+				delete(s.byConnection, session.connectionID)
+			}
 		}
 	}
 }

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +33,35 @@ type oauthRoundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f oauthRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+type serializedDeviceAuthFixture struct {
+	started chan struct{}
+	release chan struct{}
+	starts  atomic.Int32
+}
+
+func (*serializedDeviceAuthFixture) ID() string                        { return "fixture-device-auth" }
+func (*serializedDeviceAuthFixture) SetupSchema() provider.SetupSchema { return provider.SetupSchema{} }
+func (*serializedDeviceAuthFixture) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
+	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
+}
+func (*serializedDeviceAuthFixture) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
+	return credential, nil
+}
+func (f *serializedDeviceAuthFixture) BeginDeviceAuthorization(ctx context.Context) (provider.DeviceAuthorization, error) {
+	f.starts.Add(1)
+	f.started <- struct{}{}
+	select {
+	case <-f.release:
+		return provider.DeviceAuthorization{DeviceCode: "private", UserCode: "USER-CODE", VerificationURL: "https://login.test/activate", ExpiresAt: time.Now().Add(time.Minute), PollInterval: time.Second}, nil
+	case <-ctx.Done():
+		return provider.DeviceAuthorization{}, ctx.Err()
+	}
+}
+func (*serializedDeviceAuthFixture) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (kernel.Credential, error) {
+	<-ctx.Done()
+	return kernel.Credential{}, ctx.Err()
 }
 
 func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
@@ -335,6 +366,149 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	if !cancelled.OK {
 		t.Fatalf("cancel authorization: %s", cancelled.Error)
 	}
+}
+
+func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testing.T) {
+	var tokenRequests int
+	transport := oauthRoundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/device":
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"device_code":"private-device-code","user_code":"ABCD-EFGH","verification_uri":"https://identity.test/activate","verification_uri_complete":"https://identity.test/activate?user_code=ABCD-EFGH","expires_in":60,"interval":1}`)), Request: request}, nil
+		case "/token":
+			body, err := io.ReadAll(request.Body)
+			if err != nil {
+				return nil, err
+			}
+			form, err := url.ParseQuery(string(body))
+			if err != nil {
+				return nil, err
+			}
+			if form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" || form.Get("device_code") != "private-device-code" {
+				t.Errorf("unexpected device token request: %#v", form)
+			}
+			tokenRequests++
+			if tokenRequests == 1 {
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"authorization_pending"}`)), Request: request}, nil
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"access_token":"device-access","refresh_token":"device-refresh","expires_in":3600,"token_type":"Bearer"}`)), Request: request}, nil
+		default:
+			return nil, fmt.Errorf("unexpected OAuth URL %s", request.URL)
+		}
+	})
+
+	s, err := store.Open(t.TempDir() + "/oauth-device.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Device OAuth", Prefix: "device", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "device-oauth", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "device account", CredentialType: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCtx, stop := context.WithCancel(context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Transport: transport}))
+	defer stop()
+	d := &Daemon{
+		store: s, server: api.NewServer(s), runCtx: rootCtx,
+		providerAuthFlowIDs: map[string]string{"device-oauth": "device-oauth:oauth2"},
+		authFlows: map[string]provider.AuthFlow{"device-oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
+			ClientID: "device-client", DeviceAuthURL: "https://identity.test/device", TokenURL: "https://identity.test/token",
+		}}},
+	}
+	started := d.handleIPC(rootCtx, IPCRequest{ID: "device-start", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !started.OK {
+		t.Fatal(started.Error)
+	}
+	view := started.Result.(deviceAuthorizationView)
+	encodedView, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encodedView), "private-device-code") || view.UserCode != "ABCD-EFGH" || view.VerificationURL != "https://identity.test/activate" {
+		t.Fatalf("device action leaked private code or omitted public instructions: %s", encodedView)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for view.Status != "completed" && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		response := d.handleIPC(rootCtx, IPCRequest{ID: "device-get", Method: "auth.device.get", Params: map[string]any{"sessionID": view.SessionID}})
+		if !response.OK {
+			t.Fatal(response.Error)
+		}
+		view = response.Result.(deviceAuthorizationView)
+	}
+	if view.Status != "completed" || tokenRequests < 2 {
+		t.Fatalf("device flow did not poll pending then complete: status=%q requests=%d error=%q", view.Status, tokenRequests, view.Error)
+	}
+	stored, ok := s.ConnectionCredentialByID(connection.ID)
+	if !ok {
+		t.Fatal("authorized connection unavailable after device flow")
+	}
+	tokenState, err := provider.DecodeOAuthTokenState(stored.Secret)
+	if err != nil || tokenState.AccessToken != "device-access" || tokenState.RefreshToken != "device-refresh" {
+		t.Fatalf("stored device token state=%#v err=%v", tokenState, err)
+	}
+	second := d.handleIPC(rootCtx, IPCRequest{ID: "device-start-cancel", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !second.OK {
+		t.Fatal(second.Error)
+	}
+	secondView := second.Result.(deviceAuthorizationView)
+	cancelled := d.handleIPC(rootCtx, IPCRequest{ID: "device-cancel", Method: "auth.device.cancel", Params: map[string]any{"sessionID": secondView.SessionID}})
+	if !cancelled.OK {
+		t.Fatal(cancelled.Error)
+	}
+	stop()
+	d.authWG.Wait()
+}
+
+func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/oauth-device-reservation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Device OAuth", Prefix: "device", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "device-oauth", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "device account", CredentialType: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	flow := &serializedDeviceAuthFixture{started: make(chan struct{}, 2), release: make(chan struct{})}
+	d := &Daemon{
+		store: s, server: api.NewServer(s), runCtx: rootCtx,
+		providerAuthFlowIDs: map[string]string{"device-oauth": "device-oauth:fixture"},
+		authFlows:           map[string]provider.AuthFlow{"device-oauth:fixture": flow},
+	}
+	firstDone := make(chan IPCResponse, 1)
+	go func() {
+		firstDone <- d.handleIPC(context.Background(), IPCRequest{ID: "first", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	}()
+	select {
+	case <-flow.started:
+	case <-time.After(time.Second):
+		t.Fatal("first device authorization did not enter provider start")
+	}
+	second := d.handleIPC(context.Background(), IPCRequest{ID: "second", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	if second.OK || flow.starts.Load() != 1 {
+		t.Fatalf("concurrent device authorization was not serialized: response=%#v starts=%d", second, flow.starts.Load())
+	}
+	close(flow.release)
+	first := <-firstDone
+	if !first.OK {
+		t.Fatalf("first device authorization failed: %s", first.Error)
+	}
+	view := first.Result.(deviceAuthorizationView)
+	if cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.device.cancel", Params: map[string]any{"sessionID": view.SessionID}}); !cancelled.OK {
+		t.Fatal(cancelled.Error)
+	}
+	cancel()
+	d.authWG.Wait()
 }
 
 func TestCredentialRefreshLocksAreScopedPerConnection(t *testing.T) {

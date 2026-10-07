@@ -421,17 +421,28 @@ kernel or force every auth method into an access-token field.
 
 The daemon coordinator owns the state machine. The current authorization-code
 slice exposes `auth.authorization.start`, `auth.authorization.complete` and
-`auth.authorization.cancel` over local IPC (with matching headless CLI
-commands). Start returns a consent URL and opaque one-use session ID; the
-frontend opens the URL, then submits either the callback URL or code/state.
-The daemon holds the verifier in memory, enforces S256 PKCE, a ten-minute
-session TTL, a cap of 64 pending sessions, one pending session per connection,
-bounded callback/code sizes, redirect-target matching and a bounded exchange
-deadline, state matching and replay rejection. On success it persists the typed token
-state under that connection and reloads the serving snapshot. This first slice
-does not yet implement device polling, an embedded loopback callback listener,
-connection-generation fencing or the schema-driven TUI action flow; those
-remain explicit C4 work rather than implied support.
+`auth.authorization.cancel` over local IPC (with headless CLI commands). Start
+returns a consent URL and opaque one-use session ID; the frontend opens the
+URL, then submits either the callback URL or code/state. The daemon holds the
+verifier in memory, enforces S256 PKCE, a ten-minute session TTL, a cap of 64
+pending sessions, one pending session per connection, bounded callback/code
+sizes, redirect-target matching and a bounded exchange deadline, state
+matching and replay rejection.
+
+OAuth definitions may additionally declare `deviceAuthUrl`. The same auth
+primitive then supports `auth.device.start/get/cancel`: the daemon starts the
+RFC 8628 exchange, keeps `device_code` private, and runs a cancellable polling
+worker using `golang.org/x/oauth2` device authorization support. The frontend
+receives only user code, verification URLs, expiry and public status; polling
+continues if the UI disconnects. Cancellation and daemon shutdown stop the
+worker. A delayed authorization or refresh persists through a compare-and-swap
+against the connection secret observed at start, so a newer credential is not
+overwritten. On success the daemon reloads serving state.
+
+The CLI and TUI expose device setup; the TUI can start, display and poll its
+public transition, or cancel it. The first slice still lacks an embedded
+loopback callback listener for authorization-code flows and a TUI callback
+handoff. Those remain explicit C4 work rather than implied support.
 
 The daemon coordinator owns the state machine:
 

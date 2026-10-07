@@ -49,6 +49,22 @@ type AuthorizationCodeFlow interface {
 	ExchangeAuthorizationCode(context.Context, string, string) (kernel.Credential, error)
 }
 
+type DeviceAuthorization struct {
+	DeviceCode              string        `json:"-"`
+	UserCode                string        `json:"userCode"`
+	VerificationURL         string        `json:"verificationUrl"`
+	VerificationURLComplete string        `json:"verificationUrlComplete,omitempty"`
+	ExpiresAt               time.Time     `json:"expiresAt"`
+	PollInterval            time.Duration `json:"pollInterval"`
+}
+
+// DeviceAuthorizationFlow is an optional RFC 8628 capability. Device codes
+// stay private to the daemon; only verification instructions cross IPC.
+type DeviceAuthorizationFlow interface {
+	BeginDeviceAuthorization(context.Context) (DeviceAuthorization, error)
+	WaitForDeviceAuthorization(context.Context, DeviceAuthorization) (kernel.Credential, error)
+}
+
 type StaticSecretAuth struct{}
 
 func (StaticSecretAuth) ID() string { return "static-secret" }
@@ -132,7 +148,7 @@ func OAuthAuthFactory(options AuthOptions) (AuthFlow, error) {
 	if options.OAuth == nil || options.OAuth.ClientID == "" || options.OAuth.AuthURL == "" || options.OAuth.TokenURL == "" {
 		return nil, fmt.Errorf("oauth2 requires clientId, authUrl and tokenUrl in authOptions.oauth")
 	}
-	config := appauth.OAuthConfig{ClientID: options.OAuth.ClientID, AuthURL: options.OAuth.AuthURL, TokenURL: options.OAuth.TokenURL, Scopes: append([]string(nil), options.OAuth.Scopes...), RedirectURL: options.OAuth.RedirectURL}
+	config := appauth.OAuthConfig{ClientID: options.OAuth.ClientID, AuthURL: options.OAuth.AuthURL, TokenURL: options.OAuth.TokenURL, DeviceAuthURL: options.OAuth.DeviceAuthURL, Scopes: append([]string(nil), options.OAuth.Scopes...), RedirectURL: options.OAuth.RedirectURL}
 	return OAuthAuth{Config: config}, nil
 }
 
@@ -189,6 +205,47 @@ func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier
 		Type: "oauth2", Secret: token.AccessToken, RefreshToken: token.RefreshToken,
 		ExpiresAt: token.Expiry, ClientID: a.Config.ClientID, ClientSecret: a.Config.ClientSecret,
 	}, nil
+}
+
+func (a OAuthAuth) BeginDeviceAuthorization(ctx context.Context) (DeviceAuthorization, error) {
+	if a.Config.ClientID == "" || a.Config.DeviceAuthURL == "" || a.Config.TokenURL == "" {
+		return DeviceAuthorization{}, fmt.Errorf("device authorization requires client ID, device authorization URL and token URL")
+	}
+	response, err := a.Config.Config().DeviceAuth(ctx)
+	if err != nil {
+		return DeviceAuthorization{}, fmt.Errorf("start OAuth device authorization: %w", err)
+	}
+	if response == nil || response.DeviceCode == "" || response.UserCode == "" || response.VerificationURI == "" || response.Expiry.IsZero() {
+		return DeviceAuthorization{}, fmt.Errorf("OAuth device authorization response is incomplete")
+	}
+	interval := time.Duration(response.Interval) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	return DeviceAuthorization{
+		DeviceCode: response.DeviceCode, UserCode: response.UserCode,
+		VerificationURL: response.VerificationURI, VerificationURLComplete: response.VerificationURIComplete,
+		ExpiresAt: response.Expiry, PollInterval: interval,
+	}, nil
+}
+
+func (a OAuthAuth) WaitForDeviceAuthorization(ctx context.Context, device DeviceAuthorization) (kernel.Credential, error) {
+	if device.DeviceCode == "" || device.ExpiresAt.IsZero() {
+		return kernel.Credential{}, fmt.Errorf("OAuth device code and expiry are required")
+	}
+	response := &oauth2.DeviceAuthResponse{
+		DeviceCode: device.DeviceCode, UserCode: device.UserCode,
+		VerificationURI: device.VerificationURL, VerificationURIComplete: device.VerificationURLComplete,
+		Expiry: device.ExpiresAt, Interval: int64(device.PollInterval / time.Second),
+	}
+	token, err := a.Config.Config().DeviceAccessToken(ctx, response)
+	if err != nil {
+		return kernel.Credential{}, fmt.Errorf("poll OAuth device authorization: %w", err)
+	}
+	if token == nil || strings.TrimSpace(token.AccessToken) == "" {
+		return kernel.Credential{}, fmt.Errorf("OAuth device token response has no access token")
+	}
+	return kernel.Credential{Type: "oauth2", Secret: token.AccessToken, RefreshToken: token.RefreshToken, ExpiresAt: token.Expiry, ClientID: a.Config.ClientID}, nil
 }
 
 type AuthRegistry struct {

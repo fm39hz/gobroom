@@ -66,6 +66,8 @@ type Daemon struct {
 	mu                  sync.Mutex
 	oauthMu             sync.Mutex
 	oauth               *authorizationSessions
+	runCtx              context.Context
+	authWG              sync.WaitGroup
 	credentialRefreshMu sync.Mutex
 	credentialRefreshes map[string]*sync.Mutex
 	logMu               sync.RWMutex
@@ -212,6 +214,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
+	d.runCtx = ctx
 	started := false
 	var bodyStore *artifacts.Store
 	defer func() {
@@ -383,7 +386,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if err != nil {
 			return kernel.Credential{}, err
 		}
-		if err := d.store.UpdateConnectionSecret(route.CredentialID, secret); err != nil {
+		if err := d.store.UpdateConnectionSecretIfUnchanged(route.CredentialID, stored.Secret, secret); err != nil {
 			return kernel.Credential{}, err
 		}
 		return refreshed, nil
@@ -462,6 +465,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	d.stop = func() {
 		cancel()
+		d.cancelAuthorizationSessions()
+		d.authWG.Wait()
 		if d.usageCancel != nil {
 			d.usageCancel()
 		}
@@ -868,6 +873,23 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		return success(request, result)
 	case "auth.authorization.cancel":
 		if err := d.cancelAuthorization(stringParam(request.Params, "sessionID")); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"status": "cancelled"})
+	case "auth.device.start":
+		result, err := d.startDeviceAuthorization(ctx, stringParam(request.Params, "connectionID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
+	case "auth.device.get":
+		result, err := d.deviceAuthorizationStatus(stringParam(request.Params, "sessionID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
+	case "auth.device.cancel":
+		if err := d.cancelDeviceAuthorization(stringParam(request.Params, "sessionID")); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"status": "cancelled"})

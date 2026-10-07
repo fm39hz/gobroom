@@ -35,7 +35,7 @@ func TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	if called != 0 {
 		t.Fatal("--help unexpectedly launched TUI")
 	}
-	for _, path := range [][]string{{"status"}, {"logs"}, {"providers", "list"}, {"providers", "catalog"}, {"extensions", "catalog"}, {"connections", "test"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"connections", "authorize-start"}, {"connections", "authorize-complete"}, {"connections", "authorize-cancel"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}} {
+	for _, path := range [][]string{{"status"}, {"logs"}, {"providers", "list"}, {"providers", "catalog"}, {"extensions", "catalog"}, {"connections", "test"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"connections", "authorize-start"}, {"connections", "authorize-complete"}, {"connections", "authorize-cancel"}, {"connections", "device-start"}, {"connections", "device-get"}, {"connections", "device-cancel"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}} {
 		command, _, err := root.Find(path)
 		if err != nil || command == root {
 			t.Fatalf("typed command %v missing: command=%v err=%v", path, command, err)
@@ -44,7 +44,7 @@ func TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	for _, item := range []struct {
 		path []string
 		flag string
-	}{{[]string{"combo-models", "upsert"}, "strategy-options"}, {[]string{"physical-models", "upsert"}, "policy-options"}, {[]string{"connections", "refresh-models"}, "model-id"}, {[]string{"connections", "refresh-models"}, "entitlements-only"}, {[]string{"connections", "authorize-start"}, "connection-id"}, {[]string{"connections", "authorize-complete"}, "callback-url"}, {[]string{"connections", "authorize-cancel"}, "session-id"}, {[]string{"logs"}, "limit"}} {
+	}{{[]string{"combo-models", "upsert"}, "strategy-options"}, {[]string{"physical-models", "upsert"}, "policy-options"}, {[]string{"connections", "refresh-models"}, "model-id"}, {[]string{"connections", "refresh-models"}, "entitlements-only"}, {[]string{"connections", "authorize-start"}, "connection-id"}, {[]string{"connections", "authorize-complete"}, "callback-url"}, {[]string{"connections", "authorize-cancel"}, "session-id"}, {[]string{"connections", "device-start"}, "connection-id"}, {[]string{"connections", "device-get"}, "session-id"}, {[]string{"connections", "device-cancel"}, "session-id"}, {[]string{"logs"}, "limit"}} {
 		command, _, err := root.Find(item.path)
 		if err != nil || command.Flags().Lookup(item.flag) == nil {
 			t.Fatalf("typed command %v missing flag --%s: command=%v err=%v", item.path, item.flag, command, err)

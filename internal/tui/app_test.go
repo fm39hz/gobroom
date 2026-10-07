@@ -107,6 +107,32 @@ func TestSelectedConnectionTestShowsReadOnlyCatalogPreview(t *testing.T) {
 	}
 }
 
+func TestTUIDeviceAuthorizationShowsPublicInstructionsAndPollsDaemon(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 120, 40
+	model.activePanel = int(dashboardConnections)
+	model.activeTabs[dashboardConnections] = 1
+	model.resize()
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: "connection-oauth", title: "oauth account", payload: connection{ID: "connection-oauth", ProviderNodeID: "provider-oauth", Name: "oauth account", CredentialType: "oauth2", Enabled: true}}})
+	updated, command := model.updateDashboardAction(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if command == nil || !strings.Contains(updated.(*app).status, "private state stays in daemon") {
+		t.Fatalf("device authorization did not start from selected connection: status=%q", updated.(*app).status)
+	}
+	model = updated.(*app)
+	pending := json.RawMessage(`{"sessionId":"auth-session-1","status":"awaiting_user","userCode":"ABCD-EFGH","verificationUrl":"https://identity.test/activate","expiresAt":"2026-10-07T13:00:00Z"}`)
+	updatedModel, poll := model.Update(actionMsg{method: "auth.device.start", result: pending})
+	model = updatedModel.(*app)
+	if model.deviceAuthSessionID != "auth-session-1" || poll == nil || !strings.Contains(model.status, "ABCD-EFGH") || !strings.Contains(model.previewExtra, "identity.test/activate") || strings.Contains(model.previewExtra, "device_code") {
+		t.Fatalf("device instructions/status are incomplete or private: status=%q preview=%q session=%q", model.status, model.previewExtra, model.deviceAuthSessionID)
+	}
+	completed := json.RawMessage(`{"sessionId":"auth-session-1","status":"completed","userCode":"ABCD-EFGH","verificationUrl":"https://identity.test/activate"}`)
+	updatedModel, next := model.Update(actionMsg{method: "auth.device.get", result: completed})
+	model = updatedModel.(*app)
+	if next != nil || model.deviceAuthSessionID != "" || !strings.Contains(model.status, "credential saved") {
+		t.Fatalf("completed device authorization was not rendered as terminal: status=%q session=%q", model.status, model.deviceAuthSessionID)
+	}
+}
+
 func TestTUITestsSelectedConnectionAndShowsNonMutatingPreview(t *testing.T) {
 	model := newApp("/tmp/gobroom.sock")
 	model.width, model.height = 120, 40

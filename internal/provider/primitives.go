@@ -195,11 +195,12 @@ type CapabilitySet struct {
 }
 
 type OAuthFlowOptions struct {
-	ClientID    string   `json:"clientId"`
-	AuthURL     string   `json:"authUrl"`
-	TokenURL    string   `json:"tokenUrl"`
-	Scopes      []string `json:"scopes,omitempty"`
-	RedirectURL string   `json:"redirectUrl,omitempty"`
+	ClientID      string   `json:"clientId"`
+	AuthURL       string   `json:"authUrl"`
+	TokenURL      string   `json:"tokenUrl"`
+	DeviceAuthURL string   `json:"deviceAuthUrl,omitempty"`
+	Scopes        []string `json:"scopes,omitempty"`
+	RedirectURL   string   `json:"redirectUrl,omitempty"`
 }
 
 type AuthOptions struct {
