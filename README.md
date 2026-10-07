@@ -1,108 +1,101 @@
 # GoBroom
 
-**One model lineup for every provider you use.**
+**Many providers. One handle.**
 
-GoBroom brings provider connections, model catalogs and routing policies into a
-single lightweight gateway. Give equivalent upstream routes one stable identity,
-compose those models into roles such as `junior` or `tech-lead`, and expose the
-names your tools should use. The daemon serves requests independently; the
-bundled CLI and keyboard-first TUI are simply ways to operate it.
+GoBroom brings provider accounts, model sources and routing policies under one
+daemon. Manage each upstream connection, organize models around stable
+identities, compose role-based models, and serve the names you choose through
+one gateway.
 
 ```text
-provider connections → discovered routes → physical models → role combos
-                                                        └→ /v1/models
+providers and connections
+          ↓
+discovered routes → Physical models → optional Combos
+                           │                  │
+                           └──── expose ──────┘
+                                    ↓
+                          one client endpoint
 ```
 
-## Models that match how you think
+## Manage providers and connections
 
-Provider model IDs often encode account, gateway and product-specific prefixes.
-Those strings matter when calling an upstream, but they are not the model you
-want to manage:
+A provider describes how to reach an upstream service. A connection represents
+an account or credential for that provider. Keep multiple connections separate
+so each can have its own credentials, priority and model availability.
+
+Discover model IDs from a connection or add a route manually. GoBroom preserves
+the exact upstream ID used to call the provider and tracks which connection
+reported it. Discovery gives you source inventory to review; it does not decide
+that two routes are the same model or expose them to clients automatically.
+
+## Organize models around identity
+
+Provider prefixes and model IDs often vary even when routes refer to the same
+underlying model. GoBroom keeps those route details while letting you manage a
+stable Physical model identity:
 
 ```text
 xkiro/qwen/qwen3.7-max:free ─┐
 ocg/qwen3.7-max              ├── qwen-3.7-max
-g4f/Qwen:qwen3.7-max        ─┘       │
-                                     ├── junior
-                                     ├── senior
-                                     └── tech-lead
+g4f/Qwen:qwen3.7-max        ─┘
 ```
 
-GoBroom keeps the layers distinct and connected:
+Each Physical model groups routes you consider equivalent and retains the
+identity evidence, capabilities and limits used to evaluate them. Unknown
+evidence stays unknown: similar names alone do not make routes interchangeable.
+Availability also belongs to a connection, so one account is not assumed to
+access every route discovered through another.
 
-- **Discovered routes** retain the exact upstream model ID and the connection
-  that reported it. Discovery is evidence, not an assumption that every account
-  can use every model.
-- **Physical models** give equivalent routes one canonical identity. Their
-  sources carry explicit identity/fidelity evidence and capability profiles,
-  including context limits, modalities and reasoning support.
-- **Combos** are real, routable models made from ordered Physical or Combo
-  members. Their strategy, fallback behavior and member options are typed
-  policy—not hidden strings or a second publishing system.
+Build **Combos** from ordered Physical or Combo members to represent a role or
+use case, such as `junior`, `senior` or `tech-lead`. Choose a routing strategy
+for each Combo and keep the policy at that layer. A nested Combo retains its own
+strategy when used as a member; the model graph is not flattened into a list of
+provider strings.
 
-Manage each layer directly, while moving through the model graph in one
-workflow. Search source prefixes when curating a Combo, see the canonical model
-identity, and decide which Physical models and Combos are discoverable. The
-public model list is a projection of that choice; there is no separate alias
-catalog to keep synchronized.
+Physical models and Combos are both routable models. Choose which ones clients
+can see by exposing them; `/v1/models` is the projection of that choice, not a
+separate alias or publishing catalog.
 
-## Route by what a request needs
+## Route requests with policy
 
-Before fallback or ranking, GoBroom evaluates whether a route can satisfy the
-request: operation, tools, modalities, context, reasoning intent and continuity.
-Unknown capability evidence stays unknown; it is not silently treated as
-support. Strategy then selects among eligible routes using the policy configured
-at each model layer.
+GoBroom first checks whether a route can satisfy the request, including its
+operation, tools, modalities, context and reasoning requirements. It then
+applies the strategy at each model layer to order eligible members and sources.
+Fallback, rotation and weighting are explicit policies, so a role model can
+combine models without losing their individual routing rules.
 
-Health and priority come from actual traffic. Typed outcomes distinguish
-authentication failures, unavailable models, throttling, quota exhaustion and
-transient upstream errors. Reset windows, latency and throughput can inform
-eligibility and bounded adaptive ordering. Synthetic health checks and quota
-polling are opt-in, not background noise on the default path.
+Real requests provide health, limit and performance evidence. Authentication
+failures, unavailable models, rate limits, quota windows and transient errors
+have different effects on future selection. Runtime feedback can guide route
+ordering without changing the priority you configured. Synthetic health checks
+and quota polling are opt-in by default.
 
-Retries and fallback stop when a response is committed to the client. A stream
-does not switch models halfway through. Translation compatibility is explicit:
-unsupported or materially lossy paths are rejected unless the model policy
-allows them.
+Fallback ends once a response is committed to the client; a stream never
+switches models halfway through. Client and provider protocols may differ, but
+GoBroom makes translation compatibility explicit and does not silently accept
+unsupported or materially lossy request paths.
 
-## A semantic boundary between clients and providers
+## One gateway, independent control
 
-Clients and upstreams do not have to share a wire protocol. GoBroom decodes
-requests into a typed invocation, routes that semantic request, and converts
-the response through canonical events:
+The daemon owns configuration, routing and request serving. CLI and TUI clients
+manage the same state through local IPC; neither needs to stay open for the
+gateway to serve requests. The HTTP data plane is separate from the optional
+HTTP control API, so serving inference does not require exposing management
+access.
 
-```text
-client wire → ingress codec → typed invocation → routing policy
-            → provider composition → semantic response events
-            → client renderer → client wire
-```
+The data plane provides OpenAI Chat Completions, OpenAI Responses, Anthropic
+Messages and `/v1/models` endpoints. Requests are normalized into a shared
+invocation, routed through provider-specific codecs, and rendered for the
+client protocol. This boundary lets clients use one gateway while provider
+connections retain their own wire formats and credentials.
 
-The request contract keeps prompt layers, tools, thinking effort/budget,
-continuity state, generation options and hard requirements distinct. Provider
-signatures and opaque continuation artifacts remain scoped to the provider and
-session that issued them. This gives provider codecs room to translate only what
-they understand and report what cannot be preserved.
-
-The data plane includes OpenAI Chat Completions, OpenAI Responses,
-Anthropic Messages and `/v1/models` endpoints. Provider definitions compose
-reusable primitives for endpoint resolution, transport, authentication,
-request encoding, response decoding, model discovery, error classification,
-usage and quota evidence. A provider-specific quirk belongs behind one of those
-contracts; it does not require a provider-name branch in the routing kernel.
-
-## A daemon you can operate your way
-
-- **Daemon-first:** `gobroomd` owns configuration and runtime state. Serving
-  requests does not depend on an open TUI or CLI.
-- **Keyboard-first TUI:** move between named management panes, search and edit
-  models, connections and combos without treating the screen as a dashboard.
-- **CLI:** inspect, automate and administer the same domain through local IPC.
-- **HTTP gateway:** connect existing clients to the data plane; optionally
-  protect remote access with a bearer token and TLS at the deployment boundary.
-- **Portable configuration:** export a versioned, secret-free bundle, review a
-  diff, then apply it atomically. Credentials remain separate from the bundle.
-- **Lightweight operations:** SQLite, loopback HTTP, Unix-domain control IPC and
-  structured stdout/stderr logging work without external services. Under
+- **TUI:** manage providers, connections, discovered routes, Physical models
+  and Combos with keyboard-driven navigation and search.
+- **CLI:** inspect, automate and administer the same daemon over IPC.
+- **Configuration bundles:** export and review a versioned, secret-free
+  configuration diff, then apply it atomically. Credentials remain separate.
+- **Local-first operations:** SQLite, loopback HTTP, Unix-domain control IPC
+  and structured stdout/stderr logging work without external services. Under
   systemd, logs are available through `journalctl`.
 
 ## Get started
@@ -117,37 +110,32 @@ make build-all
 In another terminal:
 
 ```sh
-./gobroom           # open the bundled TUI
-./gobroom status    # query the daemon
-./gobroom extensions catalog  # inspect configured extension schemas
-./gobroom providers catalog   # inspect provider setup metadata
+./gobroom                         # open the TUI
+./gobroom status                  # query the daemon
+./gobroom providers catalog       # inspect provider setup metadata
+./gobroom extensions catalog     # inspect extension schemas
 ./gobroom --help
 ```
 
 The default data-plane address is `http://127.0.0.1:2712`. The optional HTTP
-control API uses `127.0.0.1:2713` when enabled. The CLI and daemon can also be
-installed with `make install-all`.
+control API uses `127.0.0.1:2713` when enabled. Install the CLI and daemon with
+`make install-all`.
 
 ```sh
 make test
 make build-all
 ```
 
-## Project status
+## Further reading
 
-GoBroom's product and extension contracts are documented independently from
-feature maturity. The roadmap and compatibility matrix identify what is
-implemented, partial or still being validated; this README describes the
-intended product, not a claim that every provider or protocol edge case is
-already interchangeable.
-
-- [Implementation roadmap](docs/IMPLEMENTATION_PLAN.md)
-- [Compatibility and verification status](docs/COMPATIBILITY_MATRIX.md)
 - [Product vision](docs/VISION.md)
-- [Solution architecture](docs/SOLUTION_ARCHITECTURE.md)
-- [Physical model contract](docs/PHYSICAL_MODELS.md)
-- [Passive health and adaptive routing](docs/PASSIVE_HEALTH_ROUTING.md)
-- [Provider definitions](docs/PROVIDERS.md)
-- [Normalization contract](docs/NORMALIZATION.md)
-- [Operations and remote hosting](docs/OPERATIONS.md)
-- [TUI interaction model](docs/TUI_UX.md)
+- [Product use cases](docs/USE_CASES.md)
+- [Model management in the TUI](docs/TUI_UX.md)
+- [Routing policies](docs/CORE_POLICIES.md)
+- [Compatibility matrix](docs/COMPATIBILITY_MATRIX.md)
+- [Operations](docs/OPERATIONS.md)
+
+## Acknowledgements
+
+GoBroom draws inspiration from [9router](https://github.com/decolua/9router)
+for its provider routing and model-management concepts.
