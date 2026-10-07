@@ -97,8 +97,10 @@ An operation is a semantic task, independent of both provider and client wire:
 OperationDefinition {
   ref: ExtensionRef
   inputSchemaRef, resultSchemaRef, eventSchemaRefs[]
+  artifactInputs: [{role, exactTypeRef, minCount, maxCount}]
   Validate(payload) -> ValidationResult
   CompileRequirements(invocation) -> RequirementSet
+  NewResultProjector(bounds) -> bounded incremental result accumulator
   semanticFacets[], replayContract
 }
 Invocation {
@@ -115,6 +117,13 @@ payload without adding an operation field to every kernel layer. Multipart,
 binary and JSON are ingress choices; the operation definition does not assume
 that input is a messages array or a raw OpenAI body.
 
+A result schema is only valid when the operation also supplies a request-local
+result projector. The projector consumes canonical response-event envelopes
+incrementally under the operation's buffer/output bounds and produces the
+typed result checked against that exact schema before terminal completion is
+accepted. Operations that expose only the event stream do not claim a typed
+aggregate result schema.
+
 Content references are tagged values: text, media/document reference,
 tool invocation/result, refusal or extension artifact. New content kinds use
 the artifact arm and a registered interpreter/requirement compiler. A custom
@@ -123,7 +132,7 @@ operation ID to chat fixtures does not prove this contract.
 
 ```text
 Artifact {
-  typeRef, schemaRef
+  typeRef, role, schemaRef
   owner: { domain, issuerRef, providerDefinitionId?, connectionId?,
            modelIdentity?, clientContract?, sessionId? }
   applicability: { operationRefs[], recipientContracts[] }
@@ -132,6 +141,25 @@ Artifact {
   expiresAt?, digest?, data: JSONValue | BodyRef
 }
 ```
+
+The extension catalog now registers artifact-type policies with exact refs,
+owner-domain allowlists, replay scopes, sensitivity ceilings, media-type
+allowlists, recipient contracts and a positive byte limit. `ArtifactRef` shape
+validation distinguishes inline JSON from a body lease; the frozen catalog
+validates inline schemas, expiry, digest form, declared byte sizes and any
+cross-owner transfer. Portable transfer requires an explicit recipient
+contract and can never carry secret-sensitivity artifacts. The leased body
+store supports bounded request-scoped spool files and cancellable owner-scoped
+leases. A generic multipart ingress binds file fields to exact artifact type
+and role refs, streams them into the spool, and releases temporary bodies when
+the request ends or decode fails. Operation definitions declare named artifact
+input ports; request preparation validates role/type/count and the selected
+provider boundary rechecks recipient policy before a codec can open the lease.
+This is the generic binary path, not yet proof of provider-specific multimodal
+JSON extraction, wire rendering, or a built-in non-chat operation running
+end-to-end. A fake-provider HTTP→kernel→adapter fixture proves that the
+registered operation can consume the leased bytes and return a response;
+native provider rendering remains a separate adapter contract.
 
 The artifact type descriptor declares legal scopes and transfer rules; the
 issuer may narrow them. Ingress cannot grant portability merely by labeling
@@ -227,11 +255,20 @@ TransformContract.Describe(binding, semanticContract) -> MappingReport
 CompatibilityPlanner.Build(reports, requirements, policy) -> Plan | Rejection
 ```
 
-Feature definitions own separate schemas for evidence and requirement
-constraints plus their evaluator. Strategy/ranker factories bind schema-valid
-options into module-owned typed state; the common catalog does not restrict
-every policy to integer options. Neither evaluator nor codec negotiator may
-mutate the snapshot or perform remote health checks to prove support.
+Feature requirements carry an exact, versioned evaluator reference; route
+capability evidence remains keyed by semantic feature ID. Feature evaluator
+descriptors live in the frozen shared extension catalog, bind through the
+catalog factory, and may pin an input schema for requirement constraints.
+Unknown evaluator versions and invalid constraints fail closed. Strategy and
+ranker descriptors/factories now join the same catalog, and schemas are pinned
+per strategy contract version; exact refs for the same strategy ID can coexist.
+Physical and Combo policies persist the exact strategy ref with their options;
+CRUD, bundle apply and snapshot compilation resolve that ref without ID-only
+fallback. The frozen strategy module's options schema validates configuration,
+and the selected strategy receives the validated options in its per-model
+state. The common catalog does not restrict every policy to integer options.
+Neither evaluator nor codec negotiator may mutate the snapshot or perform
+remote health checks to prove support.
 
 Default permission is no semantic loss. Explicit client intent or model
 policy may grant named losses; grants are constrained by all configured
@@ -285,6 +322,11 @@ options and portable content. Response effects cover declared semantic event
 payloads. Identity, auth leases, issuer-private artifacts, event correlation,
 client contract and cancellation are immutable. Module options and effects
 are validated at configuration publish; undeclared mutations fail explicitly.
+Transform implementations are instantiated from the frozen extension
+catalog independently of binding options. The catalog validates each exact
+binding ref and its options schema; the same stateless implementation receives
+the validated options at apply time rather than capturing one binding's
+configuration in shared mutable state.
 
 Invocation transforms bind to daemon/model policy and run before candidate
 selection. Bindings compose in stable scope order: daemon, requested model,

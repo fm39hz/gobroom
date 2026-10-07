@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/extensions"
 )
 
 type providerNode struct {
@@ -57,7 +59,7 @@ type modelReference struct {
 	Weight int    `json:"weight,omitempty"`
 }
 type strategySpec struct {
-	ID     string         `json:"id"`
+	Ref    extensions.Ref `json:"ref"`
 	Config map[string]any `json:"config,omitempty"`
 }
 
@@ -121,13 +123,22 @@ type usageRecord struct {
 }
 
 type logRecord struct {
-	At      time.Time `json:"at"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
+	At         time.Time `json:"at"`
+	Level      string    `json:"level"`
+	Message    string    `json:"message"`
+	RequestID  string    `json:"requestId,omitempty"`
+	Method     string    `json:"method,omitempty"`
+	Path       string    `json:"path,omitempty"`
+	Status     int       `json:"status,omitempty"`
+	DurationMS int64     `json:"durationMs,omitempty"`
+	Bytes      int64     `json:"bytes,omitempty"`
+	Model      string    `json:"model,omitempty"`
+	Operation  string    `json:"operation,omitempty"`
 }
 
 type entry struct {
 	key, title, summary, detail, parentID string
+	filterValue                           string
 	routeRef                              string
 	modelRef                              string
 	modelKind                             string
@@ -203,14 +214,14 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		if value.Discoverable {
 			visibility = "exposed in /models"
 		}
-		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\nReasoning    %s\nReferenced by %s\n\nEffective projection\n%s\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.ID, capabilitySummary(value.Profile), visibility, value.Enabled, pretty(value.Reasoning), strings.Join(physicalUsers[value.Name], ", "), pretty(value.Projection), strings.Join(members, "\n  ↓  "))
-		physical = append(physical, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d routes · %s", value.Policy.ID, len(value.Sources), visibility), detail: detail, modelRef: value.Name, modelKind: "physical", publicName: value.Name, exposed: value.Discoverable, payload: value})
+		detail := fmt.Sprintf("Physical model\n\nName         %s\nSource policy %s\nCapabilities %s\nExposure     %s\nEnabled      %t\nReasoning    %s\nReferenced by %s\n\nEffective projection\n%s\n\nOrdered discovered routes\n  %s", value.Name, value.Policy.Ref.Key(), capabilitySummary(value.Profile), visibility, value.Enabled, pretty(value.Reasoning), strings.Join(physicalUsers[value.Name], ", "), pretty(value.Projection), strings.Join(members, "\n  ↓  "))
+		physical = append(physical, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d routes · %s", value.Policy.Ref.ID, len(value.Sources), visibility), detail: detail, modelRef: value.Name, modelKind: "physical", publicName: value.Name, exposed: value.Discoverable, payload: value})
 	}
 	for _, value := range comboModels {
 		members := make([]string, 0, len(value.Members))
 		for _, member := range value.Members {
 			label := member.Kind + ":" + member.ID
-			if value.Strategy.ID == "weighted-fallback" {
+			if value.Strategy.Ref.ID == "weighted-fallback" {
 				weight := member.Weight
 				if weight < 1 {
 					weight = 1
@@ -223,8 +234,8 @@ func (c modelWorkspaceClient) Build(discoveredJSON, physicalJSON, comboJSON json
 		if value.Discoverable {
 			visibility = "exposed in /models"
 		}
-		detail := fmt.Sprintf("Combo model\n\nName       %s\nStrategy   %s\nExposure   %s\nEnabled    %t\nReasoning  %s\n\nOrdered members\n  %s", value.Name, value.Strategy.ID, visibility, value.Enabled, pretty(value.Reasoning), strings.Join(members, "\n  ↓  "))
-		combos = append(combos, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d members · %s", value.Strategy.ID, len(value.Members), visibility), detail: detail, modelRef: value.Name, modelKind: "combo", publicName: value.Name, exposed: value.Discoverable, payload: value})
+		detail := fmt.Sprintf("Combo model\n\nName       %s\nStrategy   %s\nExposure   %s\nEnabled    %t\nReasoning  %s\n\nOrdered members\n  %s", value.Name, value.Strategy.Ref.Key(), visibility, value.Enabled, pretty(value.Reasoning), strings.Join(members, "\n  ↓  "))
+		combos = append(combos, entry{key: value.Name, title: value.Name, summary: fmt.Sprintf("%s · %d members · %s", value.Strategy.Ref.ID, len(value.Members), visibility), detail: detail, modelRef: value.Name, modelKind: "combo", publicName: value.Name, exposed: value.Discoverable, payload: value})
 	}
 	for index := range discovered {
 		if route, ok := discovered[index].payload.(discoveredRoute); ok {
@@ -267,6 +278,9 @@ func evidenceSummary(items []map[string]any) string {
 }
 
 func (e entry) FilterValue() string {
+	if e.filterValue != "" {
+		return e.filterValue
+	}
 	return strings.Join([]string{e.title, e.summary, e.detail, e.key, e.parentID}, " ")
 }
 
@@ -409,7 +423,13 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 		entries := make([]entry, 0, len(values))
 		for index, value := range values {
 			detail := fmt.Sprintf("%s [%s]\n\n%s", value.At.Format(time.RFC3339), value.Level, value.Message)
-			entries = append(entries, entry{key: fmt.Sprintf("%d", index), title: value.Level, summary: value.Message, detail: detail, payload: value})
+			title, summary := value.Level, value.Message
+			if value.RequestID != "" {
+				detail += fmt.Sprintf("\n\nRequest    %s\nMethod     %s\nPath       %s\nStatus     %d\nDuration   %d ms\nBytes      %d\nModel      %s\nOperation  %s", value.RequestID, value.Method, value.Path, value.Status, value.DurationMS, value.Bytes, value.Model, value.Operation)
+				title = fmt.Sprintf("%d %s %s", value.Status, value.Method, value.Path)
+				summary = fmt.Sprintf("%s · %d ms · %s", value.Model, value.DurationMS, value.RequestID)
+			}
+			entries = append(entries, entry{key: fmt.Sprintf("%d", index), title: title, summary: summary, detail: detail, payload: value})
 		}
 		return entries, nil
 	default:

@@ -248,6 +248,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	}
 	providerComplete := false
 	firstEvent := false
+	var totalEventBytes int64
 	emit := func(event ResponseEvent) error {
 		if event.Kind == EventResponseComplete {
 			providerComplete = true
@@ -268,6 +269,21 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 				return transformErr
 			}
 			event = transformed
+		}
+		if hooks.MaxEventBytes > 0 {
+			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
+			if eventBytes > hooks.MaxEventBytes {
+				return fmt.Errorf("response event %q exceeds %d-byte operation buffer limit", event.Kind, hooks.MaxEventBytes)
+			}
+			totalEventBytes += eventBytes
+			if hooks.MaxOutputBytes > 0 && totalEventBytes > hooks.MaxOutputBytes {
+				return fmt.Errorf("decoded response exceeds %d-byte operation output limit", hooks.MaxOutputBytes)
+			}
+		}
+		if hooks.ValidateEvent != nil {
+			if err := hooks.ValidateEvent(ctx, event); err != nil {
+				return fmt.Errorf("validate operation response event %q: %w", event.Kind, err)
+			}
 		}
 		if hooks.OnEvent != nil {
 			hooks.OnEvent(event)

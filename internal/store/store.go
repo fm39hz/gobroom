@@ -23,20 +23,9 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", withConnectionPragmas(path))
 	if err != nil {
 		return nil, err
-	}
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
 	}
 	s := &Store{DB: db}
 	if err := s.Migrate(); err != nil {
@@ -44,6 +33,21 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// withConnectionPragmas installs settings in the driver's DSN so every
+// physical connection opened by database/sql receives them. Executing PRAGMA
+// statements once through *sql.DB configures only one pooled connection.
+func withConnectionPragmas(path string) string {
+	dsn := path
+	if dsn == ":memory:" {
+		dsn = "file::memory:?cache=shared"
+	}
+	separator := "?"
+	if strings.Contains(dsn, "?") {
+		separator = "&"
+	}
+	return dsn + separator + "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"
 }
 
 func (s *Store) Close() error { return s.DB.Close() }
@@ -140,6 +144,19 @@ CREATE TABLE IF NOT EXISTS provider_sessions (
   PRIMARY KEY(connection_id, namespace, session_key)
 );
 CREATE INDEX IF NOT EXISTS idx_provider_sessions_expiry ON provider_sessions(expires_at);
+CREATE TABLE IF NOT EXISTS transform_bindings (
+  id TEXT PRIMARY KEY,
+  transform_kind TEXT NOT NULL,
+  transform_id TEXT NOT NULL,
+  contract_version INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  scope_kind TEXT NOT NULL,
+  scope_id TEXT NOT NULL DEFAULT '',
+  ordering INTEGER NOT NULL DEFAULT 0,
+  options_json TEXT NOT NULL DEFAULT 'null',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_transform_bindings_ref ON transform_bindings(transform_kind,transform_id,contract_version,enabled);
 CREATE TABLE IF NOT EXISTS usage_daily (
   date_key TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0,
   prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
@@ -148,7 +165,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 -- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
-  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', allow_compatible_sources INTEGER NOT NULL DEFAULT 0, allow_dynamic_sources INTEGER NOT NULL DEFAULT 0, policy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
+  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', allow_compatible_sources INTEGER NOT NULL DEFAULT 0, allow_dynamic_sources INTEGER NOT NULL DEFAULT 0, policy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',
   capabilities_json TEXT NOT NULL DEFAULT '{}', limits_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -160,7 +177,7 @@ CREATE TABLE IF NOT EXISTS physical_model_sources (
 );
 CREATE INDEX IF NOT EXISTS idx_physical_sources_route ON physical_model_sources(route_id);
 CREATE TABLE IF NOT EXISTS combo_models (
-  name TEXT PRIMARY KEY, reasoning_json TEXT NOT NULL DEFAULT '{}', strategy_json TEXT NOT NULL DEFAULT '{"id":"ordered-fallback","config":{}}',
+  name TEXT PRIMARY KEY, reasoning_json TEXT NOT NULL DEFAULT '{}', strategy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',
   discoverable INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

@@ -15,33 +15,43 @@ func extensionRef(ref PrimitiveRef) extensions.Ref {
 }
 
 type RuntimeBinding struct {
-	DefinitionID      string
-	Operation         Operation
-	TaskRef           extensions.Ref
-	Protocol          kernel.Protocol
-	ProviderFormat    normalize.Format
-	EndpointID        string
-	Endpoint          kernel.Endpoint
-	EndpointOptions   kernel.EndpointOptions
-	TransportID       string
-	Transport         kernel.Transport
-	RequestCodecID    string
-	ResponseDecoderID string
-	AdapterID         string
-	Adapter           kernel.ProviderAdapter
-	AuthFlowID        string
-	Auth              AuthFlow
-	ModelSourceID     string
-	ModelSource       ModelSource
-	UsageSourceID     string
-	UsageOptions      kernel.UsageSourceOptions
-	SessionStoreID    string
-	SessionStore      kernel.SessionStore
-	ErrorClassifierID string
-	ErrorClassifier   ErrorClassifier
-	QuotaSourceID     string
-	QuotaSource       QuotaSource
-	QuotaWindowName   string
+	DefinitionID        string
+	DefinitionRef       extensions.Ref
+	Operation           Operation
+	TaskRef             extensions.Ref
+	Protocol            kernel.Protocol
+	ProviderFormat      normalize.Format
+	EndpointID          string
+	EndpointRef         extensions.Ref
+	Endpoint            kernel.Endpoint
+	EndpointOptions     kernel.EndpointOptions
+	TransportID         string
+	TransportRef        extensions.Ref
+	Transport           kernel.Transport
+	RequestCodecID      string
+	RequestCodecOptions json.RawMessage
+	ResponseDecoderID   string
+	AdapterID           string
+	Adapter             kernel.ProviderAdapter
+	AuthFlowID          string
+	Auth                AuthFlow
+	ModelSourceID       string
+	ModelSource         ModelSource
+	UsageSourceID       string
+	UsageSourceRef      extensions.Ref
+	UsageOptions        kernel.UsageSourceOptions
+	SessionStoreID      string
+	SessionStoreRef     extensions.Ref
+	SessionStore        kernel.SessionStore
+	ErrorClassifierID   string
+	ErrorClassifierRef  extensions.Ref
+	ErrorClassifier     ErrorClassifier
+	QuotaSourceID       string
+	QuotaSourceRef      extensions.Ref
+	QuotaSource         QuotaSource
+	QuotaWindowName     string
+	QuotaEndpointRef    extensions.Ref
+	QuotaTransportRef   extensions.Ref
 }
 
 // DefinitionMetadata is the safe, frontend-facing projection of a provider
@@ -83,7 +93,7 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].ID < definitions[j].ID })
 	result := make([]DefinitionMetadata, 0, len(definitions))
 	for _, definition := range definitions {
-		flow, err := r.Auth.Build(definition.Auth.ID, definition.AuthOptions)
+		flow, err := r.Auth.Build(extensionRef(definition.Auth), definition.AuthOptions)
 		if err != nil {
 			return nil, fmt.Errorf("provider %q auth metadata: %w", definition.ID, err)
 		}
@@ -131,6 +141,12 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 
 type RuntimeBindingBuilder struct {
 	registry *RuntimeRegistry
+}
+
+// RequestArtifactRoleMapper declares the exact operation artifact ports a
+// request codec can encode so manifest bindings can fail closed at startup.
+type RequestArtifactRoleMapper interface {
+	ArtifactRoleMappings() map[string]string
 }
 
 func NewRuntimeBindingBuilder(registry *RuntimeRegistry) *RuntimeBindingBuilder {
@@ -193,7 +209,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 		if err != nil {
 			return RuntimeBinding{}, fmt.Errorf("bind auth flow %q: %w", definition.Auth.ID, err)
 		}
-		authFlowID = AuthBindingKey(definition.ID, auth.ID())
+		authFlowID = AuthBindingKey(definition.ID, definition.Auth)
 	}
 	var err error
 	var modelSource ModelSource
@@ -205,13 +221,16 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	}
 	var sessionStore kernel.SessionStore
 	sessionStoreID := ""
+	sessionStoreRef := extensions.Ref{}
 	if definition.Session.ID != "" {
 		sessionStore, err = bindPrimitiveAs[kernel.SessionStore](b, definition.Session)
 		if err != nil {
 			return RuntimeBinding{}, fmt.Errorf("resolve session store %q: %w", definition.Session.ID, err)
 		}
 		sessionStoreID = definition.Session.ID
+		sessionStoreRef = extensionRef(definition.Session)
 	}
+	usageSourceRef := extensions.Ref{}
 	if binding.UsageSource.ID != "" {
 		options, marshalErr := json.Marshal(binding.UsageOptions)
 		if marshalErr != nil {
@@ -220,9 +239,11 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 		if _, err := bindPrimitiveAsOptions[UsageSource](b, binding.UsageSource, options); err != nil {
 			return RuntimeBinding{}, fmt.Errorf("resolve usage source %q: %w", binding.UsageSource.ID, err)
 		}
+		usageSourceRef = extensionRef(binding.UsageSource)
 	}
 	var classifier ErrorClassifier
 	errorClassifierID := binding.ErrorClassifier.ID
+	errorClassifierRef := extensions.Ref{}
 	if binding.ErrorClassifier.ID != "" {
 		options, marshalErr := json.Marshal(binding.ErrorClassifierOptions)
 		if marshalErr != nil {
@@ -242,15 +263,19 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 				return RuntimeBinding{}, fmt.Errorf("configure error classifier %q: %w", binding.ErrorClassifier.ID, err)
 			}
 			classifier = configured
-			errorClassifierID = RuntimeErrorClassifierKey(definitionID, operation, binding.ErrorClassifier.ID)
+			errorClassifierRef = RuntimeErrorClassifierRef(definitionID, operation, binding.ErrorClassifier)
+		} else {
+			errorClassifierRef = extensionRef(binding.ErrorClassifier)
 		}
 	}
 	var quotaSource QuotaSource
+	quotaSourceRef := extensions.Ref{}
 	if binding.QuotaSource.ID != "" {
 		quotaSource, err = bindPrimitiveAs[QuotaSource](b, binding.QuotaSource)
 		if err != nil {
 			return RuntimeBinding{}, fmt.Errorf("resolve quota source %q: %w", binding.QuotaSource.ID, err)
 		}
+		quotaSourceRef = extensionRef(binding.QuotaSource)
 	}
 	endpointOptions := binding.EndpointOptions
 	query := make(map[string]string, len(binding.EndpointOptions.Query))
@@ -276,13 +301,32 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	} else if binding.RequestCodec.ID != "" {
 		return RuntimeBinding{}, fmt.Errorf("provider %q %q inference binding requires a semantic task ref", definitionID, operation)
 	}
-	result := RuntimeBinding{DefinitionID: definitionID, Operation: operation, TaskRef: taskRef, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, Transport: transport, RequestCodecID: binding.RequestCodec.ID, ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
+	result := RuntimeBinding{DefinitionID: definitionID, DefinitionRef: ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation: operation, TaskRef: taskRef, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, EndpointRef: extensionRef(binding.Endpoint), Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, TransportRef: extensionRef(binding.Transport), Transport: transport, RequestCodecID: binding.RequestCodec.ID, RequestCodecOptions: append(json.RawMessage(nil), binding.RequestCodecOptions...), ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageSourceRef: usageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStoreRef: sessionStoreRef, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifierRef: errorClassifierRef, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSourceRef: quotaSourceRef, QuotaEndpointRef: extensionRef(binding.Endpoint), QuotaTransportRef: extensionRef(binding.Transport), QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
 	if binding.RequestCodec.ID == "" && binding.ResponseDecoder.ID == "" {
 		return result, nil
 	}
-	requestCodec, err := bindPrimitiveAs[kernel.RequestCodec](b, binding.RequestCodec)
+	requestCodec, err := bindPrimitiveAsOptions[kernel.RequestCodec](b, binding.RequestCodec, binding.RequestCodecOptions)
 	if err != nil {
 		return RuntimeBinding{}, fmt.Errorf("resolve request codec %q: %w", binding.RequestCodec.ID, err)
+	}
+	if mapper, ok := requestCodec.(RequestArtifactRoleMapper); ok {
+		operationDefinition, exists := b.registry.operationSnapshot.Resolve(taskRef)
+		if !exists {
+			return RuntimeBinding{}, fmt.Errorf("request codec %q task %q is not registered", binding.RequestCodec.ID, taskRef.Key())
+		}
+		mappings := mapper.ArtifactRoleMappings()
+		ports := make(map[string]bool, len(operationDefinition.ArtifactInputs))
+		for _, port := range operationDefinition.ArtifactInputs {
+			ports[port.Role] = true
+			if mappings[port.Role] == "" {
+				return RuntimeBinding{}, fmt.Errorf("request codec %q does not map declared artifact role %q for operation %q", binding.RequestCodec.ID, port.Role, taskRef.Key())
+			}
+		}
+		for role := range mappings {
+			if !ports[role] {
+				return RuntimeBinding{}, fmt.Errorf("request codec %q maps undeclared artifact role %q for operation %q", binding.RequestCodec.ID, role, taskRef.Key())
+			}
+		}
 	}
 	responseDecoder, err := bindPrimitiveAs[kernel.ResponseDecoder](b, binding.ResponseDecoder)
 	if err != nil {
@@ -311,15 +355,15 @@ func RuntimeBindingsForProtocol(bindings map[string]RuntimeBinding, definitionID
 	return result
 }
 
-func RuntimeErrorClassifierKey(definitionID string, operation Operation, primitiveID string) string {
-	return RuntimeBindingKey(definitionID, operation) + ":error:" + primitiveID
+func RuntimeErrorClassifierRef(definitionID string, operation Operation, primitive PrimitiveRef) extensions.Ref {
+	return extensions.Ref{Kind: string(PrimitiveErrorClassifier), ID: RuntimeBindingKey(definitionID, operation) + ":error:" + primitive.ID, ContractVersion: primitive.ContractVersion}
 }
 
-func AuthBindingKey(definitionID, authFlowID string) string {
-	if definitionID == "" || authFlowID == "" {
+func AuthBindingKey(definitionID string, auth PrimitiveRef) string {
+	if definitionID == "" || auth.ID == "" || auth.ContractVersion == 0 {
 		return ""
 	}
-	return definitionID + ":" + authFlowID
+	return definitionID + ":" + extensionRef(auth).Key()
 }
 
 func (r *RuntimeRegistry) BuildBindings() (map[string]RuntimeBinding, error) {

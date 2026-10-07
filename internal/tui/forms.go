@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 )
@@ -103,7 +104,8 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			if err != nil {
 				return nil
 			}
-			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.ID, "policyOptions": options, "discoverable": strconv.FormatBool(value.Discoverable), "allowCompatibleSources": strconv.FormatBool(value.AllowCompatibleSources), "allowDynamicSources": strconv.FormatBool(value.AllowDynamicSources)})
+			f := buildForm("Edit physical model", "physical_models.upsert", physicalModelEditFields(), map[string]string{"policy": value.Policy.Ref.ID, "policyOptions": options, "discoverable": strconv.FormatBool(value.Discoverable), "allowCompatibleSources": strconv.FormatBool(value.AllowCompatibleSources), "allowDynamicSources": strconv.FormatBool(value.AllowDynamicSources)})
+			f.extra["strategyRef"] = value.Policy.Ref
 			f.extra["name"] = value.Name
 			f.extra["profile"] = value.Profile
 			f.extra["identity"] = value.Identity
@@ -119,7 +121,8 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			if err != nil {
 				return nil
 			}
-			f := buildForm("Edit combo model", "combo_models.upsert", comboModelEditFields(), map[string]string{"strategy": value.Strategy.ID, "strategyOptions": options, "discoverable": strconv.FormatBool(value.Discoverable)})
+			f := buildForm("Edit combo model", "combo_models.upsert", comboModelEditFields(), map[string]string{"strategy": value.Strategy.Ref.ID, "strategyOptions": options, "discoverable": strconv.FormatBool(value.Discoverable)})
+			f.extra["strategyRef"] = value.Strategy.Ref
 			f.extra["name"] = value.Name
 			f.extra["enabled"] = value.Enabled
 			f.typedMembers = append([]modelReference(nil), value.Members...)
@@ -136,9 +139,13 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 	case sectionModels:
 		return buildForm("Add physical model", "custom_models.upsert", modelFields(), map[string]string{"kind": "custom", "providerNodeID": providerID})
 	case sectionPhysical:
-		return buildForm("Create physical model", "physical_models.upsert", physicalModelFields(), map[string]string{"policy": "ordered-fallback", "policyOptions": "{}", "discoverable": "false"})
+		f := buildForm("Create physical model", "physical_models.upsert", physicalModelFields(), map[string]string{"policy": "ordered-fallback", "policyOptions": "{}", "discoverable": "false"})
+		f.extra["strategyRef"] = kernel.StrategyRef("ordered-fallback", 1)
+		return f
 	case sectionComboModels:
-		return buildForm("Create combo model", "combo_models.upsert", comboModelFields(), map[string]string{"strategy": "ordered-fallback", "strategyOptions": "{}", "discoverable": "false"})
+		f := buildForm("Create combo model", "combo_models.upsert", comboModelFields(), map[string]string{"strategy": "ordered-fallback", "strategyOptions": "{}", "discoverable": "false"})
+		f.extra["strategyRef"] = kernel.StrategyRef("ordered-fallback", 1)
+		return f
 	default:
 		return nil
 	}
@@ -550,16 +557,17 @@ func (f *formState) Params() (map[string]any, error) {
 		}
 	}
 	if f.method == "physical_models.upsert" {
-		policy, _ := params["policy"].(string)
+		policyRef, ok := f.extra["strategyRef"].(extensions.Ref)
+		policyName, _ := params["policy"].(string)
+		if !ok || policyName != policyRef.ID {
+			return nil, fmt.Errorf("choose an exact source-policy strategy version")
+		}
 		delete(params, "policy")
 		options, err := strategyOptionsFromParams(params, "policyOptions")
 		if err != nil {
 			return nil, err
 		}
-		if err := kernel.ValidateStrategyConfig(policy, options); err != nil {
-			return nil, err
-		}
-		params["policy"] = strategySpec{ID: policy, Config: options}
+		params["policy"] = strategySpec{Ref: policyRef, Config: options}
 		for _, key := range []string{"allowCompatibleSources", "allowDynamicSources"} {
 			value, _ := params[key].(string)
 			parsed, err := strconv.ParseBool(value)
@@ -586,16 +594,17 @@ func (f *formState) Params() (map[string]any, error) {
 		}
 	}
 	if f.method == "combo_models.upsert" {
-		strategy, _ := params["strategy"].(string)
+		strategyRef, ok := f.extra["strategyRef"].(extensions.Ref)
+		strategyName, _ := params["strategy"].(string)
+		if !ok || strategyName != strategyRef.ID {
+			return nil, fmt.Errorf("choose an exact combo strategy version")
+		}
 		delete(params, "strategy")
 		options, err := strategyOptionsFromParams(params, "strategyOptions")
 		if err != nil {
 			return nil, err
 		}
-		if err := kernel.ValidateStrategyConfig(strategy, options); err != nil {
-			return nil, err
-		}
-		params["strategy"] = strategySpec{ID: strategy, Config: options}
+		params["strategy"] = strategySpec{Ref: strategyRef, Config: options}
 		params["members"] = append([]modelReference(nil), f.typedMembers...)
 		if reasoning, ok := f.extra["reasoning"]; ok {
 			params["reasoning"] = reasoning

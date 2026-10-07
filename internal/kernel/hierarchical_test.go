@@ -113,7 +113,9 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 			}
 		}
 	}
-	if kernel.Scheduler.modelState["role"].Cursor != 0 || kernel.Scheduler.modelState["physical"].Cursor != 1 {
+	roleState := kernel.Scheduler.modelState[strategyStateKey("role", StrategyRef("ordered-fallback", 1))]
+	physicalState := kernel.Scheduler.modelState[strategyStateKey("physical", StrategyRef("ordered-fallback", 1))]
+	if roleState == nil || physicalState == nil || roleState.Cursor != 0 || physicalState.Cursor != 1 {
 		t.Fatalf("state must be scoped and advanced independently per node: %#v", kernel.Scheduler.modelState)
 	}
 	if len(failedNodes) != 9 {

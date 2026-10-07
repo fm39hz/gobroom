@@ -11,24 +11,29 @@ import (
 )
 
 type Manager struct {
-	store     *store.Store
-	snapshots *kernel.SnapshotStore
-	mu        sync.Mutex
-	version   uint64
-	bindings  map[string]provider.RuntimeBinding
+	store      *store.Store
+	snapshots  *kernel.SnapshotStore
+	mu         sync.Mutex
+	version    uint64
+	bindings   map[string]provider.RuntimeBinding
+	strategies *kernel.StrategyCatalog
 }
 
 func NewManager(s *store.Store) (*Manager, error) {
 	return NewManagerWithRuntimeBindings(s, nil)
 }
 
-func NewManagerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding) (*Manager, error) {
+func NewManagerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding, strategyCatalogs ...*kernel.StrategyCatalog) (*Manager, error) {
+	strategies, err := selectStrategyCatalog(strategyCatalogs)
+	if err != nil {
+		return nil, err
+	}
 	initial := kernel.Snapshot{PublicModels: map[string]kernel.PublicModel{}, Routes: map[string]kernel.Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, Nodes: map[string]kernel.ModelNode{}}
 	snapshots, err := kernel.NewSnapshotStore(initial)
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{store: s, snapshots: snapshots, bindings: bindings}
+	m := &Manager{store: s, snapshots: snapshots, bindings: bindings, strategies: strategies}
 	if raw, ok, err := s.Setting("snapshot_version"); err == nil && ok {
 		m.version, _ = strconv.ParseUint(raw, 10, 64)
 	}
@@ -42,7 +47,7 @@ func (m *Manager) Reload() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	nextVersion := m.version + 1
-	snapshot, err := (Loader{Store: m.store, Bindings: m.bindings}).LoadSnapshot(nextVersion)
+	snapshot, err := (Loader{Store: m.store, Bindings: m.bindings, Strategies: m.strategies}).LoadSnapshot(nextVersion)
 	if err != nil {
 		return err
 	}
@@ -54,6 +59,16 @@ func (m *Manager) Reload() error {
 		return err
 	}
 	return nil
+}
+
+func selectStrategyCatalog(catalogs []*kernel.StrategyCatalog) (*kernel.StrategyCatalog, error) {
+	if len(catalogs) > 1 {
+		return nil, fmt.Errorf("only one strategy catalog may be supplied")
+	}
+	if len(catalogs) == 1 && catalogs[0] != nil {
+		return catalogs[0], nil
+	}
+	return kernel.NewBuiltinStrategyCatalog()
 }
 
 func (m *Manager) Snapshot() kernel.Snapshot { return m.snapshots.Load() }
@@ -75,7 +90,7 @@ func (m *Manager) ValidateProviderDelete(id string) error {
 }
 
 func snapshotInput(s kernel.Snapshot) kernel.SnapshotInput {
-	input := kernel.SnapshotInput{RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}}
+	input := kernel.SnapshotInput{RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, TransformBindings: append([]kernel.TransformBinding(nil), s.TransformBindings...)}
 	for _, item := range s.PublicModels {
 		input.PublicModels = append(input.PublicModels, item)
 	}

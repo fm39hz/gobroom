@@ -18,6 +18,9 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 	if err := operations.RegisterChatGenerate(r.catalog, r.Operations); err != nil {
 		return nil, fmt.Errorf("register built-in chat operation: %w", err)
 	}
+	if err := kernel.RegisterBuiltinStrategyExtensions(r.catalog); err != nil {
+		return nil, fmt.Errorf("register built-in strategies: %w", err)
+	}
 	primitives := []struct {
 		kind PrimitiveKind
 		ids  []string

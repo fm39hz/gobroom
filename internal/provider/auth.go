@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appauth "github.com/fm39hz/gobroom/internal/auth"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"golang.org/x/oauth2"
 )
@@ -159,59 +160,71 @@ func (a OAuthAuth) Refresh(ctx context.Context, credential kernel.Credential) (k
 }
 
 type AuthRegistry struct {
-	flows     map[string]AuthFlow
-	factories map[string]AuthFlowFactory
+	flows     map[extensions.Ref]AuthFlow
+	factories map[extensions.Ref]AuthFlowFactory
 }
 
 func NewAuthRegistry() *AuthRegistry {
-	registry := &AuthRegistry{flows: map[string]AuthFlow{}, factories: map[string]AuthFlowFactory{}}
+	registry := &AuthRegistry{flows: map[extensions.Ref]AuthFlow{}, factories: map[extensions.Ref]AuthFlowFactory{}}
 	registry.Register(StaticSecretAuth{})
 	registry.Register(NoAuth{})
 	return registry
 }
 
 func (r *AuthRegistry) Register(flow AuthFlow) error {
+	return r.RegisterVersion(flow, 1)
+}
+
+func (r *AuthRegistry) RegisterVersion(flow AuthFlow, contractVersion uint64) error {
 	if flow == nil || flow.ID() == "" {
 		return fmt.Errorf("auth flow and ID are required")
 	}
-	if _, exists := r.flows[flow.ID()]; exists {
-		return fmt.Errorf("auth flow %q already registered", flow.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveAuth), ID: flow.ID(), ContractVersion: contractVersion}
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("auth flow: %w", err)
 	}
-	r.flows[flow.ID()] = flow
+	if _, exists := r.flows[ref]; exists {
+		return fmt.Errorf("auth flow %q already registered", ref.Key())
+	}
+	r.flows[ref] = flow
 	return nil
 }
 
-func (r *AuthRegistry) Resolve(id string) (AuthFlow, bool) {
-	flow, ok := r.flows[id]
+func (r *AuthRegistry) Resolve(ref extensions.Ref) (AuthFlow, bool) {
+	flow, ok := r.flows[ref]
 	return flow, ok
 }
 
 func (r *AuthRegistry) RegisterFactory(id string, factory AuthFlowFactory) error {
-	if r == nil || id == "" || factory == nil {
+	return r.RegisterFactoryVersion(extensions.Ref{Kind: string(PrimitiveAuth), ID: id, ContractVersion: 1}, factory)
+}
+
+func (r *AuthRegistry) RegisterFactoryVersion(ref extensions.Ref, factory AuthFlowFactory) error {
+	if r == nil || ref.Validate() != nil || ref.Kind != string(PrimitiveAuth) || factory == nil {
 		return fmt.Errorf("auth factory and ID are required")
 	}
-	if _, exists := r.factories[id]; exists {
-		return fmt.Errorf("auth factory %q is already registered", id)
+	if _, exists := r.factories[ref]; exists {
+		return fmt.Errorf("auth factory %q is already registered", ref.Key())
 	}
-	if _, exists := r.flows[id]; exists {
-		return fmt.Errorf("auth flow %q is already registered as an instance", id)
+	if _, exists := r.flows[ref]; exists {
+		return fmt.Errorf("auth flow %q is already registered as an instance", ref.Key())
 	}
-	r.factories[id] = factory
+	r.factories[ref] = factory
 	return nil
 }
 
-func (r *AuthRegistry) Build(id string, options AuthOptions) (AuthFlow, error) {
+func (r *AuthRegistry) Build(ref extensions.Ref, options AuthOptions) (AuthFlow, error) {
 	if r == nil {
 		return nil, fmt.Errorf("auth registry is not initialized")
 	}
-	if factory, ok := r.factories[id]; ok {
+	if factory, ok := r.factories[ref]; ok {
 		return factory(options)
 	}
-	if flow, ok := r.flows[id]; ok {
+	if flow, ok := r.flows[ref]; ok {
 		if options.OAuth != nil {
-			return nil, fmt.Errorf("authOptions.oauth cannot be applied to auth flow %q", id)
+			return nil, fmt.Errorf("authOptions.oauth cannot be applied to auth flow %q", ref.Key())
 		}
 		return flow, nil
 	}
-	return nil, fmt.Errorf("auth flow %q is not registered", id)
+	return nil, fmt.Errorf("auth flow %q is not registered", ref.Key())
 }

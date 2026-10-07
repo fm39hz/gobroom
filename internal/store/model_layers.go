@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -35,7 +36,7 @@ type RouteReference struct {
 // configuration. The store persists the whole value as JSON so primitive
 // implementations can evolve without adding schema columns.
 type StrategySpec struct {
-	ID     string         `json:"id"`
+	Ref    extensions.Ref `json:"ref"`
 	Config map[string]any `json:"config,omitempty"`
 }
 
@@ -253,10 +254,10 @@ func (s *Store) UpsertPhysicalModel(item PhysicalModel) error {
 	if item.Name == "" {
 		return fmt.Errorf("physical model name is required")
 	}
-	if item.Policy.ID == "" {
-		item.Policy.ID = "ordered-fallback"
+	if item.Policy.Ref == (extensions.Ref{}) {
+		item.Policy.Ref = kernel.StrategyRef("ordered-fallback", 1)
 	}
-	if err := kernel.ValidateStrategyConfig(item.Policy.ID, item.Policy.Config); err != nil {
+	if err := validateStrategySpec(item.Policy); err != nil {
 		return fmt.Errorf("physical model %q source policy: %w", item.Name, err)
 	}
 	if item.Identity.CanonicalName == "" {
@@ -423,10 +424,10 @@ func (s *Store) UpsertComboModel(item ComboModel) error {
 	if item.Name == "" {
 		return fmt.Errorf("combo model name is required")
 	}
-	if item.Strategy.ID == "" {
-		item.Strategy.ID = "ordered-fallback"
+	if item.Strategy.Ref == (extensions.Ref{}) {
+		item.Strategy.Ref = kernel.StrategyRef("ordered-fallback", 1)
 	}
-	if err := kernel.ValidateStrategyConfig(item.Strategy.ID, item.Strategy.Config); err != nil {
+	if err := validateStrategySpec(item.Strategy); err != nil {
 		return fmt.Errorf("combo model %q strategy: %w", item.Name, err)
 	}
 	strategy, err := json.Marshal(item.Strategy)
@@ -491,6 +492,16 @@ ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,strategy_
 		return fmt.Errorf("combo model %q introduces a reference cycle", item.Name)
 	}
 	return tx.Commit()
+}
+
+func validateStrategySpec(spec StrategySpec) error {
+	if err := spec.Ref.Validate(); err != nil {
+		return fmt.Errorf("strategy requires an exact versioned reference: %w", err)
+	}
+	if spec.Ref.Kind != kernel.StrategyExtensionKind {
+		return fmt.Errorf("strategy ref kind must be %q", kernel.StrategyExtensionKind)
+	}
+	return nil
 }
 
 func comboHasCycle(tx *sql.Tx, root string) (bool, error) {

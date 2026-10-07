@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
@@ -40,7 +41,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 		Name:     "qwen-3.7-max",
 		Identity: kernel.PhysicalIdentity{CanonicalName: "qwen-3.7-max"},
 		Sources:  []RouteReference{{RouteID: "route-b", Fidelity: kernel.FidelityUnknown}, {RouteID: "route-a", Fidelity: kernel.FidelityUnknown}},
-		Policy:   StrategySpec{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 2}},
+		Policy:   StrategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 2}},
 		Profile:  map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
 	}
 	if err := s.UpsertPhysicalModel(physical); err != nil {
@@ -50,14 +51,14 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotPhysical.Sources, physical.Sources) || gotPhysical.Policy.ID != "round-robin-fallback" || gotPhysical.Discoverable {
+	if !reflect.DeepEqual(gotPhysical.Sources, physical.Sources) || gotPhysical.Policy.Ref != kernel.StrategyRef("round-robin-fallback", 1) || gotPhysical.Discoverable {
 		t.Fatalf("physical=%#v", gotPhysical)
 	}
 
 	combo := ComboModel{
 		Name:         "junior",
 		Members:      []ModelReference{{Kind: PhysicalReference, ID: "qwen-3.7-max", Weight: 3}},
-		Strategy:     StrategySpec{ID: "weighted-fallback"},
+		Strategy:     StrategySpec{Ref: kernel.StrategyRef("weighted-fallback", 1)},
 		Discoverable: true, Enabled: true,
 	}
 	if err := s.UpsertComboModel(combo); err != nil {
@@ -67,7 +68,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotCombo.Members, combo.Members) || gotCombo.Strategy.ID != combo.Strategy.ID || !gotCombo.Discoverable {
+	if !reflect.DeepEqual(gotCombo.Members, combo.Members) || gotCombo.Strategy.Ref != combo.Strategy.Ref || !gotCombo.Discoverable {
 		t.Fatalf("combo=%#v", gotCombo)
 	}
 
@@ -159,23 +160,22 @@ func TestMigrationAddsModelLayerTablesWithoutReplacingCatalog(t *testing.T) {
 	}
 }
 
-func TestModelLayerWritesRejectUnknownStrategyIDsAndOptions(t *testing.T) {
+func TestModelLayerWritesRequireExactStrategyRefs(t *testing.T) {
 	s, err := Open(t.TempDir() + "/strategy-validation.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	for _, strategy := range []StrategySpec{
-		{ID: "round_robin_fallback"},
-		{ID: "weighted-fallback", Config: map[string]any{"stickyLimit": 2}},
-		{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 1001}},
+		{Ref: extensions.Ref{Kind: "untyped", ID: "ordered-fallback", ContractVersion: 1}},
+		{Ref: kernel.StrategyRef("ordered-fallback", 0)},
 	} {
 		if err := s.UpsertComboModel(ComboModel{Name: "invalid", Strategy: strategy}); err == nil {
 			t.Fatalf("invalid strategy config was accepted: %#v", strategy)
 		}
 	}
-	if err := s.UpsertComboModel(ComboModel{Name: "valid", Strategy: StrategySpec{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 2}}}); err != nil {
-		t.Fatalf("valid registered strategy/options rejected: %v", err)
+	if err := s.UpsertComboModel(ComboModel{Name: "valid", Strategy: StrategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 2}}}); err != nil {
+		t.Fatalf("well-formed exact strategy ref rejected by store: %v", err)
 	}
 }
 

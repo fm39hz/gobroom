@@ -3,6 +3,8 @@ package normalize
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/extensions"
 )
 
 type Format string
@@ -21,29 +23,30 @@ const (
 )
 
 type Request struct {
-	Model                    string               `json:"model"`
-	Operation                Operation            `json:"operation"`
-	OperationContractVersion uint64               `json:"operationContractVersion"`
-	OperationPayload         json.RawMessage      `json:"operationPayload,omitempty"`
-	SourceFormat             Format               `json:"-"`
-	Stream                   bool                 `json:"stream,omitempty"`
-	Messages                 []Message            `json:"messages,omitempty"`
-	Prompt                   PromptPlan           `json:"prompt,omitempty"`
-	Tools                    []Tool               `json:"tools,omitempty"`
-	Thinking                 ThinkingIntent       `json:"thinking,omitempty"`
-	Session                  SessionContext       `json:"-"`
-	Continuity               ContinuityState      `json:"-"`
-	Modalities               Modalities           `json:"-"`
-	Requirements             []FeatureRequirement `json:"-"`
-	Transport                TransportHints       `json:"-"`
-	Extensions               map[string]any       `json:"-"`
-	Raw                      map[string]any       `json:"-"`
+	Model                    string                   `json:"model"`
+	Operation                Operation                `json:"operation"`
+	OperationContractVersion uint64                   `json:"operationContractVersion"`
+	OperationPayload         json.RawMessage          `json:"operationPayload,omitempty"`
+	Artifacts                []extensions.ArtifactRef `json:"artifacts,omitempty"`
+	SourceFormat             Format                   `json:"-"`
+	Stream                   bool                     `json:"stream,omitempty"`
+	Messages                 []Message                `json:"messages,omitempty"`
+	Prompt                   PromptPlan               `json:"prompt,omitempty"`
+	Tools                    []Tool                   `json:"tools,omitempty"`
+	Thinking                 ThinkingIntent           `json:"thinking,omitempty"`
+	Session                  SessionContext           `json:"-"`
+	Continuity               ContinuityState          `json:"-"`
+	Modalities               Modalities               `json:"-"`
+	Requirements             []FeatureRequirement     `json:"-"`
+	Transport                TransportHints           `json:"-"`
+	Extensions               map[string]any           `json:"-"`
+	Raw                      map[string]any           `json:"-"`
 }
 
 // FeatureRequirement is an extensible hard requirement derived by ingress or
 // an operation extension. Unknown fields are never interpreted by the kernel.
 type FeatureRequirement struct {
-	ID          string          `json:"id"`
+	Ref         extensions.Ref  `json:"ref"`
 	Constraints json.RawMessage `json:"constraints,omitempty"`
 }
 

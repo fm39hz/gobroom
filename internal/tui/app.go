@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/fm39hz/gobroom/internal/discovery"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 )
@@ -424,15 +425,17 @@ func (m *app) rebuildStrategyPicker() {
 
 func strategyEntry(definition kernel.StrategyDefinition) entry {
 	lines := []string{definition.Label, definition.Description}
+	searchable := []string{definition.Label, definition.ID, definition.Ref.Key()}
 	if len(definition.Options) == 0 {
 		lines = append(lines, "Options: none")
 	} else {
 		lines = append(lines, "Options:")
 		for _, option := range definition.Options {
 			lines = append(lines, fmt.Sprintf("  %s (%s), default=%v, min=%d, max=%d — %s", option.Key, option.Type, option.Default, option.Minimum, option.Maximum, option.Description))
+			searchable = append(searchable, option.Key, option.Label)
 		}
 	}
-	return entry{key: definition.ID, title: definition.Label, summary: definition.ID, detail: strings.Join(lines, "\n"), payload: definition}
+	return entry{key: definition.Ref.Key(), title: definition.Label, summary: definition.Ref.Key(), detail: strings.Join(lines, "\n"), filterValue: strings.Join(searchable, " "), payload: definition}
 }
 
 func (m *app) openStrategyPicker() tea.Cmd {
@@ -443,7 +446,10 @@ func (m *app) openStrategyPicker() tea.Cmd {
 	}
 	m.strategyPicker.GoToStart()
 	if m.form != nil && m.form.active >= 0 && m.form.active < len(m.form.fields) {
-		current := m.form.inputs[m.form.active].Value()
+		current := ""
+		if ref, ok := m.form.extra["strategyRef"].(extensions.Ref); ok {
+			current = ref.Key()
+		}
 		for index, raw := range m.strategyPicker.VisibleItems() {
 			definition, ok := raw.(entry)
 			if ok && definition.key == current {
@@ -492,13 +498,15 @@ func (m *app) updateStrategyPickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		if strategyField < 0 {
 			return m, nil
 		}
-		previous := m.form.inputs[strategyField].Value()
+		previousRef, _ := m.form.extra["strategyRef"].(extensions.Ref)
+		m.form.extra["strategyRef"] = definition.Ref
 		m.form.inputs[strategyField].SetValue(definition.ID)
-		if previous != definition.ID && optionsField >= 0 {
-			options, err := kernel.DefaultStrategyConfig(definition.ID)
-			if err != nil {
-				m.status = err.Error()
-				return m, nil
+		if previousRef != definition.Ref && optionsField >= 0 {
+			options := make(map[string]any)
+			for _, option := range definition.Options {
+				if option.Default != nil {
+					options[option.Key] = option.Default
+				}
 			}
 			data, err := json.Marshal(options)
 			if err != nil {
@@ -1877,7 +1885,7 @@ func comboUsesWeights(model any) bool {
 	if !ok {
 		return false
 	}
-	return value.Strategy.ID == "weighted-fallback"
+	return value.Strategy.Ref.ID == "weighted-fallback"
 }
 
 func (m *app) changePickerMemberWeight(target modelReference, delta int) {

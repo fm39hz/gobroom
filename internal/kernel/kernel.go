@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/artifacts"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
 )
@@ -19,13 +22,14 @@ type Kernel struct {
 	Snapshots          *SnapshotStore
 	Scheduler          *Scheduler
 	Adapters           map[string]ProviderAdapter
-	ErrorClassifiers   map[string]ErrorClassifier
-	UsageSources       map[string]UsageEnricher
-	SessionStores      map[string]SessionStore
+	ErrorClassifiers   map[extensions.Ref]ErrorClassifier
+	UsageSources       map[extensions.Ref]UsageEnricher
+	SessionStores      map[extensions.Ref]SessionStore
 	Transforms         *RequestTransformRegistry
 	ResponseTransforms *ResponseTransformRegistry
 	Features           *FeatureRegistry
 	Operations         *operations.Snapshot
+	ArtifactStore      *artifacts.Store
 	Events             chan UsageEvent
 	ResolveCredential  CredentialResolver
 	RefreshCredential  CredentialRefresher
@@ -51,11 +55,29 @@ func New(initial Snapshot, gate Gate, buffer int) (*Kernel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build operation catalog: %w", err)
 	}
-	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[string]ErrorClassifier{}, UsageSources: map[string]UsageEnricher{}, SessionStores: map[string]SessionStore{}, Features: NewFeatureRegistry(), Operations: operationSnapshot, Transforms: NewRequestTransformRegistry(), ResponseTransforms: NewResponseTransformRegistry(), Events: make(chan UsageEvent, buffer)}, nil
+	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[extensions.Ref]ErrorClassifier{}, UsageSources: map[extensions.Ref]UsageEnricher{}, SessionStores: map[extensions.Ref]SessionStore{}, Features: NewFeatureRegistry(), Operations: operationSnapshot, Transforms: NewRequestTransformRegistry(), ResponseTransforms: NewResponseTransformRegistry(), Events: make(chan UsageEvent, buffer)}, nil
 }
 
-func (k *Kernel) transformResponse(ctx context.Context, event ResponseEvent) (ResponseEvent, error) {
-	return k.ResponseTransforms.Apply(ctx, event)
+func daemonTransformScope() TransformScope {
+	return TransformScope{Kind: TransformScopeDaemon}
+}
+
+func (k *Kernel) ValidateTransformBindings(bindings []TransformBinding) error {
+	var requestBindings, responseBindings []TransformBinding
+	for _, binding := range bindings {
+		switch binding.TransformRef.Kind {
+		case RequestTransformKind:
+			requestBindings = append(requestBindings, binding)
+		case ResponseTransformKind:
+			responseBindings = append(responseBindings, binding)
+		default:
+			return fmt.Errorf("transform binding %q has unsupported kind %q", binding.ID, binding.TransformRef.Kind)
+		}
+	}
+	if err := k.Transforms.ValidateBindings(requestBindings); err != nil {
+		return err
+	}
+	return k.ResponseTransforms.ValidateBindings(responseBindings)
 }
 
 func (k *Kernel) Resolve(name string) (ResolvedModel, error) {
@@ -97,20 +119,40 @@ func (k *Kernel) Close() {
 // Execute is the single data-plane orchestration boundary. Provider adapters
 // own protocol details; the kernel owns public-model resolution and selection.
 func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential Credential, writer http.ResponseWriter) error {
+	if k.ArtifactStore != nil {
+		ctx = artifacts.WithStore(ctx, k.ArtifactStore)
+	}
+	started := time.Now()
 	if req.Operation == "" {
 		return ErrOperationRequired
 	}
 	if k.Operations == nil {
 		return fmt.Errorf("operation catalog is not initialized")
 	}
+	snapshot := k.Snapshots.Load()
+	root, err := ResolvePublicNode(snapshot, req.Model)
+	if err != nil {
+		return err
+	}
 	externalRequirements := append([]normalize.FeatureRequirement(nil), req.Requirements...)
 	preparedOperation, err := k.Operations.Prepare(req)
 	if err != nil {
 		return err
 	}
+	if deadline := preparedOperation.ResourceBounds.DeadlineMillis; deadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(deadline)*time.Millisecond)
+		defer cancel()
+	}
 	req.Requirements = mergeRequirements(externalRequirements, preparedOperation.Requirements)
-	if k.Transforms.Active() {
-		if err := k.Transforms.Apply(ctx, &req); err != nil {
+	transformBindings := cloneTransformBindings(snapshot.TransformBindings)
+	scopes := []TransformScope{daemonTransformScope()}
+	if k.Transforms.Active(transformBindings, daemonTransformScope()) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		req = normalize.CloneRequest(req)
+		if err := k.Transforms.ApplyScopes(ctx, &req, transformBindings, daemonTransformScope()); err != nil {
 			return err
 		}
 		preparedOperation, err = k.Operations.Prepare(req)
@@ -119,20 +161,17 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 		}
 		req.Requirements = mergeRequirements(externalRequirements, preparedOperation.Requirements)
 	}
-	started := time.Now()
-	snapshot := k.Snapshots.Load()
-	root, err := ResolvePublicNode(snapshot, req.Model)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, credential, writer, started, map[string]bool{})
+	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, credential, writer, started, map[string]bool{})
 }
 
 func mergeRequirements(required, derived []normalize.FeatureRequirement) []normalize.FeatureRequirement {
 	result := make([]normalize.FeatureRequirement, 0, len(required)+len(derived))
 	seen := make(map[string]struct{}, cap(result))
 	for _, requirement := range append(append([]normalize.FeatureRequirement(nil), required...), derived...) {
-		key := requirement.ID + "\x00" + string(requirement.Constraints)
+		key := requirement.Ref.Key() + "\x00" + string(requirement.Constraints)
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -142,7 +181,7 @@ func mergeRequirements(required, derived []normalize.FeatureRequirement) []norma
 	return result
 }
 
-func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements) ProviderAdapter {
+func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements, transformBindings []TransformBinding, scopes []TransformScope) ProviderAdapter {
 	operation := requirements.Operation
 	operationBinding, ok := route.OperationBindings[operation]
 	if !ok || requirements.OperationContractVersion == 0 || operationBinding.ContractVersion != requirements.OperationContractVersion {
@@ -156,7 +195,7 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		}
 		compatibilityContext := CompatibilityContext{
 			Request: request, Route: route, Operation: operation, Requirements: requirements,
-			ActiveResponseTransform: k.ResponseTransforms.Active(),
+			ActiveResponseTransform: k.ResponseTransforms.Active(transformBindings, scopes...),
 		}
 		compatibilityContext.Policy.RequiredFacets = RequiredRequestFacets(request)
 		for _, event := range RequiredResponseEvents(request) {
@@ -174,7 +213,7 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 	return nil
 }
 
-func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
+func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, resourceBounds extensions.ResourceBounds, externalRequirements []normalize.FeatureRequirement, transformBindings []TransformBinding, scopes []TransformScope, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
 	if stack[node.ID] {
 		return fmt.Errorf("model cycle at %q", node.ID)
 	}
@@ -185,6 +224,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			req.Thinking = node.Reasoning
 		}
 	}
+	modelScope := TransformScope{Kind: TransformScopeModel, ID: node.ID}
+	scopes = append(append([]TransformScope(nil), scopes...), modelScope)
+	if k.Transforms.Active(transformBindings, modelScope) {
+		req = normalize.CloneRequest(req)
+		if err := k.Transforms.ApplyScopes(ctx, &req, transformBindings, modelScope); err != nil {
+			return err
+		}
+		prepared, err := k.Operations.Prepare(req)
+		if err != nil {
+			return err
+		}
+		req.Requirements = mergeRequirements(externalRequirements, prepared.Requirements)
+	}
 	for _, member := range k.Scheduler.Plan(node) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -194,7 +246,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if !ok {
 				return fmt.Errorf("unknown model node %q", member.ID)
 			}
-			err := k.executeNode(ctx, snapshot, child, req, replaySafety, credential, writer, started, stack)
+			err := k.executeNode(ctx, snapshot, child, req, replaySafety, resourceBounds, externalRequirements, transformBindings, scopes, credential, writer, started, stack)
 			if err == nil {
 				return nil
 			} else if !errors.Is(err, ErrNoRoute) {
@@ -221,24 +273,68 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 		}
 		for _, candidate := range routes {
-			requirements := CompileRequirements(req)
+			candidateRequest := req
+			attemptScopes := []TransformScope{{Kind: TransformScopeRoute, ID: candidate.ID}}
+			if candidate.NodeID != "" {
+				attemptScopes = append(attemptScopes, TransformScope{Kind: TransformScopeProvider, ID: candidate.NodeID})
+			}
+			if candidate.CredentialID != "" {
+				attemptScopes = append(attemptScopes, TransformScope{Kind: TransformScopeConnection, ID: candidate.CredentialID})
+			}
+			candidateScopes := append(append([]TransformScope(nil), scopes...), attemptScopes...)
+			if k.Transforms.Active(transformBindings, attemptScopes...) {
+				candidateRequest = normalize.CloneRequest(req)
+				if err := k.Transforms.ApplyScopes(ctx, &candidateRequest, transformBindings, attemptScopes...); err != nil {
+					return err
+				}
+				prepared, err := k.Operations.Prepare(candidateRequest)
+				if err != nil {
+					return err
+				}
+				candidateRequest.Requirements = mergeRequirements(externalRequirements, prepared.Requirements)
+			}
+			requirements := CompileRequirements(candidateRequest)
 			operationBinding, ok := candidate.OperationBindings[requirements.Operation]
 			if !ok || operationBinding.ContractVersion != requirements.OperationContractVersion {
 				continue
 			}
-			candidate.ErrorClassifierID = operationBinding.ErrorClassifierID
-			candidate.UsageSourceID = operationBinding.UsageSourceID
+			candidate.ErrorClassifierRef = operationBinding.ErrorClassifierRef
+			candidate.UsageSourceRef = operationBinding.UsageSourceRef
 			candidate.UsageOptions = operationBinding.UsageOptions
-			candidate.SessionStoreID = operationBinding.SessionStoreID
+			candidate.SessionStoreRef = operationBinding.SessionStoreRef
+			operationRef := extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
+			receiver := extensions.ArtifactOwner{
+				Domain: "provider", IssuerRef: &candidate.DefinitionRef,
+				ProviderDefinitionID: candidate.DefinitionID, ConnectionID: candidate.CredentialID,
+				ModelIdentity: candidate.ExternalModel, ClientContract: string(candidateRequest.SourceFormat),
+				SessionID: requestSessionKey(candidateRequest),
+			}
+			if err := k.Operations.ValidateArtifactsForConsumer(operationRef, candidateRequest.Artifacts, receiver, candidate.DefinitionRef); err != nil {
+				failureClass, memberErr = ErrorCapability, err
+				continue
+			}
+			if k.ArtifactStore == nil && hasBodyArtifacts(candidateRequest.Artifacts) {
+				failureClass, memberErr = ErrorCapability, fmt.Errorf("artifact body store is unavailable")
+				continue
+			}
 			if eligible, _ := Eligible(candidate, requirements); !eligible {
 				continue
 			}
 			if eligible, _ := k.Features.Evaluate(candidate, requirements.Features); !eligible {
 				continue
 			}
-			adapter := k.adapterForRoute(candidate, req, requirements)
+			adapter := k.adapterForRoute(candidate, candidateRequest, requirements, transformBindings, candidateScopes)
 			if adapter == nil {
 				continue
+			}
+			var resultProjector operations.ResultProjector
+			if definition, exists := k.Operations.Resolve(operationRef); exists && definition.ResultSchemaRef != nil {
+				projector, projectorErr := k.Operations.NewResultProjector(operationRef)
+				if projectorErr != nil {
+					failureClass, memberErr = ErrorCapability, projectorErr
+					continue
+				}
+				resultProjector = projector
 			}
 			if !k.Scheduler.Acquire(candidate, time.Now()) {
 				failureClass = ErrorCooldown
@@ -257,11 +353,10 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					continue
 				}
 			}
-			candidateRequest := req
 			sessionKey := requestSessionKey(req)
 			var sessionState SessionState
-			if sessionKey != "" && candidate.SessionStoreID != "" {
-				if sessionStore := k.SessionStores[candidate.SessionStoreID]; sessionStore != nil {
+			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
+				if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
 					if saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey); loadErr == nil && found {
 						sessionState = saved
 						candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
@@ -271,15 +366,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 				}
 			}
+			attemptCtx := ctx
+			if k.ArtifactStore != nil {
+				attemptCtx = artifacts.WithAccess(ctx, artifacts.Access{Store: k.ArtifactStore, Catalog: k.Operations.ExtensionCatalog(), Receiver: receiver, Recipient: candidate.DefinitionRef})
+			}
 			refreshed := false
 		retryUpstream:
-			upstream, err := adapter.Prepare(ctx, candidateRequest, candidate, selectedCredential)
+			upstream, err := adapter.Prepare(attemptCtx, candidateRequest, candidate, selectedCredential)
 			if err != nil {
 				k.Scheduler.Release(candidate)
 				failureClass, memberErr = ErrorRetryable, err
 				continue
 			}
-			response, err := adapter.Execute(ctx, upstream)
+			response, err := adapter.Execute(attemptCtx, upstream)
 			if err != nil {
 				k.Scheduler.Release(candidate)
 				if ctx.Err() != nil {
@@ -297,7 +396,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
 				class := adapter.ClassifyError(response.Status, body)
 				outcome := classifyOutcome(adapter, response.Status, response.Headers, body, class)
-				if classifier, ok := k.ErrorClassifiers[candidate.ErrorClassifierID]; ok {
+				if classifier, ok := k.ErrorClassifiers[candidate.ErrorClassifierRef]; ok {
 					class = classifier.ClassifyError(response.Status, body)
 					if rich, ok := classifier.(OutcomeClassifier); ok {
 						outcome = rich.ClassifyOutcome(response.Status, response.Headers, body)
@@ -346,10 +445,48 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			defer response.Body.Close()
 			var firstByteAt time.Time
 			emitEvent := responseEventSink(writer)
-			streamWriter := &responseCommitWriter{ResponseWriter: writer}
+			streamWriter := &responseCommitWriter{ResponseWriter: writer, maxBytes: resourceBounds.MaxOutputBytes}
+			var validateEvent func(context.Context, ResponseEvent) error
+			if definition, exists := k.Operations.Resolve(operationRef); exists && (len(definition.EventSchemaRefs) > 0 || resultProjector != nil) {
+				var sequence uint64
+				resultFinalized := false
+				validateEvent = func(_ context.Context, event ResponseEvent) error {
+					sequence++
+					payload, err := operationEventPayload(event, sequence)
+					if err != nil {
+						return err
+					}
+					if err := k.Operations.ValidateEvent(operationRef, payload); err != nil {
+						return err
+					}
+					if resultProjector == nil {
+						return nil
+					}
+					if resultFinalized {
+						return fmt.Errorf("operation %q emitted events after its terminal result", operationRef.Key())
+					}
+					if err := resultProjector.ConsumeEvent(payload); err != nil {
+						return fmt.Errorf("project operation %q result: %w", operationRef.Key(), err)
+					}
+					if event.Kind == EventResponseComplete {
+						result, err := resultProjector.Finalize()
+						if err != nil {
+							return fmt.Errorf("finalize operation %q result: %w", operationRef.Key(), err)
+						}
+						if err := k.Operations.ValidateResult(operationRef, result); err != nil {
+							return err
+						}
+						resultFinalized = true
+					}
+					return nil
+				}
+			}
 			var responseTransform func(context.Context, ResponseEvent) (ResponseEvent, error)
-			if k.ResponseTransforms.Active() {
-				responseTransform = k.transformResponse
+			responseTransformScopes := append([]TransformScope(nil), candidateScopes...)
+			if k.ResponseTransforms.Active(transformBindings, responseTransformScopes...) {
+				responseTransform = func(transformCtx context.Context, event ResponseEvent) (ResponseEvent, error) {
+					return k.ResponseTransforms.ApplyScopes(transformCtx, event, transformBindings, responseTransformScopes...)
+				}
 			}
 			attemptReleased := false
 			releaseAttempt := func() {
@@ -358,7 +495,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					attemptReleased = true
 				}
 			}
-			renderErr := adapter.RenderResponse(ctx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, TransformResponse: responseTransform, OnError: func(streamErr error) {
+			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, OnError: func(streamErr error) {
 				releaseAttempt()
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
@@ -368,7 +505,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
-			}, OnEvent: func(event ResponseEvent) {
+			}, ValidateEvent: validateEvent, OnEvent: func(event ResponseEvent) {
 				if event.ResponseID != "" {
 					sessionState.ResponseID = event.ResponseID
 				}
@@ -392,12 +529,12 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 			}, OnComplete: func(event UsageEvent) {
 				releaseAttempt()
-				if sessionKey != "" && candidate.SessionStoreID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
-					if sessionStore := k.SessionStores[candidate.SessionStoreID]; sessionStore != nil {
+				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
+					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
 						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
 					}
 				}
-				if source := k.UsageSources[candidate.UsageSourceID]; source != nil {
+				if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
 					if enriched, enrichErr := source.EnrichUsage(ctx, candidate, response.Headers, event); enrichErr == nil {
 						event = enriched
 					}
@@ -483,6 +620,50 @@ func requestSessionKey(request NormalizedRequest) string {
 		return request.Session.ID
 	}
 	return request.Session.Conversation
+}
+
+func hasBodyArtifacts(artifacts []extensions.ArtifactRef) bool {
+	for _, artifact := range artifacts {
+		if artifact.Body != nil {
+			return true
+		}
+	}
+	return false
+}
+
+type operationEventEnvelope struct {
+	Kind     string         `json:"kind"`
+	Sequence uint64         `json:"sequence"`
+	ItemID   string         `json:"itemId,omitempty"`
+	Content  map[string]any `json:"content"`
+}
+
+func operationEventPayload(event ResponseEvent, sequence uint64) (json.RawMessage, error) {
+	content := make(map[string]any)
+	for key, value := range map[string]string{
+		"responseId": event.ResponseID, "contentType": event.ContentType, "blockType": event.BlockType,
+		"stopReason": event.StopReason, "text": event.Text, "toolCallId": event.ToolCallID,
+		"toolName": event.ToolName, "toolArguments": event.ToolArguments, "error": event.Error,
+		"wireFormat": string(event.WireFormat),
+	} {
+		if value != "" {
+			content[key] = value
+		}
+	}
+	if event.Index != 0 {
+		content["index"] = event.Index
+	}
+	if event.Usage != nil {
+		content["usage"] = map[string]any{
+			"inputTokens": event.Usage.InputTokens, "outputTokens": event.Usage.OutputTokens,
+			"estimatedCost": event.Usage.EstimatedCost, "status": event.Usage.Status,
+		}
+	}
+	payload, err := json.Marshal(operationEventEnvelope{Kind: string(event.Kind), Sequence: sequence, ItemID: event.ItemID, Content: content})
+	if err != nil {
+		return nil, fmt.Errorf("encode operation response event: %w", err)
+	}
+	return payload, nil
 }
 
 func PhysicalSourceAllowed(node ModelNode, source MemberRef) bool {

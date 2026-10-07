@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
+	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 func testPrimitiveRegistry() *PrimitiveRegistry {
@@ -39,6 +41,22 @@ func testPrimitiveRegistry() *PrimitiveRegistry {
 		}
 	}
 	return r
+}
+
+type schemaBoundRequestTransform struct{ optionsSchemaRef extensions.Ref }
+
+func (schemaBoundRequestTransform) Definition() kernel.TransformDefinition {
+	optionsRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "fixture.transform-options", ContractVersion: 1}
+	return kernel.TransformDefinition{
+		Ref:                   extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.add-suffix", ContractVersion: 1},
+		ImplementationVersion: "1.0.0", Label: "Add suffix", Description: "Add a configured suffix to user text.",
+		OptionsSchemaRef: &optionsRef, Stage: kernel.TransformBeforeRequirements,
+		Effects: []kernel.TransformEffect{kernel.TransformInput},
+	}
+}
+
+func (schemaBoundRequestTransform) Apply(context.Context, *kernel.NormalizedRequest, json.RawMessage) error {
+	return nil
 }
 
 func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
@@ -90,7 +108,7 @@ func TestRuntimeRegistryRejectsNilCodecImplementation(t *testing.T) {
 	if err := runtime.RegisterRequestCodec(nil); err == nil {
 		t.Fatal("expected nil codec error")
 	}
-	if err := runtime.RegisterRequestCodec(runtime.requestCodecs["openai-chat-json"]); err == nil {
+	if err := runtime.RegisterRequestCodec(runtime.requestCodecs[extensions.Ref{Kind: string(PrimitiveRequestCodec), ID: "openai-chat-json", ContractVersion: 1}]); err == nil {
 		t.Fatal("duplicate primitive implementation must not silently replace the registered codec")
 	}
 }
@@ -166,11 +184,11 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := bindings[RuntimeBindingKey(definition.ID, OperationChat)]
-	if binding.ErrorClassifierID != RuntimeErrorClassifierKey(definition.ID, OperationChat, "http-json") {
-		t.Fatalf("configured classifier key=%q", binding.ErrorClassifierID)
+	if binding.ErrorClassifierRef != RuntimeErrorClassifierRef(definition.ID, OperationChat, PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}) {
+		t.Fatalf("configured classifier ref=%q", binding.ErrorClassifierRef.Key())
 	}
 	classifiers := registry.ErrorClassifiersForBindings(bindings)
-	classifier, ok := classifiers[binding.ErrorClassifierID].(kernel.OutcomeClassifier)
+	classifier, ok := classifiers[binding.ErrorClassifierRef].(kernel.OutcomeClassifier)
 	if !ok {
 		t.Fatal("configured rich classifier was not installed under its bound identity")
 	}
@@ -305,7 +323,7 @@ func TestRuntimeBindingBuilderBuildsComposedOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.AdapterID != "openai-compatible-chat:chat" || binding.Adapter == nil || binding.Auth == nil || binding.AuthFlowID != "openai-compatible-chat:static-secret" || binding.EndpointID != "http-json" || binding.TransportID != "http" || binding.RequestCodecID != "openai-chat-json" || binding.ResponseDecoderID != "openai-sse" {
+	if binding.AdapterID != "openai-compatible-chat:chat" || binding.Adapter == nil || binding.Auth == nil || binding.AuthFlowID != AuthBindingKey("openai-compatible-chat", PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || binding.EndpointID != "http-json" || binding.TransportID != "http" || binding.RequestCodecID != "openai-chat-json" || binding.ResponseDecoderID != "openai-sse" {
 		t.Fatalf("binding=%#v", binding)
 	}
 	if binding.ErrorClassifier == nil || binding.ErrorClassifierID != "http-json" {
@@ -330,7 +348,7 @@ func TestRegisteredHTTPJSONClassifierPreservesRichOutcomeEvidence(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	classifier, ok := registry.ErrorClassifiers()["http-json"].(kernel.OutcomeClassifier)
+	classifier, ok := registry.ErrorClassifiers()[extensions.Ref{Kind: string(PrimitiveErrorClassifier), ID: "http-json", ContractVersion: 1}].(kernel.OutcomeClassifier)
 	if !ok {
 		t.Fatal("registered rich classifier was downgraded to ClassifyError-only adapter")
 	}
@@ -373,7 +391,7 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Auth == nil || binding.Auth.ID() != "oauth2" || binding.AuthFlowID != "oauth-provider:oauth2" {
+	if binding.Auth == nil || binding.Auth.ID() != "oauth2" || binding.AuthFlowID != AuthBindingKey("oauth-provider", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
 		t.Fatalf("auth binding=%#v", binding)
 	}
 	state := []byte(`{"access_token":"access","refresh_token":"refresh","client_secret":"per-connection-secret"}`)
@@ -436,6 +454,83 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 	}
 }
 
+func TestTransformOptionsUseVersionedSharedExtensionSchema(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	optionsShape := json.RawMessage(`{"type":"object","properties":{"suffix":{"type":"string","minLength":1}},"required":["suffix"],"additionalProperties":false}`)
+	if err := registry.RegisterRequestTransform(schemaBoundRequestTransform{}, optionsShape); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterResponseTransform(uppercaseResponseTransform{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	view, err := registry.ExtensionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transformRef := extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.add-suffix", ContractVersion: 1}
+	optionsRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "fixture.transform-options", ContractVersion: 1}
+	foundDescriptor, foundSchema := false, false
+	for _, descriptor := range view.Descriptors {
+		if descriptor.Ref == transformRef && descriptor.OptionsSchemaRef != nil && *descriptor.OptionsSchemaRef == optionsRef {
+			foundDescriptor = true
+		}
+	}
+	for _, schema := range view.Schemas {
+		foundSchema = foundSchema || schema.Ref == optionsRef
+	}
+	if !foundDescriptor || !foundSchema {
+		t.Fatalf("transform extension missing descriptor/schema: descriptor=%v schema=%v", foundDescriptor, foundSchema)
+	}
+	binding := kernel.TransformBinding{
+		ID: "model.junior.suffix", TransformRef: transformRef, Enabled: true,
+		Scope:   kernel.TransformScope{Kind: kernel.TransformScopeModel, ID: "junior"},
+		Options: json.RawMessage(`{"suffix":"!"}`),
+	}
+	if err := registry.ValidateTransformBindings([]kernel.TransformBinding{binding}); err != nil {
+		t.Fatalf("valid binding options rejected: %v", err)
+	}
+	catalogSnapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestTransforms, err := kernel.NewRequestTransformRegistryFromCatalog(catalogSnapshot)
+	if err != nil {
+		t.Fatalf("transform implementation did not bind from shared catalog: %v", err)
+	}
+	if err := requestTransforms.ValidateBindings([]kernel.TransformBinding{binding}); err != nil {
+		t.Fatalf("catalog-bound transform registry rejected valid options: %v", err)
+	}
+	binding.Options = json.RawMessage(`{"suffix":7}`)
+	if err := registry.ValidateTransformBindings([]kernel.TransformBinding{binding}); err == nil {
+		t.Fatal("binding options violating the shared catalog schema were accepted")
+	}
+	if err := requestTransforms.ValidateBindings([]kernel.TransformBinding{binding}); err == nil {
+		t.Fatal("catalog-bound kernel registry accepted invalid options")
+	}
+	responseTransforms, err := kernel.NewResponseTransformRegistryFromCatalog(catalogSnapshot)
+	if err != nil {
+		t.Fatalf("response transform implementation did not bind from shared catalog: %v", err)
+	}
+	responseBinding := kernel.TransformBinding{
+		ID: "daemon.uppercase", TransformRef: uppercaseResponseTransform{}.Definition().Ref, Enabled: true,
+		Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon},
+	}
+	event, err := responseTransforms.ApplyScopes(context.Background(), kernel.ResponseEvent{Kind: kernel.EventTextDelta, Text: "catalog"}, []kernel.TransformBinding{responseBinding}, responseBinding.Scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Text != "CATALOG" {
+		t.Fatalf("catalog-bound response transform output=%q", event.Text)
+	}
+	binding.TransformRef.ContractVersion = 2
+	if err := registry.ValidateTransformBindings([]kernel.TransformBinding{binding}); err == nil {
+		t.Fatal("transform binding silently resolved a different contract version")
+	}
+}
+
 func TestProviderMustDeclareNoAuthExplicitly(t *testing.T) {
 	registry, err := NewRuntimeRegistry()
 	if err != nil {
@@ -457,7 +552,7 @@ func TestProviderMustDeclareNoAuthExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := bindings[RuntimeBindingKey(definition.ID, OperationChat)]
-	if binding.AuthFlowID != "public-provider:none" || binding.Auth == nil {
+	if binding.AuthFlowID != AuthBindingKey("public-provider", PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}) || binding.Auth == nil {
 		t.Fatalf("no-auth binding=%#v", binding)
 	}
 	credential, err := binding.Auth.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "none"})
@@ -562,9 +657,9 @@ func (runtimeTestRenderSession) Finish(_ context.Context, err error) error { ret
 type uppercaseResponseTransform struct{}
 
 func (uppercaseResponseTransform) Definition() kernel.ResponseTransformDefinition {
-	return kernel.ResponseTransformDefinition{ID: "fixture.uppercase-response.v1", Label: "Uppercase response text", Description: "Modify semantic text before rendering.", Effects: []kernel.ResponseTransformEffect{kernel.ResponseEffectText}}
+	return kernel.ResponseTransformDefinition{Ref: extensions.Ref{Kind: kernel.ResponseTransformKind, ID: "fixture.uppercase-response.v1", ContractVersion: 1}, ImplementationVersion: "1", Label: "Uppercase response text", Description: "Modify semantic text before rendering.", Effects: []kernel.ResponseTransformEffect{kernel.ResponseEffectText}}
 }
-func (uppercaseResponseTransform) ApplyResponse(_ context.Context, event kernel.ResponseEvent) (kernel.ResponseEvent, error) {
+func (uppercaseResponseTransform) ApplyResponse(_ context.Context, event kernel.ResponseEvent, _ json.RawMessage) (kernel.ResponseEvent, error) {
 	if event.Kind == kernel.EventTextDelta {
 		event.Text = strings.ToUpper(event.Text)
 	}
@@ -651,7 +746,12 @@ func TestRuntimeBindingExecutesSelectedEndpointAndCodecs(t *testing.T) {
 	if err := responseTransforms.Register(uppercaseResponseTransform{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := binding.Adapter.RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK}, customWriter, normalize.Format("vendor-test"), kernel.StreamHooks{TransformResponse: responseTransforms.Apply}); err != nil {
+	scope := kernel.TransformScope{Kind: kernel.TransformScopeDaemon}
+	bindings := []kernel.TransformBinding{{ID: "test.uppercase", TransformRef: extensions.Ref{Kind: kernel.ResponseTransformKind, ID: "fixture.uppercase-response.v1", ContractVersion: 1}, Enabled: true, Scope: scope}}
+	transform := func(ctx context.Context, event kernel.ResponseEvent) (kernel.ResponseEvent, error) {
+		return responseTransforms.ApplyScopes(ctx, event, bindings, scope)
+	}
+	if err := binding.Adapter.RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK}, customWriter, normalize.Format("vendor-test"), kernel.StreamHooks{TransformResponse: transform}); err != nil {
 		t.Fatal(err)
 	}
 	if customWriter.Header().Get("Content-Type") != "application/vnd.vendor.test+text" || customWriter.Body.String() != "DECODED BY PROVIDER" {
@@ -730,5 +830,244 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	modelBinding := bindings[RuntimeBindingKey("openai", OperationModels)]
 	if modelBinding.Auth == nil || modelBinding.ModelSource == nil || modelBinding.Endpoint == nil || modelBinding.Transport == nil {
 		t.Fatalf("manifest-bound API-key /models operation was incomplete: %#v", modelBinding)
+	}
+}
+
+type fixtureFeatureEvaluator struct{ accept bool }
+
+func (f fixtureFeatureEvaluator) Evaluate(kernel.Capability, json.RawMessage) (bool, string) {
+	if f.accept {
+		return true, ""
+	}
+	return false, "fixture rejects feature"
+}
+
+type versionedPrimitiveEndpoint struct{ version uint64 }
+
+func (e *versionedPrimitiveEndpoint) ID() string { return "versioned-endpoint" }
+func (e *versionedPrimitiveEndpoint) Resolve(_, _ string, _ kernel.EndpointOptions) (string, error) {
+	return fmt.Sprintf("https://provider.test/v%d", e.version), nil
+}
+
+type versionedPrimitiveTransport struct{ version uint64 }
+
+func (t *versionedPrimitiveTransport) ID() string { return "versioned-transport" }
+func (t *versionedPrimitiveTransport) Execute(context.Context, kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	return kernel.UpstreamResponse{Status: int(t.version)}, nil
+}
+
+type versionedPrimitiveRequestCodec struct{ version uint64 }
+
+func (c versionedPrimitiveRequestCodec) ID() string { return "versioned-request" }
+func (versionedPrimitiveRequestCodec) DescribeCompatibility(kernel.CompatibilityContext) []kernel.FacetMapping {
+	return []kernel.FacetMapping{{Facet: kernel.FacetWireRequest, Paths: []string{"request"}, Disposition: kernel.FacetPreserved}}
+}
+func (c versionedPrimitiveRequestCodec) Prepare(context.Context, kernel.NormalizedRequest, kernel.Route, kernel.Credential) (kernel.UpstreamRequest, error) {
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: fmt.Sprintf("/v%d", c.version)}, nil
+}
+
+type versionedPrimitiveResponseDecoder struct{ version uint64 }
+
+func (d versionedPrimitiveResponseDecoder) ID() string { return "versioned-response" }
+func (versionedPrimitiveResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
+	return []kernel.ResponseEventKind{kernel.EventResponseComplete}
+}
+func (versionedPrimitiveResponseDecoder) ClassifyError(int, []byte) kernel.ErrorClass {
+	return kernel.ErrorRetryable
+}
+func (versionedPrimitiveResponseDecoder) Decode(_ context.Context, _ kernel.UpstreamResponse, emit func(kernel.ResponseEvent) error, _ kernel.StreamHooks) error {
+	return emit(kernel.ResponseEvent{Kind: kernel.EventResponseComplete})
+}
+
+type versionedPrimitiveQuotaSource struct{ version uint64 }
+
+func (versionedPrimitiveQuotaSource) ID() string { return "versioned-quota" }
+func (versionedPrimitiveQuotaSource) Fetch(context.Context, QuotaRequest) ([]quota.Snapshot, error) {
+	return nil, nil
+}
+
+func TestVersionedPrimitiveRefsSelectExactAdapterComponents(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []uint64{1, 2} {
+		if err := registry.RegisterEndpointVersion(&versionedPrimitiveEndpoint{version}, version); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterTransportVersion(&versionedPrimitiveTransport{version}, version); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterRequestCodecVersion(versionedPrimitiveRequestCodec{version}, version); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterResponseDecoderVersion(versionedPrimitiveResponseDecoder{version}, version); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.RegisterQuotaSourceVersion(versionedPrimitiveQuotaSource{version}, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const definitionID = "versioned-primitive-provider"
+	ref := func(kind PrimitiveKind, id string) PrimitiveRef {
+		return PrimitiveRef{Kind: kind, ID: id, ContractVersion: 2}
+	}
+	definition := ProviderDefinition{
+		ContractVersion: 1, ID: definitionID, Version: "1", DisplayName: "Versioned primitive fixture",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1},
+		Operations: map[Operation]OperationBinding{OperationChat: {
+			Protocol: kernel.ProtocolOpenAIChat, TaskRef: OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.FormatOpenAIChat,
+			Endpoint: ref(PrimitiveEndpoint, "versioned-endpoint"), Transport: ref(PrimitiveTransport, "versioned-transport"),
+			RequestCodec: ref(PrimitiveRequestCodec, "versioned-request"), ResponseDecoder: ref(PrimitiveResponseDecoder, "versioned-response"),
+		}},
+	}
+	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
+		t.Fatal(err)
+	}
+	binding, err := NewRuntimeBindingBuilder(registry).Build(definitionID, OperationChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := binding.Adapter.(kernel.ComposedAdapter)
+	if !ok {
+		t.Fatalf("runtime adapter=%T", binding.Adapter)
+	}
+	if adapter.Endpoint.(*versionedPrimitiveEndpoint).version != 2 || adapter.Transport.(*versionedPrimitiveTransport).version != 2 || adapter.Request.(versionedPrimitiveRequestCodec).version != 2 || adapter.Response.(versionedPrimitiveResponseDecoder).version != 2 {
+		t.Fatalf("adapter did not bind exact v2 components: %#v", adapter)
+	}
+	endpoints := registry.Endpoints()
+	quotaSources := registry.QuotaSources()
+	endpointV1 := extensions.Ref{Kind: string(PrimitiveEndpoint), ID: "versioned-endpoint", ContractVersion: 1}
+	endpointV2 := extensions.Ref{Kind: string(PrimitiveEndpoint), ID: "versioned-endpoint", ContractVersion: 2}
+	quotaV1 := extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: "versioned-quota", ContractVersion: 1}
+	quotaV2 := extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: "versioned-quota", ContractVersion: 2}
+	if endpoints[endpointV1].(*versionedPrimitiveEndpoint).version != 1 || endpoints[endpointV2].(*versionedPrimitiveEndpoint).version != 2 {
+		t.Fatalf("endpoint runtime cache did not retain exact refs: %#v", endpoints)
+	}
+	if quotaSources[quotaV1].(versionedPrimitiveQuotaSource).version != 1 || quotaSources[quotaV2].(versionedPrimitiveQuotaSource).version != 2 {
+		t.Fatalf("quota runtime cache did not retain exact refs: %#v", quotaSources)
+	}
+}
+
+type catalogStrategyFixture struct{}
+
+func (catalogStrategyFixture) Plan(_ string, members []kernel.MemberRef, _ *kernel.StrategyState) []kernel.MemberRef {
+	return append([]kernel.MemberRef(nil), members...)
+}
+func (catalogStrategyFixture) OnFailure(kernel.StrategyFailure, *kernel.StrategyState) kernel.FailureAction {
+	return kernel.FailureContinue
+}
+
+func TestPrimitiveFactoriesWithSameIDBindOnlyTheirExactContractVersion(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []uint64{1, 2} {
+		version := version
+		if err := registry.RegisterPrimitiveImplementation(PrimitiveExtension, "vendor.codec", version, func(json.RawMessage) (any, error) {
+			return version, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []uint64{1, 2} {
+		ref := extensions.Ref{Kind: string(PrimitiveExtension), ID: "vendor.codec", ContractVersion: version}
+		_, implementation, err := snapshot.Bind(ref, json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("bind %s: %v", ref.Key(), err)
+		}
+		if implementation != version {
+			t.Fatalf("%s resolved implementation %v", ref.Key(), implementation)
+		}
+	}
+	if _, _, err := snapshot.Bind(extensions.Ref{Kind: string(PrimitiveExtension), ID: "vendor.codec", ContractVersion: 3}, json.RawMessage(`{}`)); err == nil {
+		t.Fatal("missing primitive contract version resolved to another implementation")
+	}
+}
+
+func TestRuntimeRegistryStoresStrategyImplementationsByExactVersion(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []uint64{1, 2} {
+		ref := extensions.Ref{Kind: kernel.StrategyExtensionKind, ID: "vendor.policy", ContractVersion: version}
+		if err := registry.RegisterStrategyDefinition(kernel.StrategyDefinition{
+			Ref: ref, ID: ref.ID, Label: "Vendor policy", Description: "Fixture versioned strategy.",
+			Runtime: kernel.Strategy(fmt.Sprintf("vendor-policy-v%d", version)), Primitive: catalogStrategyFixture{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions, err := kernel.StrategyDefinitionsFromCatalog(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[uint64]bool{}
+	for _, definition := range definitions {
+		if definition.Ref.ID == "vendor.policy" {
+			found[definition.Ref.ContractVersion] = true
+		}
+	}
+	if !found[1] || !found[2] {
+		t.Fatalf("same strategy ID did not retain both exact versions: %v", found)
+	}
+	builtinRef := extensions.Ref{Kind: kernel.StrategyExtensionKind, ID: "round-robin-fallback", ContractVersion: 1}
+	if err := snapshot.ValidateOptions(builtinRef, json.RawMessage(`{"stickyLimit":4}`)); err != nil {
+		t.Fatalf("valid strategy options rejected by shared schema: %v", err)
+	}
+	if err := snapshot.ValidateOptions(builtinRef, json.RawMessage(`{"stickyLimit":0}`)); err == nil {
+		t.Fatal("strategy options below schema minimum were accepted")
+	}
+}
+
+func TestRuntimeRegistryContributesVersionedFeatureEvaluatorsToSharedCatalog(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	featureID := "vendor.example.structured-output"
+	shape := json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","minLength":1}},"required":["format"],"additionalProperties":false}`)
+	featureV1 := extensions.Ref{Kind: kernel.FeatureEvaluatorKind, ID: featureID, ContractVersion: 1}
+	featureV2 := extensions.Ref{Kind: kernel.FeatureEvaluatorKind, ID: featureID, ContractVersion: 2}
+	for _, item := range []struct {
+		ref       extensions.Ref
+		evaluator kernel.FeatureEvaluator
+	}{
+		{featureV1, fixtureFeatureEvaluator{accept: true}},
+		{featureV2, fixtureFeatureEvaluator{accept: false}},
+	} {
+		schemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "feature.constraints." + featureID, ContractVersion: item.ref.ContractVersion}
+		if err := registry.RegisterFeatureEvaluator(item.ref, "1", "Structured output", "Checks the requested structured output format.", schemaRef, shape, item.evaluator); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	features, err := kernel.NewFeatureRegistryFromCatalog(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := kernel.Route{Profile: kernel.CapabilityProfile{featureID: {State: kernel.SupportNative}}}
+	constraints := json.RawMessage(`{"format":"json"}`)
+	if ok, reason := features.Evaluate(route, []normalize.FeatureRequirement{{Ref: featureV1, Constraints: constraints}}); !ok {
+		t.Fatalf("catalog-bound v1 evaluator rejected feature: %s", reason)
+	}
+	if ok, reason := features.Evaluate(route, []normalize.FeatureRequirement{{Ref: featureV2, Constraints: constraints}}); ok || reason == "" {
+		t.Fatalf("exact v2 evaluator ref was not used: %v %q", ok, reason)
+	}
+	if ok, reason := features.Evaluate(route, []normalize.FeatureRequirement{{Ref: featureV1, Constraints: json.RawMessage(`{"unknown":true}`)}}); ok || reason == "" {
+		t.Fatalf("feature input schema was not enforced: %v %q", ok, reason)
 	}
 }

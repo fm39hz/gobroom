@@ -332,7 +332,7 @@ func TestModelsOwnMostSideHeightAndEnterOpensInteractiveMainEditor(t *testing.T)
 	}
 	model.setPaneItems(model.activeContextIndex(), []entry{{
 		key: "qwen", title: "qwen", modelRef: "qwen", modelKind: "physical",
-		payload: physicalModel{Name: "qwen", Policy: strategySpec{ID: "ordered-fallback"}, Enabled: true},
+		payload: physicalModel{Name: "qwen", Policy: strategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, Enabled: true},
 	}})
 	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.focus != focusInspector || model.mode != modeForm || model.form == nil || model.form.method != "physical_models.upsert" {
@@ -378,9 +378,9 @@ func TestComboPickerFiltersViaSourcePrefixButShowsOneCanonicalPhysicalRow(t *tes
 {"id":"route-openrouter","providerNodeId":"node-openrouter","providerPrefix":"openrouter","kind":"discovered","externalId":"deepseek-v4-flash-0731:free","displayName":"DeepSeek Free"},
 {"id":"route-other","providerNodeId":"node-openrouter","providerPrefix":"openrouter","kind":"discovered","externalId":"qwen-3.8-max","displayName":"Qwen"}]`),
 		sectionPhysical: json.RawMessage(`[
-{"name":"deepseek-v4-flash","sources":[{"routeId":"route-orca"},{"routeId":"route-openrouter"}],"policy":{"id":"ordered-fallback"},"enabled":true},
-{"name":"qwen-3.8-max","sources":[{"routeId":"route-other"}],"policy":{"id":"ordered-fallback"},"enabled":true}]`),
-		sectionComboModels: json.RawMessage(`[{"name":"junior","members":[],"strategy":{"id":"ordered-fallback"},"enabled":true}]`),
+{"name":"deepseek-v4-flash","sources":[{"routeId":"route-orca"},{"routeId":"route-openrouter"}],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true},
+{"name":"qwen-3.8-max","sources":[{"routeId":"route-other"}],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true}]`),
+		sectionComboModels: json.RawMessage(`[{"name":"junior","members":[],"strategy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true}]`),
 	}
 	model.setPaneItems(model.activeContextIndex(), []entry{{key: "junior", title: "junior", payload: comboModel{Name: "junior", Enabled: true}}})
 	if cmd := model.openTypedMemberPicker(); cmd != nil {
@@ -409,12 +409,12 @@ func TestComboPickerPreservesOrderAndSupportsExplicitMemberReorder(t *testing.T)
 	model.raw = map[sectionID]json.RawMessage{
 		sectionDiscovered: json.RawMessage(`[]`),
 		sectionPhysical: json.RawMessage(`[
-{"name":"alpha","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true},
-{"name":"omega","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true},
-{"name":"tau","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true}]`),
+{"name":"alpha","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true},
+{"name":"omega","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true},
+{"name":"tau","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true}]`),
 		sectionComboModels: json.RawMessage(`[]`),
 	}
-	original := comboModel{Name: "junior", Members: []modelReference{{Kind: "physical", ID: "omega", Weight: 3}, {Kind: "physical", ID: "alpha", Weight: 1}}, Strategy: strategySpec{ID: "weighted-fallback"}, Enabled: true}
+	original := comboModel{Name: "junior", Members: []modelReference{{Kind: "physical", ID: "omega", Weight: 3}, {Kind: "physical", ID: "alpha", Weight: 1}}, Strategy: strategySpec{Ref: kernel.StrategyRef("weighted-fallback", 1)}, Enabled: true}
 	model.setPaneItems(model.activeContextIndex(), []entry{{key: "junior", title: "junior", modelRef: "junior", modelKind: "combo", payload: original}})
 	if cmd := model.openTypedMemberPicker(); cmd != nil {
 		t.Fatal("opening local Combo picker unexpectedly issued a daemon request")
@@ -502,7 +502,7 @@ func TestComboPickerPreservesOrderAndSupportsExplicitMemberReorder(t *testing.T)
 		}
 	}
 	strategy, ok := request.Params["strategy"].(map[string]any)
-	if !ok || strategy["id"] != "weighted-fallback" {
+	if !ok || strategy["ref"].(map[string]any)["id"] != "weighted-fallback" || strategy["ref"].(map[string]any)["contractVersion"] != float64(1) {
 		t.Fatalf("strategy primitive was not preserved in save request: %#v", request.Params["strategy"])
 	}
 	if config, ok := strategy["config"].(map[string]any); ok && len(config) != 0 {
@@ -514,8 +514,8 @@ func TestComboPickerUsesIndependentPanesAndLazyGitNavigation(t *testing.T) {
 	raw := map[sectionID]json.RawMessage{
 		sectionDiscovered: json.RawMessage(`[]`),
 		sectionPhysical: json.RawMessage(`[
-{"name":"alpha","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true},
-{"name":"omega","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true}]`),
+{"name":"alpha","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true},
+{"name":"omega","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true}]`),
 		sectionComboModels: json.RawMessage(`[]`),
 	}
 	value := comboModel{Name: "junior", Members: []modelReference{{Kind: "physical", ID: "omega"}}, Enabled: true}
@@ -573,7 +573,7 @@ func TestTUIToggleComboExposurePreservesStrategyAndMemberPolicy(t *testing.T) {
 	model.activeTabs[dashboardModels] = 2
 	value := comboModel{
 		Name: "junior", Members: []modelReference{{Kind: "physical", ID: "qwen", Weight: 3}},
-		Strategy: strategySpec{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 2}}, Enabled: true,
+		Strategy: strategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 2}}, Enabled: true,
 	}
 	model.setPaneItems(model.activeContextIndex(), []entry{{key: "junior", title: "junior", modelRef: "junior", modelKind: "combo", payload: value}})
 	requests := make(chan daemon.IPCRequest, 1)
@@ -599,7 +599,7 @@ func TestTUIToggleComboExposurePreservesStrategyAndMemberPolicy(t *testing.T) {
 		t.Fatalf("exposure request=%#v", request)
 	}
 	strategy, ok := request.Params["strategy"].(map[string]any)
-	if !ok || strategy["id"] != value.Strategy.ID {
+	if !ok || strategy["ref"].(map[string]any)["id"] != value.Strategy.Ref.ID || strategy["ref"].(map[string]any)["contractVersion"] != float64(value.Strategy.Ref.ContractVersion) {
 		t.Fatalf("strategy was lost while exposing Combo: %#v", request.Params["strategy"])
 	}
 	config, ok := strategy["config"].(map[string]any)
@@ -623,11 +623,11 @@ func TestComboEditorSaveAndExposureReachOpenAIModelsProjection(t *testing.T) {
 	}
 	defer db.Close()
 	for _, name := range []string{"glm-5.3", "qwen-3.7-max"} {
-		if err := db.UpsertPhysicalModel(store.PhysicalModel{Name: name, Policy: store.StrategySpec{ID: "ordered-fallback"}, Enabled: true}); err != nil {
+		if err := db.UpsertPhysicalModel(store.PhysicalModel{Name: name, Policy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, Enabled: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	initial := store.ComboModel{Name: "junior", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "qwen-3.7-max", Weight: 3}}, Strategy: store.StrategySpec{ID: "weighted-fallback"}, Enabled: true}
+	initial := store.ComboModel{Name: "junior", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "qwen-3.7-max", Weight: 3}}, Strategy: store.StrategySpec{Ref: kernel.StrategyRef("weighted-fallback", 1)}, Enabled: true}
 	if err := db.UpsertComboModel(initial); err != nil {
 		t.Fatal(err)
 	}
@@ -668,10 +668,10 @@ func TestComboEditorSaveAndExposureReachOpenAIModelsProjection(t *testing.T) {
 	model.activeTabs[dashboardModels] = 2
 	model.raw = map[sectionID]json.RawMessage{
 		sectionDiscovered:  json.RawMessage(`[]`),
-		sectionPhysical:    json.RawMessage(`[ {"name":"glm-5.3","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true}, {"name":"qwen-3.7-max","sources":[],"policy":{"id":"ordered-fallback"},"enabled":true} ]`),
-		sectionComboModels: json.RawMessage(`[{"name":"junior","members":[{"kind":"physical","id":"qwen-3.7-max","weight":3}],"strategy":{"id":"weighted-fallback"},"enabled":true}]`),
+		sectionPhysical:    json.RawMessage(`[ {"name":"glm-5.3","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true}, {"name":"qwen-3.7-max","sources":[],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"enabled":true} ]`),
+		sectionComboModels: json.RawMessage(`[{"name":"junior","members":[{"kind":"physical","id":"qwen-3.7-max","weight":3}],"strategy":{"ref":{"kind":"strategy","id":"weighted-fallback","contractVersion":1}},"enabled":true}]`),
 	}
-	model.setPaneItems(model.activeContextIndex(), []entry{{key: "junior", title: "junior", modelRef: "junior", modelKind: "combo", payload: comboModel{Name: "junior", Members: []modelReference{{Kind: "physical", ID: "qwen-3.7-max", Weight: 3}}, Strategy: strategySpec{ID: "weighted-fallback"}, Enabled: true}}})
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: "junior", title: "junior", modelRef: "junior", modelKind: "combo", payload: comboModel{Name: "junior", Members: []modelReference{{Kind: "physical", ID: "qwen-3.7-max", Weight: 3}}, Strategy: strategySpec{Ref: kernel.StrategyRef("weighted-fallback", 1)}, Enabled: true}}})
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
 	model = updated.(*app)
 	if cmd != nil || model.mode != modeSourcePicker {
@@ -845,7 +845,7 @@ func TestComboEditFormRoundTripsPrimitiveOptionsAndMemberWeight(t *testing.T) {
 	value := comboModel{
 		Name:         "junior",
 		Members:      []modelReference{{Kind: "physical", ID: "qwen", Weight: 4}},
-		Strategy:     strategySpec{ID: "round-robin-fallback", Config: map[string]any{"stickyLimit": 3}},
+		Strategy:     strategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 3}},
 		Discoverable: true, Enabled: true,
 	}
 	selected := entry{payload: value}
@@ -858,7 +858,7 @@ func TestComboEditFormRoundTripsPrimitiveOptionsAndMemberWeight(t *testing.T) {
 		t.Fatal(err)
 	}
 	strategy, ok := params["strategy"].(strategySpec)
-	if !ok || strategy.ID != value.Strategy.ID || strategy.Config["stickyLimit"] != float64(3) {
+	if !ok || strategy.Ref != value.Strategy.Ref || strategy.Config["stickyLimit"] != float64(3) {
 		t.Fatalf("strategy primitive/options were not preserved: %#v", params["strategy"])
 	}
 	members, ok := params["members"].([]modelReference)
@@ -927,13 +927,13 @@ func TestComboFormOpensSearchableStrategyCatalogAndAppliesSchemaDefaults(t *test
 			t.Fatalf("strategy picker omitted catalog/contract panes at width %d:\n%s", width, view)
 		}
 	}
-	model.strategyPicker.SetFilterText("sticky")
+	model.strategyPicker.SetFilterText("stickyLimit")
 	visible := model.strategyPicker.VisibleItems()
 	if len(visible) != 1 {
-		t.Fatalf("strategy search returned %d rows, want one sticky strategy", len(visible))
+		t.Fatalf("strategy search returned %d rows, want one sticky strategy: %#v", len(visible), visible)
 	}
 	row, ok := visible[0].(entry)
-	if !ok || row.key != "round-robin-fallback" || !strings.Contains(row.detail, "stickyLimit") {
+	if !ok || row.key != "strategy:round-robin-fallback@1" || !strings.Contains(row.detail, "stickyLimit") {
 		t.Fatalf("search result lacks canonical strategy/options contract: %#v", visible[0])
 	}
 	updated, _ = model.updateKey(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -946,7 +946,7 @@ func TestComboFormOpensSearchableStrategyCatalogAndAppliesSchemaDefaults(t *test
 		t.Fatal(err)
 	}
 	strategy := params["strategy"].(strategySpec)
-	if strategy.ID != "round-robin-fallback" || strategy.Config["stickyLimit"] != float64(1) {
+	if strategy.Ref != kernel.StrategyRef("round-robin-fallback", 1) || strategy.Config["stickyLimit"] != float64(1) {
 		t.Fatalf("selected primitive did not produce validated typed config: %#v", strategy)
 	}
 }
@@ -979,8 +979,8 @@ func TestModelWorkspaceUsesTypedViewsAndSeparatesPhysicalMapping(t *testing.T) {
 	providers := []providerNode{{ID: "xkiro", Name: "XKiro", Prefix: "xkiro"}, {ID: "ocg", Name: "OCG", Prefix: "ocg"}}
 	workspace, err := (modelWorkspaceClient{providers: providers}).Build(
 		json.RawMessage(`[{"id":"r1","providerNodeId":"xkiro","providerPrefix":"xkiro","kind":"discovered","externalId":"qwen/qwen3.7-max:free"},{"id":"r2","providerNodeId":"ocg","providerPrefix":"ocg","kind":"discovered","externalId":"qwen3.7-max"}]`),
-		json.RawMessage(`[{"name":"qwen-3.7-max","sources":[{"routeId":"r1"},{"routeId":"r2"}],"policy":{"id":"ordered-fallback"},"discoverable":false,"enabled":true}]`),
-		json.RawMessage(`[{"name":"junior","strategy":{"id":"ordered-fallback"},"members":[{"kind":"physical","id":"qwen-3.7-max"}],"discoverable":true,"enabled":true}]`),
+		json.RawMessage(`[{"name":"qwen-3.7-max","sources":[{"routeId":"r1"},{"routeId":"r2"}],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"discoverable":false,"enabled":true}]`),
+		json.RawMessage(`[{"name":"junior","strategy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"members":[{"kind":"physical","id":"qwen-3.7-max"}],"discoverable":true,"enabled":true}]`),
 	)
 	if err != nil {
 		t.Fatal(err)

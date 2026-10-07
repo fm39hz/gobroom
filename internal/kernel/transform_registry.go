@@ -3,17 +3,49 @@ package kernel
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 type TransformStage string
 
 const TransformBeforeRequirements TransformStage = "request.before_requirements"
+
+type TransformScopeKind string
+
+const (
+	TransformScopeDaemon     TransformScopeKind = "daemon"
+	TransformScopeModel      TransformScopeKind = "model"
+	TransformScopeRoute      TransformScopeKind = "route"
+	TransformScopeProvider   TransformScopeKind = "provider"
+	TransformScopeConnection TransformScopeKind = "connection"
+)
+
+const (
+	RequestTransformKind  = "request_transform"
+	ResponseTransformKind = "response_transform"
+)
+
+type TransformScope struct {
+	Kind TransformScopeKind `json:"kind"`
+	ID   string             `json:"id,omitempty"`
+}
+
+type TransformBinding struct {
+	ID           string          `json:"id"`
+	TransformRef extensions.Ref  `json:"transformRef"`
+	Enabled      bool            `json:"enabled"`
+	Scope        TransformScope  `json:"scope"`
+	Order        int             `json:"order,omitempty"`
+	Options      json.RawMessage `json:"options,omitempty"`
+}
 
 type TransformEffect string
 
@@ -27,27 +59,30 @@ const (
 )
 
 type TransformDefinition struct {
-	ID          string            `json:"id"`
-	Label       string            `json:"label"`
-	Description string            `json:"description"`
-	Stage       TransformStage    `json:"stage"`
-	Order       int               `json:"order,omitempty"`
-	Effects     []TransformEffect `json:"effects"`
+	Ref                   extensions.Ref            `json:"ref"`
+	ImplementationVersion string                    `json:"implementationVersion"`
+	Label                 string                    `json:"label"`
+	Description           string                    `json:"description"`
+	OptionsSchemaRef      *extensions.Ref           `json:"optionsSchemaRef,omitempty"`
+	ResourceBounds        extensions.ResourceBounds `json:"resourceBounds,omitempty"`
+	Stage                 TransformStage            `json:"stage"`
+	Effects               []TransformEffect         `json:"effects"`
 }
 
 type RequestTransform interface {
 	Definition() TransformDefinition
-	Apply(context.Context, *NormalizedRequest) error
+	Apply(context.Context, *NormalizedRequest, json.RawMessage) error
 }
 
 type RequestTransformRegistry struct {
 	mu         sync.RWMutex
-	transforms map[string]RequestTransform
+	transforms map[extensions.Ref]RequestTransform
+	catalog    *extensions.Snapshot
 }
 
 type ResponseTransform interface {
 	Definition() ResponseTransformDefinition
-	ApplyResponse(context.Context, ResponseEvent) (ResponseEvent, error)
+	ApplyResponse(context.Context, ResponseEvent, json.RawMessage) (ResponseEvent, error)
 }
 
 type ResponseTransformEffect string
@@ -60,31 +95,51 @@ const (
 )
 
 type ResponseTransformDefinition struct {
-	ID          string                    `json:"id"`
-	Label       string                    `json:"label"`
-	Description string                    `json:"description"`
-	Order       int                       `json:"order,omitempty"`
-	Effects     []ResponseTransformEffect `json:"effects"`
+	Ref                   extensions.Ref            `json:"ref"`
+	ImplementationVersion string                    `json:"implementationVersion"`
+	Label                 string                    `json:"label"`
+	Description           string                    `json:"description"`
+	OptionsSchemaRef      *extensions.Ref           `json:"optionsSchemaRef,omitempty"`
+	ResourceBounds        extensions.ResourceBounds `json:"resourceBounds,omitempty"`
+	Effects               []ResponseTransformEffect `json:"effects"`
 }
 
 type ResponseTransformRegistry struct {
 	mu         sync.RWMutex
-	transforms map[string]ResponseTransform
-	ordered    []ResponseTransform
+	transforms map[extensions.Ref]ResponseTransform
+	catalog    *extensions.Snapshot
 }
 
 func NewResponseTransformRegistry() *ResponseTransformRegistry {
-	return &ResponseTransformRegistry{transforms: map[string]ResponseTransform{}}
+	return &ResponseTransformRegistry{transforms: map[extensions.Ref]ResponseTransform{}}
 }
 
-func (r *ResponseTransformRegistry) Active() bool {
-	if r == nil {
-		return false
+// NewResponseTransformRegistryFromCatalog binds every response transform from
+// the frozen extension catalog. The catalog remains the authority for exact
+// contract resolution and binding-option schema validation.
+func NewResponseTransformRegistryFromCatalog(catalog *extensions.Snapshot) (*ResponseTransformRegistry, error) {
+	if catalog == nil {
+		return nil, fmt.Errorf("response transform catalog is nil")
 	}
-	r.mu.RLock()
-	active := len(r.ordered) > 0
-	r.mu.RUnlock()
-	return active
+	registry := NewResponseTransformRegistry()
+	registry.catalog = catalog
+	for _, descriptor := range catalog.Descriptors() {
+		if descriptor.Ref.Kind != ResponseTransformKind {
+			continue
+		}
+		_, implementation, err := catalog.Implementation(descriptor.Ref)
+		if err != nil {
+			return nil, err
+		}
+		transform, ok := implementation.(ResponseTransform)
+		if !ok {
+			return nil, fmt.Errorf("response transform %q factory returned %T", descriptor.Ref.Key(), implementation)
+		}
+		if err := registry.Register(transform); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
 }
 
 func (r *ResponseTransformRegistry) Register(transform ResponseTransform) error {
@@ -92,50 +147,64 @@ func (r *ResponseTransformRegistry) Register(transform ResponseTransform) error 
 		return fmt.Errorf("response transform registry and transform are required")
 	}
 	definition := transform.Definition()
-	if definition.ID == "" || definition.Label == "" || definition.Description == "" || len(definition.Effects) == 0 {
-		return fmt.Errorf("response transform requires ID, label, description and declared effects")
+	if err := validateTransformRef(definition.Ref, ResponseTransformKind); err != nil {
+		return err
+	}
+	if err := validateTransformMetadata(definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef); err != nil {
+		return fmt.Errorf("response transform %q: %w", definition.Ref.Key(), err)
+	}
+	if len(definition.Effects) == 0 {
+		return fmt.Errorf("response transform %q requires declared effects", definition.Ref.Key())
 	}
 	allowed := map[ResponseTransformEffect]bool{ResponseEffectText: true, ResponseEffectThinking: true, ResponseEffectToolArguments: true, ResponseEffectUsage: true}
 	seen := map[ResponseTransformEffect]bool{}
 	for _, effect := range definition.Effects {
 		if !allowed[effect] || seen[effect] {
-			return fmt.Errorf("response transform %q has invalid or duplicate effect %q", definition.ID, effect)
+			return fmt.Errorf("response transform %q has invalid or duplicate effect %q", definition.Ref.Key(), effect)
 		}
 		seen[effect] = true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.transforms[definition.ID]; exists {
-		return fmt.Errorf("response transform %q is already registered", definition.ID)
+	if _, exists := r.transforms[definition.Ref]; exists {
+		return fmt.Errorf("response transform %q is already registered", definition.Ref.Key())
 	}
-	definition.Effects = append([]ResponseTransformEffect(nil), definition.Effects...)
-	r.transforms[definition.ID] = transform
-	r.ordered = append(r.ordered, transform)
-	sort.Slice(r.ordered, func(i, j int) bool {
-		left, right := r.ordered[i].Definition(), r.ordered[j].Definition()
-		if left.Order != right.Order {
-			return left.Order < right.Order
-		}
-		return left.ID < right.ID
-	})
+	r.transforms[definition.Ref] = transform
 	return nil
 }
 
-func (r *ResponseTransformRegistry) Apply(ctx context.Context, event ResponseEvent) (ResponseEvent, error) {
+func (r *ResponseTransformRegistry) ValidateBindings(bindings []TransformBinding) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if err := validateRegistryBindings(r.transforms, bindings, ResponseTransformKind); err != nil {
+		return err
+	}
+	return validateTransformOptions(r.catalog, bindings, ResponseTransformKind)
+}
+
+func (r *ResponseTransformRegistry) Active(bindings []TransformBinding, scopes ...TransformScope) bool {
+	return len(orderedBindings(bindings, scopes, ResponseTransformKind)) > 0
+}
+
+func (r *ResponseTransformRegistry) ApplyScopes(ctx context.Context, event ResponseEvent, bindings []TransformBinding, scopes ...TransformScope) (ResponseEvent, error) {
 	if r == nil {
 		return event, nil
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, transform := range r.ordered {
+	for _, binding := range orderedBindings(bindings, scopes, ResponseTransformKind) {
+		transform := r.transforms[binding.TransformRef]
+		if transform == nil {
+			return ResponseEvent{}, fmt.Errorf("response transform binding %q references missing transform %q", binding.ID, binding.TransformRef.Key())
+		}
 		definition := transform.Definition()
-		before := event
-		updated, err := transform.ApplyResponse(ctx, event)
+		before := cloneResponseEvent(event)
+		updated, err := transform.ApplyResponse(ctx, cloneResponseEvent(event), append(json.RawMessage(nil), binding.Options...))
 		if err != nil {
-			return ResponseEvent{}, fmt.Errorf("response transform %q: %w", definition.ID, err)
+			return ResponseEvent{}, fmt.Errorf("response transform %q: %w", definition.Ref.Key(), err)
 		}
 		if updated.Kind != before.Kind || updated.At != before.At || updated.Index != before.Index || updated.ResponseID != before.ResponseID || updated.ItemID != before.ItemID || updated.ContentType != before.ContentType || updated.BlockType != before.BlockType || updated.StopReason != before.StopReason || updated.ToolCallID != before.ToolCallID || updated.ToolName != before.ToolName || updated.Error != before.Error || updated.WireFormat != before.WireFormat || !bytes.Equal(updated.Raw, before.Raw) || !bytes.Equal(updated.Opaque, before.Opaque) {
-			return ResponseEvent{}, fmt.Errorf("response transform %q changed immutable event identity or opaque data", definition.ID)
+			return ResponseEvent{}, fmt.Errorf("response transform %q changed immutable event identity or opaque data", definition.Ref.Key())
 		}
 		changedText := updated.Text != before.Text
 		changedArguments := updated.ToolArguments != before.ToolArguments
@@ -145,7 +214,7 @@ func (r *ResponseTransformRegistry) Apply(ctx context.Context, event ResponseEve
 			textEffect = ResponseEffectThinking
 		}
 		if changedText && (before.Kind != EventTextDelta && before.Kind != EventThinkingDelta || !responseTransformHasEffect(definition, textEffect)) || changedArguments && (before.Kind != EventToolCallDelta || !responseTransformHasEffect(definition, ResponseEffectToolArguments)) || changedUsage && (before.Kind != EventUsage && before.Kind != EventResponseComplete || !responseTransformHasEffect(definition, ResponseEffectUsage)) {
-			return ResponseEvent{}, fmt.Errorf("response transform %q changed undeclared event content", definition.ID)
+			return ResponseEvent{}, fmt.Errorf("response transform %q changed undeclared event content", definition.Ref.Key())
 		}
 		event = updated
 	}
@@ -164,17 +233,35 @@ func responseTransformHasEffect(definition ResponseTransformDefinition, effects 
 }
 
 func NewRequestTransformRegistry() *RequestTransformRegistry {
-	return &RequestTransformRegistry{transforms: map[string]RequestTransform{}}
+	return &RequestTransformRegistry{transforms: map[extensions.Ref]RequestTransform{}}
 }
 
-func (r *RequestTransformRegistry) Active() bool {
-	if r == nil {
-		return false
+// NewRequestTransformRegistryFromCatalog binds every request transform from
+// the frozen extension catalog. The catalog remains the authority for exact
+// contract resolution and binding-option schema validation.
+func NewRequestTransformRegistryFromCatalog(catalog *extensions.Snapshot) (*RequestTransformRegistry, error) {
+	if catalog == nil {
+		return nil, fmt.Errorf("request transform catalog is nil")
 	}
-	r.mu.RLock()
-	active := len(r.transforms) > 0
-	r.mu.RUnlock()
-	return active
+	registry := NewRequestTransformRegistry()
+	registry.catalog = catalog
+	for _, descriptor := range catalog.Descriptors() {
+		if descriptor.Ref.Kind != RequestTransformKind {
+			continue
+		}
+		_, implementation, err := catalog.Implementation(descriptor.Ref)
+		if err != nil {
+			return nil, err
+		}
+		transform, ok := implementation.(RequestTransform)
+		if !ok {
+			return nil, fmt.Errorf("request transform %q factory returned %T", descriptor.Ref.Key(), implementation)
+		}
+		if err := registry.Register(transform); err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
 }
 
 func (r *RequestTransformRegistry) Register(transform RequestTransform) error {
@@ -182,62 +269,368 @@ func (r *RequestTransformRegistry) Register(transform RequestTransform) error {
 		return fmt.Errorf("request transform registry and transform are required")
 	}
 	definition := transform.Definition()
-	if definition.ID == "" || definition.Label == "" || definition.Description == "" || definition.Stage != TransformBeforeRequirements || len(definition.Effects) == 0 {
-		return fmt.Errorf("request transform requires ID, description, supported stage and declared effects")
+	if err := validateTransformRef(definition.Ref, RequestTransformKind); err != nil {
+		return err
+	}
+	if err := validateTransformMetadata(definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef); err != nil {
+		return fmt.Errorf("request transform %q: %w", definition.Ref.Key(), err)
+	}
+	if definition.Stage != TransformBeforeRequirements || len(definition.Effects) == 0 {
+		return fmt.Errorf("request transform %q requires a supported stage and declared effects", definition.Ref.Key())
 	}
 	allowed := map[TransformEffect]bool{TransformPrompt: true, TransformInput: true, TransformTools: true, TransformThinking: true, TransformOptions: true, TransformContinuity: true}
 	seen := map[TransformEffect]bool{}
 	for _, effect := range definition.Effects {
 		if !allowed[effect] || seen[effect] {
-			return fmt.Errorf("request transform %q has invalid or duplicate effect %q", definition.ID, effect)
+			return fmt.Errorf("request transform %q has invalid or duplicate effect %q", definition.Ref.Key(), effect)
 		}
 		seen[effect] = true
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.transforms[definition.ID]; exists {
-		return fmt.Errorf("request transform %q is already registered", definition.ID)
+	if _, exists := r.transforms[definition.Ref]; exists {
+		return fmt.Errorf("request transform %q is already registered", definition.Ref.Key())
 	}
-	definition.Effects = append([]TransformEffect(nil), definition.Effects...)
-	r.transforms[definition.ID] = transform
+	r.transforms[definition.Ref] = transform
 	return nil
 }
 
-func (r *RequestTransformRegistry) Apply(ctx context.Context, request *NormalizedRequest) error {
+func (r *RequestTransformRegistry) ValidateBindings(bindings []TransformBinding) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if err := validateRegistryBindings(r.transforms, bindings, RequestTransformKind); err != nil {
+		return err
+	}
+	return validateTransformOptions(r.catalog, bindings, RequestTransformKind)
+}
+
+func validateTransformOptions(catalog *extensions.Snapshot, bindings []TransformBinding, expectedKind string) error {
+	if catalog == nil {
+		return nil
+	}
+	for _, binding := range bindings {
+		if !binding.Enabled || binding.TransformRef.Kind != expectedKind {
+			continue
+		}
+		if err := catalog.ValidateOptions(binding.TransformRef, binding.Options); err != nil {
+			return fmt.Errorf("transform binding %q: %w", binding.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *RequestTransformRegistry) Active(bindings []TransformBinding, scopes ...TransformScope) bool {
+	return len(orderedBindings(bindings, scopes, RequestTransformKind)) > 0
+}
+
+func (r *RequestTransformRegistry) ApplyScopes(ctx context.Context, request *NormalizedRequest, bindings []TransformBinding, scopes ...TransformScope) error {
 	if r == nil || request == nil {
 		return nil
 	}
 	r.mu.RLock()
-	transforms := make([]RequestTransform, 0, len(r.transforms))
-	for _, transform := range r.transforms {
-		transforms = append(transforms, transform)
+	transforms := make([]struct {
+		binding TransformBinding
+		impl    RequestTransform
+	}, 0, len(bindings))
+	for _, binding := range orderedBindings(bindings, scopes, RequestTransformKind) {
+		transform := r.transforms[binding.TransformRef]
+		if transform == nil {
+			r.mu.RUnlock()
+			return fmt.Errorf("request transform binding %q references missing transform %q", binding.ID, binding.TransformRef.Key())
+		}
+		transforms = append(transforms, struct {
+			binding TransformBinding
+			impl    RequestTransform
+		}{binding, transform})
 	}
 	r.mu.RUnlock()
-	sort.Slice(transforms, func(i, j int) bool {
-		left, right := transforms[i].Definition(), transforms[j].Definition()
-		if left.Order != right.Order {
-			return left.Order < right.Order
-		}
-		return left.ID < right.ID
-	})
-	for _, transform := range transforms {
+	for _, item := range transforms {
+		transform := item.impl
 		definition := transform.Definition()
-		model, operation, clientFormat, streaming, sessionID := request.Model, request.Operation, request.SourceFormat, request.Stream, request.Session.ID
-		if err := transform.Apply(ctx, request); err != nil {
-			return fmt.Errorf("request transform %q: %w", definition.ID, err)
+		before := normalize.CloneRequest(*request)
+		updated := normalize.CloneRequest(*request)
+		if err := transform.Apply(ctx, &updated, append(json.RawMessage(nil), item.binding.Options...)); err != nil {
+			return fmt.Errorf("request transform %q: %w", definition.Ref.Key(), err)
 		}
-		if request.Model != model || request.Operation != operation || request.SourceFormat != clientFormat || request.Stream != streaming || request.Session.ID != sessionID {
-			return fmt.Errorf("request transform %q changed immutable request identity or client contract", definition.ID)
+		if updated.Model != before.Model || updated.Operation != before.Operation || updated.SourceFormat != before.SourceFormat || updated.Stream != before.Stream || updated.Session.ID != before.Session.ID || updated.Session.Client != before.Session.Client || updated.Session.Conversation != before.Session.Conversation || !reflect.DeepEqual(updated.Transport, before.Transport) {
+			return fmt.Errorf("request transform %q changed immutable request identity or client contract", definition.Ref.Key())
+		}
+		if err := validateRequestTransformEffects(definition, before, updated); err != nil {
+			return fmt.Errorf("request transform %q: %w", definition.Ref.Key(), err)
+		}
+		*request = updated
+	}
+	return nil
+}
+
+func cloneResponseEvent(event ResponseEvent) ResponseEvent {
+	event.Raw = append([]byte(nil), event.Raw...)
+	event.Opaque = append(json.RawMessage(nil), event.Opaque...)
+	if event.Usage != nil {
+		usage := *event.Usage
+		event.Usage = &usage
+	}
+	return event
+}
+
+func validateRequestTransformEffects(definition TransformDefinition, before, after NormalizedRequest) error {
+	require := func(changed bool, effect TransformEffect, label string) error {
+		if changed && !requestTransformHasEffect(definition, effect) {
+			return fmt.Errorf("changed %s without declaring effect %q", label, effect)
+		}
+		return nil
+	}
+	if err := require(!reflect.DeepEqual(before.Prompt, after.Prompt), TransformPrompt, "prompt layers"); err != nil {
+		return err
+	}
+	if !promptLayerIdentityEqual(before.Prompt, after.Prompt) {
+		return fmt.Errorf("changed prompt provenance, role or layer ordering")
+	}
+	if err := require(!reflect.DeepEqual(before.Tools, after.Tools), TransformTools, "tool definitions"); err != nil {
+		return err
+	}
+	if len(before.Messages) != len(after.Messages) {
+		if err := require(true, TransformInput, "message count"); err != nil {
+			return err
+		}
+	}
+	for i := 0; i < len(before.Messages) && i < len(after.Messages); i++ {
+		left, right := before.Messages[i], after.Messages[i]
+		if left.Role != right.Role || left.Name != right.Name || left.ToolCallID != right.ToolCallID || !reflect.DeepEqual(left.Metadata, right.Metadata) {
+			return fmt.Errorf("changed immutable message role, correlation or metadata")
+		}
+		if !reflect.DeepEqual(left.Content, right.Content) {
+			if err := require(true, TransformInput, "message content"); err != nil {
+				return err
+			}
+		}
+		if len(left.ToolCalls) != len(right.ToolCalls) {
+			return fmt.Errorf("changed tool-call count or correlation")
+		}
+		for j := range left.ToolCalls {
+			beforeCall, afterCall := left.ToolCalls[j], right.ToolCalls[j]
+			if beforeCall.ID != afterCall.ID || beforeCall.Type != afterCall.Type || beforeCall.Name != afterCall.Name || beforeCall.State != afterCall.State || !bytes.Equal(beforeCall.ProviderData, afterCall.ProviderData) || !reflect.DeepEqual(beforeCall.Metadata, afterCall.Metadata) {
+				return fmt.Errorf("changed tool-call identity, correlation or opaque data")
+			}
+			if !reflect.DeepEqual(beforeCall.Arguments, afterCall.Arguments) {
+				if err := require(true, TransformTools, "tool-call arguments"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := require(!reflect.DeepEqual(before.Modalities, after.Modalities) || !bytes.Equal(before.OperationPayload, after.OperationPayload), TransformInput, "operation input or modalities"); err != nil {
+		return err
+	}
+	if err := require(!reflect.DeepEqual(before.Thinking, after.Thinking), TransformThinking, "thinking intent"); err != nil {
+		return err
+	}
+	if err := require(!reflect.DeepEqual(before.Continuity, after.Continuity) || !bytes.Equal(before.Session.ProviderState, after.Session.ProviderState), TransformContinuity, "continuity state"); err != nil {
+		return err
+	}
+	if err := require(!reflect.DeepEqual(before.Requirements, after.Requirements), TransformInput, "compiled request requirements"); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(before.Extensions, after.Extensions) {
+		if err := require(true, TransformOptions, "namespaced request extensions"); err != nil {
+			return err
+		}
+	}
+	if !reflect.DeepEqual(before.Raw, after.Raw) {
+		beforeRaw, afterRaw := before.Raw, after.Raw
+		for _, key := range []string{"model", "stream"} {
+			if !reflect.DeepEqual(beforeRaw[key], afterRaw[key]) {
+				return fmt.Errorf("changed immutable raw request field %q", key)
+			}
+		}
+		if !rawChangesHaveDeclaredEffect(definition, beforeRaw, afterRaw) {
+			return fmt.Errorf("changed raw request options without declaring a corresponding effect")
 		}
 	}
 	return nil
+}
+
+func requestTransformHasEffect(definition TransformDefinition, effect TransformEffect) bool {
+	for _, declared := range definition.Effects {
+		if declared == effect {
+			return true
+		}
+	}
+	return false
+}
+
+func promptLayerIdentityEqual(before, after normalize.PromptPlan) bool {
+	if len(before.Layers) != len(after.Layers) {
+		return false
+	}
+	for i := range before.Layers {
+		if before.Layers[i].Origin != after.Layers[i].Origin || before.Layers[i].Role != after.Layers[i].Role {
+			return false
+		}
+	}
+	return true
+}
+
+func rawChangesHaveDeclaredEffect(definition TransformDefinition, before, after map[string]any) bool {
+	keys := make(map[string]bool, len(before)+len(after))
+	for key := range before {
+		keys[key] = true
+	}
+	for key := range after {
+		keys[key] = true
+	}
+	for key := range keys {
+		if reflect.DeepEqual(before[key], after[key]) {
+			continue
+		}
+		var effect TransformEffect
+		switch key {
+		case "model", "stream":
+			return false
+		case "messages", "input", "contents", "prompt", "operationPayload":
+			effect = TransformInput
+		case "tools":
+			effect = TransformTools
+		case "thinking", "reasoning", "reasoning_effort":
+			effect = TransformThinking
+		case "previous_response_id", "response_id", "encrypted_content":
+			effect = TransformContinuity
+		default:
+			effect = TransformOptions
+		}
+		if !requestTransformHasEffect(definition, effect) {
+			return false
+		}
+	}
+	return true
+}
+
+func ValidateTransformBinding(binding TransformBinding) error {
+	if binding.ID == "" {
+		return fmt.Errorf("transform binding ID is required")
+	}
+	if err := binding.TransformRef.Validate(); err != nil {
+		return fmt.Errorf("transform binding %q: %w", binding.ID, err)
+	}
+	if binding.TransformRef.Kind != RequestTransformKind && binding.TransformRef.Kind != ResponseTransformKind {
+		return fmt.Errorf("transform binding %q has invalid transform kind %q", binding.ID, binding.TransformRef.Kind)
+	}
+	if len(binding.Options) > 0 && !json.Valid(binding.Options) {
+		return fmt.Errorf("transform binding %q options are not valid JSON", binding.ID)
+	}
+	switch binding.Scope.Kind {
+	case TransformScopeDaemon:
+		if binding.Scope.ID != "" {
+			return fmt.Errorf("daemon transform scope must not have an ID")
+		}
+	case TransformScopeModel, TransformScopeRoute, TransformScopeProvider, TransformScopeConnection:
+		if binding.Scope.ID == "" {
+			return fmt.Errorf("transform scope %q requires an ID", binding.Scope.Kind)
+		}
+	default:
+		return fmt.Errorf("unsupported transform scope %q", binding.Scope.Kind)
+	}
+	return nil
+}
+
+func validateTransformRef(ref extensions.Ref, expectedKind string) error {
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("transform reference: %w", err)
+	}
+	if ref.Kind != expectedKind {
+		return fmt.Errorf("transform reference kind must be %q, got %q", expectedKind, ref.Kind)
+	}
+	return nil
+}
+
+func validateTransformMetadata(version, label, description string, optionsSchema *extensions.Ref) error {
+	if strings.TrimSpace(version) == "" || strings.TrimSpace(label) == "" || strings.TrimSpace(description) == "" {
+		return fmt.Errorf("implementation version, label and description are required")
+	}
+	if optionsSchema != nil {
+		if err := optionsSchema.Validate(); err != nil {
+			return fmt.Errorf("options schema: %w", err)
+		}
+		if optionsSchema.Kind != extensions.SchemaKind {
+			return fmt.Errorf("options schema reference must use kind %q", extensions.SchemaKind)
+		}
+	}
+	return nil
+}
+
+func orderedBindings(bindings []TransformBinding, scopes []TransformScope, expectedKind string) []TransformBinding {
+	ranks := make(map[TransformScope]int, len(scopes))
+	for rank, scope := range scopes {
+		ranks[scope] = rank
+	}
+	type rankedBinding struct {
+		binding TransformBinding
+		rank    int
+	}
+	selected := make([]rankedBinding, 0, len(bindings))
+	seenIDs := make(map[string]bool, len(bindings))
+	for _, binding := range bindings {
+		if !binding.Enabled || binding.TransformRef.Kind != expectedKind {
+			continue
+		}
+		if seenIDs[binding.ID] {
+			continue
+		}
+		seenIDs[binding.ID] = true
+		if rank, ok := ranks[binding.Scope]; ok {
+			selected = append(selected, rankedBinding{binding: binding, rank: rank})
+		}
+	}
+	sort.Slice(selected, func(i, j int) bool {
+		if selected[i].rank != selected[j].rank {
+			return selected[i].rank < selected[j].rank
+		}
+		if selected[i].binding.Order != selected[j].binding.Order {
+			return selected[i].binding.Order < selected[j].binding.Order
+		}
+		return selected[i].binding.ID < selected[j].binding.ID
+	})
+	result := make([]TransformBinding, len(selected))
+	for i, item := range selected {
+		result[i] = item.binding
+	}
+	return result
+}
+
+func validateRegistryBindings[T any](registry map[extensions.Ref]T, bindings []TransformBinding, expectedKind string) error {
+	seen := make(map[string]bool, len(bindings))
+	for _, binding := range bindings {
+		if err := ValidateTransformBinding(binding); err != nil {
+			return err
+		}
+		if seen[binding.ID] {
+			return fmt.Errorf("duplicate transform binding ID %q", binding.ID)
+		}
+		seen[binding.ID] = true
+		if binding.TransformRef.Kind != expectedKind {
+			return fmt.Errorf("transform binding %q expects kind %q, got %q", binding.ID, expectedKind, binding.TransformRef.Kind)
+		}
+		if _, ok := registry[binding.TransformRef]; !ok {
+			return fmt.Errorf("transform binding %q references missing implementation %q", binding.ID, binding.TransformRef.Key())
+		}
+	}
+	return nil
+}
+
+func cloneTransformBindings(bindings []TransformBinding) []TransformBinding {
+	cloned := make([]TransformBinding, len(bindings))
+	for i, binding := range bindings {
+		binding.Options = append(json.RawMessage(nil), binding.Options...)
+		cloned[i] = binding
+	}
+	return cloned
 }
 
 // CompileRequestRequirements is a shared helper for extensions that derive
 // namespaced capability requirements from normalized input.
 func AppendFeatureRequirement(request *normalize.Request, requirement normalize.FeatureRequirement) error {
-	if request == nil || requirement.ID == "" {
-		return fmt.Errorf("request and feature requirement ID are required")
+	if request == nil || requirement.Ref.Validate() != nil || requirement.Ref.Kind != FeatureEvaluatorKind {
+		return fmt.Errorf("request and exact versioned feature evaluator reference are required")
 	}
 	request.Requirements = append(request.Requirements, requirement)
 	return nil

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
@@ -45,16 +46,17 @@ type Route struct {
 	Protocol             Protocol
 	OperationBindings    map[normalize.Operation]RouteOperationBinding
 	DefinitionID         string
+	DefinitionRef        extensions.Ref
 	AuthFlowID           string
-	ErrorClassifierID    string
-	QuotaSourceID        string
-	QuotaEndpointID      string
-	QuotaTransportID     string
+	ErrorClassifierRef   extensions.Ref
+	QuotaSourceRef       extensions.Ref
+	QuotaEndpointRef     extensions.Ref
+	QuotaTransportRef    extensions.Ref
 	QuotaEndpointOptions EndpointOptions
 	QuotaWindowName      string
-	UsageSourceID        string
+	UsageSourceRef       extensions.Ref
 	UsageOptions         UsageSourceOptions
-	SessionStoreID       string
+	SessionStoreRef      extensions.Ref
 	Profile              CapabilityProfile
 	Limits               TokenLimits
 	Weight               int
@@ -65,12 +67,12 @@ type Route struct {
 }
 
 type RouteOperationBinding struct {
-	ContractVersion   uint64
-	AdapterIDs        []string
-	ErrorClassifierID string
-	UsageSourceID     string
-	UsageOptions      UsageSourceOptions
-	SessionStoreID    string
+	ContractVersion    uint64
+	AdapterIDs         []string
+	ErrorClassifierRef extensions.Ref
+	UsageSourceRef     extensions.Ref
+	UsageOptions       UsageSourceOptions
+	SessionStoreRef    extensions.Ref
 }
 
 type Snapshot struct {
@@ -86,14 +88,18 @@ type Snapshot struct {
 	WireRoutes map[string][]string
 	// Nodes is the typed execution graph used by the data plane.
 	Nodes map[string]ModelNode
+	// TransformBindings are declarative, request-pinned module bindings.
+	TransformBindings []TransformBinding
 }
 
 type ResolvedModel struct {
-	PublicName  string
-	TargetRef   string
-	Strategy    Strategy
-	StickyLimit int
-	Candidates  []Route
+	PublicName     string
+	TargetRef      string
+	Strategy       Strategy
+	StrategyRef    extensions.Ref
+	StrategyConfig json.RawMessage
+	StickyLimit    int
+	Candidates     []Route
 }
 
 type MemberKind string
@@ -124,6 +130,8 @@ type ModelNode struct {
 	ID                     string
 	Kind                   ModelNodeKind
 	Strategy               Strategy
+	StrategyRef            extensions.Ref
+	StrategyConfig         json.RawMessage
 	StickyLimit            int
 	Members                []MemberRef
 	Identity               PhysicalIdentity
@@ -146,6 +154,7 @@ type StrategyState struct {
 	StickyIndex int
 	StickyCount int
 	StickyLimit int
+	Config      json.RawMessage
 }
 
 type StrategyFailure struct {
@@ -184,10 +193,11 @@ type UpstreamResponse struct {
 type ErrorClass string
 
 const (
-	ErrorTerminal  ErrorClass = "terminal"
-	ErrorRetryable ErrorClass = "retryable"
-	ErrorCooldown  ErrorClass = "cooldown"
-	ErrorAuth      ErrorClass = "auth"
+	ErrorTerminal   ErrorClass = "terminal"
+	ErrorRetryable  ErrorClass = "retryable"
+	ErrorCooldown   ErrorClass = "cooldown"
+	ErrorAuth       ErrorClass = "auth"
+	ErrorCapability ErrorClass = "capability"
 )
 
 // OutcomeCause is deliberately more specific than ErrorClass. ErrorClass is
@@ -377,12 +387,15 @@ type CredentialRefresher func(context.Context, Route, Credential) (Credential, e
 type StreamHooks struct {
 	OnFirstByte       func(time.Time)
 	OnEvent           func(ResponseEvent)
+	ValidateEvent     func(context.Context, ResponseEvent) error
 	OnComplete        func(UsageEvent)
 	OnError           func(error)
 	OnSessionState    func(SessionState)
 	TransformResponse func(context.Context, ResponseEvent) (ResponseEvent, error)
 	Streaming         bool
 	Model             string
+	MaxEventBytes     int64
+	MaxOutputBytes    int64
 }
 
 type ResponseEventKind string

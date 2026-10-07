@@ -81,6 +81,37 @@ describe behavior; they are not inferred solely from a marketing model name.
 Bindings are validated at load/startup, not by ad-hoc string edits while
 serving a request.
 
+### Generic multipart request codec
+
+The shared `multipart-form` request codec streams declared operation artifacts
+from their owner-scoped leases instead of copying file bytes into the JSON
+operation payload. Its options are validated against the codec's versioned
+schema. Artifact roles must match the operation's named `artifactInputs` ports;
+the provider manifest only maps those roles to upstream form field names:
+
+```json
+{
+  "requestCodec": {"kind": "request_codec", "id": "multipart-form", "contractVersion": 1},
+  "requestCodecOptions": {
+    "modelField": "model",
+    "payloadField": "metadata",
+    "streamField": "stream",
+    "artifacts": [
+      {"role": "source-audio", "field": "file", "fileName": "input.wav"}
+    ]
+  }
+}
+```
+
+The selected operation must declare the same `source-audio` role and exact
+artifact type. Unmapped roles, schema-invalid options and streaming requests
+without a configured stream field fail closed. This codec is protocol-neutral;
+provider-specific response decoding and client rendering remain separately
+bound primitives. When an upstream expects individual text fields instead of
+one JSON metadata field, `payloadFields` maps exact top-level operation
+properties to form fields; every property must be mapped, so metadata is never
+silently dropped. For example, `{"payloadFields":[{"property":"language","field":"language"}]}` maps the operation payload's `language` string to that form field.
+
 ## Primitive responsibilities
 
 | Primitive | Responsibility |

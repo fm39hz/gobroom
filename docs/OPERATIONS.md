@@ -26,8 +26,14 @@ systemctl --user enable --now gobroomd
 journalctl --user -u gobroomd -f
 ```
 
-The daemon also exposes a bounded recent log ring through `logs.list` for TUI
-and CLI diagnostics. It is not a replacement for durable journal storage.
+Every `/v1/*` request also emits a structured access record with request ID,
+method/path, status, duration, bytes, and (for model operations) public model
+and operation. Bodies, query strings, authorization headers, API keys, and
+provider response content are never included. Streaming requests are logged
+when the stream finishes. The latest 256 records are available in the TUI Logs
+pane or with `gobroom logs --limit 100`; this in-memory ring is not a replacement
+for durable journal storage. Use `X-Request-ID` to supply a safe correlation ID;
+otherwise the daemon generates one and returns it in the response header.
 
 ## Data-plane exposure
 

@@ -3,33 +3,44 @@ package controlplane
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
+
+	"github.com/fm39hz/gobroom/internal/extensions"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
 type ConfigBundle struct {
-	Version     int                      `json:"version"`
-	Providers   []store.ProviderNode     `json:"providers"`
-	Connections []store.ConnectionRecord `json:"connections"`
-	Models      []store.Model            `json:"models"`
-	Physical    []store.PhysicalModel    `json:"physicalModels"`
-	Combos      []store.ComboModel       `json:"comboModels"`
+	Version           int                       `json:"version"`
+	Dependencies      extensions.DependencyLock `json:"dependencies"`
+	Providers         []store.ProviderNode      `json:"providers"`
+	Connections       []store.ConnectionRecord  `json:"connections"`
+	Models            []store.Model             `json:"models"`
+	Physical          []store.PhysicalModel     `json:"physicalModels"`
+	Combos            []store.ComboModel        `json:"comboModels"`
+	TransformBindings []kernel.TransformBinding `json:"transformBindings"`
 }
 
 type BundleDiff struct {
-	ProvidersAdded     int      `json:"providersAdded"`
-	ProvidersRemoved   int      `json:"providersRemoved"`
-	ConnectionsAdded   int      `json:"connectionsAdded"`
-	ConnectionsRemoved int      `json:"connectionsRemoved"`
-	ModelsAdded        int      `json:"modelsAdded"`
-	ModelsRemoved      int      `json:"modelsRemoved"`
-	PhysicalAdded      int      `json:"physicalAdded"`
-	PhysicalRemoved    int      `json:"physicalRemoved"`
-	CombosAdded        int      `json:"combosAdded"`
-	CombosRemoved      int      `json:"combosRemoved"`
-	Changes            []string `json:"changes"`
+	ProvidersAdded           int      `json:"providersAdded"`
+	ProvidersRemoved         int      `json:"providersRemoved"`
+	ConnectionsAdded         int      `json:"connectionsAdded"`
+	ConnectionsRemoved       int      `json:"connectionsRemoved"`
+	ModelsAdded              int      `json:"modelsAdded"`
+	ModelsRemoved            int      `json:"modelsRemoved"`
+	PhysicalAdded            int      `json:"physicalAdded"`
+	PhysicalRemoved          int      `json:"physicalRemoved"`
+	CombosAdded              int      `json:"combosAdded"`
+	CombosRemoved            int      `json:"combosRemoved"`
+	TransformBindingsAdded   int      `json:"transformBindingsAdded"`
+	TransformBindingsRemoved int      `json:"transformBindingsRemoved"`
+	TransformBindingsChanged int      `json:"transformBindingsChanged"`
+	Changes                  []string `json:"changes"`
 }
 
-func ExportBundle(s *store.Store) (ConfigBundle, error) {
+func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, error) {
 	providers, err := s.ProviderNodes()
 	if err != nil {
 		return ConfigBundle{}, err
@@ -50,12 +61,55 @@ func ExportBundle(s *store.Store) (ConfigBundle, error) {
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	return ConfigBundle{Version: 1, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos}, nil
+	transformBindings, err := s.TransformBindings()
+	if err != nil {
+		return ConfigBundle{}, err
+	}
+	bundle := ConfigBundle{Version: 2, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	roots := bundleDependencyRoots(bundle)
+	if catalog == nil {
+		if len(roots) > 0 {
+			return ConfigBundle{}, fmt.Errorf("extension catalog is required to export dependencies")
+		}
+		bundle.Dependencies = extensions.DependencyLock{Version: 1}
+	} else {
+		bundle.Dependencies, err = catalog.LockDependencies(roots)
+		if err != nil {
+			return ConfigBundle{}, fmt.Errorf("lock bundle extension dependencies: %w", err)
+		}
+	}
+	return bundle, nil
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 1 {
+	if bundle.Version != 2 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
+	}
+	if bundle.Dependencies.Version != 1 {
+		return fmt.Errorf("unsupported or missing extension dependency lock version %d", bundle.Dependencies.Version)
+	}
+	if !sameExtensionRefs(bundle.Dependencies.Roots, bundleDependencyRoots(bundle)) {
+		return fmt.Errorf("extension dependency lock roots do not match bundle contents")
+	}
+	for _, physical := range bundle.Physical {
+		if err := validateStrategyReference(physical.Policy.Ref); err != nil {
+			return fmt.Errorf("physical model %q strategy: %w", physical.Name, err)
+		}
+	}
+	for _, combo := range bundle.Combos {
+		if err := validateStrategyReference(combo.Strategy.Ref); err != nil {
+			return fmt.Errorf("combo model %q strategy: %w", combo.Name, err)
+		}
+	}
+	transformBindingIDs := map[string]bool{}
+	for _, binding := range bundle.TransformBindings {
+		if err := kernel.ValidateTransformBinding(binding); err != nil {
+			return err
+		}
+		if transformBindingIDs[binding.ID] {
+			return fmt.Errorf("duplicate transform binding %q", binding.ID)
+		}
+		transformBindingIDs[binding.ID] = true
 	}
 	providers := map[string]bool{}
 	for _, item := range bundle.Providers {
@@ -156,8 +210,90 @@ func ValidateBundle(bundle ConfigBundle) error {
 	return nil
 }
 
-func DiffBundle(current, desired ConfigBundle) (BundleDiff, error) {
-	if err := ValidateBundle(desired); err != nil {
+func ValidateBundleWithStrategies(bundle ConfigBundle, strategies *kernel.StrategyCatalog) error {
+	if err := ValidateBundle(bundle); err != nil {
+		return err
+	}
+	if strategies == nil {
+		return fmt.Errorf("strategy catalog is unavailable")
+	}
+	if err := strategies.Extensions().ValidateDependencyLock(bundle.Dependencies); err != nil {
+		return fmt.Errorf("validate extension dependency lock: %w", err)
+	}
+	for _, physical := range bundle.Physical {
+		if err := strategies.Validate(physical.Policy.Ref, physical.Policy.Config); err != nil {
+			return fmt.Errorf("physical model %q strategy: %w", physical.Name, err)
+		}
+	}
+	for _, combo := range bundle.Combos {
+		if err := strategies.Validate(combo.Strategy.Ref, combo.Strategy.Config); err != nil {
+			return fmt.Errorf("combo model %q strategy: %w", combo.Name, err)
+		}
+	}
+	return nil
+}
+
+func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
+	roots := make([]extensions.Ref, 0, len(bundle.Providers)+len(bundle.Physical)+len(bundle.Combos)+len(bundle.TransformBindings))
+	for _, item := range bundle.Providers {
+		if item.DefinitionID != "" {
+			roots = append(roots, provider.ProviderDefinitionRef(item.DefinitionID, 1))
+		}
+	}
+	for _, item := range bundle.Physical {
+		roots = append(roots, item.Policy.Ref)
+	}
+	for _, item := range bundle.Combos {
+		roots = append(roots, item.Strategy.Ref)
+	}
+	for _, item := range bundle.TransformBindings {
+		roots = append(roots, item.TransformRef)
+	}
+	sort.Slice(roots, func(i, j int) bool { return roots[i].Key() < roots[j].Key() })
+	result := roots[:0]
+	for _, root := range roots {
+		if len(result) == 0 || result[len(result)-1] != root {
+			result = append(result, root)
+		}
+	}
+	return result
+}
+
+func sameExtensionRefs(left, right []extensions.Ref) bool {
+	left = append([]extensions.Ref(nil), left...)
+	right = append([]extensions.Ref(nil), right...)
+	sort.Slice(left, func(i, j int) bool { return left[i].Key() < left[j].Key() })
+	sort.Slice(right, func(i, j int) bool { return right[i].Key() < right[j].Key() })
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func validateStrategyReference(ref extensions.Ref) error {
+	if err := ref.Validate(); err != nil {
+		return fmt.Errorf("exact versioned strategy ref is required: %w", err)
+	}
+	if ref.Kind != kernel.StrategyExtensionKind {
+		return fmt.Errorf("strategy ref kind must be %q", kernel.StrategyExtensionKind)
+	}
+	return nil
+}
+
+func DiffBundle(current, desired ConfigBundle, strategyCatalogs ...*kernel.StrategyCatalog) (BundleDiff, error) {
+	strategies, err := selectStrategyCatalog(strategyCatalogs)
+	if err != nil {
+		return BundleDiff{}, err
+	}
+	if err := ValidateBundleWithStrategies(desired, strategies); err != nil {
+		return BundleDiff{}, err
+	}
+	if err := ValidateBundleWithStrategies(current, strategies); err != nil {
 		return BundleDiff{}, err
 	}
 	result := BundleDiff{}
@@ -166,14 +302,20 @@ func DiffBundle(current, desired ConfigBundle) (BundleDiff, error) {
 	result.ModelsAdded, result.ModelsRemoved = countDelta(modelIDs(current.Models), modelIDs(desired.Models), "discovered model", &result.Changes)
 	result.PhysicalAdded, result.PhysicalRemoved = countDelta(physicalIDs(current.Physical), physicalIDs(desired.Physical), "physical model", &result.Changes)
 	result.CombosAdded, result.CombosRemoved = countDelta(comboIDs(current.Combos), comboIDs(desired.Combos), "combo model", &result.Changes)
+	result.TransformBindingsAdded, result.TransformBindingsRemoved = countDelta(transformBindingIDs(current.TransformBindings), transformBindingIDs(desired.TransformBindings), "transform binding", &result.Changes)
+	result.TransformBindingsChanged = changedTransformBindings(current.TransformBindings, desired.TransformBindings, &result.Changes)
 	return result, nil
 }
 
-func ApplyBundle(s *store.Store, bundle ConfigBundle) error {
-	if err := ValidateBundle(bundle); err != nil {
+func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kernel.StrategyCatalog) error {
+	strategies, err := selectStrategyCatalog(strategyCatalogs)
+	if err != nil {
 		return err
 	}
-	current, err := ExportBundle(s)
+	if err := ValidateBundleWithStrategies(bundle, strategies); err != nil {
+		return err
+	}
+	current, err := ExportBundle(s, strategies.Extensions())
 	if err != nil {
 		return err
 	}
@@ -189,6 +331,14 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err = tx.Exec(`DELETE FROM transform_bindings`); err != nil {
+		return err
+	}
+	for _, binding := range bundle.TransformBindings {
+		if err = store.UpsertTransformBindingInTx(tx, binding); err != nil {
+			return err
+		}
+	}
 	for _, provider := range bundle.Providers {
 		if _, err = tx.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,protocol=excluded.protocol,definition_id=excluded.definition_id,prefix=excluded.prefix,models_path=excluded.models_path,auth_mode=excluded.auth_mode,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, provider.ID, provider.Name, provider.BaseURL, provider.Protocol, provider.DefinitionID, provider.Prefix, provider.ModelsPath, provider.AuthMode, boolInt(provider.Enabled)); err != nil {
 			return err
@@ -380,4 +530,28 @@ func comboIDs(items []store.ComboModel) map[string]bool {
 		result[item.Name] = true
 	}
 	return result
+}
+
+func transformBindingIDs(items []kernel.TransformBinding) map[string]bool {
+	result := map[string]bool{}
+	for _, item := range items {
+		result[item.ID] = true
+	}
+	return result
+}
+
+func changedTransformBindings(current, desired []kernel.TransformBinding, changes *[]string) int {
+	currentByID := make(map[string]kernel.TransformBinding, len(current))
+	for _, item := range current {
+		currentByID[item.ID] = item
+	}
+	changed := 0
+	for _, item := range desired {
+		previous, exists := currentByID[item.ID]
+		if exists && !reflect.DeepEqual(previous, item) {
+			changed++
+			*changes = append(*changes, "~ transform binding "+item.ID)
+		}
+	}
+	return changed
 }

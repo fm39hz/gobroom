@@ -4,15 +4,16 @@ import (
 	"context"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 type QuotaPoller struct {
-	Sources    map[string]provider.QuotaSource
-	Endpoints  map[string]kernel.Endpoint
-	Transports map[string]kernel.Transport
+	Sources    map[extensions.Ref]provider.QuotaSource
+	Endpoints  map[extensions.Ref]kernel.Endpoint
+	Transports map[extensions.Ref]kernel.Transport
 	Snapshot   func() kernel.Snapshot
 	Credential func(context.Context, kernel.Route) (kernel.Credential, error)
 	Record     func(quota.Snapshot)
@@ -49,14 +50,14 @@ func (p QuotaPoller) poll(ctx context.Context) {
 	}
 	seen := map[string]bool{}
 	for _, route := range p.Snapshot().Routes {
-		if route.QuotaSourceID == "" || route.CredentialID == "" {
+		if route.QuotaSourceRef.ID == "" || route.CredentialID == "" {
 			continue
 		}
-		source := p.Sources[route.QuotaSourceID]
+		source := p.Sources[route.QuotaSourceRef]
 		if source == nil {
 			continue
 		}
-		key := route.QuotaSourceID + "\x00" + route.CredentialID + "\x00" + route.ExternalModel
+		key := route.QuotaSourceRef.Key() + "\x00" + route.CredentialID + "\x00" + route.ExternalModel
 		if seen[key] {
 			continue
 		}
@@ -65,8 +66,8 @@ func (p QuotaPoller) poll(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		endpoint := p.Endpoints[route.QuotaEndpointID]
-		transport := p.Transports[route.QuotaTransportID]
+		endpoint := p.Endpoints[route.QuotaEndpointRef]
+		transport := p.Transports[route.QuotaTransportRef]
 		if endpoint == nil || transport == nil {
 			continue
 		}

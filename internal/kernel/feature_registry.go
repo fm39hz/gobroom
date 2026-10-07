@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+
+	"github.com/fm39hz/gobroom/internal/extensions"
 )
 
 // FeatureEvaluator evaluates one namespaced hard requirement against the
@@ -15,52 +17,90 @@ type FeatureEvaluator interface {
 
 type FeatureRegistry struct {
 	mu         sync.RWMutex
-	evaluators map[string]FeatureEvaluator
+	evaluators map[extensions.Ref]featureRegistration
 }
+
+type featureRegistration struct {
+	evaluator FeatureEvaluator
+	input     *extensions.Ref
+	catalog   *extensions.Snapshot
+}
+
+const FeatureEvaluatorKind = "feature-evaluator"
 
 func NewFeatureRegistry() *FeatureRegistry {
-	return &FeatureRegistry{evaluators: map[string]FeatureEvaluator{}}
+	return &FeatureRegistry{evaluators: map[extensions.Ref]featureRegistration{}}
 }
 
-func (r *FeatureRegistry) Register(id string, evaluator FeatureEvaluator) error {
+func (r *FeatureRegistry) Register(ref extensions.Ref, evaluator FeatureEvaluator) error {
 	if r == nil {
 		return fmt.Errorf("feature registry is nil")
 	}
-	if id == "" || evaluator == nil {
-		return fmt.Errorf("feature ID and evaluator are required")
+	if err := ref.Validate(); err != nil || ref.Kind != FeatureEvaluatorKind || evaluator == nil {
+		return fmt.Errorf("feature evaluator requires an exact %q reference and implementation", FeatureEvaluatorKind)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, exists := r.evaluators[id]; exists {
-		return fmt.Errorf("feature evaluator %q is already registered", id)
+	if _, exists := r.evaluators[ref]; exists {
+		return fmt.Errorf("feature evaluator %q is already registered", ref.Key())
 	}
-	r.evaluators[id] = evaluator
+	r.evaluators[ref] = featureRegistration{evaluator: evaluator}
 	return nil
+}
+
+// NewFeatureRegistryFromCatalog binds evaluators from the frozen shared
+// extension catalog. The exact evaluator version travels with each request
+// requirement; route profiles remain keyed by semantic feature ID.
+func NewFeatureRegistryFromCatalog(catalog *extensions.Snapshot) (*FeatureRegistry, error) {
+	if catalog == nil {
+		return nil, fmt.Errorf("feature evaluator catalog is nil")
+	}
+	registry := NewFeatureRegistry()
+	for _, descriptor := range catalog.Descriptors() {
+		if descriptor.Ref.Kind != FeatureEvaluatorKind {
+			continue
+		}
+		_, implementation, err := catalog.Bind(descriptor.Ref, json.RawMessage(`{}`))
+		if err != nil {
+			return nil, err
+		}
+		evaluator, ok := implementation.(FeatureEvaluator)
+		if !ok {
+			return nil, fmt.Errorf("feature evaluator %q factory returned %T", descriptor.Ref.Key(), implementation)
+		}
+		registry.evaluators[descriptor.Ref] = featureRegistration{evaluator: evaluator, input: descriptor.InputSchemaRef, catalog: catalog}
+	}
+	return registry, nil
 }
 
 func (r *FeatureRegistry) Evaluate(route Route, requirements []FeatureRequirement) (bool, string) {
 	for _, requirement := range requirements {
-		if requirement.ID == "" {
-			return false, "feature requirement is missing an ID"
+		if err := requirement.Ref.Validate(); err != nil || requirement.Ref.Kind != FeatureEvaluatorKind {
+			return false, "feature requirement is missing a valid versioned evaluator reference"
 		}
-		capability, ok := route.Profile[requirement.ID]
+		capability, ok := route.Profile[requirement.Ref.ID]
 		if !ok {
-			return false, requirement.ID + " has no route evidence"
+			return false, requirement.Ref.ID + " has no route evidence"
 		}
-		var evaluator FeatureEvaluator
+		var registered featureRegistration
 		if r != nil {
 			r.mu.RLock()
-			evaluator = r.evaluators[requirement.ID]
+			registered = r.evaluators[requirement.Ref]
 			r.mu.RUnlock()
 		}
-		if evaluator == nil {
-			return false, requirement.ID + " has no registered evaluator"
+		if registered.evaluator == nil {
+			return false, requirement.Ref.Key() + " has no registered evaluator"
 		}
-		if eligible, reason := evaluator.Evaluate(capability, requirement.Constraints); !eligible {
+		if registered.input != nil {
+			if err := registered.catalog.ValidateSchema(*registered.input, requirement.Constraints); err != nil {
+				return false, requirement.Ref.ID + ": invalid feature constraints: " + err.Error()
+			}
+		}
+		if eligible, reason := registered.evaluator.Evaluate(capability, requirement.Constraints); !eligible {
 			if reason == "" {
 				reason = "requirement is not satisfied"
 			}
-			return false, requirement.ID + ": " + reason
+			return false, requirement.Ref.ID + ": " + reason
 		}
 	}
 	return true, ""

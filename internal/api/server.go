@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/controlplane"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
@@ -22,6 +25,7 @@ import (
 
 type Server struct {
 	store            *store.Store
+	artifactStore    *artifacts.Store
 	control          *controlplane.Manager
 	started          time.Time
 	executor         func(context.Context, normalize.Request, http.ResponseWriter) error
@@ -31,6 +35,31 @@ type Server struct {
 	providerCatalog  []provider.DefinitionMetadata
 	extensionCatalog extensions.CatalogView
 	operations       *operations.Snapshot
+	accessLogger     func(AccessLogRecord)
+}
+
+func (s *Server) SetArtifactStore(bodyStore *artifacts.Store) {
+	s.artifactStore = bodyStore
+}
+
+type AccessLogRecord struct {
+	At         time.Time           `json:"at"`
+	RequestID  string              `json:"requestId"`
+	Method     string              `json:"method"`
+	Path       string              `json:"path"`
+	Status     int                 `json:"status"`
+	DurationMS int64               `json:"durationMs"`
+	Bytes      int64               `json:"bytes"`
+	Model      string              `json:"model,omitempty"`
+	Operation  normalize.Operation `json:"operation,omitempty"`
+}
+
+type accessLogContextKey struct{}
+
+type accessLogState struct {
+	requestID string
+	model     string
+	operation normalize.Operation
 }
 
 type HandlerOptions struct {
@@ -42,8 +71,8 @@ func NewServer(s *store.Store) *Server {
 	return NewServerWithRuntimeBindings(s, nil)
 }
 
-func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding) *Server {
-	manager, err := controlplane.NewManagerWithRuntimeBindings(s, bindings)
+func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding, strategies ...*kernel.StrategyCatalog) *Server {
+	manager, err := controlplane.NewManagerWithRuntimeBindings(s, bindings, strategies...)
 	if err != nil {
 		manager = nil
 	}
@@ -67,6 +96,11 @@ func (s *Server) RegisterOperationIngress(codec OperationIngress) error {
 	}
 	if _, ok := s.operations.Resolve(codec.OperationRef()); !ok {
 		return fmt.Errorf("operation %q contract %d is not registered", codec.OperationRef().ID, codec.OperationRef().ContractVersion)
+	}
+	if multipartCodec, ok := codec.(MultipartOperationIngress); ok {
+		if err := validateMultipartOperationBindings(multipartCodec, s.operations); err != nil {
+			return err
+		}
 	}
 	if s.ingress == nil {
 		s.ingress = map[string]OperationIngress{}
@@ -94,6 +128,11 @@ func (s *Server) SetOperationSnapshot(snapshot *operations.Snapshot) error {
 	for _, codec := range s.ingress {
 		if _, ok := snapshot.Resolve(codec.OperationRef()); !ok {
 			return fmt.Errorf("ingress codec %q references missing operation %s", codec.ID(), codec.OperationRef().Key())
+		}
+		if multipartCodec, ok := codec.(MultipartOperationIngress); ok {
+			if err := validateMultipartOperationBindings(multipartCodec, snapshot); err != nil {
+				return err
+			}
 		}
 	}
 	s.operations = snapshot
@@ -129,7 +168,13 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 			r.Method(method, path, s.dataPlane(s.operationHandler(codec)))
 		}
 	}
-	return logging(r)
+	return logging(r, s.accessLogger)
+}
+
+func (s *Server) SetAccessLogger(logger func(AccessLogRecord)) {
+	if s != nil {
+		s.accessLogger = logger
+	}
 }
 
 // SetProviderDefinitionCatalog installs the secret-free setup metadata shared
@@ -485,12 +530,17 @@ const maxIngressBodyBytes = 32 << 20
 func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxIngressBodyBytes)
+		if s.artifactStore != nil {
+			r = r.WithContext(artifacts.WithStore(r.Context(), s.artifactStore))
+		}
 		request, err := codec.Decode(r)
 		if err != nil {
 			status := http.StatusBadRequest
 			var maxBytesError *http.MaxBytesError
-			if errors.As(err, &maxBytesError) {
+			if errors.As(err, &maxBytesError) || errors.Is(err, artifacts.ErrBodyTooLarge) {
 				status = http.StatusRequestEntityTooLarge
+			} else if errors.Is(err, ErrArtifactIngressUnavailable) || errors.Is(err, artifacts.ErrStoreFull) || errors.Is(err, artifacts.ErrClosed) {
+				status = http.StatusServiceUnavailable
 			}
 			writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error()}})
 			return
@@ -499,7 +549,23 @@ func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "ingress codec returned no semantic operation"}})
 			return
 		}
+		if state, ok := r.Context().Value(accessLogContextKey{}).(*accessLogState); ok {
+			state.model = safeAccessValue(request.Model, 128)
+			state.operation = request.Operation
+		}
+		defer releaseRequestArtifacts(s.artifactStore, request.Artifacts)
 		s.executeNormalized(w, r, request)
+	}
+}
+
+func releaseRequestArtifacts(bodyStore *artifacts.Store, references []extensions.ArtifactRef) {
+	if bodyStore == nil {
+		return
+	}
+	for _, artifact := range references {
+		if artifact.Body != nil {
+			_ = bodyStore.Release(artifact.Owner, *artifact.Body)
+		}
 	}
 }
 
@@ -564,6 +630,100 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 }
-func logging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { next.ServeHTTP(w, r) })
+func logging(next http.Handler, sink func(AccessLogRecord)) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		started := time.Now()
+		state := &accessLogState{requestID: safeRequestID(r.Header.Get("X-Request-ID"))}
+		ctx := context.WithValue(r.Context(), accessLogContextKey{}, state)
+		r = r.WithContext(ctx)
+		w.Header().Set("X-Request-ID", state.requestID)
+		tracked := &accessLogResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(tracked, r)
+		if tracked.status == 0 {
+			tracked.status = http.StatusOK
+		}
+		if sink != nil {
+			sink(AccessLogRecord{
+				At: time.Now(), RequestID: state.requestID, Method: r.Method, Path: safeAccessValue(r.URL.Path, 256),
+				Status: tracked.status, DurationMS: time.Since(started).Milliseconds(), Bytes: tracked.bytes,
+				Model: state.model, Operation: state.operation,
+			})
+		}
+	})
+}
+
+func safeAccessValue(value string, maxRunes int) string {
+	var result strings.Builder
+	count := 0
+	for _, r := range value {
+		if count >= maxRunes {
+			break
+		}
+		if r < 0x20 || r == 0x7f {
+			r = '?'
+		}
+		result.WriteRune(r)
+		count++
+	}
+	return result.String()
+}
+
+func safeRequestID(value string) string {
+	if value != "" && len(value) <= 64 {
+		valid := true
+		for _, r := range value {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' || r == ':') {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return value
+		}
+	}
+	var random [12]byte
+	if _, err := rand.Read(random[:]); err == nil {
+		return hex.EncodeToString(random[:])
+	}
+	return fmt.Sprintf("req-%x", time.Now().UnixNano())
+}
+
+type accessLogResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int64
+}
+
+func (w *accessLogResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *accessLogResponseWriter) Write(data []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(data)
+	w.bytes += int64(n)
+	return n, err
+}
+
+func (w *accessLogResponseWriter) Flush() {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *accessLogResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }

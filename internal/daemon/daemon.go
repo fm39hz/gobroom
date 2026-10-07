@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/api"
+	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/controlplane"
 	"github.com/fm39hz/gobroom/internal/discovery"
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -35,11 +37,15 @@ type Config struct {
 	HTTPToken           string
 	ProviderManifestDir string
 	QuotaPolling        bool
+	ArtifactStoreDir    string
+	ArtifactStoreMaxBytes int64
+	ArtifactStoreMaxBodyBytes int64
 }
 
 type Daemon struct {
 	config              Config
 	store               *store.Store
+	artifactStore       *artifacts.Store
 	server              *api.Server
 	ipc                 *IPCServer
 	http                *http.Server
@@ -48,6 +54,8 @@ type Daemon struct {
 	providerBindings    map[string]provider.RuntimeBinding
 	providerRegistry    *provider.RuntimeRegistry
 	providerCatalog     []provider.DefinitionMetadata
+	strategyCatalog     *kernel.StrategyCatalog
+	strategyDefinitions []kernel.StrategyDefinition
 	extensionCatalog    extensions.CatalogView
 	authFlows           map[string]provider.AuthFlow
 	providerAuthModes   map[string]string
@@ -64,15 +72,59 @@ type Daemon struct {
 }
 
 type LogRecord struct {
-	At      time.Time `json:"at"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
+	At         time.Time           `json:"at"`
+	Level      string              `json:"level"`
+	Message    string              `json:"message"`
+	RequestID  string              `json:"requestId,omitempty"`
+	Method     string              `json:"method,omitempty"`
+	Path       string              `json:"path,omitempty"`
+	Status     int                 `json:"status,omitempty"`
+	DurationMS int64               `json:"durationMs,omitempty"`
+	Bytes      int64               `json:"bytes,omitempty"`
+	Model      string              `json:"model,omitempty"`
+	Operation  normalize.Operation `json:"operation,omitempty"`
 }
 
 func (d *Daemon) appendLog(level, message string) {
+	record := LogRecord{At: time.Now(), Level: level, Message: message}
+	d.storeLog(record)
+	logLevel := slog.LevelInfo
+	switch strings.ToLower(level) {
+	case "warn", "warning":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	case "debug":
+		logLevel = slog.LevelDebug
+	}
+	slog.Log(context.Background(), logLevel, message)
+}
+
+func (d *Daemon) appendAccessLog(entry api.AccessLogRecord) {
+	level := "info"
+	logLevel := slog.LevelInfo
+	if entry.Status >= 500 {
+		level, logLevel = "error", slog.LevelError
+	} else if entry.Status >= 400 {
+		level, logLevel = "warn", slog.LevelWarn
+	}
+	record := LogRecord{
+		At: entry.At, Level: level, Message: "HTTP request", RequestID: entry.RequestID,
+		Method: entry.Method, Path: entry.Path, Status: entry.Status, DurationMS: entry.DurationMS,
+		Bytes: entry.Bytes, Model: entry.Model, Operation: entry.Operation,
+	}
+	d.storeLog(record)
+	slog.Log(context.Background(), logLevel, record.Message,
+		"request_id", record.RequestID, "method", record.Method, "path", record.Path,
+		"status", record.Status, "duration_ms", record.DurationMS, "bytes", record.Bytes,
+		"model", record.Model, "operation", record.Operation,
+	)
+}
+
+func (d *Daemon) storeLog(record LogRecord) {
 	d.logMu.Lock()
 	defer d.logMu.Unlock()
-	d.logs = append(d.logs, LogRecord{At: time.Now(), Level: level, Message: message})
+	d.logs = append(d.logs, record)
 	if len(d.logs) > 256 {
 		d.logs = d.logs[len(d.logs)-256:]
 	}
@@ -133,11 +185,23 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return fmt.Errorf("build extension catalog: %w", err)
 	}
+	extensionSnapshot, err := runtimeRegistry.FreezeCatalog()
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("resolve frozen extension catalog: %w", err)
+	}
+	d.strategyCatalog, err = kernel.NewStrategyCatalog(extensionSnapshot)
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind strategy catalog: %w", err)
+	}
+	d.strategyDefinitions = d.strategyCatalog.Definitions()
 	d.providerBindings = runtimeBindings
 	d.authFlows = runtimeRegistry.AuthFlowsForBindings(runtimeBindings)
 	d.providerAuthModes = runtimeRegistry.DefaultCredentialTypes()
 	d.providerAuthFlowIDs = runtimeRegistry.AuthFlowIDsByDefinition()
-	d.server = api.NewServerWithRuntimeBindings(s, runtimeBindings)
+	d.server = api.NewServerWithRuntimeBindings(s, runtimeBindings, d.strategyCatalog)
+	d.server.SetAccessLogger(d.appendAccessLog)
 	d.server.SetProviderDefinitionCatalog(d.providerCatalog)
 	d.server.SetExtensionCatalog(d.extensionCatalog)
 	if err := d.server.SetOperationSnapshot(operationSnapshot); err != nil {
@@ -147,9 +211,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	started := false
+	var bodyStore *artifacts.Store
 	defer func() {
 		if !started {
 			cancel()
+			if bodyStore != nil {
+				_ = bodyStore.Close()
+			}
 		}
 	}()
 	if d.server.Control() == nil {
@@ -175,6 +243,42 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err != nil {
 		_ = s.Close()
 		return err
+	}
+	maxArtifactBytes := d.config.ArtifactStoreMaxBytes
+	if maxArtifactBytes <= 0 {
+		maxArtifactBytes = 256 << 20
+	}
+	maxArtifactBodyBytes := d.config.ArtifactStoreMaxBodyBytes
+	if maxArtifactBodyBytes <= 0 || maxArtifactBodyBytes > maxArtifactBytes {
+		maxArtifactBodyBytes = min(maxArtifactBytes, int64(64<<20))
+	}
+	bodyStore, err = artifacts.NewStore(d.config.ArtifactStoreDir, artifacts.Limits{MaxBytes: maxArtifactBytes, MaxBodyBytes: maxArtifactBodyBytes, DefaultTTL: time.Hour})
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("initialize artifact body store: %w", err)
+	}
+	d.artifactStore = bodyStore
+	d.kernel.ArtifactStore = bodyStore
+	d.server.SetArtifactStore(bodyStore)
+	d.kernel.Scheduler.SetStrategyDefinitions(d.strategyDefinitions)
+	d.kernel.Features, err = kernel.NewFeatureRegistryFromCatalog(extensionSnapshot)
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind feature evaluators: %w", err)
+	}
+	d.kernel.Transforms, err = kernel.NewRequestTransformRegistryFromCatalog(extensionSnapshot)
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind request transforms: %w", err)
+	}
+	d.kernel.ResponseTransforms, err = kernel.NewResponseTransformRegistryFromCatalog(extensionSnapshot)
+	if err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind response transforms: %w", err)
+	}
+	if err := d.kernel.ValidateTransformBindings(d.kernel.Snapshots.Load().TransformBindings); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("validate configured transform bindings: %w", err)
 	}
 	d.kernel.Operations = operationSnapshot
 	d.kernel.Adapters = runtimeRegistry.AdaptersForBindings(runtimeBindings)
@@ -335,7 +439,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})
-	d.server.SetReloadHook(func() error { return d.kernel.PublishSnapshot(d.server.Control().Snapshot()) })
+	d.server.SetReloadHook(func() error {
+		snapshot := d.server.Control().Snapshot()
+		if err := d.kernel.ValidateTransformBindings(snapshot.TransformBindings); err != nil {
+			return err
+		}
+		return d.kernel.PublishSnapshot(snapshot)
+	})
 	usageCtx, usageCancel := context.WithCancel(ctx)
 	d.usageCancel = usageCancel
 	go (usageworker.Worker{Store: s, Events: d.kernel.Events}).Run(usageCtx)
@@ -358,6 +468,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 		<-quotaPollerDone
 		quotaPersistence.Close()
 		<-quotaPersistenceDone
+		if d.artifactStore != nil {
+			_ = d.artifactStore.Close()
+			d.artifactStore = nil
+		}
 		_ = d.store.Close()
 	}
 
@@ -456,7 +570,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	case "status":
 		return IPCResponse{ID: request.ID, OK: true, Result: d.server.Status()}
 	case "config.export":
-		bundle, err := controlplane.ExportBundle(d.store)
+		bundle, err := controlplane.ExportBundle(d.store, d.strategyCatalog.Extensions())
 		if err != nil {
 			return fail(request, err.Error())
 		}
@@ -466,8 +580,13 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &bundle); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := controlplane.ValidateBundle(bundle); err != nil {
+		if err := controlplane.ValidateBundleWithStrategies(bundle, d.strategyCatalog); err != nil {
 			return fail(request, err.Error())
+		}
+		if d.kernel != nil {
+			if err := d.kernel.ValidateTransformBindings(bundle.TransformBindings); err != nil {
+				return fail(request, err.Error())
+			}
 		}
 		return success(request, map[string]any{"valid": true, "version": bundle.Version})
 	case "config.diff":
@@ -475,13 +594,18 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &desired); err != nil {
 			return fail(request, err.Error())
 		}
-		current, err := controlplane.ExportBundle(d.store)
+		current, err := controlplane.ExportBundle(d.store, d.strategyCatalog.Extensions())
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		diff, err := controlplane.DiffBundle(current, desired)
+		diff, err := controlplane.DiffBundle(current, desired, d.strategyCatalog)
 		if err != nil {
 			return fail(request, err.Error())
+		}
+		if d.kernel != nil {
+			if err := d.kernel.ValidateTransformBindings(desired.TransformBindings); err != nil {
+				return fail(request, err.Error())
+			}
 		}
 		return success(request, diff)
 	case "config.apply":
@@ -489,7 +613,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &bundle); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := controlplane.ApplyBundle(d.store, bundle); err != nil {
+		if d.kernel != nil {
+			if err := d.kernel.ValidateTransformBindings(bundle.TransformBindings); err != nil {
+				return fail(request, err.Error())
+			}
+		}
+		if err := controlplane.ApplyBundle(d.store, bundle, d.strategyCatalog); err != nil {
 			return fail(request, err.Error())
 		}
 		if err := d.server.Reload(); err != nil {
@@ -601,8 +730,19 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		d.appendLog("info", fmt.Sprintf("pruned %d usage events", deleted))
 		return success(request, map[string]any{"deleted": deleted, "before": before})
 	case "logs.list":
+		limit := 100
+		if raw, ok := request.Params["limit"].(float64); ok {
+			if raw < 1 || raw > 256 || raw != float64(int(raw)) {
+				return fail(request, "limit must be an integer between 1 and 256")
+			}
+			limit = int(raw)
+		}
 		d.logMu.RLock()
-		logs := append([]LogRecord(nil), d.logs...)
+		start := len(d.logs) - limit
+		if start < 0 {
+			start = 0
+		}
+		logs := append([]LogRecord(nil), d.logs[start:]...)
 		d.logMu.RUnlock()
 		return success(request, logs)
 	case "routes.explain":
@@ -839,6 +979,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &item); err != nil {
 			return fail(request, err.Error())
 		}
+		if item.Policy.Ref == (extensions.Ref{}) {
+			item.Policy.Ref = kernel.StrategyRef("ordered-fallback", 1)
+		}
+		if err := d.strategyCatalog.Validate(item.Policy.Ref, item.Policy.Config); err != nil {
+			return fail(request, err.Error())
+		}
 		if err := d.store.UpsertPhysicalModel(item); err != nil {
 			return fail(request, err.Error())
 		}
@@ -865,10 +1011,16 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		return success(request, items)
 	case "strategies.list":
-		return success(request, kernel.StrategyDefinitions())
+		return success(request, d.strategyDefinitions)
 	case "combo_models.upsert":
 		var item store.ComboModel
 		if err := decodeParams(request.Params, &item); err != nil {
+			return fail(request, err.Error())
+		}
+		if item.Strategy.Ref == (extensions.Ref{}) {
+			item.Strategy.Ref = kernel.StrategyRef("ordered-fallback", 1)
+		}
+		if err := d.strategyCatalog.Validate(item.Strategy.Ref, item.Strategy.Config); err != nil {
 			return fail(request, err.Error())
 		}
 		if err := d.store.UpsertComboModel(item); err != nil {
@@ -1020,11 +1172,15 @@ func DefaultConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return Config{}, err
+	}
 	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713", ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers")}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713", ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts")}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }

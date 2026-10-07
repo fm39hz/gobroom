@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/quota"
@@ -20,11 +21,11 @@ func (testQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) (
 func TestQuotaPollerResolvesRouteSourceAndRecordsSnapshot(t *testing.T) {
 	got := 0
 	poller := QuotaPoller{
-		Sources:    map[string]provider.QuotaSource{"test": testQuotaSource{}},
-		Endpoints:  map[string]kernel.Endpoint{"http-json": kernel.HTTPJSONEndpoint{}},
-		Transports: map[string]kernel.Transport{"http": kernel.HTTPTransport{}},
+		Sources:    map[extensions.Ref]provider.QuotaSource{{Kind: "quota_source", ID: "test", ContractVersion: 1}: testQuotaSource{}},
+		Endpoints:  map[extensions.Ref]kernel.Endpoint{{Kind: "endpoint", ID: "http-json", ContractVersion: 1}: kernel.HTTPJSONEndpoint{}},
+		Transports: map[extensions.Ref]kernel.Transport{{Kind: "transport", ID: "http", ContractVersion: 1}: kernel.HTTPTransport{}},
 		Snapshot: func() kernel.Snapshot {
-			return kernel.Snapshot{Routes: map[string]kernel.Route{"r": {NodeID: "node", CredentialID: "conn", ExternalModel: "model", QuotaSourceID: "test", QuotaEndpointID: "http-json", QuotaTransportID: "http", Enabled: true}}}
+			return kernel.Snapshot{Routes: map[string]kernel.Route{"r": {NodeID: "node", CredentialID: "conn", ExternalModel: "model", QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "test", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, Enabled: true}}}
 		},
 		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
 			return kernel.Credential{Secret: "secret"}, nil

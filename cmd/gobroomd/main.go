@@ -35,6 +35,9 @@ func main() {
 	httpToken := flag.String("http-token", "", "optional bearer token for HTTP data plane")
 	providerManifestDir := flag.String("provider-manifests", defaults.ProviderManifestDir, "directory containing provider definition JSON files")
 	quotaPolling := flag.Bool("quota-poll", false, "opt in to periodic provider quota polling")
+	artifactStoreDir := flag.String("artifact-store", defaults.ArtifactStoreDir, "parent directory for bounded, temporary artifact body spools")
+	artifactStoreMaxBytes := flag.Int64("artifact-store-max-bytes", 256<<20, "maximum total bytes held by the artifact body store")
+	artifactStoreMaxBodyBytes := flag.Int64("artifact-store-max-body-bytes", 64<<20, "maximum bytes in one artifact body")
 	flag.Parse()
 	if *providerManifestDir == defaults.ProviderManifestDir {
 		if err := os.MkdirAll(*providerManifestDir, 0o700); err != nil {
@@ -43,7 +46,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl, HTTPControlAddr: *controlAddr, HTTPToken: *httpToken, ProviderManifestDir: *providerManifestDir, QuotaPolling: *quotaPolling})
+	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl, HTTPControlAddr: *controlAddr, HTTPToken: *httpToken, ProviderManifestDir: *providerManifestDir, QuotaPolling: *quotaPolling, ArtifactStoreDir: *artifactStoreDir, ArtifactStoreMaxBytes: *artifactStoreMaxBytes, ArtifactStoreMaxBodyBytes: *artifactStoreMaxBodyBytes})
 	if err := d.Start(ctx); err != nil {
 		log.Fatal(err)
 	}

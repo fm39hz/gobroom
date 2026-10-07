@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 type SnapshotStore struct{ current atomic.Pointer[Snapshot] }
 
 func NewSnapshotStore(initial Snapshot) (*SnapshotStore, error) {
+	initial.TransformBindings = cloneTransformBindings(initial.TransformBindings)
 	if err := ensureModelNodes(&initial); err != nil {
 		return nil, err
 	}
@@ -22,12 +24,15 @@ func NewSnapshotStore(initial Snapshot) (*SnapshotStore, error) {
 
 func (s *SnapshotStore) Load() Snapshot {
 	if value := s.current.Load(); value != nil {
-		return *value
+		loaded := *value
+		loaded.TransformBindings = cloneTransformBindings(value.TransformBindings)
+		return loaded
 	}
 	return Snapshot{}
 }
 
 func (s *SnapshotStore) Publish(next Snapshot) error {
+	next.TransformBindings = cloneTransformBindings(next.TransformBindings)
 	if err := ensureModelNodes(&next); err != nil {
 		return err
 	}
@@ -65,6 +70,16 @@ func ValidateSnapshot(s Snapshot) error {
 			}
 		}
 	}
+	transformBindingIDs := make(map[string]bool, len(s.TransformBindings))
+	for _, binding := range s.TransformBindings {
+		if err := ValidateTransformBinding(binding); err != nil {
+			return err
+		}
+		if transformBindingIDs[binding.ID] {
+			return fmt.Errorf("duplicate transform binding ID %q", binding.ID)
+		}
+		transformBindingIDs[binding.ID] = true
+	}
 	return validateModelGraph(s)
 }
 
@@ -92,7 +107,7 @@ func ResolvePublic(s Snapshot, name string) (ResolvedModel, error) {
 	if stickyLimit < 1 {
 		stickyLimit = 1
 	}
-	return ResolvedModel{PublicName: name, TargetRef: public.TargetRef, Strategy: strategy, StickyLimit: stickyLimit, Candidates: items}, nil
+	return ResolvedModel{PublicName: name, TargetRef: public.TargetRef, Strategy: strategy, StrategyRef: node.StrategyRef, StrategyConfig: append(json.RawMessage(nil), node.StrategyConfig...), StickyLimit: stickyLimit, Candidates: items}, nil
 }
 
 func resolveRef(s Snapshot, ref string, stack map[string]bool) ([]Route, error) {

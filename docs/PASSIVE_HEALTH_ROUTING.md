@@ -193,8 +193,11 @@ real attempt returns quota-like 409/429
   -> inference fallback continues independently
 ```
 
-Enrichment is deduplicated, bounded and has its own cooldown. Its failure never
-breaks an inference response. Periodic quota polling is disabled by default;
+Enrichment is deduplicated with `x/sync/singleflight`, detached from the
+downstream request cancellation, and bounded by a 15-second default timeout.
+Its per-route cooldown cache is capped at 8192 keys by default; stale entries
+are pruned before the oldest live key is evicted. Its failure never breaks an
+inference response. Periodic quota polling is disabled by default;
 providers that truly require scheduled refresh must opt into an explicit
 policy rather than inheriting a daemon-wide ticker.
 

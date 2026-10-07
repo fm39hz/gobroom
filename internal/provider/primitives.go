@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/fm39hz/gobroom/internal/adapter/anthropic"
@@ -19,6 +20,10 @@ import (
 )
 
 type Operation string
+
+func ProviderDefinitionRef(id string, contractVersion uint64) extensions.Ref {
+	return extensions.Ref{Kind: "provider-definition", ID: id, ContractVersion: contractVersion}
+}
 
 func OperationRef(task normalize.Operation, contractVersion uint64) *extensions.Ref {
 	return &extensions.Ref{Kind: "operation", ID: string(task), ContractVersion: contractVersion}
@@ -162,6 +167,7 @@ type OperationBinding struct {
 	EndpointOptions        kernel.EndpointOptions    `json:"endpointOptions,omitempty"`
 	Transport              PrimitiveRef              `json:"transport"`
 	RequestCodec           PrimitiveRef              `json:"requestCodec,omitempty"`
+	RequestCodecOptions    json.RawMessage           `json:"requestCodecOptions,omitempty"`
 	ResponseDecoder        PrimitiveRef              `json:"responseDecoder,omitempty"`
 	ModelSource            PrimitiveRef              `json:"modelSource,omitempty"`
 	UsageSource            PrimitiveRef              `json:"usageSource,omitempty"`
@@ -249,7 +255,7 @@ type PrimitivePlugin interface {
 
 type PrimitiveRegistry struct {
 	definitions map[string]ProviderDefinition
-	primitives  map[PrimitiveKind]map[string]uint64
+	primitives  map[PrimitiveKind]map[extensions.Ref]struct{}
 	catalog     *extensions.Catalog
 	Operations  *operations.Registry
 }
@@ -259,16 +265,42 @@ type RuntimeRegistry struct {
 	Auth              *AuthRegistry
 	extensionSnapshot *extensions.Snapshot
 	operationSnapshot *operations.Snapshot
-	endpoints         map[string]kernel.Endpoint
-	transports        map[string]kernel.Transport
-	requestCodecs     map[string]kernel.RequestCodec
-	responseDecoders  map[string]kernel.ResponseDecoder
+	endpoints         map[extensions.Ref]kernel.Endpoint
+	transports        map[extensions.Ref]kernel.Transport
+	requestCodecs     map[extensions.Ref]kernel.RequestCodec
+	responseDecoders  map[extensions.Ref]kernel.ResponseDecoder
 	renderers         map[normalize.Format]kernel.ResponseRenderer
-	modelSources      map[string]ModelSource
-	usageSources      map[string]UsageSource
-	sessionStores     map[string]kernel.SessionStore
-	errorClassifiers  map[string]ErrorClassifier
-	quotaSources      map[string]QuotaSource
+	modelSources      map[extensions.Ref]ModelSource
+	usageSources      map[extensions.Ref]UsageSource
+	sessionStores     map[extensions.Ref]kernel.SessionStore
+	errorClassifiers  map[extensions.Ref]ErrorClassifier
+	quotaSources      map[extensions.Ref]QuotaSource
+}
+
+// RegisterFeatureEvaluator contributes a versioned feature evaluator and its
+// request-constraint schema to the shared extension catalog. Model profiles
+// retain the semantic feature ID; each invocation pins one evaluator version.
+func (r *RuntimeRegistry) RegisterFeatureEvaluator(ref extensions.Ref, implementationVersion, displayName, description string, constraintsSchemaRef extensions.Ref, constraintsSchema json.RawMessage, evaluator kernel.FeatureEvaluator) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if err := ref.Validate(); err != nil || ref.Kind != kernel.FeatureEvaluatorKind || evaluator == nil {
+		return fmt.Errorf("feature evaluator requires an exact %q reference and implementation", kernel.FeatureEvaluatorKind)
+	}
+	if constraintsSchemaRef.Kind != extensions.SchemaKind || constraintsSchemaRef.ContractVersion == 0 {
+		return fmt.Errorf("feature evaluator %q requires an exact constraint schema reference", ref.Key())
+	}
+	document, err := extensions.BindSchemaDocument(constraintsSchemaRef, constraintsSchema)
+	if err != nil {
+		return fmt.Errorf("feature evaluator %q constraints schema: %w", ref.Key(), err)
+	}
+	if err := r.Primitives.catalog.RegisterSchema(constraintsSchemaRef, document); err != nil {
+		return err
+	}
+	return r.Primitives.catalog.Register(extensions.Descriptor{
+		Ref: ref, ImplementationVersion: implementationVersion, DisplayName: displayName,
+		Description: description, InputSchemaRef: &constraintsSchemaRef,
+	}, func(json.RawMessage) (any, error) { return evaluator, nil })
 }
 
 func NewRuntimeRegistry() (*RuntimeRegistry, error) {
@@ -276,13 +308,16 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[string]kernel.Endpoint{}, transports: map[string]kernel.Transport{}, requestCodecs: map[string]kernel.RequestCodec{}, responseDecoders: map[string]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[string]ModelSource{}, usageSources: map[string]UsageSource{}, sessionStores: map[string]kernel.SessionStore{}, errorClassifiers: map[string]ErrorClassifier{}, quotaSources: map[string]QuotaSource{}}
+	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[extensions.Ref]kernel.Endpoint{}, transports: map[extensions.Ref]kernel.Transport{}, requestCodecs: map[extensions.Ref]kernel.RequestCodec{}, responseDecoders: map[extensions.Ref]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[extensions.Ref]ModelSource{}, usageSources: map[extensions.Ref]UsageSource{}, sessionStores: map[extensions.Ref]kernel.SessionStore{}, errorClassifiers: map[extensions.Ref]ErrorClassifier{}, quotaSources: map[extensions.Ref]QuotaSource{}}
+	if err := registerMultipartRequestCodec(runtime); err != nil {
+		return nil, fmt.Errorf("register generic multipart request codec: %w", err)
+	}
 	oauthSchema, err := oauthOptionsSchema()
 	if err != nil {
 		return nil, err
 	}
 	for _, authID := range []string{"static-secret", "none"} {
-		if err := runtime.registerAuthImplementation(authID); err != nil {
+		if err := runtime.registerAuthImplementation(authID, 1); err != nil {
 			return nil, err
 		}
 	}
@@ -345,19 +380,148 @@ func (r *RuntimeRegistry) ResponseRenderers() map[normalize.Format]kernel.Respon
 	return result
 }
 
-func (r *RuntimeRegistry) registerImplementation(kind PrimitiveKind, id string, factory extensions.Factory) error {
+func (r *RuntimeRegistry) RegisterRequestTransform(transform kernel.RequestTransform, optionsSchema json.RawMessage) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if transform == nil {
+		return fmt.Errorf("request transform implementation is required")
+	}
+	definition := transform.Definition()
+	if err := kernel.NewRequestTransformRegistry().Register(transform); err != nil {
+		return err
+	}
+	if err := validateRuntimeTransformRegistration(definition.Ref, definition.ImplementationVersion, definition.OptionsSchemaRef, optionsSchema); err != nil {
+		return err
+	}
+	if err := registerTransformDescriptor(r.Primitives.catalog, definition.Ref, definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef, definition.ResourceBounds, string(definition.Stage), transformEffects(definition.Effects), optionsSchema, transform); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *RuntimeRegistry) RegisterResponseTransform(transform kernel.ResponseTransform, optionsSchema json.RawMessage) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if transform == nil {
+		return fmt.Errorf("response transform implementation is required")
+	}
+	definition := transform.Definition()
+	if err := kernel.NewResponseTransformRegistry().Register(transform); err != nil {
+		return err
+	}
+	if err := validateRuntimeTransformRegistration(definition.Ref, definition.ImplementationVersion, definition.OptionsSchemaRef, optionsSchema); err != nil {
+		return err
+	}
+	capabilities := make([]string, len(definition.Effects))
+	for i, effect := range definition.Effects {
+		capabilities[i] = string(effect)
+	}
+	if err := registerTransformDescriptor(r.Primitives.catalog, definition.Ref, definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef, definition.ResourceBounds, "response.semantic", capabilities, optionsSchema, transform); err != nil {
+		return err
+	}
+	return nil
+}
+
+// RegisterStrategyDefinition contributes a versioned scheduling policy to the
+// same frozen catalog used for provider, operation, feature and transform
+// modules. Exact strategy refs can coexist at different contract versions.
+func (r *RuntimeRegistry) RegisterStrategyDefinition(definition kernel.StrategyDefinition) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	return kernel.RegisterStrategyExtension(r.Primitives.catalog, definition)
+}
+
+func validateRuntimeTransformRegistration(ref extensions.Ref, implementationVersion string, optionsSchemaRef *extensions.Ref, optionsSchema json.RawMessage) error {
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(implementationVersion) == "" {
+		return fmt.Errorf("transform %q requires an implementation version", ref.Key())
+	}
+	if optionsSchemaRef == nil && len(optionsSchema) > 0 {
+		return fmt.Errorf("transform %q provided an options schema without optionsSchemaRef", ref.Key())
+	}
+	if optionsSchemaRef == nil {
+		return nil
+	}
+	if optionsSchemaRef.Kind != extensions.SchemaKind {
+		return fmt.Errorf("transform %q optionsSchemaRef must use kind %q", ref.Key(), extensions.SchemaKind)
+	}
+	if len(optionsSchema) == 0 {
+		return fmt.Errorf("transform %q has an optionsSchemaRef but no options schema document", ref.Key())
+	}
+	if _, err := extensions.BindSchemaDocument(*optionsSchemaRef, optionsSchema); err != nil {
+		return err
+	}
+	return nil
+}
+
+func registerTransformDescriptor(catalog *extensions.Catalog, ref extensions.Ref, implementationVersion, label, description string, schemaRef *extensions.Ref, bounds extensions.ResourceBounds, stage string, effects []string, schemaShape json.RawMessage, implementation any) error {
+	if err := ref.Validate(); err != nil {
+		return err
+	}
+	if implementationVersion == "" || label == "" || description == "" {
+		return fmt.Errorf("transform %q requires implementation version and display metadata", ref.Key())
+	}
+	if schemaRef == nil && len(schemaShape) > 0 {
+		return fmt.Errorf("transform %q supplied an options schema without an optionsSchemaRef", ref.Key())
+	}
+	if schemaRef != nil {
+		if schemaRef.Kind != extensions.SchemaKind {
+			return fmt.Errorf("transform %q options schema reference must use kind %q", ref.Key(), extensions.SchemaKind)
+		}
+		document, err := extensions.BindSchemaDocument(*schemaRef, schemaShape)
+		if err != nil {
+			return err
+		}
+		if err := catalog.RegisterSchema(*schemaRef, document); err != nil {
+			return err
+		}
+	}
+	return catalog.Register(extensions.Descriptor{
+		Ref: ref, ImplementationVersion: implementationVersion, DisplayName: label, Description: description,
+		OptionsSchemaRef: schemaRef, LifecycleCapabilities: append([]string{stage}, effects...), ResourceBounds: bounds,
+	}, func(json.RawMessage) (any, error) { return implementation, nil })
+}
+
+func transformEffects[T ~string](effects []T) []string {
+	result := make([]string, len(effects))
+	for i, effect := range effects {
+		result[i] = string(effect)
+	}
+	return result
+}
+
+func (r *RuntimeRegistry) ValidateTransformBindings(bindings []kernel.TransformBinding) error {
+	snapshot, err := r.FreezeCatalog()
+	if err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		_, ok := snapshot.Descriptor(binding.TransformRef)
+		if !ok {
+			return fmt.Errorf("transform binding %q references unavailable extension %q", binding.ID, binding.TransformRef.Key())
+		}
+		if _, _, err := snapshot.Bind(binding.TransformRef, binding.Options); err != nil {
+			return fmt.Errorf("transform binding %q: %w", binding.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *RuntimeRegistry) registerImplementation(kind PrimitiveKind, id string, contractVersion uint64, factory extensions.Factory) error {
 	if r == nil || r.Primitives == nil {
 		return fmt.Errorf("runtime registry is not initialized")
 	}
-	if id == "" || factory == nil {
-		return fmt.Errorf("%s primitive ID and factory are required", kind)
+	if id == "" || contractVersion == 0 || factory == nil {
+		return fmt.Errorf("%s primitive ID, positive contract version and factory are required", kind)
 	}
-	ref := PrimitiveRef{Kind: kind, ID: id, ContractVersion: 1}
+	ref := PrimitiveRef{Kind: kind, ID: id, ContractVersion: contractVersion}
 	if !r.Primitives.hasPrimitive(ref) {
-		if version, exists := r.Primitives.primitives[kind][id]; exists {
-			return fmt.Errorf("runtime implementation %s/%q is contract 1; registered contract is %d", kind, id, version)
-		}
-		if err := r.Primitives.RegisterPrimitiveVersion(kind, id, 1); err != nil {
+		if err := r.Primitives.RegisterPrimitiveVersion(kind, id, contractVersion); err != nil {
 			return err
 		}
 	}
@@ -372,6 +536,25 @@ func (r *RuntimeRegistry) RegisterPrimitiveOptionsSchema(kind PrimitiveKind, id 
 		return err
 	}
 	return r.Primitives.RegisterPrimitiveWithOptionsSchema(kind, id, contractVersion, schemaRef, schema)
+}
+
+// RegisterPrimitiveImplementation installs an exact versioned primitive
+// factory in the shared catalog. Identical IDs at different contract versions
+// remain independent; no latest-version fallback is performed at bind time.
+func (r *RuntimeRegistry) RegisterPrimitiveImplementation(kind PrimitiveKind, id string, contractVersion uint64, factory extensions.Factory) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if id == "" || contractVersion == 0 || factory == nil {
+		return fmt.Errorf("primitive requires ID, positive contract version and factory")
+	}
+	ref := PrimitiveRef{Kind: kind, ID: id, ContractVersion: contractVersion}
+	if !r.Primitives.hasPrimitive(ref) {
+		if err := r.Primitives.RegisterPrimitiveVersion(kind, id, contractVersion); err != nil {
+			return err
+		}
+	}
+	return r.Primitives.catalog.RegisterFactory(extensionRef(ref), factory)
 }
 
 func (r *RuntimeRegistry) ensureReady() error {
@@ -423,226 +606,308 @@ func (r *RuntimeRegistry) ExtensionCatalog() (extensions.CatalogView, error) {
 	return snapshot.View(), nil
 }
 
-func (r *RuntimeRegistry) registerAuthImplementation(id string) error {
-	return r.registerImplementation(PrimitiveAuth, id, func(raw json.RawMessage) (any, error) {
+func (r *RuntimeRegistry) registerAuthImplementation(id string, contractVersion uint64) error {
+	ref := extensions.Ref{Kind: string(PrimitiveAuth), ID: id, ContractVersion: contractVersion}
+	return r.registerImplementation(PrimitiveAuth, id, contractVersion, func(raw json.RawMessage) (any, error) {
 		var options AuthOptions
 		if len(raw) > 0 {
 			if err := decodeStrictJSON(raw, &options); err != nil {
 				return nil, err
 			}
 		}
-		return r.Auth.Build(id, options)
+		return r.Auth.Build(ref, options)
 	})
 }
 
 func (r *RuntimeRegistry) RegisterEndpoint(endpoint kernel.Endpoint) error {
+	return r.RegisterEndpointVersion(endpoint, 1)
+}
+
+func (r *RuntimeRegistry) RegisterEndpointVersion(endpoint kernel.Endpoint, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if endpoint == nil {
-		return fmt.Errorf("endpoint implementation is nil")
+	if endpoint == nil || contractVersion == 0 {
+		return fmt.Errorf("endpoint implementation and positive contract version are required")
 	}
-	if _, exists := r.endpoints[endpoint.ID()]; exists {
-		return fmt.Errorf("endpoint %q is already registered", endpoint.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveEndpoint), ID: endpoint.ID(), ContractVersion: contractVersion}
+	if _, exists := r.endpoints[ref]; exists {
+		return fmt.Errorf("endpoint %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveEndpoint, endpoint.ID(), func(json.RawMessage) (any, error) { return endpoint, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveEndpoint, endpoint.ID(), contractVersion, func(json.RawMessage) (any, error) { return endpoint, nil }); err != nil {
 		return err
 	}
-	r.endpoints[endpoint.ID()] = endpoint
+	r.endpoints[ref] = endpoint
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterTransport(transport kernel.Transport) error {
+	return r.RegisterTransportVersion(transport, 1)
+}
+
+func (r *RuntimeRegistry) RegisterTransportVersion(transport kernel.Transport, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if transport == nil {
-		return fmt.Errorf("transport implementation is nil")
+	if transport == nil || contractVersion == 0 {
+		return fmt.Errorf("transport implementation and positive contract version are required")
 	}
-	if _, exists := r.transports[transport.ID()]; exists {
-		return fmt.Errorf("transport %q is already registered", transport.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveTransport), ID: transport.ID(), ContractVersion: contractVersion}
+	if _, exists := r.transports[ref]; exists {
+		return fmt.Errorf("transport %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveTransport, transport.ID(), func(json.RawMessage) (any, error) { return transport, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveTransport, transport.ID(), contractVersion, func(json.RawMessage) (any, error) { return transport, nil }); err != nil {
 		return err
 	}
-	r.transports[transport.ID()] = transport
+	r.transports[ref] = transport
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterRequestCodec(codec kernel.RequestCodec) error {
+	return r.RegisterRequestCodecVersion(codec, 1)
+}
+
+func (r *RuntimeRegistry) RegisterRequestCodecVersion(codec kernel.RequestCodec, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if codec == nil {
-		return fmt.Errorf("request codec implementation is nil")
+	if codec == nil || contractVersion == 0 {
+		return fmt.Errorf("request codec implementation and positive contract version are required")
 	}
-	if _, exists := r.requestCodecs[codec.ID()]; exists {
-		return fmt.Errorf("request codec %q is already registered", codec.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveRequestCodec), ID: codec.ID(), ContractVersion: contractVersion}
+	if _, exists := r.requestCodecs[ref]; exists {
+		return fmt.Errorf("request codec %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveRequestCodec, codec.ID(), func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveRequestCodec, codec.ID(), contractVersion, func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
 		return err
 	}
-	r.requestCodecs[codec.ID()] = codec
+	r.requestCodecs[ref] = codec
+	return nil
+}
+
+// RegisterConfiguredRequestCodec registers a request codec factory with a
+// versioned options schema. Provider manifests can select the exact codec
+// contract and configure its wire fields without adding provider branches.
+func (r *RuntimeRegistry) RegisterConfiguredRequestCodec(id string, contractVersion uint64, optionsSchemaRef extensions.Ref, optionsSchema json.RawMessage, factory extensions.Factory) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(id) == "" || contractVersion == 0 || factory == nil {
+		return fmt.Errorf("configured request codec requires ID, positive contract version and factory")
+	}
+	ref := extensions.Ref{Kind: string(PrimitiveRequestCodec), ID: id, ContractVersion: contractVersion}
+	if _, exists := r.requestCodecs[ref]; exists {
+		return fmt.Errorf("request codec %q is already registered", ref.Key())
+	}
+	boundSchema, err := extensions.BindSchemaDocument(optionsSchemaRef, optionsSchema)
+	if err != nil {
+		return fmt.Errorf("bind request codec %q options schema: %w", ref.Key(), err)
+	}
+	if err := r.Primitives.RegisterPrimitiveWithOptionsSchema(PrimitiveRequestCodec, id, contractVersion, optionsSchemaRef, boundSchema); err != nil {
+		return err
+	}
+	if err := r.Primitives.catalog.RegisterFactory(ref, factory); err != nil {
+		return fmt.Errorf("register request codec %q factory: %w", ref.Key(), err)
+	}
+	r.requestCodecs[ref] = nil
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterResponseDecoder(codec kernel.ResponseDecoder) error {
+	return r.RegisterResponseDecoderVersion(codec, 1)
+}
+
+func (r *RuntimeRegistry) RegisterResponseDecoderVersion(codec kernel.ResponseDecoder, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if codec == nil {
-		return fmt.Errorf("response codec implementation is nil")
+	if codec == nil || contractVersion == 0 {
+		return fmt.Errorf("response codec implementation and positive contract version are required")
 	}
-	if _, exists := r.responseDecoders[codec.ID()]; exists {
-		return fmt.Errorf("response codec %q is already registered", codec.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveResponseDecoder), ID: codec.ID(), ContractVersion: contractVersion}
+	if _, exists := r.responseDecoders[ref]; exists {
+		return fmt.Errorf("response codec %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveResponseDecoder, codec.ID(), func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveResponseDecoder, codec.ID(), contractVersion, func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
 		return err
 	}
-	r.responseDecoders[codec.ID()] = codec
+	r.responseDecoders[ref] = codec
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterModelSource(source ModelSource) error {
+	return r.RegisterModelSourceVersion(source, 1)
+}
+
+func (r *RuntimeRegistry) RegisterModelSourceVersion(source ModelSource, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if source == nil {
-		return fmt.Errorf("model source implementation is nil")
+	if source == nil || contractVersion == 0 {
+		return fmt.Errorf("model source implementation and positive contract version are required")
 	}
-	if _, exists := r.modelSources[source.ID()]; exists {
-		return fmt.Errorf("model source %q is already registered", source.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveModelSource), ID: source.ID(), ContractVersion: contractVersion}
+	if _, exists := r.modelSources[ref]; exists {
+		return fmt.Errorf("model source %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveModelSource, source.ID(), func(json.RawMessage) (any, error) { return source, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveModelSource, source.ID(), contractVersion, func(json.RawMessage) (any, error) { return source, nil }); err != nil {
 		return err
 	}
-	r.modelSources[source.ID()] = source
+	r.modelSources[ref] = source
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterUsageSource(source UsageSource) error {
+	return r.RegisterUsageSourceVersion(source, 1)
+}
+
+func (r *RuntimeRegistry) RegisterUsageSourceVersion(source UsageSource, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if source == nil {
-		return fmt.Errorf("usage source implementation is nil")
+	if source == nil || contractVersion == 0 {
+		return fmt.Errorf("usage source implementation and positive contract version are required")
 	}
-	if _, exists := r.usageSources[source.ID()]; exists {
-		return fmt.Errorf("usage source %q is already registered", source.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveUsageSource), ID: source.ID(), ContractVersion: contractVersion}
+	if _, exists := r.usageSources[ref]; exists {
+		return fmt.Errorf("usage source %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveUsageSource, source.ID(), func(json.RawMessage) (any, error) { return source, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveUsageSource, source.ID(), contractVersion, func(json.RawMessage) (any, error) { return source, nil }); err != nil {
 		return err
 	}
-	r.usageSources[source.ID()] = source
+	r.usageSources[ref] = source
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterSessionStore(sessionStore kernel.SessionStore) error {
+	return r.RegisterSessionStoreVersion(sessionStore, 1)
+}
+
+func (r *RuntimeRegistry) RegisterSessionStoreVersion(sessionStore kernel.SessionStore, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if sessionStore == nil {
-		return fmt.Errorf("session store implementation is nil")
+	if sessionStore == nil || contractVersion == 0 {
+		return fmt.Errorf("session store implementation and positive contract version are required")
 	}
-	if _, exists := r.sessionStores[sessionStore.ID()]; exists {
-		return fmt.Errorf("session store %q is already registered", sessionStore.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveSessionStore), ID: sessionStore.ID(), ContractVersion: contractVersion}
+	if _, exists := r.sessionStores[ref]; exists {
+		return fmt.Errorf("session store %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveSessionStore, sessionStore.ID(), func(json.RawMessage) (any, error) { return sessionStore, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveSessionStore, sessionStore.ID(), contractVersion, func(json.RawMessage) (any, error) { return sessionStore, nil }); err != nil {
 		return err
 	}
-	r.sessionStores[sessionStore.ID()] = sessionStore
+	r.sessionStores[ref] = sessionStore
 	return nil
 }
 
 // ReplaceSessionStore lets the daemon install its durable, async-backed
 // implementation under the same manifest primitive before bindings are built.
 func (r *RuntimeRegistry) ReplaceSessionStore(sessionStore kernel.SessionStore) error {
+	return r.ReplaceSessionStoreVersion(sessionStore, 1)
+}
+
+func (r *RuntimeRegistry) ReplaceSessionStoreVersion(sessionStore kernel.SessionStore, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if sessionStore == nil {
-		return fmt.Errorf("session store implementation is nil")
+	if sessionStore == nil || contractVersion == 0 {
+		return fmt.Errorf("session store implementation and positive contract version are required")
 	}
-	if _, exists := r.sessionStores[sessionStore.ID()]; !exists {
-		return fmt.Errorf("session store %q is not registered", sessionStore.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveSessionStore), ID: sessionStore.ID(), ContractVersion: contractVersion}
+	if _, exists := r.sessionStores[ref]; !exists {
+		return fmt.Errorf("session store %q is not registered", ref.Key())
 	}
-	ref := extensions.Ref{Kind: string(PrimitiveSessionStore), ID: sessionStore.ID(), ContractVersion: 1}
 	if err := r.Primitives.catalog.ReplaceFactory(ref, func(json.RawMessage) (any, error) { return sessionStore, nil }); err != nil {
 		return err
 	}
-	r.sessionStores[sessionStore.ID()] = sessionStore
+	r.sessionStores[ref] = sessionStore
 	return nil
 }
 
-func (r *RuntimeRegistry) SessionStores() map[string]kernel.SessionStore {
-	result := make(map[string]kernel.SessionStore, len(r.sessionStores))
-	for id, sessionStore := range r.sessionStores {
-		result[id] = sessionStore
+func (r *RuntimeRegistry) SessionStores() map[extensions.Ref]kernel.SessionStore {
+	result := make(map[extensions.Ref]kernel.SessionStore, len(r.sessionStores))
+	for ref, sessionStore := range r.sessionStores {
+		result[ref] = sessionStore
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) Endpoints() map[string]kernel.Endpoint {
-	result := make(map[string]kernel.Endpoint, len(r.endpoints))
-	for id, endpoint := range r.endpoints {
-		result[id] = endpoint
+func (r *RuntimeRegistry) Endpoints() map[extensions.Ref]kernel.Endpoint {
+	result := make(map[extensions.Ref]kernel.Endpoint, len(r.endpoints))
+	for ref, endpoint := range r.endpoints {
+		result[ref] = endpoint
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) Transports() map[string]kernel.Transport {
-	result := make(map[string]kernel.Transport, len(r.transports))
-	for id, transport := range r.transports {
-		result[id] = transport
+func (r *RuntimeRegistry) Transports() map[extensions.Ref]kernel.Transport {
+	result := make(map[extensions.Ref]kernel.Transport, len(r.transports))
+	for ref, transport := range r.transports {
+		result[ref] = transport
 	}
 	return result
 }
 
 func (r *RuntimeRegistry) RegisterErrorClassifier(classifier ErrorClassifier) error {
+	return r.RegisterErrorClassifierVersion(classifier, 1)
+}
+
+func (r *RuntimeRegistry) RegisterErrorClassifierVersion(classifier ErrorClassifier, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if classifier == nil {
-		return fmt.Errorf("error classifier implementation is nil")
+	if classifier == nil || contractVersion == 0 {
+		return fmt.Errorf("error classifier implementation and positive contract version are required")
 	}
-	if _, exists := r.errorClassifiers[classifier.ID()]; exists {
-		return fmt.Errorf("error classifier %q is already registered", classifier.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveErrorClassifier), ID: classifier.ID(), ContractVersion: contractVersion}
+	if _, exists := r.errorClassifiers[ref]; exists {
+		return fmt.Errorf("error classifier %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveErrorClassifier, classifier.ID(), func(json.RawMessage) (any, error) { return classifier, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveErrorClassifier, classifier.ID(), contractVersion, func(json.RawMessage) (any, error) { return classifier, nil }); err != nil {
 		return err
 	}
-	r.errorClassifiers[classifier.ID()] = classifier
+	r.errorClassifiers[ref] = classifier
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterQuotaSource(source QuotaSource) error {
+	return r.RegisterQuotaSourceVersion(source, 1)
+}
+
+func (r *RuntimeRegistry) RegisterQuotaSourceVersion(source QuotaSource, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if source == nil {
-		return fmt.Errorf("quota source implementation is nil")
+	if source == nil || contractVersion == 0 {
+		return fmt.Errorf("quota source implementation and positive contract version are required")
 	}
-	if _, exists := r.quotaSources[source.ID()]; exists {
-		return fmt.Errorf("quota source %q is already registered", source.ID())
+	ref := extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: source.ID(), ContractVersion: contractVersion}
+	if _, exists := r.quotaSources[ref]; exists {
+		return fmt.Errorf("quota source %q is already registered", ref.Key())
 	}
-	if err := r.registerImplementation(PrimitiveQuotaSource, source.ID(), func(json.RawMessage) (any, error) { return source, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveQuotaSource, source.ID(), contractVersion, func(json.RawMessage) (any, error) { return source, nil }); err != nil {
 		return err
 	}
-	r.quotaSources[source.ID()] = source
+	r.quotaSources[ref] = source
 	return nil
 }
 
 func (r *RuntimeRegistry) RegisterAuthFlow(flow AuthFlow) error {
+	return r.RegisterAuthFlowVersion(flow, 1)
+}
+
+func (r *RuntimeRegistry) RegisterAuthFlowVersion(flow AuthFlow, contractVersion uint64) error {
 	if err := r.ensureReady(); err != nil {
 		return err
 	}
-	if flow == nil {
-		return fmt.Errorf("auth flow implementation is nil")
+	if flow == nil || contractVersion == 0 {
+		return fmt.Errorf("auth flow implementation and positive contract version are required")
 	}
-	if err := r.registerImplementation(PrimitiveAuth, flow.ID(), func(json.RawMessage) (any, error) { return flow, nil }); err != nil {
+	if err := r.registerImplementation(PrimitiveAuth, flow.ID(), contractVersion, func(json.RawMessage) (any, error) { return flow, nil }); err != nil {
 		return err
 	}
-	return r.Auth.Register(flow)
+	return r.Auth.RegisterVersion(flow, contractVersion)
 }
 
 func (r *RuntimeRegistry) RegisterAuthFactory(id string, factory AuthFlowFactory) error {
@@ -669,10 +934,11 @@ func (r *RuntimeRegistry) registerAuthFactory(id string, contractVersion uint64,
 			return err
 		}
 	}
-	if err := r.Auth.RegisterFactory(id, factory); err != nil {
+	ref := extensions.Ref{Kind: string(PrimitiveAuth), ID: id, ContractVersion: contractVersion}
+	if err := r.Auth.RegisterFactoryVersion(ref, factory); err != nil {
 		return err
 	}
-	if err := r.registerAuthImplementation(id); err != nil {
+	if err := r.registerAuthImplementation(id, contractVersion); err != nil {
 		return err
 	}
 	return nil
@@ -723,27 +989,27 @@ func (r *RuntimeRegistry) AuthFlowIDsByDefinition() map[string]string {
 	}
 	for _, definition := range r.Primitives.Definitions() {
 		if definition.Auth.ID != "" {
-			result[definition.ID] = AuthBindingKey(definition.ID, definition.Auth.ID)
+			result[definition.ID] = AuthBindingKey(definition.ID, definition.Auth)
 		}
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) ErrorClassifiers() map[string]kernel.ErrorClassifier {
-	result := make(map[string]kernel.ErrorClassifier, len(r.errorClassifiers))
-	for id, classifier := range r.errorClassifiers {
-		result[id] = adaptErrorClassifier(classifier)
+func (r *RuntimeRegistry) ErrorClassifiers() map[extensions.Ref]kernel.ErrorClassifier {
+	result := make(map[extensions.Ref]kernel.ErrorClassifier, len(r.errorClassifiers))
+	for ref, classifier := range r.errorClassifiers {
+		result[ref] = adaptErrorClassifier(classifier)
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) ErrorClassifiersForBindings(bindings map[string]RuntimeBinding) map[string]kernel.ErrorClassifier {
+func (r *RuntimeRegistry) ErrorClassifiersForBindings(bindings map[string]RuntimeBinding) map[extensions.Ref]kernel.ErrorClassifier {
 	result := r.ErrorClassifiers()
 	for _, binding := range bindings {
-		if binding.ErrorClassifier == nil || binding.ErrorClassifierID == "" || binding.ErrorClassifierID == binding.ErrorClassifier.ID() {
+		if binding.ErrorClassifier == nil || binding.ErrorClassifierRef.ID == "" {
 			continue
 		}
-		result[binding.ErrorClassifierID] = adaptErrorClassifier(binding.ErrorClassifier)
+		result[binding.ErrorClassifierRef] = adaptErrorClassifier(binding.ErrorClassifier)
 	}
 	return result
 }
@@ -756,18 +1022,18 @@ func adaptErrorClassifier(classifier ErrorClassifier) kernel.ErrorClassifier {
 	return adapter
 }
 
-func (r *RuntimeRegistry) QuotaSources() map[string]QuotaSource {
-	result := make(map[string]QuotaSource, len(r.quotaSources))
-	for id, source := range r.quotaSources {
-		result[id] = source
+func (r *RuntimeRegistry) QuotaSources() map[extensions.Ref]QuotaSource {
+	result := make(map[extensions.Ref]QuotaSource, len(r.quotaSources))
+	for ref, source := range r.quotaSources {
+		result[ref] = source
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) UsageSources() map[string]kernel.UsageEnricher {
-	result := make(map[string]kernel.UsageEnricher, len(r.usageSources))
-	for id, source := range r.usageSources {
-		result[id] = source
+func (r *RuntimeRegistry) UsageSources() map[extensions.Ref]kernel.UsageEnricher {
+	result := make(map[extensions.Ref]kernel.UsageEnricher, len(r.usageSources))
+	for ref, source := range r.usageSources {
+		result[ref] = source
 	}
 	return result
 }
@@ -792,7 +1058,7 @@ func NewPrimitiveRegistry() *PrimitiveRegistry {
 	operationRegistry, _ := operations.NewRegistry(catalog)
 	return &PrimitiveRegistry{
 		definitions: map[string]ProviderDefinition{},
-		primitives: map[PrimitiveKind]map[string]uint64{
+		primitives: map[PrimitiveKind]map[extensions.Ref]struct{}{
 			PrimitiveEndpoint: {}, PrimitiveTransport: {}, PrimitiveAuth: {}, PrimitiveRequestCodec: {},
 			PrimitiveResponseDecoder: {}, PrimitiveModelSource: {}, PrimitiveUsageSource: {},
 			PrimitiveQuotaSource: {}, PrimitiveSessionStore: {},
@@ -807,9 +1073,8 @@ func (r *PrimitiveRegistry) RegisterPrimitive(kind PrimitiveKind, id string) err
 	return r.RegisterPrimitiveVersion(kind, id, 1)
 }
 
-// RegisterPrimitiveVersion pins the executable contract version for a
-// primitive ID. A runtime currently registers one version per kind/ID; a
-// manifest must always select that exact version.
+// RegisterPrimitiveVersion declares one exact primitive contract. Multiple
+// versions of one kind/ID coexist; every binding must select its exact ref.
 func (r *PrimitiveRegistry) RegisterPrimitiveVersion(kind PrimitiveKind, id string, contractVersion uint64) error {
 	return r.registerPrimitiveContract(kind, id, contractVersion, nil)
 }
@@ -832,10 +1097,10 @@ func (r *PrimitiveRegistry) registerPrimitiveContract(kind PrimitiveKind, id str
 	if !ok {
 		return fmt.Errorf("unknown primitive kind %q", kind)
 	}
-	if previous, exists := set[id]; exists {
-		return fmt.Errorf("primitive %s/%q already registered at contract %d", kind, id, previous)
-	}
 	ref := extensions.Ref{Kind: string(kind), ID: id, ContractVersion: contractVersion}
+	if _, exists := set[ref]; exists {
+		return fmt.Errorf("primitive %s already registered", ref.Key())
+	}
 	if err := r.catalog.RegisterDescriptor(extensions.Descriptor{
 		Ref: ref, ImplementationVersion: fmt.Sprintf("contract-%d", contractVersion),
 		DisplayName: string(kind) + ": " + id, Description: "Runtime provider primitive contract.",
@@ -843,7 +1108,7 @@ func (r *PrimitiveRegistry) registerPrimitiveContract(kind PrimitiveKind, id str
 	}); err != nil {
 		return err
 	}
-	set[id] = contractVersion
+	set[ref] = struct{}{}
 	return nil
 }
 
@@ -867,6 +1132,12 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	if len(def.Operations) == 0 {
 		return fmt.Errorf("provider %q has no operations", def.ID)
 	}
+	operationBindings := make(map[Operation]OperationBinding, len(def.Operations))
+	for operation, binding := range def.Operations {
+		binding.RequestCodecOptions = append(json.RawMessage(nil), binding.RequestCodecOptions...)
+		operationBindings[operation] = binding
+	}
+	def.Operations = operationBindings
 	if def.Auth.ID == "" {
 		return fmt.Errorf("provider %q must bind an auth primitive explicitly (use %q when no credential is needed)", def.ID, "none")
 	}
@@ -886,6 +1157,9 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		requestResponseOperation := binding.RequestCodec.ID != "" || binding.ResponseDecoder.ID != ""
 		if requestResponseOperation && (binding.RequestCodec.ID == "" || binding.ResponseDecoder.ID == "") {
 			return fmt.Errorf("provider %q has incomplete %q codec binding", def.ID, operation)
+		}
+		if binding.RequestCodec.ID == "" && len(binding.RequestCodecOptions) > 0 {
+			return fmt.Errorf("provider %q %q requestCodecOptions requires a requestCodec", def.ID, operation)
 		}
 		if binding.TaskRef == nil {
 			if requestResponseOperation {
@@ -928,6 +1202,36 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 			return fmt.Errorf("provider %q references unknown extension %q", def.ID, extension.ID)
 		}
 	}
+	dependencies := map[extensions.Ref]struct{}{extensionRef(def.Auth): {}}
+	if def.Session.ID != "" {
+		dependencies[extensionRef(def.Session)] = struct{}{}
+	}
+	for _, binding := range def.Operations {
+		if binding.TaskRef != nil {
+			dependencies[*binding.TaskRef] = struct{}{}
+		}
+		for _, primitive := range []PrimitiveRef{binding.Endpoint, binding.Transport, binding.RequestCodec, binding.ResponseDecoder, binding.ModelSource, binding.UsageSource, binding.QuotaSource, binding.ErrorClassifier} {
+			if primitive.ID != "" {
+				dependencies[extensionRef(primitive)] = struct{}{}
+			}
+		}
+	}
+	for _, extension := range def.Extensions {
+		dependencies[extensionRef(extension)] = struct{}{}
+	}
+	dependencyRefs := make([]extensions.Ref, 0, len(dependencies))
+	for dependency := range dependencies {
+		dependencyRefs = append(dependencyRefs, dependency)
+	}
+	sort.Slice(dependencyRefs, func(i, j int) bool { return dependencyRefs[i].Key() < dependencyRefs[j].Key() })
+	providerRef := ProviderDefinitionRef(def.ID, def.ContractVersion)
+	if err := r.catalog.Register(extensions.Descriptor{
+		Ref: providerRef, ImplementationVersion: def.Version, DisplayName: def.DisplayName,
+		Description:  "Provider behavior definition with exact primitive and operation dependencies.",
+		Dependencies: dependencyRefs, LifecycleCapabilities: []string{"provider.definition"},
+	}, func(json.RawMessage) (any, error) { return def, nil }); err != nil {
+		return fmt.Errorf("register provider definition extension %q: %w", providerRef.Key(), err)
+	}
 	r.definitions[def.ID] = def
 	return nil
 }
@@ -960,8 +1264,8 @@ func (r *PrimitiveRegistry) hasPrimitive(ref PrimitiveRef) bool {
 	if !ok {
 		return false
 	}
-	version, exists := set[ref.ID]
-	return exists && version == ref.ContractVersion
+	_, exists := set[extensions.Ref{Kind: string(ref.Kind), ID: ref.ID, ContractVersion: ref.ContractVersion}]
+	return exists
 }
 
 func validatePrimitiveRef(ref PrimitiveRef) error {

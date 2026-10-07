@@ -2,6 +2,7 @@ package kernel_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"unicode"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -41,9 +43,9 @@ type scriptedResponseDecoder struct {
 type uppercaseSemanticText struct{}
 
 func (uppercaseSemanticText) Definition() kernel.ResponseTransformDefinition {
-	return kernel.ResponseTransformDefinition{ID: "fixture.uppercase-response-text.v1", Label: "Uppercase fixture text", Description: "Prove semantic response transforms run before rendering.", Effects: []kernel.ResponseTransformEffect{kernel.ResponseEffectText}}
+	return kernel.ResponseTransformDefinition{Ref: extensions.Ref{Kind: kernel.ResponseTransformKind, ID: "fixture.uppercase-response-text.v1", ContractVersion: 1}, ImplementationVersion: "1", Label: "Uppercase fixture text", Description: "Prove semantic response transforms run before rendering.", Effects: []kernel.ResponseTransformEffect{kernel.ResponseEffectText}}
 }
-func (uppercaseSemanticText) ApplyResponse(_ context.Context, event kernel.ResponseEvent) (kernel.ResponseEvent, error) {
+func (uppercaseSemanticText) ApplyResponse(_ context.Context, event kernel.ResponseEvent, _ json.RawMessage) (kernel.ResponseEvent, error) {
 	if event.Kind == kernel.EventTextDelta {
 		event.Text = strings.Map(unicode.ToUpper, event.Text)
 	}
@@ -80,14 +82,18 @@ func (d scriptedResponseDecoder) Decode(_ context.Context, _ kernel.UpstreamResp
 func TestComposedSemanticPipelineDoesNotReplayAcceptedUpstreamResponse(t *testing.T) {
 	buildKernel := func(t *testing.T, failAfterWrite bool) (*kernel.Kernel, *[]string) {
 		t.Helper()
-		snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		input := kernel.SnapshotInput{
 			PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
 			Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelCombo, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "broken-route"}, {Kind: kernel.MemberRoute, ID: "good-route"}}}},
 			Routes: []kernel.Route{
 				{ID: "broken-route", Protocol: kernel.Protocol("vendor.v1"), BaseURL: "https://provider.test/v1", Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"broken"}}}},
 				{ID: "good-route", Protocol: kernel.Protocol("vendor.v1"), BaseURL: "https://provider.test/v1", Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"good"}}}},
 			},
-		}, 1)
+		}
+		if !failAfterWrite {
+			input.TransformBindings = []kernel.TransformBinding{{ID: "daemon.uppercase", TransformRef: extensions.Ref{Kind: kernel.ResponseTransformKind, ID: "fixture.uppercase-response-text.v1", ContractVersion: 1}, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}}
+		}
+		snapshot, err := kernel.BuildSnapshot(input, 1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -109,9 +115,17 @@ func TestComposedSemanticPipelineDoesNotReplayAcceptedUpstreamResponse(t *testin
 	if err := precommitKernel.ResponseTransforms.Register(uppercaseSemanticText{}); err != nil {
 		t.Fatal(err)
 	}
+	bindings := precommitKernel.Snapshots.Load().TransformBindings
+	if err := precommitKernel.ResponseTransforms.ValidateBindings(bindings); err != nil {
+		t.Fatalf("validate response binding: %v", err)
+	}
+	probe, err := precommitKernel.ResponseTransforms.ApplyScopes(context.Background(), kernel.ResponseEvent{Kind: kernel.EventTextDelta, Text: "probe"}, bindings, kernel.TransformScope{Kind: kernel.TransformScopeDaemon})
+	if err != nil || probe.Text != "PROBE" {
+		t.Fatalf("apply response binding probe=%#v err=%v", probe, err)
+	}
 	precommitWriter := httptest.NewRecorder()
 	request := kernel.NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
-	err := precommitKernel.Execute(context.Background(), request, kernel.Credential{}, precommitWriter)
+	err = precommitKernel.Execute(context.Background(), request, kernel.Credential{}, precommitWriter)
 	var suppressed *kernel.ReplaySuppressedError
 	if !errors.As(err, &suppressed) || suppressed.Effect != kernel.EffectAccepted {
 		t.Fatalf("accepted response should suppress retry, got %v", err)
@@ -129,5 +143,25 @@ func TestComposedSemanticPipelineDoesNotReplayAcceptedUpstreamResponse(t *testin
 	committedKernel.Close()
 	if err == nil || len(*committedAttempts) != 1 || !strings.Contains(committedWriter.Body.String(), "partial") {
 		t.Fatalf("post-commit err=%v attempts=%v body=%q", err, *committedAttempts, committedWriter.Body.String())
+	}
+}
+
+func TestComposedSemanticPipelineBoundsEachDecodedResponseEvent(t *testing.T) {
+	attempts := []string{}
+	adapter := kernel.ComposedAdapter{
+		AdapterID: "bounded-events", Endpoint: kernel.HTTPJSONEndpoint{}, Request: pipelineRequest{},
+		Transport: pipelineTransport{}, Response: scriptedResponseDecoder{name: "bounded", attempts: &attempts},
+		ProviderFormat: normalize.FormatOpenAIChat,
+		Renderers:      map[normalize.Format]kernel.ResponseRenderer{normalize.FormatOpenAIChat: egress.OpenAIChat{}},
+	}
+	writer := httptest.NewRecorder()
+	err := adapter.RenderResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader("fixture")),
+	}, writer, normalize.FormatOpenAIChat, kernel.StreamHooks{MaxEventBytes: 4})
+	if err == nil || !strings.Contains(err.Error(), "operation buffer limit") {
+		t.Fatalf("oversized decoded event error=%v", err)
+	}
+	if writer.Body.Len() != 0 || len(attempts) != 1 {
+		t.Fatalf("event limit should stop before renderer emission: body=%q attempts=%v", writer.Body.String(), attempts)
 	}
 }

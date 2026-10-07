@@ -58,7 +58,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
 	root.AddCommand(extensionCommands())
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), logsCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
 	return root
 }
 
@@ -267,6 +267,14 @@ func healthCommand() *cobra.Command {
 func quotaCommand() *cobra.Command        { return listCommand("quota", "quota.list", nil) }
 func usageCommand() *cobra.Command        { return listCommand("usage", "usage.list", nil) }
 func usageSummaryCommand() *cobra.Command { return listCommand("usage-summary", "usage.summary", nil) }
+func logsCommand() *cobra.Command {
+	var limit int
+	command := &cobra.Command{Use: "logs", Short: "show recent daemon and data-plane logs", RunE: func(*cobra.Command, []string) error {
+		return invoke("logs.list", map[string]any{"limit": limit})
+	}}
+	command.Flags().IntVar(&limit, "limit", 100, "number of recent records (1-256)")
+	return command
+}
 func usagePruneCommand() *cobra.Command {
 	var before string
 	cmd := &cobra.Command{Use: "usage-prune", Short: "prune usage before a cutoff", RunE: func(*cobra.Command, []string) error { return invoke("usage.prune", map[string]any{"before": before}) }}

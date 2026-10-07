@@ -5,11 +5,12 @@ import "fmt"
 import "github.com/fm39hz/gobroom/internal/normalize"
 
 type SnapshotInput struct {
-	PublicModels []PublicModel
-	Routes       []Route
-	RouteGroups  map[string][]string
-	WireRoutes   map[string][]string
-	Nodes        []ModelNode
+	PublicModels      []PublicModel
+	Routes            []Route
+	RouteGroups       map[string][]string
+	WireRoutes        map[string][]string
+	Nodes             []ModelNode
+	TransformBindings []TransformBinding
 }
 
 // BuildSnapshot converts durable control-plane records into the immutable
@@ -17,6 +18,7 @@ type SnapshotInput struct {
 func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 	snapshot := Snapshot{
 		Version: version, PublicModels: map[string]PublicModel{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, Nodes: map[string]ModelNode{},
+		TransformBindings: cloneTransformBindings(input.TransformBindings),
 	}
 	for _, item := range input.PublicModels {
 		if item.Name == "" {

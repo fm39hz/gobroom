@@ -42,16 +42,65 @@ func (structuredOutputFeature) Evaluate(capability Capability, constraintData js
 	return false, fmt.Sprintf("format %q is unavailable", requested.Format)
 }
 
-func TestNewFeatureExtensionNegotiatesTypedConstraintsWithoutKernelBranch(t *testing.T) {
-	const featureID = "vendor.example.output-schema.v1"
-	registry := NewFeatureRegistry()
-	if err := registry.Register(featureID, structuredOutputFeature{}); err != nil {
+type rejectingFeature struct{}
+
+func (rejectingFeature) Evaluate(Capability, json.RawMessage) (bool, string) {
+	return false, "this evaluator contract rejects the route"
+}
+
+func TestFeatureEvaluatorsBindFromVersionedExtensionCatalog(t *testing.T) {
+	catalog := extensions.NewCatalog()
+	constraintShape := json.RawMessage(`{"type":"object","properties":{"format":{"type":"string","minLength":1}},"required":["format"],"additionalProperties":false}`)
+	featureID := "vendor.example.output-schema"
+	featureV1 := extensions.Ref{Kind: FeatureEvaluatorKind, ID: featureID, ContractVersion: 1}
+	featureV2 := extensions.Ref{Kind: FeatureEvaluatorKind, ID: featureID, ContractVersion: 2}
+	for version, evaluator := range map[extensions.Ref]FeatureEvaluator{featureV1: structuredOutputFeature{}, featureV2: rejectingFeature{}} {
+		schemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "feature.constraints." + featureID, ContractVersion: version.ContractVersion}
+		document, err := extensions.BindSchemaDocument(schemaRef, constraintShape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := catalog.RegisterSchema(schemaRef, document); err != nil {
+			t.Fatal(err)
+		}
+		if err := catalog.Register(extensions.Descriptor{
+			Ref: version, ImplementationVersion: "test", DisplayName: "Output schema", Description: "Fixture feature evaluator.", InputSchemaRef: &schemaRef,
+		}, func(json.RawMessage) (any, error) { return evaluator, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := catalog.Freeze()
+	if err != nil {
 		t.Fatal(err)
 	}
-	requirement := normalize.FeatureRequirement{ID: featureID, Constraints: json.RawMessage(`{"format":"strict-json"}`)}
+	registry, err := NewFeatureRegistryFromCatalog(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := Route{Profile: CapabilityProfile{featureID: {State: SupportNative, Constraints: json.RawMessage(`{"formats":["json"]}`)}}}
+	constraints := json.RawMessage(`{"format":"json"}`)
+	if ok, reason := registry.Evaluate(route, []FeatureRequirement{{Ref: featureV1, Constraints: constraints}}); !ok {
+		t.Fatalf("v1 evaluator failed: %s", reason)
+	}
+	if ok, reason := registry.Evaluate(route, []FeatureRequirement{{Ref: featureV2, Constraints: constraints}}); ok || reason == "" {
+		t.Fatalf("v2 request silently resolved to another evaluator version: %v %q", ok, reason)
+	}
+	if ok, reason := registry.Evaluate(route, []FeatureRequirement{{Ref: featureV1, Constraints: json.RawMessage(`{"unexpected":true}`)}}); ok || reason == "" {
+		t.Fatalf("catalog input schema did not validate evaluator constraints: %v %q", ok, reason)
+	}
+}
+
+func TestNewFeatureExtensionNegotiatesTypedConstraintsWithoutKernelBranch(t *testing.T) {
+	const featureID = "vendor.example.output-schema.v1"
+	featureRef := extensions.Ref{Kind: FeatureEvaluatorKind, ID: featureID, ContractVersion: 1}
+	registry := NewFeatureRegistry()
+	if err := registry.Register(featureRef, structuredOutputFeature{}); err != nil {
+		t.Fatal(err)
+	}
+	requirement := normalize.FeatureRequirement{Ref: featureRef, Constraints: json.RawMessage(`{"format":"strict-json"}`)}
 	request := normalize.Request{Requirements: []normalize.FeatureRequirement{requirement}}
 	compiled := CompileRequirements(request)
-	if len(compiled.Features) != 1 || compiled.Features[0].ID != featureID {
+	if len(compiled.Features) != 1 || compiled.Features[0].Ref != featureRef {
 		t.Fatalf("extension requirement was not preserved: %#v", compiled.Features)
 	}
 	route := Route{Profile: CapabilityProfile{featureID: {
@@ -69,7 +118,8 @@ func TestNewFeatureExtensionNegotiatesTypedConstraintsWithoutKernelBranch(t *tes
 func TestFeatureRegistryFailsClosedForUnknownExtension(t *testing.T) {
 	const featureID = "future.audio.transcription.v1"
 	registry := NewFeatureRegistry()
-	eligible, reason := registry.Evaluate(Route{Profile: CapabilityProfile{featureID: {State: SupportNative}}}, []FeatureRequirement{{ID: featureID}})
+	ref := extensions.Ref{Kind: FeatureEvaluatorKind, ID: featureID, ContractVersion: 1}
+	eligible, reason := registry.Evaluate(Route{Profile: CapabilityProfile{featureID: {State: SupportNative}}}, []FeatureRequirement{{Ref: ref}})
 	if eligible || reason == "" {
 		t.Fatalf("unregistered feature evaluator must fail closed: %v %q", eligible, reason)
 	}
@@ -109,8 +159,9 @@ func (featureRouteAdapter) RenderResponse(_ context.Context, _ UpstreamResponse,
 
 func TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest(t *testing.T) {
 	const featureID = "vendor.example.output-schema.v1"
+	featureRef := extensions.Ref{Kind: FeatureEvaluatorKind, ID: featureID, ContractVersion: 1}
 	registry := NewFeatureRegistry()
-	if err := registry.Register(featureID, structuredOutputFeature{}); err != nil {
+	if err := registry.Register(featureRef, structuredOutputFeature{}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := BuildSnapshot(SnapshotInput{
@@ -132,7 +183,7 @@ func TestKernelRunsOnlyRouteWhoseRegisteredFeatureEvaluatorAcceptsRequest(t *tes
 	var used []string
 	k.Adapters["wrong"] = featureRouteAdapter{id: "wrong", used: &used}
 	k.Adapters["right"] = featureRouteAdapter{id: "right", used: &used}
-	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatAnthropic, Requirements: []normalize.FeatureRequirement{{ID: featureID, Constraints: json.RawMessage(`{"format":"strict-json"}`)}}}
+	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatAnthropic, Requirements: []normalize.FeatureRequirement{{Ref: featureRef, Constraints: json.RawMessage(`{"format":"strict-json"}`)}}}
 	writer := httptest.NewRecorder()
 	if err := k.Execute(context.Background(), request, Credential{}, writer); err != nil {
 		t.Fatal(err)

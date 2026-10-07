@@ -2,6 +2,8 @@ package kernel
 
 import "fmt"
 
+import "encoding/json"
+
 // ensureModelNodes validates the typed Physical/Combo graph.
 func ensureModelNodes(snapshot *Snapshot) error {
 	if snapshot.Nodes == nil {
@@ -22,6 +24,9 @@ func ensureModelNodes(snapshot *Snapshot) error {
 		}
 		if node.Strategy == "" {
 			node.Strategy = StrategyFallback
+		}
+		if node.StrategyRef.ID == "" {
+			node.StrategyRef = StrategyRef("ordered-fallback", 1)
 		}
 		if node.Kind == "" {
 			node.Kind = ModelCombo
@@ -60,6 +65,7 @@ func classifyMember(snapshot Snapshot, ref string) MemberRef {
 
 func cloneNode(node ModelNode) ModelNode {
 	node.Members = append([]MemberRef(nil), node.Members...)
+	node.StrategyConfig = append(json.RawMessage(nil), node.StrategyConfig...)
 	return node
 }
 

@@ -1,8 +1,11 @@
 package kernel
 
 import (
+	"errors"
 	"net/http"
 )
+
+var ErrResponseOutputLimit = errors.New("operation response exceeded its output byte limit")
 
 // responseCommitWriter tracks the first externally visible response write.
 // The caller may retry a semantic decode/render failure only before this
@@ -10,6 +13,8 @@ import (
 type responseCommitWriter struct {
 	http.ResponseWriter
 	committed bool
+	maxBytes  int64
+	written   int64
 }
 
 func (w *responseCommitWriter) WriteHeader(status int) {
@@ -21,10 +26,15 @@ func (w *responseCommitWriter) WriteHeader(status int) {
 }
 
 func (w *responseCommitWriter) Write(data []byte) (int, error) {
+	if w.maxBytes > 0 && int64(len(data)) > w.maxBytes-w.written {
+		return 0, ErrResponseOutputLimit
+	}
 	if !w.committed {
 		w.WriteHeader(http.StatusOK)
 	}
-	return w.ResponseWriter.Write(data)
+	n, err := w.ResponseWriter.Write(data)
+	w.written += int64(n)
+	return n, err
 }
 
 func (w *responseCommitWriter) Flush() {

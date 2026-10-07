@@ -45,7 +45,15 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog, extensionCatalog: extensionCatalog}
+	extensionSnapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategyCatalog, err := kernel.NewStrategyCatalog(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog, strategyCatalog: strategyCatalog, strategyDefinitions: strategyCatalog.Definitions(), extensionCatalog: extensionCatalog}
 	response := d.handleIPC(nil, IPCRequest{ID: "1", Method: "providers.create", Params: map[string]any{"name": "G4F", "prefix": "g4f", "baseUrl": "https://example.test/v1", "protocol": "openai_chat"}})
 	if !response.OK {
 		t.Fatal(response.Error)
@@ -93,6 +101,26 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	}
 }
 
+func TestLogsListReturnsRecentStructuredRecordsWithBoundedLimit(t *testing.T) {
+	d := &Daemon{}
+	d.storeLog(LogRecord{At: time.Date(2026, 10, 7, 1, 0, 0, 0, time.UTC), Level: "info", Message: "older"})
+	d.storeLog(LogRecord{At: time.Date(2026, 10, 7, 1, 1, 0, 0, time.UTC), Level: "info", Message: "HTTP request", RequestID: "trace-1", Method: "POST", Path: "/v1/chat/completions", Status: 200, Model: "junior", Operation: normalize.OperationChatGenerate})
+	d.storeLog(LogRecord{At: time.Date(2026, 10, 7, 1, 2, 0, 0, time.UTC), Level: "warn", Message: "newest"})
+
+	response := d.handleIPC(context.Background(), IPCRequest{ID: "logs", Method: "logs.list", Params: map[string]any{"limit": float64(2)}})
+	items, ok := response.Result.([]LogRecord)
+	if !response.OK || !ok || len(items) != 2 {
+		t.Fatalf("logs response=%#v error=%q", response.Result, response.Error)
+	}
+	if items[0].RequestID != "trace-1" || items[0].Path != "/v1/chat/completions" || items[0].Model != "junior" || items[1].Message != "newest" {
+		t.Fatalf("recent log window=%#v", items)
+	}
+	invalid := d.handleIPC(context.Background(), IPCRequest{ID: "bad-limit", Method: "logs.list", Params: map[string]any{"limit": float64(257)}})
+	if invalid.OK {
+		t.Fatalf("out-of-range log limit accepted: %#v", invalid)
+	}
+}
+
 func TestComboIPCExposureProjectsOnlySelectedNameToOpenAIModels(t *testing.T) {
 	s, err := store.Open(t.TempDir() + "/combo-exposure.db")
 	if err != nil {
@@ -100,10 +128,14 @@ func TestComboIPCExposureProjectsOnlySelectedNameToOpenAIModels(t *testing.T) {
 	}
 	defer s.Close()
 	server := api.NewServer(s)
-	d := &Daemon{store: s, server: server}
+	strategyCatalog, err := kernel.NewBuiltinStrategyCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{store: s, server: server, strategyCatalog: strategyCatalog}
 	params := map[string]any{
 		"name": "junior", "members": []any{},
-		"strategy":     map[string]any{"id": "ordered-fallback", "config": map[string]any{}},
+		"strategy":     map[string]any{"ref": kernel.StrategyRef("ordered-fallback", 1), "config": map[string]any{}},
 		"discoverable": false, "enabled": true,
 	}
 	response := d.handleIPC(context.Background(), IPCRequest{ID: "combo-hidden", Method: "combo_models.upsert", Params: params})

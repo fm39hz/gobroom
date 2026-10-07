@@ -130,7 +130,7 @@ func TestDefinitionBoundOAuthFlowRefreshesWithConnectionSecrets(t *testing.T) {
 	}
 	binding := bindings[RuntimeBindingKey("bound-oauth", OperationChat)]
 	flows := registry.AuthFlowsForBindings(bindings)
-	if flow := flows[AuthBindingKey("bound-oauth", "oauth2")]; flow == nil || flow.ID() != "oauth2" {
+	if flow := flows[AuthBindingKey("bound-oauth", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1})]; flow == nil || flow.ID() != "oauth2" {
 		t.Fatalf("definition-specific OAuth flow was not published to the daemon runtime: %#v", flow)
 	}
 	state := `{"access_token":"old-access","refresh_token":"refresh","client_secret":"connection-secret","expires_at":"2000-01-01T00:00:00Z"}`

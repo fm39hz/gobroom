@@ -1,12 +1,51 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
+
+func TestSQLitePragmasApplyToEveryPooledConnection(t *testing.T) {
+	s, err := Open(t.TempDir() + "/pooled.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.DB.SetMaxOpenConns(4)
+	s.DB.SetMaxIdleConns(0)
+	for i := 0; i < 4; i++ {
+		connection, err := s.DB.Conn(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var journal string
+		var synchronous, foreignKeys, busyTimeout int
+		err = connection.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&journal)
+		if err == nil {
+			err = connection.QueryRowContext(context.Background(), "PRAGMA synchronous").Scan(&synchronous)
+		}
+		if err == nil {
+			err = connection.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&foreignKeys)
+		}
+		if err == nil {
+			err = connection.QueryRowContext(context.Background(), "PRAGMA busy_timeout").Scan(&busyTimeout)
+		}
+		closeErr := connection.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if journal != "wal" || synchronous != 1 || foreignKeys != 1 || busyTimeout != 5000 {
+			t.Fatalf("pooled connection %d pragmas: journal=%q synchronous=%d foreign_keys=%d busy_timeout=%d", i, journal, synchronous, foreignKeys, busyTimeout)
+		}
+	}
+}
 
 func TestConnectionsAreManagedWithoutExposingSecrets(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")

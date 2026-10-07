@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -61,6 +62,14 @@ type ResourceBounds struct {
 	DeadlineMillis   int64 `json:"deadlineMillis,omitempty"`
 }
 
+// ArtifactInput describes one named artifact port on a versioned operation.
+type ArtifactInput struct {
+	Role     string `json:"role"`
+	TypeRef  Ref    `json:"typeRef"`
+	MinCount int    `json:"minCount"`
+	MaxCount int    `json:"maxCount"`
+}
+
 type Descriptor struct {
 	Ref                   Ref             `json:"ref"`
 	ImplementationVersion string          `json:"implementationVersion"`
@@ -73,8 +82,10 @@ type Descriptor struct {
 	ReplaySafety          string          `json:"replaySafety,omitempty"`
 	Dependencies          []Ref           `json:"dependencies,omitempty"`
 	SemanticContracts     []Ref           `json:"semanticContracts,omitempty"`
+	ArtifactInputs        []ArtifactInput `json:"artifactInputs,omitempty"`
 	LifecycleCapabilities []string        `json:"lifecycleCapabilities,omitempty"`
 	ResourceBounds        ResourceBounds  `json:"resourceBounds"`
+	ArtifactPolicy        *ArtifactPolicy `json:"artifactPolicy,omitempty"`
 	SetupView             json.RawMessage `json:"setupView,omitempty"`
 }
 
@@ -88,6 +99,27 @@ type CatalogView struct {
 	Fingerprint string       `json:"fingerprint"`
 	Descriptors []Descriptor `json:"descriptors"`
 	Schemas     []Schema     `json:"schemas"`
+}
+
+// DependencyLock pins the exact compiled extension closure used by a portable
+// configuration. It records runtime roots, transitive descriptors and schema
+// digests, but never implementation binaries or secret material.
+type DependencyLock struct {
+	Version    int            `json:"version"`
+	Roots      []Ref          `json:"roots"`
+	Extensions []ExtensionPin `json:"extensions"`
+	Schemas    []SchemaPin    `json:"schemas"`
+}
+
+type ExtensionPin struct {
+	Ref                   Ref    `json:"ref"`
+	ImplementationVersion string `json:"implementationVersion"`
+	DescriptorSHA256      string `json:"descriptorSha256"`
+}
+
+type SchemaPin struct {
+	Ref    Ref    `json:"ref"`
+	SHA256 string `json:"sha256"`
 }
 
 type Factory func(json.RawMessage) (any, error)
@@ -234,6 +266,29 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	if err := validateBounds(descriptor); err != nil {
 		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
 	}
+	if len(descriptor.ArtifactInputs) > 0 && descriptor.Ref.Kind != "operation" {
+		return Descriptor{}, fmt.Errorf("only operation extensions may declare artifact input ports")
+	}
+	seenArtifactRoles := map[string]bool{}
+	for _, input := range descriptor.ArtifactInputs {
+		if strings.TrimSpace(input.Role) == "" || seenArtifactRoles[input.Role] || input.MinCount < 0 || input.MaxCount <= 0 || input.MinCount > input.MaxCount {
+			return Descriptor{}, fmt.Errorf("extension %q has an invalid or duplicate artifact input role", descriptor.Ref.Key())
+		}
+		if err := input.TypeRef.Validate(); err != nil || input.TypeRef.Kind != ArtifactKind {
+			return Descriptor{}, fmt.Errorf("extension %q artifact input %q requires an exact artifact type", descriptor.Ref.Key(), input.Role)
+		}
+		seenArtifactRoles[input.Role] = true
+	}
+	if descriptor.Ref.Kind == ArtifactKind {
+		if descriptor.ArtifactPolicy == nil || descriptor.ResourceBounds.MaxInputBytes <= 0 {
+			return Descriptor{}, fmt.Errorf("artifact extension %q requires an artifact policy and positive maxInputBytes", descriptor.Ref.Key())
+		}
+		if err := validateArtifactPolicy(*descriptor.ArtifactPolicy); err != nil {
+			return Descriptor{}, fmt.Errorf("artifact extension %q: %w", descriptor.Ref.Key(), err)
+		}
+	} else if descriptor.ArtifactPolicy != nil {
+		return Descriptor{}, fmt.Errorf("non-artifact extension %q cannot declare artifact policy", descriptor.Ref.Key())
+	}
 	if len(descriptor.SetupView) > 0 {
 		canonical, _, err := canonicalJSON(descriptor.SetupView)
 		if err != nil {
@@ -345,6 +400,125 @@ func (s *Snapshot) Fingerprint() string {
 	return s.fingerprint
 }
 
+// LockDependencies computes the deterministic transitive closure of exact
+// extension roots. Provider definitions pull in their operation/primitive
+// dependencies, while descriptors pull in options/input/result/event schemas,
+// semantic contracts, artifact types and recipient contracts.
+func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
+	if s == nil {
+		return DependencyLock{}, fmt.Errorf("extension snapshot is nil")
+	}
+	lock := DependencyLock{Version: 1}
+	extensionsSeen := map[Ref]bool{}
+	schemasSeen := map[Ref]bool{}
+	var addRef func(Ref) error
+	var addSchema func(Ref) error
+	addSchema = func(ref Ref) error {
+		if err := ref.Validate(); err != nil || ref.Kind != SchemaKind {
+			return fmt.Errorf("dependency %q is not an exact schema reference", ref.Key())
+		}
+		if schemasSeen[ref] {
+			return nil
+		}
+		schema, ok := s.schemas[ref]
+		if !ok {
+			return fmt.Errorf("dependency schema %q is unavailable", ref.Key())
+		}
+		schemasSeen[ref] = true
+		lock.Schemas = append(lock.Schemas, SchemaPin{Ref: ref, SHA256: schema.Digest})
+		return nil
+	}
+	addRef = func(ref Ref) error {
+		if err := ref.Validate(); err != nil {
+			return err
+		}
+		if ref.Kind == SchemaKind {
+			return addSchema(ref)
+		}
+		if extensionsSeen[ref] {
+			return nil
+		}
+		item, ok := s.registrations[ref]
+		if !ok {
+			return fmt.Errorf("dependency extension %q is unavailable", ref.Key())
+		}
+		extensionsSeen[ref] = true
+		descriptorBytes, err := json.Marshal(cloneDescriptor(item.descriptor))
+		if err != nil {
+			return fmt.Errorf("fingerprint extension descriptor %q: %w", ref.Key(), err)
+		}
+		descriptorDigest := sha256.Sum256(descriptorBytes)
+		lock.Extensions = append(lock.Extensions, ExtensionPin{
+			Ref: ref, ImplementationVersion: item.descriptor.ImplementationVersion,
+			DescriptorSHA256: hex.EncodeToString(descriptorDigest[:]),
+		})
+		for _, schemaRef := range []*Ref{item.descriptor.OptionsSchemaRef, item.descriptor.InputSchemaRef, item.descriptor.ResultSchemaRef} {
+			if schemaRef != nil {
+				if err := addSchema(*schemaRef); err != nil {
+					return fmt.Errorf("extension %q: %w", ref.Key(), err)
+				}
+			}
+		}
+		for _, schemaRef := range item.descriptor.EventSchemaRefs {
+			if err := addSchema(schemaRef); err != nil {
+				return fmt.Errorf("extension %q: %w", ref.Key(), err)
+			}
+		}
+		dependencies := append([]Ref(nil), item.descriptor.Dependencies...)
+		dependencies = append(dependencies, item.descriptor.SemanticContracts...)
+		for _, input := range item.descriptor.ArtifactInputs {
+			dependencies = append(dependencies, input.TypeRef)
+		}
+		if item.descriptor.ArtifactPolicy != nil {
+			dependencies = append(dependencies, item.descriptor.ArtifactPolicy.RecipientContracts...)
+		}
+		for _, dependency := range dependencies {
+			if err := addRef(dependency); err != nil {
+				return fmt.Errorf("extension %q dependency: %w", ref.Key(), err)
+			}
+		}
+		return nil
+	}
+
+	lock.Roots = append([]Ref(nil), roots...)
+	sort.Slice(lock.Roots, func(i, j int) bool { return lock.Roots[i].Key() < lock.Roots[j].Key() })
+	for i, root := range lock.Roots {
+		if i > 0 && root == lock.Roots[i-1] {
+			return DependencyLock{}, fmt.Errorf("duplicate dependency root %q", root.Key())
+		}
+		if err := addRef(root); err != nil {
+			return DependencyLock{}, fmt.Errorf("resolve dependency root %q: %w", root.Key(), err)
+		}
+	}
+	sort.Slice(lock.Extensions, func(i, j int) bool { return lock.Extensions[i].Ref.Key() < lock.Extensions[j].Ref.Key() })
+	sort.Slice(lock.Schemas, func(i, j int) bool { return lock.Schemas[i].Ref.Key() < lock.Schemas[j].Ref.Key() })
+	return lock, nil
+}
+
+// ValidateDependencyLock verifies exact implementation descriptors and schema
+// digests, then recomputes the closure so omitted transitive dependencies fail.
+func (s *Snapshot) ValidateDependencyLock(lock DependencyLock) error {
+	if lock.Version != 1 {
+		return fmt.Errorf("unsupported extension dependency lock version %d", lock.Version)
+	}
+	expected, err := s.LockDependencies(lock.Roots)
+	if err != nil {
+		return err
+	}
+	actualJSON, err := json.Marshal(lock)
+	if err != nil {
+		return err
+	}
+	expectedJSON, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(actualJSON, expectedJSON) {
+		return fmt.Errorf("extension dependency lock does not match the compiled catalog")
+	}
+	return nil
+}
+
 func (s *Snapshot) Descriptor(ref Ref) (Descriptor, bool) {
 	if s == nil {
 		return Descriptor{}, false
@@ -410,6 +584,28 @@ func (s *Snapshot) Bind(ref Ref, options json.RawMessage) (Descriptor, any, erro
 	return cloneDescriptor(item.descriptor), implementation, nil
 }
 
+// Implementation constructs a catalog-owned, stateless implementation whose
+// behavior is configured later by per-binding options. It deliberately does
+// not validate options; callers must validate each binding with ValidateOptions
+// before execution. Use Bind when options configure the constructed instance.
+func (s *Snapshot) Implementation(ref Ref) (Descriptor, any, error) {
+	if s == nil {
+		return Descriptor{}, nil, fmt.Errorf("extension snapshot is nil")
+	}
+	item, ok := s.registrations[ref]
+	if !ok {
+		return Descriptor{}, nil, fmt.Errorf("extension %q is not registered", ref.Key())
+	}
+	implementation, err := item.factory(json.RawMessage(`{}`))
+	if err != nil {
+		return Descriptor{}, nil, fmt.Errorf("construct extension %q: %w", ref.Key(), err)
+	}
+	if implementation == nil {
+		return Descriptor{}, nil, fmt.Errorf("extension %q factory returned nil", ref.Key())
+	}
+	return cloneDescriptor(item.descriptor), implementation, nil
+}
+
 func (s *Snapshot) ValidateOptions(ref Ref, options json.RawMessage) error {
 	if s == nil {
 		return fmt.Errorf("extension snapshot is nil")
@@ -460,6 +656,86 @@ func (s *Snapshot) ValidateSchema(ref Ref, value json.RawMessage) error {
 	return nil
 }
 
+// ValidateArtifact resolves the exact artifact contract and enforces its
+// ownership, replay, sensitivity, media and size policies before the value or
+// body lease may cross a module boundary.
+func (s *Snapshot) ValidateArtifact(artifact ArtifactRef, receiver ArtifactOwner, recipient Ref, now time.Time) error {
+	if s == nil {
+		return fmt.Errorf("artifact catalog is nil")
+	}
+	descriptor, exists := s.Descriptor(artifact.TypeRef)
+	if !exists || artifact.TypeRef.Kind != ArtifactKind || descriptor.ArtifactPolicy == nil {
+		return fmt.Errorf("artifact type %q is not registered with an artifact policy", artifact.TypeRef.Key())
+	}
+	policy := *descriptor.ArtifactPolicy
+	if err := artifact.ValidateShape(descriptor.ResourceBounds.MaxInputBytes); err != nil {
+		return err
+	}
+	if !policy.AllowsOwnerDomain(artifact.Owner.Domain) {
+		return fmt.Errorf("artifact owner domain %q is not allowed by %q", artifact.Owner.Domain, artifact.TypeRef.Key())
+	}
+	if !policy.AllowsScope(artifact.ReplayScope) {
+		return fmt.Errorf("artifact replay scope %q is not allowed by %q", artifact.ReplayScope, artifact.TypeRef.Key())
+	}
+	if sensitivityRank(artifact.Sensitivity) > sensitivityRank(policy.SensitivityLimit) {
+		return fmt.Errorf("artifact sensitivity %q exceeds the registered limit", artifact.Sensitivity)
+	}
+	if !policy.AllowsMediaType(artifact.MediaType) {
+		return fmt.Errorf("artifact media type %q is not allowed", artifact.MediaType)
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if !artifact.ExpiresAt.IsZero() && !artifact.ExpiresAt.After(now) {
+		return fmt.Errorf("artifact has expired")
+	}
+	if artifact.Body != nil && !artifact.Body.ExpiresAt.IsZero() && !artifact.Body.ExpiresAt.After(now) {
+		return fmt.Errorf("artifact body lease has expired")
+	}
+	if len(artifact.Value) > 0 {
+		if descriptor.InputSchemaRef == nil {
+			return fmt.Errorf("artifact type %q does not declare an inline value schema", artifact.TypeRef.Key())
+		}
+		if err := s.ValidateSchema(*descriptor.InputSchemaRef, artifact.Value); err != nil {
+			return fmt.Errorf("artifact inline value: %w", err)
+		}
+		if artifact.SHA256 != "" {
+			digest := sha256.Sum256(artifact.Value)
+			if hex.EncodeToString(digest[:]) != artifact.SHA256 {
+				return fmt.Errorf("artifact inline digest mismatch")
+			}
+		}
+	}
+	if !artifactOwnersEqual(artifact.Owner, receiver) {
+		if !containsRef(policy.RecipientContracts, recipient) {
+			return fmt.Errorf("artifact owned by %q cannot be transferred to this recipient", artifact.Owner.Domain)
+		}
+		switch artifact.ReplayScope {
+		case ArtifactReplayRequest:
+			// The exact recipient is authorized for this invocation only.
+		case ArtifactReplaySession:
+			if artifact.Owner.SessionID == "" || artifact.Owner.SessionID != receiver.SessionID {
+				return fmt.Errorf("session-scoped artifact cannot cross session owners")
+			}
+		case ArtifactReplayConnection:
+			if artifact.Owner.ConnectionID == "" || artifact.Owner.ConnectionID != receiver.ConnectionID {
+				return fmt.Errorf("connection-scoped artifact cannot cross connection owners")
+			}
+		case ArtifactReplayProvider:
+			if artifact.Owner.ProviderDefinitionID == "" || artifact.Owner.ProviderDefinitionID != receiver.ProviderDefinitionID {
+				return fmt.Errorf("provider-scoped artifact cannot cross provider owners")
+			}
+		case ArtifactReplayPortable:
+			if artifact.Sensitivity == ArtifactSecret {
+				return fmt.Errorf("secret artifacts cannot be transferred portably")
+			}
+		default:
+			return fmt.Errorf("artifact replay scope %q cannot cross owners", artifact.ReplayScope)
+		}
+	}
+	return nil
+}
+
 func (c *Catalog) validateGraph() error {
 	for _, item := range c.registrations {
 		descriptor := item.descriptor
@@ -490,6 +766,19 @@ func (c *Catalog) validateGraph() error {
 		for _, semantic := range descriptor.SemanticContracts {
 			if _, ok := c.registrations[semantic]; !ok {
 				return fmt.Errorf("extension %q references missing semantic contract %q", descriptor.Ref.Key(), semantic.Key())
+			}
+		}
+		for _, input := range descriptor.ArtifactInputs {
+			artifact, ok := c.registrations[input.TypeRef]
+			if !ok || artifact.descriptor.ArtifactPolicy == nil {
+				return fmt.Errorf("operation %q artifact input %q references missing artifact contract %q", descriptor.Ref.Key(), input.Role, input.TypeRef.Key())
+			}
+		}
+		if descriptor.ArtifactPolicy != nil {
+			for _, recipient := range descriptor.ArtifactPolicy.RecipientContracts {
+				if _, ok := c.registrations[recipient]; !ok {
+					return fmt.Errorf("artifact %q references missing recipient contract %q", descriptor.Ref.Key(), recipient.Key())
+				}
 			}
 		}
 	}
@@ -643,6 +932,7 @@ func validateBounds(descriptor Descriptor) error {
 func cloneDescriptor(descriptor Descriptor) Descriptor {
 	descriptor.Dependencies = append([]Ref(nil), descriptor.Dependencies...)
 	descriptor.SemanticContracts = append([]Ref(nil), descriptor.SemanticContracts...)
+	descriptor.ArtifactInputs = append([]ArtifactInput(nil), descriptor.ArtifactInputs...)
 	descriptor.EventSchemaRefs = append([]Ref(nil), descriptor.EventSchemaRefs...)
 	descriptor.LifecycleCapabilities = append([]string(nil), descriptor.LifecycleCapabilities...)
 	descriptor.SetupView = append(json.RawMessage(nil), descriptor.SetupView...)
@@ -657,6 +947,10 @@ func cloneDescriptor(descriptor Descriptor) Descriptor {
 	if descriptor.ResultSchemaRef != nil {
 		copy := *descriptor.ResultSchemaRef
 		descriptor.ResultSchemaRef = &copy
+	}
+	if descriptor.ArtifactPolicy != nil {
+		policy := cloneArtifactPolicy(*descriptor.ArtifactPolicy)
+		descriptor.ArtifactPolicy = &policy
 	}
 	return descriptor
 }

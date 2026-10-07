@@ -28,7 +28,7 @@ func (a deviceOAuthFixture) Refresh(_ context.Context, credential kernel.Credent
 
 func TestStaticSecretAuthIsReusablePrimitive(t *testing.T) {
 	registry := NewAuthRegistry()
-	flow, ok := registry.Resolve("static-secret")
+	flow, ok := registry.Resolve(extensions.Ref{Kind: string(PrimitiveAuth), ID: "static-secret", ContractVersion: 1})
 	if !ok {
 		t.Fatal("static-secret flow is not registered")
 	}
@@ -41,6 +41,45 @@ func TestStaticSecretAuthIsReusablePrimitive(t *testing.T) {
 	}
 	if _, err := flow.Resolve(context.Background(), AuthInput{}); err == nil {
 		t.Fatal("expected missing secret error")
+	}
+}
+
+func TestAuthPrimitiveVersionsBindTheirOwnFactoriesAndSchemas(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.auth.oauth2.options", ContractVersion: 2}
+	schema, err := bindSchemaDocument(schemaRef, json.RawMessage(`{
+"type":"object","properties":{"oauth":{"type":"object","properties":{"clientId":{"type":"string","minLength":1},"authUrl":{"type":"string","format":"uri"},"tokenUrl":{"type":"string","format":"uri"},"scopes":{"type":"array","items":{"type":"string"}},"redirectUrl":{"type":"string","format":"uri"}},"required":["clientId","authUrl","tokenUrl"],"additionalProperties":false},"options":false},"required":["oauth"],"additionalProperties":false
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterAuthFactoryWithOptionsSchema("oauth2", 2, schemaRef, schema, OAuthAuthFactory); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		version uint64
+		client  string
+	}{
+		{version: 1, client: "client-v1"},
+		{version: 2, client: "client-v2"},
+	} {
+		ref := extensions.Ref{Kind: string(PrimitiveAuth), ID: "oauth2", ContractVersion: test.version}
+		options, _ := json.Marshal(AuthOptions{OAuth: &OAuthFlowOptions{ClientID: test.client, AuthURL: "https://auth.example/authorize", TokenURL: "https://auth.example/token"}})
+		_, implementation, err := snapshot.Bind(ref, options)
+		if err != nil {
+			t.Fatalf("bind %s: %v", ref.Key(), err)
+		}
+		flow, ok := implementation.(OAuthAuth)
+		if !ok || flow.Config.ClientID != test.client {
+			t.Fatalf("auth ref %s resolved to %#v", ref.Key(), implementation)
+		}
 	}
 }
 

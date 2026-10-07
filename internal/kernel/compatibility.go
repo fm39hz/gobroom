@@ -26,19 +26,26 @@ func IsResponseCompatibilityFacet(facet string) bool {
 }
 
 const (
-	FacetWireRequest       = "wire.request"
-	FacetWireResponse      = "wire.response"
-	FacetPromptLayers      = "prompt.layers"
-	FacetToolDefinitions   = "tools.definitions"
-	FacetToolHistory       = "tools.history"
-	FacetReasoningIntent   = "reasoning.intent"
-	FacetContinuity        = "continuity.previous_response"
-	FacetVisionInput       = "input.vision"
-	FacetAudioInput        = "input.audio"
-	FacetVideoInput        = "input.video"
-	FacetDocumentInput     = "input.document"
-	FacetGenerationOptions = "generation.options"
+	FacetWireRequest             = "wire.request"
+	FacetWireResponse            = "wire.response"
+	FacetPromptLayers            = "prompt.layers"
+	FacetToolDefinitions         = "tools.definitions"
+	FacetToolHistory             = "tools.history"
+	FacetReasoningIntent         = "reasoning.intent"
+	FacetContinuity              = "continuity.previous_response"
+	FacetVisionInput             = "input.vision"
+	FacetAudioInput              = "input.audio"
+	FacetVideoInput              = "input.video"
+	FacetDocumentInput           = "input.document"
+	FacetGenerationOptions       = "generation.options"
+	FacetOperationArtifactPrefix = "operation.artifact."
 )
+
+func OperationArtifactFacet(role string) string { return FacetOperationArtifactPrefix + role }
+
+func IsOperationArtifactFacet(facet string) bool {
+	return strings.HasPrefix(facet, FacetOperationArtifactPrefix)
+}
 
 // FacetMapping is a stage-local declaration. Mappings are composed in runtime
 // order; a downstream stage must accept the output semantics of its upstream.
@@ -189,6 +196,11 @@ func RequiredRequestFacets(request NormalizedRequest) []string {
 	}
 	if request.Modalities.PDF {
 		required = append(required, FacetDocumentInput)
+	}
+	for _, artifact := range request.Artifacts {
+		if artifact.Role != "" {
+			required = append(required, OperationArtifactFacet(artifact.Role))
+		}
 	}
 	if hasGenerationOptions(request.Raw) {
 		required = append(required, FacetGenerationOptions)

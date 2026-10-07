@@ -41,6 +41,11 @@ Messages, Gemini, etc.). Neither determines the selected provider by itself.
 The ingress codec selects the exact operation version and route binding must
 match that version.
 
+Operation artifact ports also compile to named hard compatibility facets
+(`operation.artifact.<role>`). A provider encoder must explicitly declare how
+it carries each requested artifact role; an unbound binary input cannot slip
+through merely because the outer request is multipart.
+
 `PromptPlan` separates system/developer instructions from conversation and
 records their origin and order. The contract provides harness-, provider-,
 user- and inline-origin layers. HTTP ingress currently populates inline

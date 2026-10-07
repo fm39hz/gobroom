@@ -62,6 +62,58 @@ func TestModelsOnlyExposePublishedReferences(t *testing.T) {
 	}
 }
 
+func TestDataPlaneAccessLogRecordsSafeRequestSummaryAndPreservesStreaming(t *testing.T) {
+	state, err := store.Open(t.TempDir() + "/access-logs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server := NewServerWithRuntimeBindings(state, nil)
+	server.SetDataPlaneToken("authorization-secret")
+	var records []AccessLogRecord
+	server.SetAccessLogger(func(record AccessLogRecord) { records = append(records, record) })
+	server.SetExecutor(func(_ context.Context, _ normalize.Request, writer http.ResponseWriter) error {
+		writer.WriteHeader(http.StatusAccepted)
+		if _, err := writer.Write([]byte("partial")); err != nil {
+			return err
+		}
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		} else {
+			t.Fatal("access middleware broke the streaming Flush contract")
+		}
+		_, err := writer.Write([]byte("-done"))
+		return err
+	})
+
+	body := `{"model":"junior-test","stream":true,"messages":[{"role":"user","content":"body-secret"}],"credential_marker":"must-not-be-logged"}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?token=query-secret", bytes.NewBufferString(body))
+	request.Header.Set("Authorization", "Bearer authorization-secret")
+	request.Header.Set("X-Request-ID", "trace-test-123")
+	response := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted || response.Body.String() != "partial-done" || response.Header().Get("X-Request-ID") != "trace-test-123" {
+		t.Fatalf("stream response status=%d body=%q requestID=%q", response.Code, response.Body.String(), response.Header().Get("X-Request-ID"))
+	}
+	if len(records) != 1 {
+		t.Fatalf("access log records=%#v", records)
+	}
+	got := records[0]
+	if got.RequestID != "trace-test-123" || got.Method != http.MethodPost || got.Path != "/v1/chat/completions" || got.Status != http.StatusAccepted || got.Bytes != int64(len("partial-done")) || got.Model != "junior-test" || got.Operation != normalize.OperationChatGenerate {
+		t.Fatalf("access record=%#v", got)
+	}
+	encoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"body-secret", "must-not-be-logged", "authorization-secret", "query-secret"} {
+		if bytes.Contains(encoded, []byte(secret)) {
+			t.Fatalf("access record contains sensitive request data %q: %s", secret, encoded)
+		}
+	}
+}
+
 func TestProviderPrefixCollisionIsRejected(t *testing.T) {
 	s, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -376,7 +428,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 		INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity) VALUES('physical-a',0,'route:a','exact');`, upstreamURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertComboModel(store.ComboModel{Name: "public-a", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "physical-a"}}, Strategy: store.StrategySpec{ID: "ordered-fallback"}, Discoverable: true, Enabled: true}); err != nil {
+	if err := s.UpsertComboModel(store.ComboModel{Name: "public-a", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "physical-a"}}, Strategy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, Discoverable: true, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	registry, err := provider.NewRuntimeRegistry()
@@ -456,7 +508,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity) VALUES('claude-sonnet-physical',0,'route:anthropic','exact');`, upstreamURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpsertComboModel(store.ComboModel{Name: "claude-sonnet-public", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "claude-sonnet-physical"}}, Strategy: store.StrategySpec{ID: "ordered-fallback"}, Discoverable: true, Enabled: true}); err != nil {
+	if err := s.UpsertComboModel(store.ComboModel{Name: "claude-sonnet-public", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "claude-sonnet-physical"}}, Strategy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, Discoverable: true, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	registry, err := provider.NewRuntimeRegistry()

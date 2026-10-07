@@ -1,8 +1,11 @@
 package kernel
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/extensions"
 )
 
 type Gate interface{ Usable(Route, time.Time) bool }
@@ -48,12 +51,27 @@ func (s *Scheduler) RegisterStrategy(name Strategy, primitive StrategyPrimitive)
 	s.strategies[name] = primitive
 }
 
+// SetStrategyDefinitions replaces the scheduler's strategy implementations
+// from the immutable shared extension catalog bound during daemon startup.
+func (s *Scheduler) SetStrategyDefinitions(definitions []StrategyDefinition) {
+	strategies := make(map[Strategy]StrategyPrimitive, len(definitions))
+	for _, definition := range definitions {
+		if definition.Runtime != "" && definition.Primitive != nil {
+			strategies[definition.Runtime] = definition.Primitive
+		}
+	}
+	s.mu.Lock()
+	s.strategies = strategies
+	s.mu.Unlock()
+}
+
 func (s *Scheduler) Plan(node ModelNode) []MemberRef {
 	s.mu.Lock()
 	primitive, state, stateLock := s.strategyState(node)
 	s.mu.Unlock()
 	stateLock.Lock()
 	state.StickyLimit = node.StickyLimit
+	state.Config = append(json.RawMessage(nil), node.StrategyConfig...)
 	if state.StickyLimit < 1 {
 		state.StickyLimit = 1
 	}
@@ -67,6 +85,7 @@ func (s *Scheduler) OnFailure(node ModelNode, failure StrategyFailure) FailureAc
 	primitive, state, stateLock := s.strategyState(node)
 	s.mu.Unlock()
 	stateLock.Lock()
+	state.Config = append(json.RawMessage(nil), node.StrategyConfig...)
 	action := primitive.OnFailure(failure, state)
 	stateLock.Unlock()
 	return action
@@ -79,17 +98,25 @@ func (s *Scheduler) strategyState(node ModelNode) (StrategyPrimitive, *StrategyS
 	if primitive == nil {
 		primitive = s.strategies[StrategyFallback]
 	}
-	state := s.modelState[node.ID]
+	stateKey := strategyStateKey(node.ID, node.StrategyRef)
+	state := s.modelState[stateKey]
 	if state == nil {
 		state = &StrategyState{}
-		s.modelState[node.ID] = state
+		s.modelState[stateKey] = state
 	}
-	stateLock := s.stateLocks[node.ID]
+	stateLock := s.stateLocks[stateKey]
 	if stateLock == nil {
 		stateLock = &sync.Mutex{}
-		s.stateLocks[node.ID] = stateLock
+		s.stateLocks[stateKey] = stateLock
 	}
 	return primitive, state, stateLock
+}
+
+func strategyStateKey(nodeID string, ref extensions.Ref) string {
+	if ref.Validate() == nil && ref.Kind == StrategyExtensionKind {
+		return nodeID + "\x00" + ref.Key()
+	}
+	return nodeID
 }
 
 func (s *Scheduler) Select(model ResolvedModel, now time.Time) (Route, error) {
@@ -125,6 +152,25 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 	if ranker, ok := s.gate.(RouteRanker); ok {
 		available = ranker.RankRoutes(available, now)
 	}
+	if !isBuiltinStrategy(model.Strategy) && s.hasStrategy(model.Strategy) {
+		node := ModelNode{ID: model.PublicName, Kind: ModelPhysical, Strategy: model.Strategy, StrategyRef: model.StrategyRef, StrategyConfig: append(json.RawMessage(nil), model.StrategyConfig...), StickyLimit: model.StickyLimit}
+		byID := make(map[string]Route, len(available))
+		for _, route := range available {
+			byID[route.ID] = route
+			node.Members = append(node.Members, MemberRef{Kind: MemberRoute, ID: route.ID, Weight: route.Weight})
+		}
+		planned := s.Plan(node)
+		ordered := make([]Route, 0, len(planned))
+		for _, member := range planned {
+			if route, ok := byID[member.ID]; ok {
+				ordered = append(ordered, route)
+			}
+		}
+		if len(ordered) > 0 {
+			return ordered
+		}
+		return available
+	}
 	if len(available) == 0 || model.Strategy == StrategyFallback {
 		return available
 	}
@@ -133,8 +179,9 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 			return available
 		}
 		s.mu.Lock()
-		index := s.cursors[model.PublicName] % len(available)
-		s.cursors[model.PublicName] = (index + 1) % len(available)
+		key := strategyStateKey(model.PublicName, model.StrategyRef)
+		index := s.cursors[key] % len(available)
+		s.cursors[key] = (index + 1) % len(available)
 		s.mu.Unlock()
 		return []Route{available[index]}
 	}
@@ -144,7 +191,7 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := model.PublicName
+	key := strategyStateKey(model.PublicName, model.StrategyRef)
 	start := s.cursors[key] % len(available)
 	if model.Strategy == StrategyRoundRobinFallback {
 		limit := model.StickyLimit
@@ -200,6 +247,21 @@ func (s *Scheduler) OrderWithPreferred(model ResolvedModel, now time.Time, prefe
 		ordered = append(ordered, available[(start+i)%len(available)])
 	}
 	return ordered
+}
+
+func (s *Scheduler) hasStrategy(name Strategy) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.strategies[name] != nil
+}
+
+func isBuiltinStrategy(strategy Strategy) bool {
+	switch strategy {
+	case StrategyFallback, StrategyRotatingFallback, StrategyRoundRobin, StrategyRoundRobinFallback, StrategyWeighted:
+		return true
+	default:
+		return false
+	}
 }
 
 // RankRoutes applies the same runtime gate/ranker to a nested route group.

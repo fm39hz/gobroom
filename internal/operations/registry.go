@@ -4,8 +4,11 @@ package operations
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -27,11 +30,29 @@ type Definition struct {
 	InputSchemaRef      extensions.Ref
 	ResultSchemaRef     *extensions.Ref
 	EventSchemaRefs     []extensions.Ref
+	ArtifactInputs      []ArtifactInput
+	NewResultProjector  ResultProjectorFactory
+	ResourceBounds      extensions.ResourceBounds
 	ReplaySafety        ReplaySafety
 	InputPayload        func(normalize.Request) (json.RawMessage, error)
 	ValidateRequest     func(normalize.Request) error
 	CompileRequirements func(normalize.Request) ([]normalize.FeatureRequirement, error)
 }
+
+// ResultProjector incrementally derives one bounded, operation-typed result
+// from canonical response events. Implementations must enforce the supplied
+// ResourceBounds while accumulating state; they must not retain raw event
+// payloads when a smaller semantic projection is sufficient.
+type ResultProjector interface {
+	ConsumeEvent(json.RawMessage) error
+	Finalize() (json.RawMessage, error)
+}
+
+type ResultProjectorFactory func(extensions.ResourceBounds) (ResultProjector, error)
+
+// ArtifactInput is a named semantic input port shared with the frozen
+// extension descriptor contract.
+type ArtifactInput = extensions.ArtifactInput
 
 type Registry struct {
 	mu      sync.RWMutex
@@ -46,10 +67,16 @@ type Snapshot struct {
 }
 
 type Prepared struct {
-	Ref          extensions.Ref
-	InputPayload json.RawMessage
-	Requirements []normalize.FeatureRequirement
-	ReplaySafety ReplaySafety
+	Ref            extensions.Ref
+	InputPayload   json.RawMessage
+	Requirements   []normalize.FeatureRequirement
+	ReplaySafety   ReplaySafety
+	ResourceBounds extensions.ResourceBounds
+	Artifacts      []extensions.ArtifactRef
+}
+
+func DefaultResourceBounds() extensions.ResourceBounds {
+	return extensions.ResourceBounds{MaxInputBytes: 16 << 20, MaxOutputBytes: 32 << 20, MaxBufferedBytes: 1 << 20, DeadlineMillis: 300_000}
 }
 
 type InputError struct {
@@ -92,14 +119,12 @@ func RegisterChatGenerate(catalog *extensions.Catalog, registry *Registry) error
 		return fmt.Errorf("catalog and operation registry are required")
 	}
 	inputRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.operation.chat-generate.input", ContractVersion: 1}
-	resultRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.operation.chat-generate.result", ContractVersion: 1}
 	eventRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.operation.chat-generate.event", ContractVersion: 1}
 	for _, item := range []struct {
 		ref   extensions.Ref
 		shape json.RawMessage
 	}{
 		{inputRef, json.RawMessage(`{"type":"object","properties":{"model":{"type":"string","minLength":1},"messages":{"type":"array","items":{"type":"object","required":["role"],"properties":{"role":{"type":"string"},"content":true},"additionalProperties":true}},"prompt":{"type":"object"},"tools":{"type":"array"},"thinking":{"type":"object"},"modalities":{"type":"object"}},"required":["model"],"additionalProperties":false}`)},
-		{resultRef, json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"model":{"type":"string"},"content":{"type":"array"},"stop_reason":{"type":"string"},"usage":{"type":"object"},"opaque":true},"additionalProperties":true}`)},
 		{eventRef, json.RawMessage(`{"type":"object","properties":{"kind":{"type":"string","minLength":1},"sequence":{"type":"integer","minimum":0},"itemId":{"type":"string"},"content":{"type":"object"}},"required":["kind"],"additionalProperties":true}`)},
 	} {
 		document, err := extensions.BindSchemaDocument(item.ref, item.shape)
@@ -112,9 +137,9 @@ func RegisterChatGenerate(catalog *extensions.Catalog, registry *Registry) error
 	}
 	return registry.Register(Definition{
 		Ref: ChatGenerateRef(), DisplayName: "Chat generation",
-		Description:    "Generate a chat response from semantic messages, tools, prompt layers and reasoning intent.",
-		InputSchemaRef: inputRef, ResultSchemaRef: &resultRef,
-		EventSchemaRefs: []extensions.Ref{eventRef}, ReplaySafety: ReplayOnRejection,
+		Description:     "Generate a chat response from semantic messages, tools, prompt layers and reasoning intent.",
+		InputSchemaRef:  inputRef,
+		EventSchemaRefs: []extensions.Ref{eventRef}, ResourceBounds: DefaultResourceBounds(), ReplaySafety: ReplayOnRejection,
 		ValidateRequest: validateChatRequest,
 		CompileRequirements: func(request normalize.Request) ([]normalize.FeatureRequirement, error) {
 			return append([]normalize.FeatureRequirement(nil), request.Requirements...), nil
@@ -135,15 +160,35 @@ func (r *Registry) Register(definition Definition) error {
 	if definition.DisplayName == "" || definition.Description == "" || !validReplaySafety(definition.ReplaySafety) {
 		return fmt.Errorf("operation %q requires display metadata and replay safety", definition.Ref.Key())
 	}
+	if definition.ResourceBounds.MaxInputBytes == 0 || definition.ResourceBounds.MaxOutputBytes == 0 || definition.ResourceBounds.MaxBufferedBytes == 0 || definition.ResourceBounds.DeadlineMillis == 0 {
+		return fmt.Errorf("operation %q requires positive input/output/buffer/deadline bounds", definition.Ref.Key())
+	}
 	if definition.ResultSchemaRef != nil && (definition.ResultSchemaRef.Kind != extensions.SchemaKind || definition.ResultSchemaRef.ContractVersion == 0) {
 		return fmt.Errorf("operation %q has invalid result schema reference", definition.Ref.Key())
+	}
+	if definition.ResultSchemaRef != nil && definition.NewResultProjector == nil {
+		return fmt.Errorf("operation %q declares a result schema without a bounded result projector", definition.Ref.Key())
+	}
+	if definition.ResultSchemaRef == nil && definition.NewResultProjector != nil {
+		return fmt.Errorf("operation %q has a result projector without a result schema", definition.Ref.Key())
 	}
 	for _, eventSchema := range definition.EventSchemaRefs {
 		if eventSchema.Kind != extensions.SchemaKind || eventSchema.ContractVersion == 0 {
 			return fmt.Errorf("operation %q has invalid event schema reference", definition.Ref.Key())
 		}
 	}
+	seenArtifactRoles := map[string]bool{}
+	for _, input := range definition.ArtifactInputs {
+		if strings.TrimSpace(input.Role) == "" || seenArtifactRoles[input.Role] || input.MinCount < 0 || input.MaxCount <= 0 || input.MinCount > input.MaxCount {
+			return fmt.Errorf("operation %q has an invalid or duplicate artifact input role", definition.Ref.Key())
+		}
+		if err := input.TypeRef.Validate(); err != nil || input.TypeRef.Kind != extensions.ArtifactKind {
+			return fmt.Errorf("operation %q artifact input %q has an invalid artifact type ref", definition.Ref.Key(), input.Role)
+		}
+		seenArtifactRoles[input.Role] = true
+	}
 	definition.EventSchemaRefs = append([]extensions.Ref(nil), definition.EventSchemaRefs...)
+	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
 	if definition.ResultSchemaRef != nil {
 		copy := *definition.ResultSchemaRef
 		definition.ResultSchemaRef = &copy
@@ -152,7 +197,7 @@ func (r *Registry) Register(definition Definition) error {
 		Ref: definition.Ref, ImplementationVersion: fmt.Sprint(definition.Ref.ContractVersion),
 		DisplayName: definition.DisplayName, Description: definition.Description,
 		InputSchemaRef: &definition.InputSchemaRef, ResultSchemaRef: definition.ResultSchemaRef,
-		EventSchemaRefs: definition.EventSchemaRefs, ReplaySafety: string(definition.ReplaySafety),
+		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactInputTypeRefs(definition.ArtifactInputs), ArtifactInputs: definition.ArtifactInputs, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
 	}
 	if err := r.catalog.Register(descriptor, func(json.RawMessage) (any, error) { return definition, nil }); err != nil {
 		return err
@@ -170,6 +215,10 @@ func (r *Registry) Register(definition Definition) error {
 }
 
 func (r *Registry) RegisterRawPayload(ref extensions.Ref, displayName, description string, schemaBody json.RawMessage, replaySafety ReplaySafety) error {
+	return r.RegisterRawPayloadWithBounds(ref, displayName, description, schemaBody, replaySafety, DefaultResourceBounds())
+}
+
+func (r *Registry) RegisterRawPayloadWithBounds(ref extensions.Ref, displayName, description string, schemaBody json.RawMessage, replaySafety ReplaySafety, bounds extensions.ResourceBounds) error {
 	if r == nil || r.catalog == nil {
 		return fmt.Errorf("operation registry is not initialized")
 	}
@@ -183,7 +232,7 @@ func (r *Registry) RegisterRawPayload(ref extensions.Ref, displayName, descripti
 	}
 	return r.Register(Definition{
 		Ref: ref, DisplayName: displayName, Description: description,
-		InputSchemaRef: inputRef, ReplaySafety: replaySafety,
+		InputSchemaRef: inputRef, ResourceBounds: bounds, ReplaySafety: replaySafety,
 		InputPayload: func(request normalize.Request) (json.RawMessage, error) {
 			if len(request.OperationPayload) == 0 {
 				return nil, fmt.Errorf("operation payload is required")
@@ -233,6 +282,12 @@ func (r *Registry) Seal(catalog *extensions.Snapshot) (*Snapshot, error) {
 				return nil, fmt.Errorf("operation %q event schema %q is missing", ref.Key(), eventSchema.Key())
 			}
 		}
+		for _, artifactInput := range definition.ArtifactInputs {
+			descriptor, ok := catalog.Descriptor(artifactInput.TypeRef)
+			if !ok || descriptor.ArtifactPolicy == nil {
+				return nil, fmt.Errorf("operation %q artifact type %q is missing or has no artifact policy", ref.Key(), artifactInput.TypeRef.Key())
+			}
+		}
 		definitions[ref] = definition
 	}
 	r.sealed = &Snapshot{definitions: definitions, catalog: catalog}
@@ -247,11 +302,149 @@ func (s *Snapshot) Resolve(ref extensions.Ref) (Definition, bool) {
 	return definition, ok
 }
 
+func (s *Snapshot) ExtensionCatalog() *extensions.Snapshot {
+	if s == nil {
+		return nil
+	}
+	return s.catalog
+}
+
+// ValidateArtifactsForConsumer checks the operation allowlist and the exact
+// artifact policy again at the selected route boundary, where the receiver
+// and recipient are known. This prevents a valid reference from being reused
+// by a different provider/session than the owner allowed.
+func (s *Snapshot) ValidateArtifactsForConsumer(operationRef extensions.Ref, artifacts []extensions.ArtifactRef, receiver extensions.ArtifactOwner, recipient extensions.Ref) error {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return fmt.Errorf("operation %q is not registered", operationRef.Key())
+	}
+	allowed := make(map[string]ArtifactInput, len(definition.ArtifactInputs))
+	for _, input := range definition.ArtifactInputs {
+		allowed[input.Role] = input
+	}
+	counts := map[string]int{}
+	for _, artifact := range artifacts {
+		input, exists := allowed[artifact.Role]
+		if !exists || input.TypeRef != artifact.TypeRef {
+			return fmt.Errorf("artifact role/type %q/%q is not allowed by operation %q", artifact.Role, artifact.TypeRef.Key(), operationRef.Key())
+		}
+		counts[artifact.Role]++
+		if counts[artifact.Role] > input.MaxCount {
+			return fmt.Errorf("artifact role %q exceeds maximum count %d", artifact.Role, input.MaxCount)
+		}
+		if err := s.catalog.ValidateArtifact(artifact, receiver, recipient, time.Now()); err != nil {
+			return fmt.Errorf("artifact %q for %s: %w", artifact.TypeRef.Key(), recipient.Key(), err)
+		}
+	}
+	for _, input := range definition.ArtifactInputs {
+		if counts[input.Role] < input.MinCount {
+			return fmt.Errorf("artifact role %q requires at least %d item(s)", input.Role, input.MinCount)
+		}
+	}
+	return nil
+}
+
+func (s *Snapshot) ArtifactInputs(operationRef extensions.Ref) ([]ArtifactInput, bool) {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return nil, false
+	}
+	return append([]ArtifactInput(nil), definition.ArtifactInputs...), true
+}
+
+// ValidateEvent validates one canonical operation event against its exact
+// registered event schemas. A schema list is a union of supported event
+// envelopes; the event is rejected only when none of the pinned schemas match.
+func (s *Snapshot) ValidateEvent(operationRef extensions.Ref, event json.RawMessage) error {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return fmt.Errorf("operation %q is not registered", operationRef.Key())
+	}
+	if len(definition.EventSchemaRefs) == 0 {
+		return nil
+	}
+	var validationErrors []error
+	for _, schemaRef := range definition.EventSchemaRefs {
+		if err := s.catalog.ValidateSchema(schemaRef, event); err == nil {
+			return nil
+		} else {
+			validationErrors = append(validationErrors, fmt.Errorf("schema %q: %w", schemaRef.Key(), err))
+		}
+	}
+	return fmt.Errorf("event for operation %q violates every declared event schema: %w", operationRef.Key(), errors.Join(validationErrors...))
+}
+
+// NewResultProjector creates one request-local result accumulator. The
+// operation's resource bounds are passed into the module so its internal
+// state remains bounded before final schema validation.
+func (s *Snapshot) NewResultProjector(operationRef extensions.Ref) (ResultProjector, error) {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return nil, fmt.Errorf("operation %q is not registered", operationRef.Key())
+	}
+	if definition.ResultSchemaRef == nil || definition.NewResultProjector == nil {
+		return nil, fmt.Errorf("operation %q has no typed result projector", operationRef.Key())
+	}
+	projector, err := definition.NewResultProjector(definition.ResourceBounds)
+	if err != nil {
+		return nil, fmt.Errorf("create result projector for %q: %w", operationRef.Key(), err)
+	}
+	if projector == nil {
+		return nil, fmt.Errorf("operation %q result projector factory returned nil", operationRef.Key())
+	}
+	return projector, nil
+}
+
+func (s *Snapshot) ValidateResult(operationRef extensions.Ref, result json.RawMessage) error {
+	definition, ok := s.Resolve(operationRef)
+	if !ok || definition.ResultSchemaRef == nil {
+		return fmt.Errorf("operation %q has no registered result schema", operationRef.Key())
+	}
+	if int64(len(result)) > definition.ResourceBounds.MaxBufferedBytes {
+		return fmt.Errorf("operation %q result exceeds %d-byte projector bound", operationRef.Key(), definition.ResourceBounds.MaxBufferedBytes)
+	}
+	if err := s.catalog.ValidateSchema(*definition.ResultSchemaRef, result); err != nil {
+		return fmt.Errorf("operation %q result violates schema %q: %w", operationRef.Key(), definition.ResultSchemaRef.Key(), err)
+	}
+	return nil
+}
+
 func (s *Snapshot) Prepare(request normalize.Request) (Prepared, error) {
 	ref := extensions.Ref{Kind: "operation", ID: string(request.Operation), ContractVersion: request.OperationContractVersion}
 	definition, ok := s.Resolve(ref)
 	if !ok {
 		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("contract is not registered")}
+	}
+	allowedArtifacts := make(map[string]ArtifactInput, len(definition.ArtifactInputs))
+	for _, input := range definition.ArtifactInputs {
+		allowedArtifacts[input.Role] = input
+	}
+	var artifactBytes int64
+	counts := map[string]int{}
+	for _, artifact := range request.Artifacts {
+		input, exists := allowedArtifacts[artifact.Role]
+		if !exists || input.TypeRef != artifact.TypeRef {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("artifact role/type %q/%q is not allowed by this operation", artifact.Role, artifact.TypeRef.Key())}
+		}
+		counts[artifact.Role]++
+		if counts[artifact.Role] > input.MaxCount {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("artifact role %q exceeds maximum count %d", artifact.Role, input.MaxCount)}
+		}
+		if err := s.catalog.ValidateArtifact(artifact, artifact.Owner, extensions.Ref{}, time.Now()); err != nil {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("artifact %q: %w", artifact.TypeRef.Key(), err)}
+		}
+		if artifact.SizeBytes > definition.ResourceBounds.MaxInputBytes-artifactBytes {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("artifacts exceed %d-byte operation input limit", definition.ResourceBounds.MaxInputBytes)}
+		}
+		artifactBytes += artifact.SizeBytes
+	}
+	for _, input := range definition.ArtifactInputs {
+		if counts[input.Role] < input.MinCount {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("artifact role %q requires at least %d item(s)", input.Role, input.MinCount)}
+		}
+	}
+	if limit := definition.ResourceBounds.MaxInputBytes; limit > 0 && int64(len(request.OperationPayload)) > limit-artifactBytes {
+		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("input payload exceeds %d-byte operation limit", limit)}
 	}
 	var payload json.RawMessage
 	if len(request.OperationPayload) > 0 {
@@ -273,11 +466,44 @@ func (s *Snapshot) Prepare(request normalize.Request) (Prepared, error) {
 			return Prepared{}, &InputError{Ref: ref, Err: err}
 		}
 	}
+	inputBytes := len(payload)
+	if inputBytes == 0 {
+		inputView := any(request.Raw)
+		if len(request.Raw) == 0 {
+			inputRequest := request
+			inputRequest.Artifacts = nil
+			inputView = inputRequest
+		}
+		encoded, err := json.Marshal(inputView)
+		if err != nil {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("measure normalized input: %w", err)}
+		}
+		inputBytes = len(encoded)
+	}
+	if limit := definition.ResourceBounds.MaxInputBytes; limit > 0 && int64(inputBytes) > limit-artifactBytes {
+		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("input payload exceeds %d-byte operation limit", limit)}
+	}
 	requirements, err := definition.CompileRequirements(request)
 	if err != nil {
 		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("compile requirements: %w", err)}
 	}
-	return Prepared{Ref: ref, InputPayload: append(json.RawMessage(nil), payload...), Requirements: requirements, ReplaySafety: definition.ReplaySafety}, nil
+	artifacts := make([]extensions.ArtifactRef, len(request.Artifacts))
+	for i, artifact := range request.Artifacts {
+		artifacts[i] = artifact.Clone()
+	}
+	return Prepared{Ref: ref, InputPayload: append(json.RawMessage(nil), payload...), Requirements: requirements, ReplaySafety: definition.ReplaySafety, ResourceBounds: definition.ResourceBounds, Artifacts: artifacts}, nil
+}
+
+func artifactInputTypeRefs(inputs []ArtifactInput) []extensions.Ref {
+	refs := make([]extensions.Ref, 0, len(inputs))
+	seen := map[extensions.Ref]bool{}
+	for _, input := range inputs {
+		if !seen[input.TypeRef] {
+			refs = append(refs, input.TypeRef)
+			seen[input.TypeRef] = true
+		}
+	}
+	return refs
 }
 
 func validateChatRequest(request normalize.Request) error {

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
@@ -116,7 +117,7 @@ func TestKernelAppliesSelectedUsageSourceBeforeEmission(t *testing.T) {
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
 		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
-		Routes:       []Route{{ID: "route", NodeID: "provider", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"usage-source-fixture"}, UsageSourceID: "usage-fixture"}}, Protocol: ProtocolOpenAIChat, Enabled: true}},
+		Routes:       []Route{{ID: "route", NodeID: "provider", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"usage-source-fixture"}, UsageSourceRef: extensions.Ref{Kind: "usage_source", ID: "usage-fixture", ContractVersion: 1}}}, Protocol: ProtocolOpenAIChat, Enabled: true}},
 	}, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +128,7 @@ func TestKernelAppliesSelectedUsageSourceBeforeEmission(t *testing.T) {
 	}
 	defer k.Close()
 	k.Adapters["usage-source-fixture"] = usageSourceAdapter{}
-	k.UsageSources["usage-fixture"] = usageSourceFixture{}
+	k.UsageSources[extensions.Ref{Kind: "usage_source", ID: "usage-fixture", ContractVersion: 1}] = usageSourceFixture{}
 	if err := k.Execute(context.Background(), NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}, Credential{}, httptest.NewRecorder()); err != nil {
 		t.Fatal(err)
 	}

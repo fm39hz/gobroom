@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
@@ -38,7 +39,8 @@ func (*continuitySessionAdapter) RenderResponse(_ context.Context, _ UpstreamRes
 }
 
 func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
-	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreID: "session"}}, Protocol: ProtocolOpenAIChat, Enabled: true}
+	sessionStoreRef := extensions.Ref{Kind: "session_store", ID: "session", ContractVersion: 1}
+	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreRef: sessionStoreRef}}, Protocol: ProtocolOpenAIChat, Enabled: true}
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
 		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
@@ -55,7 +57,7 @@ func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	adapter := &continuitySessionAdapter{}
 	k.Adapters[adapter.ID()] = adapter
 	sessions := NewMemorySessionStore()
-	k.SessionStores["session"] = sessions
+	k.SessionStores[sessionStoreRef] = sessions
 	if err := sessions.Save(context.Background(), route, "client-session", SessionState{ResponseID: "response-previous"}); err != nil {
 		t.Fatal(err)
 	}
