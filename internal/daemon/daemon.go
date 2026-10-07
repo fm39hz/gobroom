@@ -224,7 +224,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}()
 	if d.server.Control() == nil {
 		_ = s.Close()
-		return fmt.Errorf("cannot initialize control plane")
+		if err := d.server.InitializationError(); err != nil {
+			return fmt.Errorf("initialize control plane: %w", err)
+		}
+		return fmt.Errorf("initialize control plane: manager is unavailable without an initialization error")
 	}
 	d.policy = runtimehealth.NewPolicyGate()
 	d.policy.SetEnrichmentContext(ctx)

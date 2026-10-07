@@ -27,6 +27,7 @@ type Server struct {
 	store            *store.Store
 	artifactStore    *artifacts.Store
 	control          *controlplane.Manager
+	controlErr       error
 	started          time.Time
 	executor         func(context.Context, normalize.Request, http.ResponseWriter) error
 	reloadHook       func() error
@@ -73,11 +74,8 @@ func NewServer(s *store.Store) *Server {
 
 func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.RuntimeBinding, strategies ...*kernel.StrategyCatalog) *Server {
 	manager, err := controlplane.NewManagerWithRuntimeBindings(s, bindings, strategies...)
-	if err != nil {
-		manager = nil
-	}
 	operationSnapshot, _ := operations.BuiltinSnapshot()
-	server := &Server{store: s, control: manager, started: time.Now(), ingress: map[string]OperationIngress{}, operations: operationSnapshot}
+	server := &Server{store: s, control: manager, controlErr: err, started: time.Now(), ingress: map[string]OperationIngress{}, operations: operationSnapshot}
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
@@ -219,6 +217,12 @@ func (s *Server) Status() map[string]any {
 	return map[string]any{"name": "gobroomd", "status": "ok", "snapshotVersion": version}
 }
 func (s *Server) Control() *controlplane.Manager { return s.control }
+func (s *Server) InitializationError() error {
+	if s == nil {
+		return fmt.Errorf("API server is nil")
+	}
+	return s.controlErr
+}
 func (s *Server) SetExecutor(executor func(context.Context, normalize.Request, http.ResponseWriter) error) {
 	s.executor = executor
 }
