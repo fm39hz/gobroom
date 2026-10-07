@@ -47,9 +47,11 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/provider -run '^(TestMultipartRequestCodecStreamsConfiguredArtifactFields|TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions|TestMultipartRequestCodecFailsClosedForUnmappedArtifactsAndStreamMode)$$' -count=1
 	go test ./internal/provider -run '^TestMultipartRequestCodecDeclaresExactArtifactRoleCompatibility$$' -count=1
 	go test ./internal/tui -run '^TestTUIDeviceAuthorizationShowsPublicInstructionsAndPollsDaemon$$' -count=1
+	go test ./internal/tui -run '^TestTUIAuthorizationCodeFlowShowsLoopbackModeAndPollsTerminalStatus$$' -count=1
 	go test ./internal/store -run '^TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential$$' -count=1
 
-	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1
+	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1
+	go test ./internal/daemon -run '^(TestLoopbackCallbackAddressRejectsNonLocalAndInvalidRedirects|TestOAuthCallbackTargetMatchesExactRegisteredPathAndQuery)$$' -count=1
 	go test ./internal/daemon -run '^TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow$$' -count=1
 
 test-v: ## verbose tests

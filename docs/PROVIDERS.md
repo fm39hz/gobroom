@@ -247,6 +247,13 @@ flow; the daemon retains and polls the private device code, while CLI/TUI show
 the user code and verification URL. Polling honors the server interval,
 `authorization_pending`, `slow_down` and expiry using the shared OAuth library.
 
+For authorization-code flow, an HTTP redirect URI on `localhost` or a loopback
+IP causes the daemon to bind that exact local address/port only while the
+authorization session is active. The callback is checked against the registered
+path/query and one-use state before token exchange. HTTPS and non-loopback
+redirect URIs are not bound by the daemon; they use the explicit CLI callback
+handoff instead.
+
 Providers that require no secret still bind auth explicitly with
 `{"kind":"auth","id":"none"}`; the connection can then exist without secret
 material. Omitting auth is rejected so an unconfigured route cannot be mistaken

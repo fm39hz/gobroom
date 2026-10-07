@@ -14,7 +14,7 @@ import (
 
 const (
 	deviceAuthorizationStartTimeout = 20 * time.Second
-	deviceAuthorizationRetention    = 5 * time.Minute
+	authorizationSessionRetention   = 5 * time.Minute
 )
 
 type deviceAuthorizationView struct {
@@ -57,8 +57,8 @@ func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID stri
 	startCtx, cancelStart := context.WithTimeout(ctx, deviceAuthorizationStartTimeout)
 	expiresAt := time.Now().Add(deviceAuthorizationStartTimeout)
 	sessions := d.authorizationSessions()
+	d.pruneAuthorizationSessions(sessions, time.Now())
 	sessions.mu.Lock()
-	sessions.pruneLocked(time.Now())
 	if active := sessions.byConnection[connection.ID]; active != "" {
 		sessions.mu.Unlock()
 		cancelStart()
@@ -209,7 +209,7 @@ func (d *Daemon) finishDeviceAuthorization(sessionID, status, message string) {
 	session.deviceFlow = nil
 	session.status = status
 	session.statusError = message
-	session.expiresAt = time.Now().Add(deviceAuthorizationRetention)
+	session.expiresAt = time.Now().Add(authorizationSessionRetention)
 	sessions.byID[sessionID] = session
 	if sessions.byConnection[session.connectionID] == sessionID {
 		delete(sessions.byConnection, session.connectionID)
@@ -218,8 +218,8 @@ func (d *Daemon) finishDeviceAuthorization(sessionID, status, message string) {
 
 func (d *Daemon) deviceAuthorizationStatus(sessionID string) (deviceAuthorizationView, error) {
 	sessions := d.authorizationSessions()
+	d.pruneAuthorizationSessions(sessions, time.Now())
 	sessions.mu.Lock()
-	sessions.pruneLocked(time.Now())
 	session, exists := sessions.byID[sessionID]
 	sessions.mu.Unlock()
 	if !exists || session.kind != "device_code" {
@@ -256,6 +256,9 @@ func (d *Daemon) cancelAuthorizationSessions() {
 	}
 	sessions.mu.Lock()
 	for _, session := range sessions.byID {
+		if session.timer != nil {
+			session.timer.Stop()
+		}
 		if session.cancel != nil {
 			session.cancel()
 		}

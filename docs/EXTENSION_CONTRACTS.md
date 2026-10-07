@@ -439,10 +439,15 @@ worker. A delayed authorization or refresh persists through a compare-and-swap
 against the connection secret observed at start, so a newer credential is not
 overwritten. On success the daemon reloads serving state.
 
-The CLI and TUI expose device setup; the TUI can start, display and poll its
-public transition, or cancel it. The first slice still lacks an embedded
-loopback callback listener for authorization-code flows and a TUI callback
-handoff. Those remain explicit C4 work rather than implied support.
+The CLI and TUI expose both flows. For an HTTP loopback redirect URI, the
+daemon binds only the configured loopback address, routes the callback by the
+one-use state, verifies the exact redirect target, exchanges the code and
+returns a fixed non-secret completion page. Listener references are shared
+when multiple auth definitions use the same local port and released on session
+completion, cancellation, expiry or daemon shutdown. HTTPS/non-loopback
+redirects remain manual handoffs rather than causing the daemon to bind a
+public interface. The TUI polls only the public authorization status; the
+callback code, PKCE verifier and token exchange remain daemon-owned.
 
 The daemon coordinator owns the state machine:
 

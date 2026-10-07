@@ -66,6 +66,8 @@ type Daemon struct {
 	mu                  sync.Mutex
 	oauthMu             sync.Mutex
 	oauth               *authorizationSessions
+	oauthCallbackMu     sync.Mutex
+	oauthCallbacks      map[string]*oauthCallbackListener
 	runCtx              context.Context
 	authWG              sync.WaitGroup
 	credentialRefreshMu sync.Mutex
@@ -467,6 +469,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		cancel()
 		d.cancelAuthorizationSessions()
 		d.authWG.Wait()
+		d.closeOAuthCallbackListeners()
 		if d.usageCancel != nil {
 			d.usageCancel()
 		}
@@ -854,6 +857,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, challenge)
+	case "auth.authorization.get":
+		result, err := d.authorizationStatus(stringParam(request.Params, "sessionID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
 	case "auth.authorization.complete":
 		sessionID := stringParam(request.Params, "sessionID")
 		state := stringParam(request.Params, "state")

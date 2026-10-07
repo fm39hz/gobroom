@@ -143,6 +143,11 @@ func resourceCommands() []*cobra.Command {
 	}}
 	authorizeStart.Flags().StringVar(&connID, "connection-id", "", "enabled OAuth connection ID")
 	connections.AddCommand(authorizeStart)
+	authorizeGet := &cobra.Command{Use: "authorize-get", Short: "show authorization-code setup status", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("auth.authorization.get", map[string]any{"sessionID": authorizationSessionID})
+	}}
+	authorizeGet.Flags().StringVar(&authorizationSessionID, "session-id", "", "authorization session ID")
+	connections.AddCommand(authorizeGet)
 	authorizeComplete := &cobra.Command{Use: "authorize-complete", Short: "complete OAuth authorization with the callback URL", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("auth.authorization.complete", map[string]any{"sessionID": authorizationSessionID, "callbackURL": callbackURL})
 	}}
