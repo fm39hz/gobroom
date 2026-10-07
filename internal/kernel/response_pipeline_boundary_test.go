@@ -37,6 +37,7 @@ func (pipelineTransport) Execute(context.Context, kernel.UpstreamRequest) (kerne
 type scriptedResponseDecoder struct {
 	name              string
 	emitBeforeFailure bool
+	signature         string
 	attempts          *[]string
 }
 
@@ -54,7 +55,7 @@ func (uppercaseSemanticText) ApplyResponse(_ context.Context, event kernel.Respo
 
 func (d scriptedResponseDecoder) ID() string { return d.name }
 func (d scriptedResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
-	return []kernel.ResponseEventKind{kernel.EventTextDelta, kernel.EventContentBlockEnd, kernel.EventResponseComplete}
+	return []kernel.ResponseEventKind{kernel.EventTextDelta, kernel.EventThinkingSignature, kernel.EventContentBlockEnd, kernel.EventResponseComplete}
 }
 func (d scriptedResponseDecoder) ClassifyError(int, []byte) kernel.ErrorClass {
 	return kernel.ErrorRetryable
@@ -69,6 +70,11 @@ func (d scriptedResponseDecoder) Decode(_ context.Context, _ kernel.UpstreamResp
 	}
 	if d.name == "broken" {
 		return errors.New("decode failed before output")
+	}
+	if d.signature != "" {
+		if err := emit(kernel.ResponseEvent{Kind: kernel.EventThinkingSignature, Signature: d.signature}); err != nil {
+			return err
+		}
 	}
 	if err := emit(kernel.ResponseEvent{Kind: kernel.EventTextDelta, Text: "recovered"}); err != nil {
 		return err
@@ -150,7 +156,7 @@ func TestComposedSemanticPipelineBoundsEachDecodedResponseEvent(t *testing.T) {
 	attempts := []string{}
 	adapter := kernel.ComposedAdapter{
 		AdapterID: "bounded-events", Endpoint: kernel.HTTPJSONEndpoint{}, Request: pipelineRequest{},
-		Transport: pipelineTransport{}, Response: scriptedResponseDecoder{name: "bounded", attempts: &attempts},
+		Transport: pipelineTransport{}, Response: scriptedResponseDecoder{name: "bounded", signature: "issuer-signature", attempts: &attempts},
 		ProviderFormat: normalize.FormatOpenAIChat,
 		Renderers:      map[normalize.Format]kernel.ResponseRenderer{normalize.FormatOpenAIChat: egress.OpenAIChat{}},
 	}

@@ -19,6 +19,24 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 		return
 	}
 	now := time.Now()
+	objectType := stringValue(payload["object"])
+	typ := stringValue(payload["type"])
+	responseID := stringValue(payload["response_id"])
+	itemID := stringValue(payload["item_id"])
+	if responseID == "" && strings.HasPrefix(objectType, "chat.completion") {
+		responseID = stringValue(payload["id"])
+	}
+	if responseID == "" && objectType == "response" {
+		responseID = stringValue(payload["id"])
+	}
+	if responseID == "" {
+		if response, ok := payload["response"].(map[string]any); ok {
+			responseID = stringValue(response["id"])
+		}
+	}
+	if responseID != "" {
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: responseID})
+	}
 	if choices, ok := payload["choices"].([]any); ok && len(choices) > 0 {
 		choice, _ := choices[0].(map[string]any)
 		delta, _ := choice["delta"].(map[string]any)
@@ -43,23 +61,27 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 			emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete})
 		}
 	}
-	typ, _ := payload["type"].(string)
-	responseID := stringValue(payload["response_id"])
-	itemID := stringValue(payload["item_id"])
-	objectType := stringValue(payload["object"])
-	if responseID == "" && objectType == "response" {
-		responseID = stringValue(payload["id"])
-	}
-	if responseID == "" {
-		if response, ok := payload["response"].(map[string]any); ok {
-			responseID = stringValue(response["id"])
-		}
-	}
 	switch {
 	case objectType == "response" && typ == "":
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, ResponseID: responseID})
 	case strings.Contains(typ, "output_item.added"):
-		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockStart, ResponseID: responseID, ItemID: itemID, BlockType: stringValue(payload["item_type"])})
+		item, _ := payload["item"].(map[string]any)
+		itemType := stringValue(payload["item_type"])
+		if itemType == "" {
+			itemType = stringValue(item["type"])
+		}
+		if itemID == "" {
+			itemID = stringValue(item["id"])
+		}
+		callID := stringValue(item["call_id"])
+		if callID == "" && itemType == "function_call" {
+			callID = stringValue(item["id"])
+		}
+		toolName := stringValue(item["name"])
+		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockStart, ResponseID: responseID, ItemID: itemID, BlockType: itemType, ToolCallID: callID, ToolName: toolName})
+		if itemType == "function_call" && (callID != "" || toolName != "") {
+			emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, ResponseID: responseID, ItemID: itemID, ContentType: "function_call", ToolCallID: callID, ToolName: toolName, ToolArguments: stringValue(item["arguments"])})
+		}
 	case strings.Contains(typ, "output_item.done"):
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, ResponseID: responseID, ItemID: itemID, StopReason: stringValue(payload["status"])})
 	case strings.Contains(typ, "output_text.delta"):
@@ -74,7 +96,15 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, ResponseID: responseID})
 	}
 	if usage, ok := payload["usage"].(map[string]any); ok {
-		event := kernel.UsageEvent{InputTokens: int64(numberValue(usage["input_tokens"])), OutputTokens: int64(numberValue(usage["output_tokens"]))}
+		inputTokens := usage["input_tokens"]
+		if inputTokens == nil {
+			inputTokens = usage["prompt_tokens"]
+		}
+		outputTokens := usage["output_tokens"]
+		if outputTokens == nil {
+			outputTokens = usage["completion_tokens"]
+		}
+		event := kernel.UsageEvent{InputTokens: int64(numberValue(inputTokens)), OutputTokens: int64(numberValue(outputTokens))}
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &event})
 	}
 }

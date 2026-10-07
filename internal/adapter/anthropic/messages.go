@@ -115,7 +115,7 @@ func (c messagesResponseDecoder) PossibleEvents() []kernel.ResponseEventKind {
 	return []kernel.ResponseEventKind{
 		kernel.EventRawFrame, kernel.EventResponseStarted, kernel.EventContentBlockStart,
 		kernel.EventContentBlockEnd, kernel.EventTextDelta, kernel.EventThinkingDelta,
-		kernel.EventToolCallDelta, kernel.EventUsage, kernel.EventResponseComplete,
+		kernel.EventThinkingSignature, kernel.EventToolCallDelta, kernel.EventUsage, kernel.EventResponseComplete,
 	}
 }
 func (c messagesResponseDecoder) ClassifyError(status int, body []byte) kernel.ErrorClass {
@@ -232,13 +232,14 @@ func splitAnthropicSSELines(data []byte, atEOF bool) (int, []byte, error) {
 func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolIndex int, emit func(kernel.ResponseEvent) error) (kernel.UsageEvent, int, error) {
 	now := time.Now()
 	if message, ok := event["message"].(map[string]any); ok {
-		if id := stringValue(message["id"]); id != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id}); err != nil {
-				return usage, toolIndex, err
-			}
-		}
 		if rawUsage, ok := message["usage"].(map[string]any); ok {
 			usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
+			usage.OutputTokens = int64(numberValue(rawUsage["output_tokens"]))
+		}
+		if id := stringValue(message["id"]); id != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
+				return usage, toolIndex, err
+			}
 		}
 		if blocks, ok := message["content"].([]any); ok {
 			for index, raw := range blocks {
@@ -250,14 +251,14 @@ func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolInde
 		}
 	}
 	if stringValue(event["type"]) == "" || stringValue(event["type"]) == "message" {
-		if id := stringValue(event["id"]); id != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id}); err != nil {
-				return usage, toolIndex, err
-			}
-		}
 		if rawUsage, ok := event["usage"].(map[string]any); ok {
 			usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
 			usage.OutputTokens = int64(numberValue(rawUsage["output_tokens"]))
+		}
+		if id := stringValue(event["id"]); id != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
+				return usage, toolIndex, err
+			}
 		}
 		if blocks, ok := event["content"].([]any); ok {
 			for index, raw := range blocks {
@@ -282,6 +283,11 @@ func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolInde
 		message, _ := event["message"].(map[string]any)
 		rawUsage, _ := message["usage"].(map[string]any)
 		usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
+		if id := stringValue(message["id"]); id != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
 	case "content_block_start":
 		block, _ := event["content_block"].(map[string]any)
 		toolIndex++
@@ -290,18 +296,27 @@ func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolInde
 		}
 	case "content_block_delta":
 		delta, _ := event["delta"].(map[string]any)
+		blockIndex := int(numberValue(event["index"]))
+		if _, exists := event["index"]; !exists {
+			blockIndex = toolIndex
+		}
 		if text := stringValue(delta["text"]); text != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, Text: text}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventTextDelta, Index: blockIndex, Text: text}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
 		if thinking := stringValue(delta["thinking"]); thinking != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Text: thinking}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Index: blockIndex, Text: thinking}); err != nil {
+				return usage, toolIndex, err
+			}
+		}
+		if signature := stringValue(delta["signature"]); signature != "" {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingSignature, Index: blockIndex, Signature: signature}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
 		if partial := stringValue(delta["partial_json"]); partial != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolArguments: partial}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: blockIndex, ToolArguments: partial}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
@@ -338,7 +353,12 @@ func emitAnthropicBlock(block map[string]any, index int, emit func(kernel.Respon
 		}
 	case "thinking":
 		if text := stringValue(block["thinking"]); text != "" {
-			return emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Index: index, Text: text})
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingDelta, Index: index, Text: text}); err != nil {
+				return err
+			}
+		}
+		if signature := stringValue(block["signature"]); signature != "" {
+			return emit(kernel.ResponseEvent{At: now, Kind: kernel.EventThinkingSignature, Index: index, Signature: signature})
 		}
 	case "tool_use":
 		arguments := ""

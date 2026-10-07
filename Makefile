@@ -48,6 +48,10 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/provider -run '^TestMultipartRequestCodecDeclaresExactArtifactRoleCompatibility$$' -count=1
 	go test ./internal/tui -run '^TestTUIDeviceAuthorizationShowsPublicInstructionsAndPollsDaemon$$' -count=1
 	go test ./internal/tui -run '^TestTUIAuthorizationCodeFlowShowsLoopbackModeAndPollsTerminalStatus$$' -count=1
+	go test ./internal/adapter/renderers -run '^(TestAnthropicMessagesRendererProjectsCanonicalTextAndTools|TestAnthropicMessagesRendererBuildsNonStreamingMessage|TestAnthropicSemanticThinkingRequiresAndPreservesIssuerSignature)$$' -count=1
+	go test ./internal/adapter/openai -run '^TestOpenAIChatDecoderRendersAnthropicMessagesFromSemanticEvents$$' -count=1
+	go test ./internal/adapter/openai -run '^TestOpenAIResponsesDecoderPreservesToolIdentityForAnthropicEgress$$' -count=1
+	go test ./internal/adapter/anthropic -run '^TestAnthropicDecoderEmitsThinkingSignatureAsCanonicalEvent$$' -count=1
 	go test ./internal/store -run '^TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential$$' -count=1
 
 	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1

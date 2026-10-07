@@ -406,6 +406,7 @@ const (
 	EventContentBlockEnd   ResponseEventKind = "content_block_end"
 	EventTextDelta         ResponseEventKind = "text_delta"
 	EventThinkingDelta     ResponseEventKind = "thinking_delta"
+	EventThinkingSignature ResponseEventKind = "thinking_signature"
 	EventToolCallDelta     ResponseEventKind = "tool_call_delta"
 	EventUsage             ResponseEventKind = "usage"
 	EventResponseComplete  ResponseEventKind = "response_complete"
@@ -423,6 +424,7 @@ type ResponseEvent struct {
 	BlockType     string
 	StopReason    string
 	Text          string
+	Signature     string
 	ToolCallID    string
 	ToolName      string
 	ToolArguments string

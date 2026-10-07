@@ -203,7 +203,7 @@ func (r *ResponseTransformRegistry) ApplyScopes(ctx context.Context, event Respo
 		if err != nil {
 			return ResponseEvent{}, fmt.Errorf("response transform %q: %w", definition.Ref.Key(), err)
 		}
-		if updated.Kind != before.Kind || updated.At != before.At || updated.Index != before.Index || updated.ResponseID != before.ResponseID || updated.ItemID != before.ItemID || updated.ContentType != before.ContentType || updated.BlockType != before.BlockType || updated.StopReason != before.StopReason || updated.ToolCallID != before.ToolCallID || updated.ToolName != before.ToolName || updated.Error != before.Error || updated.WireFormat != before.WireFormat || !bytes.Equal(updated.Raw, before.Raw) || !bytes.Equal(updated.Opaque, before.Opaque) {
+		if updated.Kind != before.Kind || updated.At != before.At || updated.Index != before.Index || updated.ResponseID != before.ResponseID || updated.ItemID != before.ItemID || updated.ContentType != before.ContentType || updated.BlockType != before.BlockType || updated.StopReason != before.StopReason || updated.ToolCallID != before.ToolCallID || updated.ToolName != before.ToolName || updated.Signature != before.Signature || updated.Error != before.Error || updated.WireFormat != before.WireFormat || !bytes.Equal(updated.Raw, before.Raw) || !bytes.Equal(updated.Opaque, before.Opaque) {
 			return ResponseEvent{}, fmt.Errorf("response transform %q changed immutable event identity or opaque data", definition.Ref.Key())
 		}
 		changedText := updated.Text != before.Text

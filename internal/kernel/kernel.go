@@ -643,7 +643,7 @@ func operationEventPayload(event ResponseEvent, sequence uint64) (json.RawMessag
 	for key, value := range map[string]string{
 		"responseId": event.ResponseID, "contentType": event.ContentType, "blockType": event.BlockType,
 		"stopReason": event.StopReason, "text": event.Text, "toolCallId": event.ToolCallID,
-		"toolName": event.ToolName, "toolArguments": event.ToolArguments, "error": event.Error,
+		"toolName": event.ToolName, "toolArguments": event.ToolArguments, "signature": event.Signature, "error": event.Error,
 		"wireFormat": string(event.WireFormat),
 	} {
 		if value != "" {

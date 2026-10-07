@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -31,6 +32,49 @@ func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "data:") {
 		t.Fatalf("body=%q", recorder.Body.String())
+	}
+}
+
+func TestOpenAIChatDecoderRendersAnthropicMessagesFromSemanticEvents(t *testing.T) {
+	composed, ok := NewAdapter().(kernel.ComposedAdapter)
+	if !ok {
+		t.Fatalf("OpenAI adapter type=%T", NewAdapter())
+	}
+	composed.Renderers[normalize.FormatAnthropic] = egress.AnthropicMessages{}
+	body := `{"id":"chatcmpl_semantic","object":"chat.completion","model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":"Checking now.","tool_calls":[{"id":"call_123","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"weather\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}`
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+	writer := httptest.NewRecorder()
+	var observed []kernel.ResponseEvent
+	if err := composed.RenderResponse(context.Background(), response, writer, normalize.FormatAnthropic, kernel.StreamHooks{OnEvent: func(event kernel.ResponseEvent) { observed = append(observed, event) }}); err != nil {
+		t.Fatal(err)
+	}
+	var message struct {
+		ID      string           `json:"id"`
+		Type    string           `json:"type"`
+		Stop    string           `json:"stop_reason"`
+		Usage   map[string]int64 `json:"usage"`
+		Content []map[string]any `json:"content"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &message); err != nil {
+		t.Fatalf("decode Anthropic semantic response %q: %v", writer.Body.String(), err)
+	}
+	if message.ID != "chatcmpl_semantic" || message.Type != "message" || message.Stop != "tool_use" || len(message.Content) != 2 || message.Content[0]["text"] != "Checking now." {
+		t.Fatalf("Anthropic response projection=%#v", message)
+	}
+	toolInput, ok := message.Content[1]["input"].(map[string]any)
+	if !ok || toolInput["q"] != "weather" || message.Content[1]["id"] != "call_123" || message.Content[1]["name"] != "lookup" {
+		t.Fatalf("Anthropic tool_use projection=%#v", message.Content[1])
+	}
+	if message.Usage["input_tokens"] != 7 || message.Usage["output_tokens"] != 5 {
+		t.Fatalf("Anthropic usage projection=%#v", message.Usage)
+	}
+	seenText, seenTool := false, false
+	for _, event := range observed {
+		seenText = seenText || event.Kind == kernel.EventTextDelta
+		seenTool = seenTool || event.Kind == kernel.EventToolCallDelta
+	}
+	if !seenText || !seenTool {
+		t.Fatalf("OpenAI decoder did not produce canonical text/tool events: %#v", observed)
 	}
 }
 
@@ -129,7 +173,18 @@ func TestResponsesEventsKeepOutputItemBoundaries(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) < 3 || events[0].Kind != kernel.EventContentBlockStart || events[1].Kind != kernel.EventContentBlockEnd || events[len(events)-1].Kind != kernel.EventResponseComplete {
+	startIndex, endIndex, completeIndex := -1, -1, -1
+	for index, event := range events {
+		switch event.Kind {
+		case kernel.EventContentBlockStart:
+			startIndex = index
+		case kernel.EventContentBlockEnd:
+			endIndex = index
+		case kernel.EventResponseComplete:
+			completeIndex = index
+		}
+	}
+	if len(events) < 4 || events[0].Kind != kernel.EventResponseStarted || startIndex < 0 || endIndex <= startIndex || completeIndex <= endIndex {
 		t.Fatalf("events=%#v", events)
 	}
 }

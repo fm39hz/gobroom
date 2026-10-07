@@ -271,7 +271,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 			event = transformed
 		}
 		if hooks.MaxEventBytes > 0 {
-			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
+			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
 			if eventBytes > hooks.MaxEventBytes {
 				return fmt.Errorf("response event %q exceeds %d-byte operation buffer limit", event.Kind, hooks.MaxEventBytes)
 			}

@@ -83,6 +83,27 @@ func TestAnthropicPassthroughStreamReportsUsageWithoutChangingEvents(t *testing.
 	}
 }
 
+func TestAnthropicDecoderEmitsThinkingSignatureAsCanonicalEvent(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_signed\",\"usage\":{\"input_tokens\":3}}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"reasoning\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"signed-by-provider\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	var seenThinking, seenSignature bool
+	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
+	if err := NewAdapter().RenderResponse(context.Background(), response, httptest.NewRecorder(), normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnEvent: func(event kernel.ResponseEvent) {
+		seenThinking = seenThinking || event.Kind == kernel.EventThinkingDelta && event.Text == "reasoning" && event.Index == 0
+		seenSignature = seenSignature || event.Kind == kernel.EventThinkingSignature && event.Signature == "signed-by-provider" && event.Index == 0
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if !seenThinking || !seenSignature {
+		t.Fatalf("Anthropic decoder lost thinking/signature events: thinking=%v signature=%v", seenThinking, seenSignature)
+	}
+}
+
 func TestAnthropicPrepareTranslatesReasoningWithoutMetadataShim(t *testing.T) {
 	request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"messages": []any{}}, Thinking: normalize.ThinkingIntent{Mode: "level", Effort: "high"}}
 	prepared, err := (Messages{}).Prepare(context.Background(), request, kernel.Route{ID: "route", BaseURL: "https://provider.test", ExternalModel: "claude"}, kernel.Credential{})

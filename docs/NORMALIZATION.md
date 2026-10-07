@@ -96,7 +96,10 @@ provider streams into `ResponseEvent`, applies registered response transforms,
 then selects a client renderer. Native wire-frame passthrough is a renderer
 mode, not a provider-specific writer path. Exact supported event families and
 loss behavior belong in the [compatibility matrix](COMPATIBILITY_MATRIX.md)
-and adapter fixtures.
+and adapter fixtures. The Anthropic Messages renderer can semantically encode
+text and tool events from other providers. Reasoning blocks are rendered only
+when the decoder preserves the issuer signature and no semantic response
+transform can invalidate it; otherwise the route is rejected before dispatch.
 
 ## Streaming invariants
 
