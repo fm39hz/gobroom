@@ -553,6 +553,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}, OnComplete: func(event UsageEvent) {
 				event.CompatibilityFidelity = compatibilityPlan.Fidelity
 				event.CompatibilityLosses = cloneLossRecords(compatibilityPlan.Losses)
+				compatibilitySummary := SummarizeCompatibilityPlan(compatibilityPlan)
+				event.CompatibilityPlan = &compatibilitySummary
 				releaseAttempt()
 				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {

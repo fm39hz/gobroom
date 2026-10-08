@@ -152,7 +152,7 @@ func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T)
 	makeGateway := func(comboPolicy, physicalPolicy LossPolicy, ceiling LossPolicyCeiling) (*Kernel, *[]string) {
 		attempts := []string{}
 		snapshot, err := BuildSnapshot(SnapshotInput{
-			LossCeiling: ceiling,
+			LossCeiling:  ceiling,
 			PublicModels: []PublicModel{{Name: "role", TargetRef: "combo"}},
 			Nodes: []ModelNode{
 				{ID: "combo", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberModel, ID: "physical"}}, LossPolicy: comboPolicy},
@@ -191,6 +191,18 @@ func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T)
 	case event := <-allowed.Events:
 		if event.CompatibilityFidelity != FidelityLossy || len(event.CompatibilityLosses) != 1 || event.CompatibilityLosses[0].ID != "generation.temperature.clamped" || !reflect.DeepEqual(event.CompatibilityLosses[0].Requested, map[string]any{"temperature": 0.8}) || !reflect.DeepEqual(event.CompatibilityLosses[0].Effective, map[string]any{"temperature": 0.3}) || !reflect.DeepEqual(event.CompatibilityLosses[0].SemanticPaths, []string{"request.temperature"}) || !reflect.DeepEqual(event.CompatibilityLosses[0].PolicySources, []string{"combo"}) {
 			t.Fatalf("compatibility outcome missing from usage event: %#v", event)
+		}
+		if event.CompatibilityPlan == nil || !event.CompatibilityPlan.Supported || event.CompatibilityPlan.Fidelity != FidelityLossy {
+			t.Fatalf("selected compatibility plan missing from usage event: %#v", event.CompatibilityPlan)
+		}
+		foundTemperature := false
+		for _, mapping := range event.CompatibilityPlan.Mappings {
+			if mapping.Facet == "generation.temperature" && mapping.Disposition == FacetDegraded && mapping.Reason == "temperature was clamped to the provider range" {
+				foundTemperature = true
+			}
+		}
+		if !foundTemperature {
+			t.Fatalf("usage compatibility plan omitted facet explanation: %#v", event.CompatibilityPlan.Mappings)
 		}
 	default:
 		t.Fatal("usage event was not emitted")

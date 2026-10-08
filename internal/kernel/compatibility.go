@@ -177,6 +177,46 @@ type ArtifactTransfer struct {
 	BodyLease      bool                           `json:"bodyLease,omitempty"`
 }
 
+// CompatibilityPlanSummary is the payload-free explanation persisted with a
+// completed usage event. It intentionally excludes request content and loss
+// values; loss evidence is recorded separately.
+type CompatibilityPlanSummary struct {
+	Supported              bool                          `json:"supported"`
+	Fidelity               CompatibilityFidelity         `json:"fidelity"`
+	Mappings               []CompatibilityMappingSummary `json:"mappings,omitempty"`
+	RequestTransformSteps  []RequestTransformPlanStep    `json:"requestTransformSteps,omitempty"`
+	ResponseTransformSteps []ResponseTransformPlanStep   `json:"responseTransformSteps,omitempty"`
+	ArtifactTransfers      []ArtifactTransfer            `json:"artifactTransfers,omitempty"`
+	Reason                 string                        `json:"reason,omitempty"`
+}
+
+type CompatibilityMappingSummary struct {
+	Facet       string           `json:"facet"`
+	Paths       []string         `json:"paths,omitempty"`
+	Disposition FacetDisposition `json:"disposition"`
+	Reason      string           `json:"reason,omitempty"`
+}
+
+func SummarizeCompatibilityPlan(plan CompatibilityPlan) CompatibilityPlanSummary {
+	summary := CompatibilityPlanSummary{
+		Supported: plan.Supported, Fidelity: plan.Fidelity,
+		RequestTransformSteps:  cloneRequestTransformSteps(plan.RequestTransformSteps),
+		ResponseTransformSteps: cloneResponseTransformSteps(plan.ResponseTransformSteps),
+		ArtifactTransfers:      append([]ArtifactTransfer(nil), plan.ArtifactTransfers...),
+		Reason:                 plan.Reason,
+	}
+	if len(plan.Mappings) > 0 {
+		summary.Mappings = make([]CompatibilityMappingSummary, 0, len(plan.Mappings))
+		for _, mapping := range plan.Mappings {
+			summary.Mappings = append(summary.Mappings, CompatibilityMappingSummary{
+				Facet: mapping.Facet, Paths: append([]string(nil), mapping.Paths...),
+				Disposition: mapping.Disposition, Reason: mapping.Reason,
+			})
+		}
+	}
+	return summary
+}
+
 func PlanArtifactTransfers(request normalize.Request, operationRef extensions.Ref, recipient extensions.Ref) []ArtifactTransfer {
 	result := make([]ArtifactTransfer, 0, len(request.Artifacts))
 	for _, artifact := range request.Artifacts {

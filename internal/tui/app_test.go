@@ -49,6 +49,33 @@ func TestPhysicalModelEntryUsesProviderPrefixAndKeepsCatalogIDInInspector(t *tes
 	}
 }
 
+func TestUsageEntryShowsCompatibilityPlanSummary(t *testing.T) {
+	raw := json.RawMessage(`[{
+  "ID": 7,
+  "LogicalModel": "middle",
+  "Status": "ok",
+  "CompatibilityPlan": {
+    "supported": true,
+    "fidelity": "translated",
+    "mappings": [{"facet":"tool.calls","disposition":"preserved"}],
+    "requestTransformSteps": [{"transformRef":{"kind":"request_transform","id":"normalize-prompt","contractVersion":2},"scope":{"kind":"combo"}}],
+    "artifactTransfers": [{"typeRef":{"kind":"artifact_type","id":"image","contractVersion":1},"targetProvider":{"kind":"provider-definition","id":"gemini","contractVersion":1}}]
+  }
+}]`)
+	entries, err := makeEntries("usage.list", raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d usage entries", len(entries))
+	}
+	for _, want := range []string{"Compatibility  translated", "tool.calls", "normalize-prompt@2", "image → gemini"} {
+		if !strings.Contains(entries[0].detail, want) {
+			t.Errorf("usage inspector omitted %q: %s", want, entries[0].detail)
+		}
+	}
+}
+
 func TestQuotaPaneDecodesRuntimeMapContract(t *testing.T) {
 	raw := json.RawMessage(`{"node-a|conn-a|model-a|daily":{"ProviderNodeID":"node-a","ConnectionID":"conn-a","ModelRef":"model-a","WindowName":"daily","Used":9,"Remaining":0,"ResetAt":"2026-09-20T00:00:00Z","Source":"provider"}}`)
 	items, err := makeEntries("quota.list", raw, nil)

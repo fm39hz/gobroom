@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
+	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
 type providerNode struct {
@@ -120,6 +121,7 @@ type usageRecord struct {
 	RequestClass, SessionID                                                      string
 	TTFTMS                                                                       int64
 	OutputTokensPerSecond                                                        float64
+	CompatibilityPlan                                                            *kernel.CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
 }
 
 type logRecord struct {
@@ -412,6 +414,21 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 		entries := make([]entry, 0, len(values))
 		for _, value := range values {
 			detail := fmt.Sprintf("Usage event\n\nModel      %s\nProvider   %s\nExternal   %s\nConnection %s\nStatus     %s\nClass      %s\nSession    %s\nLatency    %d ms\nTTFT       %d ms\nThroughput %.2f tok/s\nTokens     %d in / %d out\nCost       %.6f\nTimestamp  %s", value.LogicalModel, value.ProviderNodeID, value.ExternalModel, value.ConnectionID, value.Status, value.RequestClass, value.SessionID, value.LatencyMS, value.TTFTMS, value.OutputTokensPerSecond, value.InputTokens, value.OutputTokens, value.EstimatedCost, value.Timestamp)
+			if value.CompatibilityPlan != nil {
+				detail += "\n\nCompatibility  " + string(value.CompatibilityPlan.Fidelity)
+				for _, mapping := range value.CompatibilityPlan.Mappings {
+					detail += fmt.Sprintf("\n  %-24s %s", mapping.Facet, mapping.Disposition)
+				}
+				for _, step := range value.CompatibilityPlan.RequestTransformSteps {
+					detail += fmt.Sprintf("\n  request transform  %s@%d (%s)", step.TransformRef.ID, step.TransformRef.ContractVersion, step.Scope.Kind)
+				}
+				for _, step := range value.CompatibilityPlan.ResponseTransformSteps {
+					detail += fmt.Sprintf("\n  response transform %s@%d (%s)", step.TransformRef.ID, step.TransformRef.ContractVersion, step.Scope.Kind)
+				}
+				for _, transfer := range value.CompatibilityPlan.ArtifactTransfers {
+					detail += fmt.Sprintf("\n  artifact transfer  %s → %s", transfer.TypeRef.ID, transfer.TargetProvider.ID)
+				}
+			}
 			entries = append(entries, entry{key: fmt.Sprintf("%d", value.ID), title: value.LogicalModel, summary: fmt.Sprintf("%s · %d ms", value.Status, value.LatencyMS), detail: detail, payload: value})
 		}
 		return entries, nil

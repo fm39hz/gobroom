@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
   logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
   status TEXT, latency_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost REAL NOT NULL DEFAULT 0,
-  compatibility_fidelity TEXT NOT NULL DEFAULT '', compatibility_losses_json TEXT NOT NULL DEFAULT '[]'
+  compatibility_fidelity TEXT NOT NULL DEFAULT '', compatibility_losses_json TEXT NOT NULL DEFAULT '[]',
+  compatibility_plan_json TEXT NOT NULL DEFAULT 'null'
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
 CREATE TABLE IF NOT EXISTS quota_snapshots (
@@ -206,6 +207,7 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN output_tokens_per_second REAL NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_fidelity TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_losses_json TEXT NOT NULL DEFAULT '[]'`)
+	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_plan_json TEXT NOT NULL DEFAULT 'null'`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN identity_json TEXT NOT NULL DEFAULT '{}'`)
@@ -834,7 +836,11 @@ func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
 	if err != nil {
 		return fmt.Errorf("encode usage compatibility losses: %w", err)
 	}
-	if _, err = tx.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens,estimated_cost,request_class,session_id,ttft_ms,output_tokens_per_second,compatibility_fidelity,compatibility_losses_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses)); err != nil {
+	plan, err := json.Marshal(event.CompatibilityPlan)
+	if err != nil {
+		return fmt.Errorf("encode usage compatibility plan: %w", err)
+	}
+	if _, err = tx.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens,estimated_cost,request_class,session_id,ttft_ms,output_tokens_per_second,compatibility_fidelity,compatibility_losses_json,compatibility_plan_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`INSERT INTO usage_daily(date_key,requests,prompt_tokens,completion_tokens,estimated_cost,updated_at) VALUES(?,1,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(date_key) DO UPDATE SET requests=requests+1,prompt_tokens=prompt_tokens+excluded.prompt_tokens,completion_tokens=completion_tokens+excluded.completion_tokens,estimated_cost=estimated_cost+excluded.estimated_cost,updated_at=CURRENT_TIMESTAMP`, dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
@@ -851,8 +857,9 @@ type UsageRecord struct {
 	RequestClass, SessionID                                                      string
 	TTFTMS                                                                       int64
 	OutputTokensPerSecond                                                        float64
-	CompatibilityFidelity                                                        kernel.CompatibilityFidelity `json:"compatibilityFidelity,omitempty"`
-	CompatibilityLosses                                                          []kernel.LossRecord          `json:"compatibilityLosses,omitempty"`
+	CompatibilityFidelity                                                        kernel.CompatibilityFidelity     `json:"compatibilityFidelity,omitempty"`
+	CompatibilityLosses                                                          []kernel.LossRecord              `json:"compatibilityLosses,omitempty"`
+	CompatibilityPlan                                                            *kernel.CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
 }
 
 type UsageSummary struct {
@@ -899,7 +906,7 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,estimated_cost,COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,estimated_cost,COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -907,12 +914,15 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	var result []UsageRecord
 	for rows.Next() {
 		var item UsageRecord
-		var losses string
-		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.EstimatedCost, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses); err != nil {
+		var losses, plan string
+		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.EstimatedCost, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses, &plan); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(losses, &item.CompatibilityLosses); err != nil {
 			return nil, fmt.Errorf("usage event %d compatibility losses: %w", item.ID, err)
+		}
+		if err := decodeJSON(plan, &item.CompatibilityPlan); err != nil {
+			return nil, fmt.Errorf("usage event %d compatibility plan: %w", item.ID, err)
 		}
 		result = append(result, item)
 	}

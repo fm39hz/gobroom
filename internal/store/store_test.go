@@ -201,11 +201,15 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 		t.Fatalf("provider sessions=%#v err=%v", sessions, err)
 	}
 	loss := kernel.LossRecord{ID: "reasoning.clamped", Requested: "xhigh", Effective: "high", SemanticPaths: []string{"request.reasoning.effort"}, PolicySources: []string{"combo.deep"}}
-	if err := s.SaveUsageEvent(kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5, CompatibilityFidelity: kernel.FidelityLossy, CompatibilityLosses: []kernel.LossRecord{loss}}); err != nil {
+	plan := &kernel.CompatibilityPlanSummary{
+		Supported: true, Fidelity: kernel.FidelityLossy,
+		Mappings: []kernel.CompatibilityMappingSummary{{Facet: "reasoning.effort", Paths: []string{"request.reasoning.effort"}, Disposition: kernel.FacetDegraded, Reason: "clamped"}},
+	}
+	if err := s.SaveUsageEvent(kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5, CompatibilityFidelity: kernel.FidelityLossy, CompatibilityLosses: []kernel.LossRecord{loss}, CompatibilityPlan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := s.UsageEvents(1)
-	if err != nil || len(usage) != 1 || usage[0].CompatibilityFidelity != kernel.FidelityLossy || len(usage[0].CompatibilityLosses) != 1 || !reflect.DeepEqual(usage[0].CompatibilityLosses[0], loss) {
+	if err != nil || len(usage) != 1 || usage[0].CompatibilityFidelity != kernel.FidelityLossy || len(usage[0].CompatibilityLosses) != 1 || !reflect.DeepEqual(usage[0].CompatibilityLosses[0], loss) || !reflect.DeepEqual(usage[0].CompatibilityPlan, plan) {
 		t.Fatalf("compatibility outcome was not persisted with usage: %#v err=%v", usage, err)
 	}
 	var runtimeCount, modelCount, transportCount, extensionCount, sessionCount, dailyCount int
