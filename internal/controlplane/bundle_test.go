@@ -38,7 +38,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 3
+	bundle.Version = 4
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 3 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+	if bundle.Version != 4 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
 		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
@@ -165,9 +165,50 @@ func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
 func TestConfigBundleRejectsPreviousContractVersion(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	bundle := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
-	bundle.Version = 2
+	bundle.Version = 3
 	if err := ValidateBundleWithStrategies(bundle, catalog); err == nil {
 		t.Fatal("previous config bundle contract version was accepted")
+	}
+}
+
+func TestBundleExportsUnusedUnresolvedProviderWithoutInventingBehavior(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/unresolved-provider.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode) VALUES('commandcode','CommandCode','https://api.commandcode.ai','openai_chat','commandcode-pending','commandcode','/models','api_key')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority,enabled) VALUES('commandcode-account','commandcode','account','api_key','credential',1,0)`); err != nil {
+		t.Fatal(err)
+	}
+	catalog := bundleTestCatalog(t)
+	bundle, err := ExportBundle(s, catalog.Extensions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Providers) != 1 || bundle.Providers[0].DefinitionID != "commandcode-pending" || len(bundle.UnresolvedProviderDefinitions) != 1 || bundle.UnresolvedProviderDefinitions[0].ProviderNodeID != "commandcode" {
+		t.Fatalf("unused unresolved provider was dropped or hidden: %#v", bundle)
+	}
+	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
+		t.Fatalf("inert provider setup bundle should remain portable: %v", err)
+	}
+	diff, err := DiffBundle(bundleWithDependencyLock(t, ConfigBundle{}, catalog), bundle, catalog)
+	if err != nil || !diff.UnresolvedProvidersChanged {
+		t.Fatalf("unresolved provider status missing from bundle diff: %#v err=%v", diff, err)
+	}
+	if err := s.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "commandcode-route", ProviderNodeID: "commandcode", Kind: "custom", ExternalID: "model-a", DisplayName: "Model A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`UPDATE model_catalog SET enabled=0 WHERE id='commandcode-route'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertPhysicalModel(store.PhysicalModel{Name: "commandcode-model", Sources: []store.RouteReference{{RouteID: "commandcode-route"}}, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ExportBundle(s, catalog.Extensions()); err == nil {
+		t.Fatal("provider definition used by a Physical source was exported as unresolved and inert")
 	}
 }
 
@@ -220,7 +261,7 @@ func TestDiffBundleReportsTypedChanges(t *testing.T) {
 	if diff.ProvidersAdded != 1 || diff.ProvidersRemoved != 1 || len(diff.Changes) != 2 {
 		t.Fatalf("diff=%#v", diff)
 	}
-	encoded, err := json.Marshal(BundleDiff{ProvidersAdded: 1, ProvidersRemoved: 2, ConnectionsAdded: 3, ConnectionsRemoved: 4, ModelsAdded: 5, ModelsRemoved: 6, PhysicalAdded: 7, PhysicalRemoved: 8, CombosAdded: 9, CombosRemoved: 10, TransformBindingsAdded: 11, TransformBindingsRemoved: 12, TransformBindingsChanged: 13, LossCeilingChanged: true})
+	encoded, err := json.Marshal(BundleDiff{ProvidersAdded: 1, ProvidersRemoved: 2, ConnectionsAdded: 3, ConnectionsRemoved: 4, ModelsAdded: 5, ModelsRemoved: 6, PhysicalAdded: 7, PhysicalRemoved: 8, CombosAdded: 9, CombosRemoved: 10, TransformBindingsAdded: 11, TransformBindingsRemoved: 12, TransformBindingsChanged: 13, LossCeilingChanged: true, UnresolvedProvidersChanged: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +269,7 @@ func TestDiffBundleReportsTypedChanges(t *testing.T) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if len(fields) != 15 || fields["providersRemoved"] != float64(2) || fields["connectionsAdded"] != float64(3) || fields["physicalRemoved"] != float64(8) || fields["combosRemoved"] != float64(10) || fields["transformBindingsChanged"] != float64(13) || fields["lossCeilingChanged"] != true {
+	if len(fields) != 16 || fields["providersRemoved"] != float64(2) || fields["connectionsAdded"] != float64(3) || fields["physicalRemoved"] != float64(8) || fields["combosRemoved"] != float64(10) || fields["transformBindingsChanged"] != float64(13) || fields["lossCeilingChanged"] != true || fields["unresolvedProvidersChanged"] != true {
 		t.Fatalf("bundle diff JSON lost field tags: %s", encoded)
 	}
 }

@@ -153,7 +153,11 @@ pending.
    unify strategy implementation registry with this catalog, allow multiple
    primitive contract versions side by side, and add versioned
    content/event artifacts, bounded body references, declarative binding
-   storage and atomic bundle dependency resolution.
+   storage and atomic bundle dependency resolution. Bundle v4 now records an
+   unresolved provider definition explicitly when that provider has no model
+   routes; used provider definitions still must resolve exactly in the frozen
+   catalog. Embedding custom provider-definition artifacts for cross-host
+   import remains open.
 2. **C2 — full compatibility planning (in progress):** the kernel now asks
    adapters for a request/route/operation-scoped `CompatibilityPlan` and
    recomputes admission from immutable facet declarations rather than trusting
@@ -172,7 +176,7 @@ pending.
    Responses decoder→Anthropic renderer fixtures prove JSON/SSE cross-wire
    verticals. Physical/Combo nodes persist named loss grants/denials that flow
    down the model path; denial wins and admitted lossy plans are recorded in
-   usage. Repeatable CLI `--allow-loss`/`--deny-loss` and portable bundle v3
+   usage. Repeatable CLI `--allow-loss`/`--deny-loss` and portable bundle v4
    carry the policy. A server allow/deny ceiling is managed through the CLI and
    SQLite-backed snapshot. Loss records retain requested/effective values,
    semantic paths and granting model nodes. Remaining: scoped transforms and

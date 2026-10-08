@@ -13,33 +13,44 @@ import (
 )
 
 type ConfigBundle struct {
-	Version           int                       `json:"version"`
-	Dependencies      extensions.DependencyLock `json:"dependencies"`
-	LossCeiling       *kernel.LossPolicyCeiling `json:"compatibilityLossCeiling,omitempty"`
-	Providers         []store.ProviderNode      `json:"providers"`
-	Connections       []store.ConnectionRecord  `json:"connections"`
-	Models            []store.Model             `json:"models"`
-	Physical          []store.PhysicalModel     `json:"physicalModels"`
-	Combos            []store.ComboModel        `json:"comboModels"`
-	TransformBindings []kernel.TransformBinding `json:"transformBindings"`
+	Version                       int                            `json:"version"`
+	Dependencies                  extensions.DependencyLock      `json:"dependencies"`
+	LossCeiling                   *kernel.LossPolicyCeiling      `json:"compatibilityLossCeiling,omitempty"`
+	UnresolvedProviderDefinitions []UnresolvedProviderDefinition `json:"unresolvedProviderDefinitions,omitempty"`
+	Providers                     []store.ProviderNode           `json:"providers"`
+	Connections                   []store.ConnectionRecord       `json:"connections"`
+	Models                        []store.Model                  `json:"models"`
+	Physical                      []store.PhysicalModel          `json:"physicalModels"`
+	Combos                        []store.ComboModel             `json:"comboModels"`
+	TransformBindings             []kernel.TransformBinding      `json:"transformBindings"`
+}
+
+// UnresolvedProviderDefinition marks a provider setup record that is not yet
+// backed by an installed manifest. It is exportable only while no model route
+// references that provider; active dependencies remain fail-closed.
+type UnresolvedProviderDefinition struct {
+	ProviderNodeID string         `json:"providerNodeId"`
+	DefinitionRef  extensions.Ref `json:"definitionRef"`
+	Reason         string         `json:"reason"`
 }
 
 type BundleDiff struct {
-	ProvidersAdded           int      `json:"providersAdded"`
-	ProvidersRemoved         int      `json:"providersRemoved"`
-	ConnectionsAdded         int      `json:"connectionsAdded"`
-	ConnectionsRemoved       int      `json:"connectionsRemoved"`
-	ModelsAdded              int      `json:"modelsAdded"`
-	ModelsRemoved            int      `json:"modelsRemoved"`
-	PhysicalAdded            int      `json:"physicalAdded"`
-	PhysicalRemoved          int      `json:"physicalRemoved"`
-	CombosAdded              int      `json:"combosAdded"`
-	CombosRemoved            int      `json:"combosRemoved"`
-	TransformBindingsAdded   int      `json:"transformBindingsAdded"`
-	TransformBindingsRemoved int      `json:"transformBindingsRemoved"`
-	TransformBindingsChanged int      `json:"transformBindingsChanged"`
-	LossCeilingChanged       bool     `json:"lossCeilingChanged"`
-	Changes                  []string `json:"changes"`
+	ProvidersAdded             int      `json:"providersAdded"`
+	ProvidersRemoved           int      `json:"providersRemoved"`
+	ConnectionsAdded           int      `json:"connectionsAdded"`
+	ConnectionsRemoved         int      `json:"connectionsRemoved"`
+	ModelsAdded                int      `json:"modelsAdded"`
+	ModelsRemoved              int      `json:"modelsRemoved"`
+	PhysicalAdded              int      `json:"physicalAdded"`
+	PhysicalRemoved            int      `json:"physicalRemoved"`
+	CombosAdded                int      `json:"combosAdded"`
+	CombosRemoved              int      `json:"combosRemoved"`
+	TransformBindingsAdded     int      `json:"transformBindingsAdded"`
+	TransformBindingsRemoved   int      `json:"transformBindingsRemoved"`
+	TransformBindingsChanged   int      `json:"transformBindingsChanged"`
+	LossCeilingChanged         bool     `json:"lossCeilingChanged"`
+	UnresolvedProvidersChanged bool     `json:"unresolvedProvidersChanged"`
+	Changes                    []string `json:"changes"`
 }
 
 func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, error) {
@@ -52,6 +63,10 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 		return ConfigBundle{}, err
 	}
 	models, err := s.Models()
+	if err != nil {
+		return ConfigBundle{}, err
+	}
+	catalogRows, err := s.DiscoveredRoutes("")
 	if err != nil {
 		return ConfigBundle{}, err
 	}
@@ -71,7 +86,23 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 3, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	bundle := ConfigBundle{Version: 4, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	if catalog != nil {
+		for _, item := range providers {
+			if item.DefinitionID == "" {
+				continue
+			}
+			ref := provider.ProviderDefinitionRef(item.DefinitionID, 1)
+			if _, installed := catalog.Descriptor(ref); installed || bundleProviderHasModels(bundle, item.ID) || bundleProviderHasPhysicalSources(bundle.Physical, catalogRows, item.ID) {
+				continue
+			}
+			bundle.UnresolvedProviderDefinitions = append(bundle.UnresolvedProviderDefinitions, UnresolvedProviderDefinition{
+				ProviderNodeID: item.ID,
+				DefinitionRef:  ref,
+				Reason:         "provider definition is not installed and has no model routes",
+			})
+		}
+	}
 	if configured {
 		bundle.LossCeiling = &lossCeiling
 	}
@@ -91,7 +122,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 3 {
+	if bundle.Version != 4 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
 	if bundle.Dependencies.Version != 1 {
@@ -107,6 +138,9 @@ func ValidateBundle(bundle ConfigBundle) error {
 		if err := kernel.ValidateLossPolicyCeiling(*bundle.LossCeiling); err != nil {
 			return fmt.Errorf("compatibility loss ceiling: %w", err)
 		}
+	}
+	if err := validateUnresolvedProviderDefinitions(bundle); err != nil {
+		return err
 	}
 	for _, physical := range bundle.Physical {
 		if err := kernel.ValidateLossPolicy(physical.LossPolicy); err != nil {
@@ -258,8 +292,12 @@ func ValidateBundleWithStrategies(bundle ConfigBundle, strategies *kernel.Strate
 
 func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
 	roots := make([]extensions.Ref, 0, len(bundle.Providers)+len(bundle.Physical)+len(bundle.Combos)+len(bundle.TransformBindings))
+	unresolved := make(map[string]bool, len(bundle.UnresolvedProviderDefinitions))
+	for _, item := range bundle.UnresolvedProviderDefinitions {
+		unresolved[item.ProviderNodeID] = true
+	}
 	for _, item := range bundle.Providers {
-		if item.DefinitionID != "" {
+		if item.DefinitionID != "" && !unresolved[item.ID] {
 			roots = append(roots, provider.ProviderDefinitionRef(item.DefinitionID, 1))
 		}
 	}
@@ -280,6 +318,57 @@ func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
 		}
 	}
 	return result
+}
+
+func bundleProviderHasModels(bundle ConfigBundle, providerNodeID string) bool {
+	for _, model := range bundle.Models {
+		if model.NodeID == providerNodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func bundleProviderHasPhysicalSources(physical []store.PhysicalModel, catalog []store.DiscoveredRoute, providerNodeID string) bool {
+	routes := make(map[string]bool)
+	for _, route := range catalog {
+		if route.ProviderNodeID == providerNodeID {
+			routes[route.ID] = true
+		}
+	}
+	for _, model := range physical {
+		for _, source := range model.Sources {
+			if routes[source.RouteID] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateUnresolvedProviderDefinitions(bundle ConfigBundle) error {
+	providers := make(map[string]store.ProviderNode, len(bundle.Providers))
+	for _, item := range bundle.Providers {
+		providers[item.ID] = item
+	}
+	seen := make(map[string]bool, len(bundle.UnresolvedProviderDefinitions))
+	for _, unresolved := range bundle.UnresolvedProviderDefinitions {
+		if unresolved.ProviderNodeID == "" || seen[unresolved.ProviderNodeID] {
+			return fmt.Errorf("unresolved provider definitions contain an empty or duplicate provider node ID")
+		}
+		seen[unresolved.ProviderNodeID] = true
+		item, exists := providers[unresolved.ProviderNodeID]
+		if !exists {
+			return fmt.Errorf("unresolved provider definition references missing provider node %q", unresolved.ProviderNodeID)
+		}
+		if err := unresolved.DefinitionRef.Validate(); err != nil || unresolved.DefinitionRef.Kind != "provider-definition" || unresolved.DefinitionRef.ID != item.DefinitionID || unresolved.DefinitionRef.ContractVersion != 1 {
+			return fmt.Errorf("unresolved provider definition does not match provider node %q", unresolved.ProviderNodeID)
+		}
+		if bundleProviderHasModels(bundle, unresolved.ProviderNodeID) {
+			return fmt.Errorf("provider node %q has model routes but its definition is unresolved", unresolved.ProviderNodeID)
+		}
+	}
+	return nil
 }
 
 func sameExtensionRefs(left, right []extensions.Ref) bool {
@@ -330,6 +419,10 @@ func DiffBundle(current, desired ConfigBundle, strategyCatalogs ...*kernel.Strat
 	if !reflect.DeepEqual(current.LossCeiling, desired.LossCeiling) {
 		result.LossCeilingChanged = true
 		result.Changes = append(result.Changes, "compatibility loss ceiling changed")
+	}
+	if !reflect.DeepEqual(current.UnresolvedProviderDefinitions, desired.UnresolvedProviderDefinitions) {
+		result.UnresolvedProvidersChanged = true
+		result.Changes = append(result.Changes, "unresolved provider definitions changed")
 	}
 	return result, nil
 }
