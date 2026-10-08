@@ -355,13 +355,37 @@ func configApplyCommand() *cobra.Command {
 	}}
 }
 func routeExplainCommand() *cobra.Command {
-	var model, requestClass, sessionID string
-	cmd := &cobra.Command{Use: "route-explain", Short: "explain effective route order", RunE: func(*cobra.Command, []string) error {
-		return invoke("routes.explain", map[string]any{"model": model, "requestClass": requestClass, "sessionID": sessionID})
+	var model, requestClass, sessionID, requestFile, requestPath string
+	cmd := &cobra.Command{Use: "route-explain", Short: "explain route order and optional request compatibility", RunE: func(cmd *cobra.Command, _ []string) error {
+		params := map[string]any{"model": model, "requestClass": requestClass, "sessionID": sessionID}
+		if requestFile != "" {
+			var body map[string]any
+			var err error
+			if requestFile == "-" {
+				err = json.NewDecoder(cmd.InOrStdin()).Decode(&body)
+			} else {
+				var raw []byte
+				raw, err = os.ReadFile(requestFile)
+				if err == nil {
+					err = json.Unmarshal(raw, &body)
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("read compatibility request: %w", err)
+			}
+			if body == nil {
+				return fmt.Errorf("compatibility request must be a JSON object")
+			}
+			params["request"] = body
+			params["requestPath"] = requestPath
+		}
+		return invoke("routes.explain", params)
 	}}
 	cmd.Flags().StringVar(&model, "model", "", "exposed model")
 	cmd.Flags().StringVar(&requestClass, "request-class", "", "request class bucket")
 	cmd.Flags().StringVar(&sessionID, "session", "", "session affinity ID")
+	cmd.Flags().StringVar(&requestFile, "request-file", "", "request JSON file to preflight (use - for stdin)")
+	cmd.Flags().StringVar(&requestPath, "path", "/v1/chat/completions", "client API path used to normalize the sample request")
 	return cmd
 }
 

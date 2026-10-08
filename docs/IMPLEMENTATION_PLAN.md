@@ -188,9 +188,12 @@ pending.
    ordered request/response transform chains and authorized operation-to-
    provider artifact handoffs. The selected payload-free plan summary is now
    persisted with successful usage, returned through `usage.list` and shown in
-   the TUI Usage inspector. Remaining: request-specific preflight through
-   `routes.explain` and close the full SG1/SG4 matrices, including response
-   artifact rendering and transform fallback accounting.
+   the TUI Usage inspector. `routes.explain` now accepts a normalized request
+   sample and evaluates every enabled model-path candidate through the same
+   compatibility planner without strategy-state mutation, credential lookup
+   or upstream dispatch; CLI accepts a JSON file or stdin. Remaining: close
+   the full SG1/SG4 matrices, including response artifact rendering and
+   transform fallback accounting.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

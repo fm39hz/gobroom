@@ -838,7 +838,38 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		requestClass := stringParam(request.Params, "requestClass")
 		sessionID := stringParam(request.Params, "sessionID")
-		return success(request, d.policy.ExplainRoutes(resolved.Candidates, time.Now(), requestClass, sessionID))
+		explanations := d.policy.ExplainRoutes(resolved.Candidates, time.Now(), requestClass, sessionID)
+		if rawRequest, hasRequest := request.Params["request"]; hasRequest {
+			body, ok := rawRequest.(map[string]any)
+			if !ok {
+				return fail(request, "request must be a JSON object")
+			}
+			body["model"] = model
+			requestPath := stringParam(request.Params, "requestPath")
+			if requestPath == "" {
+				requestPath = "/v1/chat/completions"
+			}
+			headers := make(http.Header)
+			if sessionID != "" {
+				headers.Set("x-session-id", sessionID)
+			}
+			normalized, normalizeErr := normalize.Map(requestPath, headers, body)
+			if normalizeErr != nil {
+				return fail(request, "normalize compatibility request: "+normalizeErr.Error())
+			}
+			compatibility, explainErr := d.kernel.ExplainCompatibility(ctx, model, normalized.Request)
+			if explainErr != nil {
+				return fail(request, "explain request compatibility: "+explainErr.Error())
+			}
+			byRoute := make(map[string][]kernel.RouteCompatibilityExplanation, len(compatibility))
+			for _, item := range compatibility {
+				byRoute[item.RouteID] = append(byRoute[item.RouteID], item)
+			}
+			for index := range explanations {
+				explanations[index].Compatibility = byRoute[explanations[index].Route.ID]
+			}
+		}
+		return success(request, explanations)
 	case "quota.set":
 		if d.policy == nil {
 			return fail(request, "runtime policy unavailable")

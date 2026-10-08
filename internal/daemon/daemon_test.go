@@ -27,6 +27,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/quota"
+	runtimehealth "github.com/fm39hz/gobroom/internal/runtime"
 	"github.com/fm39hz/gobroom/internal/store"
 	"golang.org/x/oauth2"
 )
@@ -38,6 +39,30 @@ func (f oauthRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response,
 }
 
 type callbackOAuthFixture struct{ redirectURL string }
+
+type daemonExplainAdapter struct{ attempts *int }
+
+func (daemonExplainAdapter) ID() string { return "daemon-explain-fixture" }
+func (daemonExplainAdapter) PlanCompatibility(input kernel.CompatibilityContext) kernel.CompatibilityPlan {
+	mappings := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
+	for _, facet := range input.Policy.RequiredFacets {
+		mappings = append(mappings, kernel.FacetMapping{Facet: facet, Paths: []string{"fixture"}, Disposition: kernel.FacetPreserved})
+	}
+	mappings = append(mappings, kernel.FacetMapping{Facet: kernel.FacetWireResponse, Paths: []string{"fixture"}, Disposition: kernel.FacetPreserved})
+	return kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{mappings}, input.Policy)
+}
+func (a daemonExplainAdapter) Prepare(context.Context, kernel.NormalizedRequest, kernel.Route, kernel.Credential) (kernel.UpstreamRequest, error) {
+	(*a.attempts)++
+	return kernel.UpstreamRequest{}, nil
+}
+func (a daemonExplainAdapter) Execute(context.Context, kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	(*a.attempts)++
+	return kernel.UpstreamResponse{}, nil
+}
+func (daemonExplainAdapter) ClassifyError(int, []byte) kernel.ErrorClass { return kernel.ErrorTerminal }
+func (daemonExplainAdapter) RenderResponse(context.Context, kernel.UpstreamResponse, http.ResponseWriter, normalize.Format, kernel.StreamHooks) error {
+	return nil
+}
 
 func (callbackOAuthFixture) ID() string                        { return "callback-oauth-fixture" }
 func (callbackOAuthFixture) SetupSchema() provider.SetupSchema { return provider.SetupSchema{} }
@@ -177,6 +202,65 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	view, ok := response.Result.(extensions.CatalogView)
 	if !response.OK || !ok || view.Fingerprint == "" || len(view.Schemas) < 4 {
 		t.Fatalf("extension catalog=%#v error=%q", response.Result, response.Error)
+	}
+}
+
+func TestRouteExplainIPCPreflightsRequestCompatibility(t *testing.T) {
+	dataStore, err := store.Open(t.TempDir() + "/route-explain.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataStore.Close()
+	bindings := map[normalize.Operation]kernel.RouteOperationBinding{
+		normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"fixture"}},
+	}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "combo-junior"}},
+		Routes:       []kernel.Route{{ID: "route-a", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, OperationBindings: bindings}},
+		Nodes: []kernel.ModelNode{
+			{ID: "physical-qwen", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route-a", Fidelity: kernel.FidelityExact}}},
+			{ID: "combo-junior", Kind: kernel.ModelCombo, Members: []kernel.MemberRef{{Kind: kernel.MemberModel, ID: "physical-qwen"}}},
+		},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := runtimehealth.NewPolicyGate()
+	engine, err := kernel.New(snapshot, policy, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	attempts := 0
+	engine.Adapters["fixture"] = daemonExplainAdapter{attempts: &attempts}
+	service := &Daemon{store: dataStore, server: api.NewServer(dataStore), kernel: engine, policy: policy}
+	response := service.handleIPC(context.Background(), IPCRequest{
+		ID: "route-explain", Method: "routes.explain",
+		Params: map[string]any{
+			"model": "junior", "requestPath": "/v1/chat/completions",
+			"request": map[string]any{"messages": []any{map[string]any{"role": "user", "content": "private fixture text"}}},
+		},
+	})
+	if !response.OK {
+		t.Fatalf("route explanation failed: %s", response.Error)
+	}
+	items, ok := response.Result.([]runtimehealth.RouteExplanation)
+	if !ok || len(items) != 1 || len(items[0].Compatibility) != 1 {
+		t.Fatalf("route compatibility missing: %#v", response.Result)
+	}
+	compatibility := items[0].Compatibility[0]
+	if !compatibility.Compatible || compatibility.RouteID != "route-a" || compatibility.Plan.Fidelity != kernel.FidelityNative {
+		t.Fatalf("unexpected route compatibility: %#v", compatibility)
+	}
+	if attempts != 0 {
+		t.Fatalf("route explanation dispatched upstream request(s): %d", attempts)
+	}
+	encoded, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "private fixture text") {
+		t.Fatal("route explanation leaked request content")
 	}
 }
 

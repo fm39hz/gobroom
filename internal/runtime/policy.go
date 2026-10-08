@@ -28,12 +28,13 @@ type sessionRoute struct {
 }
 
 type RouteExplanation struct {
-	Route       kernel.Route      `json:"route"`
-	Rank        int               `json:"rank"`
-	Usable      bool              `json:"usable"`
-	Reason      string            `json:"reason"`
-	Health      RouteHealth       `json:"health"`
-	Performance *PerformanceStats `json:"performance,omitempty"`
+	Route         kernel.Route                           `json:"route"`
+	Rank          int                                    `json:"rank"`
+	Usable        bool                                   `json:"usable"`
+	Reason        string                                 `json:"reason"`
+	Health        RouteHealth                            `json:"health"`
+	Performance   *PerformanceStats                      `json:"performance,omitempty"`
+	Compatibility []kernel.RouteCompatibilityExplanation `json:"compatibility,omitempty"`
 }
 
 func NewPolicyGate() *PolicyGate {
