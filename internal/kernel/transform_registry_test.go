@@ -30,6 +30,7 @@ type invalidIdentityTransform struct{}
 type undeclaredPromptMutation struct{}
 
 type responseMarkTransform struct{}
+type artifactMutationTransform struct{}
 
 type scopedProbeAdapter struct{ attempts *[]string }
 
@@ -72,6 +73,34 @@ func (responseMarkTransform) ApplyResponse(_ context.Context, event ResponseEven
 		event.Text += "!"
 	}
 	return event, nil
+}
+
+func (artifactMutationTransform) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.artifact-mutation", ContractVersion: 1}, ImplementationVersion: "1", Label: "Artifact mutation", Description: "Must not rewrite provider artifact provenance.", Effects: []ResponseTransformEffect{ResponseEffectText}}
+}
+func (artifactMutationTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	if len(event.Artifacts) > 0 {
+		event.Artifacts[0].Role = "rewritten"
+	}
+	return event, nil
+}
+
+func TestResponseTransformCannotRewriteArtifactReference(t *testing.T) {
+	registry := NewResponseTransformRegistry()
+	transform := artifactMutationTransform{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	scope := daemonTransformScope()
+	event := ResponseEvent{Kind: EventArtifact, Artifacts: []extensions.ArtifactRef{{
+		TypeRef: extensions.Ref{Kind: extensions.ArtifactKind, ID: "image", ContractVersion: 1}, Role: "image",
+	}}}
+	_, err := registry.ApplyScopes(context.Background(), event, []TransformBinding{{
+		ID: "mutate-artifact", TransformRef: transform.Definition().Ref, Enabled: true, Scope: scope,
+	}}, scope)
+	if err == nil || !strings.Contains(err.Error(), "immutable artifact references") {
+		t.Fatalf("response transform rewrote artifact provenance: %v", err)
+	}
 }
 
 func TestTransformRegistriesProjectScopedCompatibilitySteps(t *testing.T) {

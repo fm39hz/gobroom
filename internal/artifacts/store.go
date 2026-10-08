@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"time"
 
@@ -52,6 +53,55 @@ type Access struct {
 	Catalog   *extensions.Snapshot
 	Receiver  extensions.ArtifactOwner
 	Recipient extensions.Ref
+	Allowlist *BodyAllowlist
+}
+
+// BodyAllowlist narrows a valid owner/recipient artifact contract to the
+// leases produced by one response scope.
+type BodyAllowlist struct {
+	mu     sync.RWMutex
+	refs   map[string]extensions.ArtifactRef
+	closed bool
+}
+
+func newBodyAllowlist() *BodyAllowlist {
+	return &BodyAllowlist{refs: make(map[string]extensions.ArtifactRef)}
+}
+
+func (a *BodyAllowlist) add(artifact extensions.ArtifactRef) bool {
+	if a == nil || artifact.Body == nil || artifact.Body.ID == "" {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return false
+	}
+	a.refs[artifact.Body.ID] = artifact.Clone()
+	return true
+}
+
+func (a *BodyAllowlist) allows(artifact extensions.ArtifactRef) bool {
+	if a == nil || artifact.Body == nil || artifact.Body.ID == "" {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.closed {
+		return false
+	}
+	allowed, ok := a.refs[artifact.Body.ID]
+	return ok && reflect.DeepEqual(allowed, artifact)
+}
+
+func (a *BodyAllowlist) close() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.closed = true
+	a.refs = nil
+	a.mu.Unlock()
 }
 
 func WithStore(ctx context.Context, store *Store) context.Context {
@@ -77,6 +127,9 @@ func OpenArtifactFromContext(ctx context.Context, artifact extensions.ArtifactRe
 	access, ok := ctx.Value(accessContextKey{}).(Access)
 	if !ok || access.Store == nil || access.Catalog == nil {
 		return nil, fmt.Errorf("artifact access scope is unavailable")
+	}
+	if access.Allowlist != nil && !access.Allowlist.allows(artifact) {
+		return nil, fmt.Errorf("artifact body is outside the active response scope")
 	}
 	return access.Store.OpenArtifact(ctx, access.Catalog, artifact, access.Receiver, access.Recipient)
 }

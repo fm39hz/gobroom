@@ -187,6 +187,11 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 	if !ok || requirements.OperationContractVersion == 0 || operationBinding.ContractVersion != requirements.OperationContractVersion {
 		return nil, CompatibilityPlan{Fidelity: FidelityUnsupported, Reason: "route has no matching operation binding"}
 	}
+	operationRef := extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: operationBinding.ContractVersion}
+	artifactOutputs, _ := k.Operations.ArtifactOutputs(operationRef)
+	if len(artifactOutputs) > 0 && k.ArtifactStore == nil {
+		return nil, CompatibilityPlan{Fidelity: FidelityUnsupported, Reason: "response artifact body store is unavailable"}
+	}
 	adapterIDs := operationBinding.AdapterIDs
 	for _, adapterID := range adapterIDs {
 		adapter := k.Adapters[adapterID]
@@ -195,13 +200,16 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		}
 		requestTransforms := k.Transforms.Plan(transformBindings, scopes...)
 		responseTransforms := k.ResponseTransforms.Plan(transformBindings, scopes...)
-		operationRef := extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: operationBinding.ContractVersion}
 		compatibilityContext := CompatibilityContext{
 			Request: request, Route: route, Operation: operation, Requirements: requirements,
 			ActiveResponseTransform: len(responseTransforms) > 0,
 			RequestTransformSteps:   requestTransforms,
 			ResponseTransformSteps:  responseTransforms,
 			ArtifactTransfers:       PlanArtifactTransfers(request, operationRef, route.DefinitionRef),
+		}
+		if len(artifactOutputs) > 0 {
+			compatibilityContext.ArtifactOutputs = append([]extensions.ArtifactOutput(nil), artifactOutputs...)
+			compatibilityContext.ArtifactOutputRequired = true
 		}
 		compatibilityContext.Policy.RequiredFacets = RequiredRequestFacets(request)
 		compatibilityContext.Policy.AllowedLosses = append([]string(nil), lossPolicy.AllowedLosses...)
@@ -210,6 +218,9 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		compatibilityContext.Policy.LossCeiling = cloneLossCeiling(lossPolicy.LossCeiling)
 		for _, event := range RequiredResponseEvents(request) {
 			compatibilityContext.Policy.RequiredFacets = append(compatibilityContext.Policy.RequiredFacets, ResponseEventFacet(event))
+		}
+		if len(artifactOutputs) > 0 {
+			compatibilityContext.Policy.RequiredFacets = append(compatibilityContext.Policy.RequiredFacets, ResponseEventFacet(EventArtifact))
 		}
 		plan := adapter.PlanCompatibility(compatibilityContext)
 		policy := compatibilityContext.Policy
@@ -326,6 +337,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.UsageOptions = operationBinding.UsageOptions
 			candidate.SessionStoreRef = operationBinding.SessionStoreRef
 			operationRef := extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
+			artifactOutputs, _ := k.Operations.ArtifactOutputs(operationRef)
+			if len(artifactOutputs) > 0 && k.ArtifactStore == nil {
+				failureClass, memberErr = ErrorCapability, fmt.Errorf("response artifact body store is unavailable")
+				continue
+			}
 			receiver := extensions.ArtifactOwner{
 				Domain: "provider", IssuerRef: &candidate.DefinitionRef,
 				ProviderDefinitionID: candidate.DefinitionID, ConnectionID: candidate.CredentialID,
@@ -392,6 +408,20 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			attemptCtx := ctx
 			if k.ArtifactStore != nil {
 				attemptCtx = artifacts.WithAccess(ctx, artifacts.Access{Store: k.ArtifactStore, Catalog: k.Operations.ExtensionCatalog(), Receiver: receiver, Recipient: candidate.DefinitionRef})
+			}
+			var responseScope *artifacts.ResponseScope
+			var responseArtifactAccess *artifacts.Access
+			if len(artifactOutputs) > 0 {
+				clientOwner := extensions.ArtifactOwner{Domain: "harness", ClientContract: string(candidateRequest.SourceFormat), SessionID: requestSessionKey(candidateRequest)}
+				responseScope, err = artifacts.NewResponseScope(k.ArtifactStore, k.Operations.ExtensionCatalog(), receiver, clientOwner, operationRef, artifactOutputs, resourceBounds.MaxOutputBytes)
+				if err != nil {
+					k.Scheduler.Release(candidate)
+					failureClass, memberErr = ErrorCapability, err
+					continue
+				}
+				attemptCtx = artifacts.WithResponseScope(attemptCtx, responseScope)
+				access := responseScope.Access()
+				responseArtifactAccess = &access
 			}
 			refreshed := false
 		retryUpstream:
@@ -469,40 +499,61 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			var firstByteAt time.Time
 			emitEvent := responseEventSink(writer)
 			streamWriter := &responseCommitWriter{ResponseWriter: writer, maxBytes: resourceBounds.MaxOutputBytes}
-			var validateEvent func(context.Context, ResponseEvent) error
-			if definition, exists := k.Operations.Resolve(operationRef); exists && (len(definition.EventSchemaRefs) > 0 || resultProjector != nil) {
-				var sequence uint64
-				resultFinalized := false
-				validateEvent = func(_ context.Context, event ResponseEvent) error {
-					sequence++
-					payload, err := operationEventPayload(event, sequence)
-					if err != nil {
+			artifactOutputCounts := make(map[string]int, len(artifactOutputs))
+			var sequence uint64
+			resultFinalized := false
+			validateEvent := func(_ context.Context, event ResponseEvent) error {
+				sequence++
+				if len(event.Artifacts) > 0 {
+					if len(artifactOutputs) == 0 || event.Kind != EventArtifact {
+						return fmt.Errorf("operation %q emitted artifacts outside its declared artifact event", operationRef.Key())
+					}
+					for _, artifact := range event.Artifacts {
+						if !artifact.Owner.Equal(receiver) {
+							return fmt.Errorf("response artifact %q is not owned by the selected provider route", artifact.TypeRef.Key())
+						}
+					}
+					clientOwner := extensions.ArtifactOwner{Domain: "harness", ClientContract: string(candidateRequest.SourceFormat), SessionID: requestSessionKey(candidateRequest)}
+					if err := k.Operations.ValidateArtifactOutputs(operationRef, event.Artifacts, clientOwner, operationRef, artifactOutputCounts); err != nil {
 						return err
 					}
+				} else if event.Kind == EventArtifact {
+					return fmt.Errorf("operation %q emitted an empty artifact event", operationRef.Key())
+				}
+				if event.Kind == EventResponseComplete {
+					if err := k.Operations.ValidateArtifactOutputCounts(operationRef, artifactOutputCounts); err != nil {
+						return err
+					}
+				}
+				payload, err := operationEventPayload(event, sequence)
+				if err != nil {
+					return err
+				}
+				if definition, exists := k.Operations.Resolve(operationRef); exists && len(definition.EventSchemaRefs) > 0 {
 					if err := k.Operations.ValidateEvent(operationRef, payload); err != nil {
 						return err
 					}
-					if resultProjector == nil {
-						return nil
-					}
-					if resultFinalized {
-						return fmt.Errorf("operation %q emitted events after its terminal result", operationRef.Key())
-					}
-					if err := resultProjector.ConsumeEvent(payload); err != nil {
-						return fmt.Errorf("project operation %q result: %w", operationRef.Key(), err)
-					}
-					if event.Kind == EventResponseComplete {
-						result, err := resultProjector.Finalize()
-						if err != nil {
-							return fmt.Errorf("finalize operation %q result: %w", operationRef.Key(), err)
-						}
-						if err := k.Operations.ValidateResult(operationRef, result); err != nil {
-							return err
-						}
-						resultFinalized = true
-					}
+				}
+				if resultProjector == nil {
 					return nil
 				}
+				if resultFinalized {
+					return fmt.Errorf("operation %q emitted events after its terminal result", operationRef.Key())
+				}
+				if err := resultProjector.ConsumeEvent(payload); err != nil {
+					return fmt.Errorf("project operation %q result: %w", operationRef.Key(), err)
+				}
+				if event.Kind == EventResponseComplete {
+					result, err := resultProjector.Finalize()
+					if err != nil {
+						return fmt.Errorf("finalize operation %q result: %w", operationRef.Key(), err)
+					}
+					if err := k.Operations.ValidateResult(operationRef, result); err != nil {
+						return err
+					}
+					resultFinalized = true
+				}
+				return nil
 			}
 			var responseTransform func(context.Context, ResponseEvent) (ResponseEvent, error)
 			responseTransformScopes := append([]TransformScope(nil), candidateScopes...)
@@ -518,7 +569,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					attemptReleased = true
 				}
 			}
-			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, OnError: func(streamErr error) {
+			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
 				releaseAttempt()
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
@@ -615,6 +666,16 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				k.EmitUsage(event)
 			}})
+			if renderErr == nil && len(artifactOutputs) > 0 {
+				if err := k.Operations.ValidateArtifactOutputCounts(operationRef, artifactOutputCounts); err != nil {
+					renderErr = err
+				}
+			}
+			if responseScope != nil {
+				if closeErr := responseScope.Close(); renderErr == nil && closeErr != nil {
+					renderErr = closeErr
+				}
+			}
 			if renderErr == nil {
 				return nil
 			}
@@ -685,6 +746,16 @@ func operationEventPayload(event ResponseEvent, sequence uint64) (json.RawMessag
 			"inputTokens": event.Usage.InputTokens, "outputTokens": event.Usage.OutputTokens,
 			"estimatedCost": event.Usage.EstimatedCost, "status": event.Usage.Status,
 		}
+	}
+	if len(event.Artifacts) > 0 {
+		metadata := make([]map[string]any, 0, len(event.Artifacts))
+		for _, artifact := range event.Artifacts {
+			metadata = append(metadata, map[string]any{
+				"typeRef": artifact.TypeRef, "role": artifact.Role, "mediaType": artifact.MediaType,
+				"sizeBytes": artifact.SizeBytes, "sensitivity": artifact.Sensitivity,
+			})
+		}
+		content["artifacts"] = metadata
 	}
 	payload, err := json.Marshal(operationEventEnvelope{Kind: string(event.Kind), Sequence: sequence, ItemID: event.ItemID, Content: content})
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
@@ -136,6 +137,9 @@ func (a ComposedAdapter) planCompatibility(input CompatibilityContext) Compatibi
 	}
 	providerEvents := a.Response.PossibleEvents()
 	requiredEvents := RequiredResponseEvents(input.Request)
+	if input.ArtifactOutputRequired {
+		requiredEvents = uniqueEventKinds(append(requiredEvents, EventArtifact))
+	}
 	decoderMappings := responseEventMappings(providerEvents)
 	declaredEvents := make(map[ResponseEventKind]bool, len(providerEvents))
 	for _, event := range providerEvents {
@@ -221,8 +225,12 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	if renderer == nil {
 		return fmt.Errorf("adapter %q has no renderer for client format %q", a.AdapterID, source)
 	}
+	rendererCtx := ctx
+	if hooks.ArtifactAccess != nil {
+		rendererCtx = artifacts.WithAccess(ctx, *hooks.ArtifactAccess)
+	}
 	providerStreaming := strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream")
-	session, err := renderer.Begin(ctx, ResponseRenderContext{
+	session, err := renderer.Begin(rendererCtx, ResponseRenderContext{
 		Status: response.Status, Headers: response.Headers, ClientFormat: source, ProviderFormat: a.ProviderFormat,
 		Streaming: hooks.Streaming, ProviderStreaming: providerStreaming, SemanticTransformActive: hooks.TransformResponse != nil, Model: hooks.Model,
 	}, writer)
@@ -276,10 +284,17 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		}
 		if hooks.MaxEventBytes > 0 {
 			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
+			artifactBytes := int64(0)
+			for _, artifact := range event.Artifacts {
+				eventBytes += int64(len(artifact.TypeRef.ID)+len(artifact.Role)+len(artifact.MediaType)+len(artifact.Sensitivity)+len(artifact.Value)) + 64
+				if artifact.Body != nil {
+					artifactBytes += artifact.SizeBytes
+				}
+			}
 			if eventBytes > hooks.MaxEventBytes {
 				return fmt.Errorf("response event %q exceeds %d-byte operation buffer limit", event.Kind, hooks.MaxEventBytes)
 			}
-			totalEventBytes += eventBytes
+			totalEventBytes += eventBytes + artifactBytes
 			if hooks.MaxOutputBytes > 0 && totalEventBytes > hooks.MaxOutputBytes {
 				return fmt.Errorf("decoded response exceeds %d-byte operation output limit", hooks.MaxOutputBytes)
 			}
@@ -292,7 +307,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		if hooks.OnEvent != nil {
 			hooks.OnEvent(event)
 		}
-		return session.Emit(ctx, event)
+		return session.Emit(rendererCtx, event)
 	}
 	decodeErr := a.Response.Decode(ctx, response, emit, decodeHooks)
 	if decodeErr == nil && !providerComplete {
@@ -301,7 +316,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	if decodeErr != nil {
 		_ = emit(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: decodeErr.Error()})
 	}
-	finishErr := session.Finish(ctx, decodeErr)
+	finishErr := session.Finish(rendererCtx, decodeErr)
 	if decodeErr != nil {
 		if hooks.OnError != nil {
 			hooks.OnError(decodeErr)

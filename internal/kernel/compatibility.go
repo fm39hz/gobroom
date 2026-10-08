@@ -159,6 +159,7 @@ type CompatibilityPlan struct {
 	RequestTransformSteps  []RequestTransformPlanStep
 	ResponseTransformSteps []ResponseTransformPlanStep
 	ArtifactTransfers      []ArtifactTransfer
+	ArtifactOutputs        []extensions.ArtifactOutput
 	Reason                 string
 }
 
@@ -187,6 +188,7 @@ type CompatibilityPlanSummary struct {
 	RequestTransformSteps  []RequestTransformPlanStep    `json:"requestTransformSteps,omitempty"`
 	ResponseTransformSteps []ResponseTransformPlanStep   `json:"responseTransformSteps,omitempty"`
 	ArtifactTransfers      []ArtifactTransfer            `json:"artifactTransfers,omitempty"`
+	ArtifactOutputs        []extensions.ArtifactOutput   `json:"artifactOutputs,omitempty"`
 	Reason                 string                        `json:"reason,omitempty"`
 }
 
@@ -203,6 +205,7 @@ func SummarizeCompatibilityPlan(plan CompatibilityPlan) CompatibilityPlanSummary
 		RequestTransformSteps:  cloneRequestTransformSteps(plan.RequestTransformSteps),
 		ResponseTransformSteps: cloneResponseTransformSteps(plan.ResponseTransformSteps),
 		ArtifactTransfers:      append([]ArtifactTransfer(nil), plan.ArtifactTransfers...),
+		ArtifactOutputs:        append([]extensions.ArtifactOutput(nil), plan.ArtifactOutputs...),
 		Reason:                 plan.Reason,
 	}
 	if len(plan.Mappings) > 0 {
@@ -234,6 +237,7 @@ func cloneCompatibilityPlanContext(plan CompatibilityPlan, input CompatibilityCo
 	plan.RequestTransformSteps = cloneRequestTransformSteps(input.RequestTransformSteps)
 	plan.ResponseTransformSteps = cloneResponseTransformSteps(input.ResponseTransformSteps)
 	plan.ArtifactTransfers = append([]ArtifactTransfer(nil), input.ArtifactTransfers...)
+	plan.ArtifactOutputs = append([]extensions.ArtifactOutput(nil), input.ArtifactOutputs...)
 	return plan
 }
 

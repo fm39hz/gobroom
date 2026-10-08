@@ -59,7 +59,8 @@ func TestUsageEntryShowsCompatibilityPlanSummary(t *testing.T) {
     "fidelity": "translated",
     "mappings": [{"facet":"tool.calls","disposition":"preserved"}],
     "requestTransformSteps": [{"transformRef":{"kind":"request_transform","id":"normalize-prompt","contractVersion":2},"scope":{"kind":"combo"}}],
-    "artifactTransfers": [{"typeRef":{"kind":"artifact_type","id":"image","contractVersion":1},"targetProvider":{"kind":"provider-definition","id":"gemini","contractVersion":1}}]
+    "artifactTransfers": [{"typeRef":{"kind":"artifact_type","id":"image","contractVersion":1},"targetProvider":{"kind":"provider-definition","id":"gemini","contractVersion":1}}],
+    "artifactOutputs": [{"role":"generated-image","typeRef":{"kind":"artifact","id":"image.output","contractVersion":1},"minCount":0,"maxCount":1}]
   }
 }]`)
 	entries, err := makeEntries("usage.list", raw, nil)
@@ -69,7 +70,7 @@ func TestUsageEntryShowsCompatibilityPlanSummary(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("got %d usage entries", len(entries))
 	}
-	for _, want := range []string{"Compatibility  translated", "tool.calls", "normalize-prompt@2", "image → gemini"} {
+	for _, want := range []string{"Compatibility  translated", "tool.calls", "normalize-prompt@2", "image → gemini", "generated-image · image.output · 0–1"} {
 		if !strings.Contains(entries[0].detail, want) {
 			t.Errorf("usage inspector omitted %q: %s", want, entries[0].detail)
 		}

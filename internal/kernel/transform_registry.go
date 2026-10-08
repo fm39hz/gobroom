@@ -245,6 +245,9 @@ func (r *ResponseTransformRegistry) ApplyScopes(ctx context.Context, event Respo
 		if updated.Kind != before.Kind || updated.At != before.At || updated.Index != before.Index || updated.ResponseID != before.ResponseID || updated.ItemID != before.ItemID || updated.ContentType != before.ContentType || updated.BlockType != before.BlockType || updated.StopReason != before.StopReason || updated.ToolCallID != before.ToolCallID || updated.ToolName != before.ToolName || updated.Signature != before.Signature || updated.Error != before.Error || updated.WireFormat != before.WireFormat || !bytes.Equal(updated.Raw, before.Raw) || !bytes.Equal(updated.Opaque, before.Opaque) {
 			return ResponseEvent{}, fmt.Errorf("response transform %q changed immutable event identity or opaque data", definition.Ref.Key())
 		}
+		if !reflect.DeepEqual(updated.Artifacts, before.Artifacts) {
+			return ResponseEvent{}, fmt.Errorf("response transform %q changed immutable artifact references", definition.Ref.Key())
+		}
 		changedText := updated.Text != before.Text
 		changedArguments := updated.ToolArguments != before.ToolArguments
 		changedUsage := !reflect.DeepEqual(updated.Usage, before.Usage)
@@ -427,6 +430,10 @@ func (r *RequestTransformRegistry) ApplyScopes(ctx context.Context, request *Nor
 func cloneResponseEvent(event ResponseEvent) ResponseEvent {
 	event.Raw = append([]byte(nil), event.Raw...)
 	event.Opaque = append(json.RawMessage(nil), event.Opaque...)
+	event.Artifacts = make([]extensions.ArtifactRef, len(event.Artifacts))
+	for index := range event.Artifacts {
+		event.Artifacts[index] = event.Artifacts[index].Clone()
+	}
 	if event.Usage != nil {
 		usage := *event.Usage
 		event.Usage = &usage

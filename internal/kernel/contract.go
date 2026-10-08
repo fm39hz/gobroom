@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -357,6 +358,8 @@ type CompatibilityContext struct {
 	RequestTransformSteps   []RequestTransformPlanStep
 	ResponseTransformSteps  []ResponseTransformPlanStep
 	ArtifactTransfers       []ArtifactTransfer
+	ArtifactOutputs         []extensions.ArtifactOutput
+	ArtifactOutputRequired  bool
 }
 
 type CompatibilityFidelity string
@@ -397,6 +400,7 @@ type StreamHooks struct {
 	OnError           func(error)
 	OnSessionState    func(SessionState)
 	TransformResponse func(context.Context, ResponseEvent) (ResponseEvent, error)
+	ArtifactAccess    *artifacts.Access
 	Streaming         bool
 	Model             string
 	MaxEventBytes     int64
@@ -414,6 +418,7 @@ const (
 	EventThinkingSignature ResponseEventKind = "thinking_signature"
 	EventToolCallDelta     ResponseEventKind = "tool_call_delta"
 	EventUsage             ResponseEventKind = "usage"
+	EventArtifact          ResponseEventKind = "artifact"
 	EventResponseComplete  ResponseEventKind = "response_complete"
 	EventResponseError     ResponseEventKind = "response_error"
 	EventRawFrame          ResponseEventKind = "raw_frame"
@@ -438,6 +443,7 @@ type ResponseEvent struct {
 	WireFormat    normalize.Format
 	Raw           []byte
 	Opaque        json.RawMessage
+	Artifacts     []extensions.ArtifactRef
 }
 
 type UsageEvent struct {

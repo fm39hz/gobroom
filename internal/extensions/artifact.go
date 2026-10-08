@@ -37,6 +37,11 @@ type ArtifactOwner struct {
 	SessionID            string `json:"sessionId,omitempty"`
 }
 
+// Equal reports exact artifact ownership equality, including issuer identity.
+func (owner ArtifactOwner) Equal(other ArtifactOwner) bool {
+	return artifactOwnersEqual(owner, other)
+}
+
 type BodyRef struct {
 	ID         string    `json:"id"`
 	MediaType  string    `json:"mediaType"`
