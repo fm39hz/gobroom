@@ -1237,6 +1237,19 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	return nil
 }
 
+// RegisterDefinitionIfAbsent merges a persisted portable definition with an
+// already installed built-in/manifest definition only when they are identical.
+// A differing definition under the same ID is rejected rather than shadowed.
+func (r *PrimitiveRegistry) RegisterDefinitionIfAbsent(def ProviderDefinition) error {
+	if existing, ok := r.definitions[def.ID]; ok {
+		if SameProviderDefinition(existing, def) {
+			return nil
+		}
+		return fmt.Errorf("provider definition %q conflicts with the installed definition", def.ID)
+	}
+	return r.RegisterDefinition(def)
+}
+
 func (r *PrimitiveRegistry) RegisterPlugin(plugin PrimitivePlugin) error {
 	if plugin == nil {
 		return fmt.Errorf("provider plugin is nil")

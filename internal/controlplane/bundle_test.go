@@ -3,10 +3,12 @@ package controlplane
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
@@ -38,7 +40,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 4
+	bundle.Version = 5
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +120,7 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 4 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+	if bundle.Version != 5 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
 		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
@@ -165,7 +167,7 @@ func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
 func TestConfigBundleRejectsPreviousContractVersion(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	bundle := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
-	bundle.Version = 3
+	bundle.Version = 4
 	if err := ValidateBundleWithStrategies(bundle, catalog); err == nil {
 		t.Fatal("previous config bundle contract version was accepted")
 	}
@@ -209,6 +211,137 @@ func TestBundleExportsUnusedUnresolvedProviderWithoutInventingBehavior(t *testin
 	}
 	if _, err := ExportBundle(s, catalog.Extensions()); err == nil {
 		t.Fatal("provider definition used by a Physical source was exported as unresolved and inert")
+	}
+}
+
+func TestBundleEmbedsOnlySecretFreeProviderDefinitionsAndPersistsThem(t *testing.T) {
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "bundle-portable", Version: "1", DisplayName: "Portable provider",
+		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
+			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef("chat.generate", 1), ProviderFormat: "openai",
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
+		t.Fatal(err)
+	}
+	external := definition
+	external.ID = "bundle-external"
+	external.DisplayName = "External provider"
+	external.Auth = provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}
+	external.AuthOptions = provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth?client_secret=bundle-secret-marker", TokenURL: "https://identity.test/token"}}
+	if err := registry.Primitives.RegisterDefinition(external); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	extensionsSnapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategies, err := kernel.NewStrategyCatalog(extensionsSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Open(t.TempDir() + "/provider-definitions.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode) VALUES
+('portable-node','Portable','https://portable.test/v1','openai_chat','bundle-portable','portable','/models','api_key'),
+('external-node','External','https://external.test/v1','openai_chat','bundle-external','external','/models','api_key')`); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := ExportBundle(source, extensionsSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.ProviderDefinitions) != 1 || bundle.ProviderDefinitions[0].ID != definition.ID || len(bundle.ExternalProviderDefinitions) != 1 || bundle.ExternalProviderDefinitions[0].DefinitionRef.ID != external.ID {
+		t.Fatalf("provider portability split=%#v", bundle)
+	}
+	encoded, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "bundle-secret-marker") {
+		t.Fatalf("provider secret escaped through bundle: %s", encoded)
+	}
+	if err := ValidateBundleWithStrategies(bundle, strategies); err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.Open(t.TempDir() + "/provider-definitions-target.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err := ApplyBundle(target, bundle, strategies); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := target.ProviderDefinitions()
+	if err != nil || len(stored) != 1 || !provider.SameProviderDefinition(stored[0], definition) {
+		t.Fatalf("portable provider definitions=%#v err=%v", stored, err)
+	}
+	restoredRuntime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range stored {
+		if err := restoredRuntime.RegisterDefinitionIfAbsent(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := restoredRuntime.BuildBindings(); err != nil {
+		t.Fatalf("persisted provider definition did not bind after restart: %v", err)
+	}
+}
+
+func TestBundleRejectsProviderDefinitionPayloadDifferentFromPinnedDescriptor(t *testing.T) {
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := provider.ProviderDefinition{
+		ContractVersion: 1, ID: "pinned-chat", Version: "1", DisplayName: "Pinned chat",
+		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
+			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef("chat.generate", 1), ProviderFormat: "openai",
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategies, err := kernel.NewStrategyCatalog(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modified := definition
+	modified.DisplayName = "Unpinned display name"
+	bundle := bundleWithDependencyLock(t, ConfigBundle{
+		Providers:           []store.ProviderNode{{ID: "pinned-node", Name: "Pinned", DefinitionID: definition.ID}},
+		ProviderDefinitions: []provider.ProviderDefinition{modified},
+	}, strategies)
+	if err := ValidateBundleWithStrategies(bundle, strategies); err == nil {
+		t.Fatal("provider definition payload changed without changing its pinned catalog descriptor")
 	}
 }
 
@@ -269,7 +402,7 @@ func TestDiffBundleReportsTypedChanges(t *testing.T) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if len(fields) != 16 || fields["providersRemoved"] != float64(2) || fields["connectionsAdded"] != float64(3) || fields["physicalRemoved"] != float64(8) || fields["combosRemoved"] != float64(10) || fields["transformBindingsChanged"] != float64(13) || fields["lossCeilingChanged"] != true || fields["unresolvedProvidersChanged"] != true {
+	if len(fields) != 17 || fields["providersRemoved"] != float64(2) || fields["connectionsAdded"] != float64(3) || fields["physicalRemoved"] != float64(8) || fields["combosRemoved"] != float64(10) || fields["transformBindingsChanged"] != float64(13) || fields["lossCeilingChanged"] != true || fields["externalProviderDefinitionsChanged"] != false || fields["unresolvedProvidersChanged"] != true {
 		t.Fatalf("bundle diff JSON lost field tags: %s", encoded)
 	}
 }

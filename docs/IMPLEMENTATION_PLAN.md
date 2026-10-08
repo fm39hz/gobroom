@@ -149,15 +149,17 @@ pending.
    declarations; ingress, provider task bindings, immutable routes and kernel
    execution resolve one exact operation version. Feature evaluator refs and
    constraint schemas now bind from that same frozen catalog. The
-   descriptor/schema catalog is available through IPC/HTTP/CLI. Remaining:
-   unify strategy implementation registry with this catalog, allow multiple
-   primitive contract versions side by side, and add versioned
-   content/event artifacts, bounded body references, declarative binding
-   storage and atomic bundle dependency resolution. Bundle v4 now records an
-   unresolved provider definition explicitly when that provider has no model
-   routes; used provider definitions still must resolve exactly in the frozen
-   catalog. Embedding custom provider-definition artifacts for cross-host
-   import remains open.
+   descriptor/schema catalog is available through IPC/HTTP/CLI. Exact primitive
+   versions, strategy/evaluator factories, operation/artifact schemas, bounded
+   body refs, declarative bindings and atomic bundle dependency validation are
+   now composed through that catalog. Bundle v5 embeds provider definitions
+   only when manifest auth/default/endpoint/codec fields are provably
+   secret-free and persists them for daemon-restart activation. Opaque or
+   sensitive definitions remain exact external module dependencies; an
+   unresolved definition is retained as inert setup only when no model route or
+   Physical source uses it. Remaining: external primitive module distribution
+   and resolution, side-by-side contract versions for provider definitions, and
+   the integrated extension proof below.
 2. **C2 — full compatibility planning (in progress):** the kernel now asks
    adapters for a request/route/operation-scoped `CompatibilityPlan` and
    recomputes admission from immutable facet declarations rather than trusting
@@ -176,7 +178,7 @@ pending.
    Responses decoder→Anthropic renderer fixtures prove JSON/SSE cross-wire
    verticals. Physical/Combo nodes persist named loss grants/denials that flow
    down the model path; denial wins and admitted lossy plans are recorded in
-   usage. Repeatable CLI `--allow-loss`/`--deny-loss` and portable bundle v4
+   usage. Repeatable CLI `--allow-loss`/`--deny-loss` and portable bundle v5
    carry the policy. A server allow/deny ceiling is managed through the CLI and
    SQLite-backed snapshot. Loss records retain requested/effective values,
    semantic paths and granting model nodes. Remaining: scoped transforms and

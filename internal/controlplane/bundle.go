@@ -16,6 +16,8 @@ type ConfigBundle struct {
 	Version                       int                            `json:"version"`
 	Dependencies                  extensions.DependencyLock      `json:"dependencies"`
 	LossCeiling                   *kernel.LossPolicyCeiling      `json:"compatibilityLossCeiling,omitempty"`
+	ProviderDefinitions           []provider.ProviderDefinition  `json:"providerDefinitions,omitempty"`
+	ExternalProviderDefinitions   []ExternalProviderDefinition   `json:"externalProviderDefinitions,omitempty"`
 	UnresolvedProviderDefinitions []UnresolvedProviderDefinition `json:"unresolvedProviderDefinitions,omitempty"`
 	Providers                     []store.ProviderNode           `json:"providers"`
 	Connections                   []store.ConnectionRecord       `json:"connections"`
@@ -29,6 +31,14 @@ type ConfigBundle struct {
 // backed by an installed manifest. It is exportable only while no model route
 // references that provider; active dependencies remain fail-closed.
 type UnresolvedProviderDefinition struct {
+	ProviderNodeID string         `json:"providerNodeId"`
+	DefinitionRef  extensions.Ref `json:"definitionRef"`
+	Reason         string         `json:"reason"`
+}
+
+// ExternalProviderDefinition pins an installed manifest whose opaque or
+// potentially sensitive configuration prevents embedding it in a bundle.
+type ExternalProviderDefinition struct {
 	ProviderNodeID string         `json:"providerNodeId"`
 	DefinitionRef  extensions.Ref `json:"definitionRef"`
 	Reason         string         `json:"reason"`
@@ -49,6 +59,7 @@ type BundleDiff struct {
 	TransformBindingsRemoved   int      `json:"transformBindingsRemoved"`
 	TransformBindingsChanged   int      `json:"transformBindingsChanged"`
 	LossCeilingChanged         bool     `json:"lossCeilingChanged"`
+	ExternalProvidersChanged   bool     `json:"externalProviderDefinitionsChanged"`
 	UnresolvedProvidersChanged bool     `json:"unresolvedProvidersChanged"`
 	Changes                    []string `json:"changes"`
 }
@@ -86,14 +97,36 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 4, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	bundle := ConfigBundle{Version: 5, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
 	if catalog != nil {
+		providerDefinitions := make(map[string]provider.ProviderDefinition)
 		for _, item := range providers {
 			if item.DefinitionID == "" {
 				continue
 			}
 			ref := provider.ProviderDefinitionRef(item.DefinitionID, 1)
-			if _, installed := catalog.Descriptor(ref); installed || bundleProviderHasModels(bundle, item.ID) || bundleProviderHasPhysicalSources(bundle.Physical, catalogRows, item.ID) {
+			if _, installed := catalog.Descriptor(ref); installed {
+				_, implementation, bindErr := catalog.Bind(ref, nil)
+				if bindErr != nil {
+					return ConfigBundle{}, fmt.Errorf("bind provider definition %q for bundle: %w", ref.Key(), bindErr)
+				}
+				definition, ok := implementation.(provider.ProviderDefinition)
+				if !ok {
+					return ConfigBundle{}, fmt.Errorf("provider definition %q has unexpected implementation type %T", ref.Key(), implementation)
+				}
+				if portable, reason := provider.ProviderDefinitionPortable(definition); portable {
+					if current, exists := providerDefinitions[definition.ID]; exists && !provider.SameProviderDefinition(current, definition) {
+						return ConfigBundle{}, fmt.Errorf("provider definition %q has conflicting portable bindings", definition.ID)
+					}
+					providerDefinitions[definition.ID] = definition
+				} else {
+					bundle.ExternalProviderDefinitions = append(bundle.ExternalProviderDefinitions, ExternalProviderDefinition{
+						ProviderNodeID: item.ID, DefinitionRef: ref, Reason: reason,
+					})
+				}
+				continue
+			}
+			if bundleProviderHasModels(bundle, item.ID) || bundleProviderHasPhysicalSources(bundle.Physical, catalogRows, item.ID) {
 				continue
 			}
 			bundle.UnresolvedProviderDefinitions = append(bundle.UnresolvedProviderDefinitions, UnresolvedProviderDefinition{
@@ -102,6 +135,10 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 				Reason:         "provider definition is not installed and has no model routes",
 			})
 		}
+		for _, definition := range providerDefinitions {
+			bundle.ProviderDefinitions = append(bundle.ProviderDefinitions, definition)
+		}
+		sort.Slice(bundle.ProviderDefinitions, func(i, j int) bool { return bundle.ProviderDefinitions[i].ID < bundle.ProviderDefinitions[j].ID })
 	}
 	if configured {
 		bundle.LossCeiling = &lossCeiling
@@ -122,7 +159,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 4 {
+	if bundle.Version != 5 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
 	if bundle.Dependencies.Version != 1 {
@@ -140,6 +177,12 @@ func ValidateBundle(bundle ConfigBundle) error {
 		}
 	}
 	if err := validateUnresolvedProviderDefinitions(bundle); err != nil {
+		return err
+	}
+	if err := validatePortableProviderDefinitions(bundle); err != nil {
+		return err
+	}
+	if err := validateExternalProviderDefinitions(bundle); err != nil {
 		return err
 	}
 	for _, physical := range bundle.Physical {
@@ -277,6 +320,17 @@ func ValidateBundleWithStrategies(bundle ConfigBundle, strategies *kernel.Strate
 	if err := strategies.Extensions().ValidateDependencyLock(bundle.Dependencies); err != nil {
 		return fmt.Errorf("validate extension dependency lock: %w", err)
 	}
+	for _, definition := range bundle.ProviderDefinitions {
+		ref := provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion)
+		_, implementation, err := strategies.Extensions().Bind(ref, nil)
+		if err != nil {
+			return fmt.Errorf("bind portable provider definition %q: %w", ref.Key(), err)
+		}
+		registered, ok := implementation.(provider.ProviderDefinition)
+		if !ok || !provider.SameProviderDefinition(registered, definition) {
+			return fmt.Errorf("portable provider definition %q does not match its pinned runtime descriptor", ref.Key())
+		}
+	}
 	for _, physical := range bundle.Physical {
 		if err := strategies.Validate(physical.Policy.Ref, physical.Policy.Config); err != nil {
 			return fmt.Errorf("physical model %q strategy: %w", physical.Name, err)
@@ -301,6 +355,9 @@ func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
 			roots = append(roots, provider.ProviderDefinitionRef(item.DefinitionID, 1))
 		}
 	}
+	for _, definition := range bundle.ProviderDefinitions {
+		roots = append(roots, provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion))
+	}
 	for _, item := range bundle.Physical {
 		roots = append(roots, item.Policy.Ref)
 	}
@@ -318,6 +375,99 @@ func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
 		}
 	}
 	return result
+}
+
+func validatePortableProviderDefinitions(bundle ConfigBundle) error {
+	definitions := make(map[string]bool, len(bundle.ProviderDefinitions))
+	external := make(map[string]bool, len(bundle.ExternalProviderDefinitions))
+	for _, item := range bundle.ExternalProviderDefinitions {
+		external[item.ProviderNodeID] = true
+	}
+	for _, definition := range bundle.ProviderDefinitions {
+		if definition.ContractVersion != 1 || definition.ID == "" || definition.Version == "" || definition.DisplayName == "" {
+			return fmt.Errorf("portable provider definition requires contract version 1, ID, version and display name")
+		}
+		if definitions[definition.ID] {
+			return fmt.Errorf("duplicate portable provider definition %q", definition.ID)
+		}
+		if portable, reason := provider.ProviderDefinitionPortable(definition); !portable {
+			return fmt.Errorf("provider definition %q contains non-portable configuration: %s", definition.ID, reason)
+		}
+		definitions[definition.ID] = true
+		found := false
+		for _, node := range bundle.Providers {
+			found = found || node.DefinitionID == definition.ID
+		}
+		if !found {
+			return fmt.Errorf("portable provider definition %q has no provider node", definition.ID)
+		}
+	}
+	for _, unresolved := range bundle.UnresolvedProviderDefinitions {
+		if definitions[unresolved.DefinitionRef.ID] {
+			return fmt.Errorf("provider definition %q cannot be both portable and unresolved", unresolved.DefinitionRef.ID)
+		}
+	}
+	for _, node := range bundle.Providers {
+		if node.DefinitionID == "" || definitions[node.DefinitionID] {
+			continue
+		}
+		if isUnresolvedProvider(bundle, node.ID) || external[node.ID] {
+			continue
+		}
+		return fmt.Errorf("provider node %q definition %q has neither a portable payload, external dependency nor unresolved marker", node.ID, node.DefinitionID)
+	}
+	return nil
+}
+
+func validateExternalProviderDefinitions(bundle ConfigBundle) error {
+	providers := make(map[string]store.ProviderNode, len(bundle.Providers))
+	for _, node := range bundle.Providers {
+		providers[node.ID] = node
+	}
+	seen := make(map[string]bool, len(bundle.ExternalProviderDefinitions))
+	for _, external := range bundle.ExternalProviderDefinitions {
+		if external.ProviderNodeID == "" || seen[external.ProviderNodeID] {
+			return fmt.Errorf("external provider definitions contain an empty or duplicate provider node ID")
+		}
+		seen[external.ProviderNodeID] = true
+		node, exists := providers[external.ProviderNodeID]
+		if !exists || node.DefinitionID != external.DefinitionRef.ID || external.DefinitionRef.Kind != "provider-definition" || external.DefinitionRef.ContractVersion != 1 {
+			return fmt.Errorf("external provider definition does not match provider node %q", external.ProviderNodeID)
+		}
+		if err := external.DefinitionRef.Validate(); err != nil {
+			return fmt.Errorf("external provider definition for %q: %w", node.ID, err)
+		}
+		if isUnresolvedProvider(bundle, node.ID) {
+			return fmt.Errorf("provider node %q cannot be both external and unresolved", node.ID)
+		}
+		if !containsRef(bundle.Dependencies.Roots, external.DefinitionRef) {
+			return fmt.Errorf("external provider definition %q is not pinned in the dependency lock", external.DefinitionRef.Key())
+		}
+		for _, definition := range bundle.ProviderDefinitions {
+			if definition.ID == node.DefinitionID {
+				return fmt.Errorf("provider definition %q cannot be both embedded and external", node.DefinitionID)
+			}
+		}
+	}
+	return nil
+}
+
+func containsRef(refs []extensions.Ref, target extensions.Ref) bool {
+	for _, ref := range refs {
+		if ref == target {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnresolvedProvider(bundle ConfigBundle, providerNodeID string) bool {
+	for _, item := range bundle.UnresolvedProviderDefinitions {
+		if item.ProviderNodeID == providerNodeID {
+			return true
+		}
+	}
+	return false
 }
 
 func bundleProviderHasModels(bundle ConfigBundle, providerNodeID string) bool {
@@ -424,6 +574,10 @@ func DiffBundle(current, desired ConfigBundle, strategyCatalogs ...*kernel.Strat
 		result.UnresolvedProvidersChanged = true
 		result.Changes = append(result.Changes, "unresolved provider definitions changed")
 	}
+	if !reflect.DeepEqual(current.ExternalProviderDefinitions, desired.ExternalProviderDefinitions) {
+		result.ExternalProvidersChanged = true
+		result.Changes = append(result.Changes, "external provider definition dependencies changed")
+	}
 	return result, nil
 }
 
@@ -465,6 +619,9 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 		}
 	}
 	if _, err = tx.Exec(`DELETE FROM transform_bindings`); err != nil {
+		return err
+	}
+	if err := store.ReplaceProviderDefinitionsInTx(tx, bundle.ProviderDefinitions); err != nil {
 		return err
 	}
 	for _, binding := range bundle.TransformBindings {

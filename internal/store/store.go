@@ -164,6 +164,11 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   estimated_cost REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS provider_definitions (
+  id TEXT NOT NULL, contract_version INTEGER NOT NULL,
+  definition_json TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(id,contract_version)
+);
 -- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
   name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', loss_policy_json TEXT NOT NULL DEFAULT '{}', allow_compatible_sources INTEGER NOT NULL DEFAULT 0, allow_dynamic_sources INTEGER NOT NULL DEFAULT 0, policy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',

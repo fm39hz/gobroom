@@ -129,6 +129,53 @@ func TestProviderDefinitionJSONBindingRoundTripsTypedContract(t *testing.T) {
 	}
 }
 
+func TestProviderDefinitionPortabilityRequiresSecretsAndOpaqueOptionsToStayExternal(t *testing.T) {
+	base := ProviderDefinition{ContractVersion: 1, ID: "portable", Version: "1", DisplayName: "Portable",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[Operation]OperationBinding{OperationChat: {
+			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	if portable, reason := ProviderDefinitionPortable(base); !portable || reason != "" {
+		t.Fatalf("plain typed provider definition should be portable: portable=%v reason=%q", portable, reason)
+	}
+	cases := []struct {
+		name   string
+		mutate func(*ProviderDefinition)
+	}{
+		{"auth options", func(definition *ProviderDefinition) {
+			definition.AuthOptions.Options = json.RawMessage(`{"client_secret":"secret"}`)
+		}},
+		{"defaults", func(definition *ProviderDefinition) { definition.Defaults = map[string]any{"apiKey": "secret"} }},
+		{"request codec options", func(definition *ProviderDefinition) {
+			binding := definition.Operations[OperationChat]
+			binding.RequestCodecOptions = json.RawMessage(`{"apiKey":"secret"}`)
+			definition.Operations[OperationChat] = binding
+		}},
+		{"endpoint query", func(definition *ProviderDefinition) {
+			binding := definition.Operations[OperationChat]
+			binding.EndpointOptions.Query = map[string]string{"key": "secret"}
+			definition.Operations[OperationChat] = binding
+		}},
+		{"oauth URL query", func(definition *ProviderDefinition) {
+			definition.AuthOptions.OAuth = &OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth?client_secret=secret", TokenURL: "https://identity.test/token"}
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			definition := base
+			definition.Operations = map[Operation]OperationBinding{OperationChat: base.Operations[OperationChat]}
+			test.mutate(&definition)
+			if portable, reason := ProviderDefinitionPortable(definition); portable || reason == "" {
+				t.Fatalf("opaque/sensitive definition was embedded: portable=%v reason=%q", portable, reason)
+			}
+		})
+	}
+}
+
 func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 	runtime, err := NewRuntimeRegistry()
 	if err != nil {

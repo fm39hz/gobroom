@@ -170,6 +170,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 			return fmt.Errorf("load provider manifests: %w", err)
 		}
 	}
+	if err := d.loadStoredProviderDefinitions(runtimeRegistry); err != nil {
+		_ = s.Close()
+		return err
+	}
 	d.providerRegistry = runtimeRegistry
 	d.providerCatalog, err = runtimeRegistry.DefinitionCatalog()
 	if err != nil {
@@ -518,6 +522,19 @@ func (d *Daemon) Start(ctx context.Context) error {
 	return nil
 }
 
+func (d *Daemon) loadStoredProviderDefinitions(runtimeRegistry *provider.RuntimeRegistry) error {
+	definitions, err := d.store.ProviderDefinitions()
+	if err != nil {
+		return fmt.Errorf("load stored provider definitions: %w", err)
+	}
+	for _, definition := range definitions {
+		if err := runtimeRegistry.RegisterDefinitionIfAbsent(definition); err != nil {
+			return fmt.Errorf("register stored provider definition %q: %w", definition.ID, err)
+		}
+	}
+	return nil
+}
+
 func (d *Daemon) lockCredentialRefresh(connectionID string) func() {
 	d.credentialRefreshMu.Lock()
 	if d.credentialRefreshes == nil {
@@ -614,7 +631,11 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &bundle); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := controlplane.ValidateBundleWithStrategies(bundle, d.strategyCatalog); err != nil {
+		_, candidateStrategies, err := d.runtimeForBundle(bundle)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if err := controlplane.ValidateBundleWithStrategies(bundle, candidateStrategies); err != nil {
 			return fail(request, err.Error())
 		}
 		if d.kernel != nil {
@@ -628,11 +649,23 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &desired); err != nil {
 			return fail(request, err.Error())
 		}
-		current, err := controlplane.ExportBundle(d.store, d.strategyCatalog.Extensions())
+		_, candidateStrategies, err := d.runtimeForBundle(desired)
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		diff, err := controlplane.DiffBundle(current, desired, d.strategyCatalog)
+		currentRuntime, _, err := d.runtimeWithProviderDefinitions(nil)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		currentCatalog, err := currentRuntime.FreezeCatalog()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		current, err := controlplane.ExportBundle(d.store, currentCatalog)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		diff, err := controlplane.DiffBundle(current, desired, candidateStrategies)
 		if err != nil {
 			return fail(request, err.Error())
 		}
@@ -647,13 +680,28 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &bundle); err != nil {
 			return fail(request, err.Error())
 		}
+		candidateRegistry, candidateStrategies, err := d.runtimeForBundle(bundle)
+		if err != nil {
+			return fail(request, err.Error())
+		}
 		if d.kernel != nil {
 			if err := d.kernel.ValidateTransformBindings(bundle.TransformBindings); err != nil {
 				return fail(request, err.Error())
 			}
 		}
-		if err := controlplane.ApplyBundle(d.store, bundle, d.strategyCatalog); err != nil {
+		if err := controlplane.ApplyBundle(d.store, bundle, candidateStrategies); err != nil {
 			return fail(request, err.Error())
+		}
+		restartRequired := false
+		for _, definition := range bundle.ProviderDefinitions {
+			if !d.providerRegistry.HasDefinition(definition) && candidateRegistry.HasDefinition(definition) {
+				restartRequired = true
+				break
+			}
+		}
+		if restartRequired {
+			d.appendLog("warn", "portable provider definitions applied; daemon restart required to bind the new frozen catalog")
+			return success(request, map[string]any{"status": "applied", "restartRequired": true, "message": "restart gobroomd to activate provider definitions"})
 		}
 		if err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
@@ -1157,6 +1205,56 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	default:
 		return IPCResponse{ID: request.ID, OK: false, Error: "unknown method: " + request.Method}
 	}
+}
+
+func (d *Daemon) runtimeForBundle(bundle controlplane.ConfigBundle) (*provider.RuntimeRegistry, *kernel.StrategyCatalog, error) {
+	runtimeRegistry, strategies, err := d.runtimeWithProviderDefinitions(bundle.ProviderDefinitions)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := controlplane.ValidateBundleWithStrategies(bundle, strategies); err != nil {
+		return nil, nil, err
+	}
+	return runtimeRegistry, strategies, nil
+}
+
+func (d *Daemon) runtimeWithProviderDefinitions(extra []provider.ProviderDefinition) (*provider.RuntimeRegistry, *kernel.StrategyCatalog, error) {
+	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		return nil, nil, err
+	}
+	if d.sessionCache != nil {
+		if err := runtimeRegistry.ReplaceSessionStore(d.sessionCache); err != nil {
+			return nil, nil, err
+		}
+	}
+	if d.config.ProviderManifestDir != "" {
+		if err := runtimeRegistry.LoadDefinitionDir(d.config.ProviderManifestDir); err != nil {
+			return nil, nil, fmt.Errorf("load provider manifests for config validation: %w", err)
+		}
+	}
+	stored, err := d.store.ProviderDefinitions()
+	if err != nil {
+		return nil, nil, err
+	}
+	definitions := append(stored, extra...)
+	for _, definition := range definitions {
+		if err := runtimeRegistry.RegisterDefinitionIfAbsent(definition); err != nil {
+			return nil, nil, fmt.Errorf("provider definition %q: %w", definition.ID, err)
+		}
+	}
+	if _, err := runtimeRegistry.BuildBindings(); err != nil {
+		return nil, nil, err
+	}
+	extensionSnapshot, err := runtimeRegistry.FreezeCatalog()
+	if err != nil {
+		return nil, nil, err
+	}
+	strategies, err := kernel.NewStrategyCatalog(extensionSnapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return runtimeRegistry, strategies, nil
 }
 
 func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) {

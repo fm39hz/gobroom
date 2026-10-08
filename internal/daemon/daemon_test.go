@@ -20,6 +20,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/auth"
+	"github.com/fm39hz/gobroom/internal/controlplane"
 	"github.com/fm39hz/gobroom/internal/discovery"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
@@ -176,6 +177,147 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	view, ok := response.Result.(extensions.CatalogView)
 	if !response.OK || !ok || view.Fingerprint == "" || len(view.Schemas) < 4 {
 		t.Fatalf("extension catalog=%#v error=%q", response.Result, response.Error)
+	}
+}
+
+func TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/portable-provider.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	activeRuntime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeSnapshot, err := activeRuntime.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeStrategies, err := kernel.NewStrategyCatalog(activeSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: activeRuntime, strategyCatalog: activeStrategies}
+	definition := provider.ProviderDefinition{
+		ContractVersion: 1, ID: "portable-custom-chat", Version: "1", DisplayName: "Portable custom chat",
+		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
+			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.FormatOpenAIChat,
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	candidateRuntime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := candidateRuntime.Primitives.RegisterDefinition(definition); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := candidateRuntime.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := candidateRuntime.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependencies, err := catalog.LockDependencies([]extensions.Ref{provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := controlplane.ConfigBundle{
+		Version: 5, Dependencies: dependencies,
+		Providers:           []store.ProviderNode{{ID: "portable-node", Name: "Portable", Prefix: "portable", BaseURL: "https://provider.test/v1", Protocol: string(kernel.ProtocolOpenAIChat), DefinitionID: definition.ID, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}},
+		ProviderDefinitions: []provider.ProviderDefinition{definition},
+	}
+	encodedBundle, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(encodedBundle, &params); err != nil {
+		t.Fatal(err)
+	}
+	response := d.handleIPC(context.Background(), IPCRequest{ID: "apply-portable-provider", Method: "config.apply", Params: params})
+	if !response.OK {
+		t.Fatalf("portable provider bundle apply failed: %s", response.Error)
+	}
+	result, ok := response.Result.(map[string]any)
+	if !ok || result["restartRequired"] != true {
+		t.Fatalf("portable definition apply did not disclose frozen-catalog restart: %#v", response.Result)
+	}
+	stored, err := s.ProviderDefinitions()
+	if err != nil || len(stored) != 1 || !provider.SameProviderDefinition(stored[0], definition) {
+		t.Fatalf("portable provider definition persistence=%#v err=%v", stored, err)
+	}
+	restartedRuntime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range stored {
+		if err := restartedRuntime.RegisterDefinitionIfAbsent(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := restartedRuntime.BuildBindings(); err != nil {
+		t.Fatalf("persisted definition did not bind after daemon restart: %v", err)
+	}
+	if len(d.server.Control().Snapshot().Routes) != 0 {
+		t.Fatal("old frozen runtime snapshot partially adopted a new provider definition")
+	}
+}
+
+func TestDaemonLoadsPortableProviderDefinitionFromStoreBeforeRuntimeBinding(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/gobroom.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	definition := provider.ProviderDefinition{
+		ContractVersion: 1, ID: "portable-startup-chat", Version: "1", DisplayName: "Portable startup chat",
+		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
+			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.FormatOpenAIChat,
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceProviderDefinitionsInTx(tx, []provider.ProviderDefinition{definition}); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Daemon{store: s}
+	if err := daemon.loadStoredProviderDefinitions(registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.BuildBindings(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.Primitives.Definition(definition.ID); !ok {
+		t.Fatal("persisted portable provider definition was not registered on startup")
+	}
+	bindings, err := registry.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := bindings[provider.RuntimeBindingKey(definition.ID, provider.OperationChat)]; !ok {
+		t.Fatal("persisted portable provider definition did not bind its operation")
 	}
 }
 
