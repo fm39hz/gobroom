@@ -15,6 +15,7 @@ import (
 type ConfigBundle struct {
 	Version           int                       `json:"version"`
 	Dependencies      extensions.DependencyLock `json:"dependencies"`
+	LossCeiling       *kernel.LossPolicyCeiling `json:"compatibilityLossCeiling,omitempty"`
 	Providers         []store.ProviderNode      `json:"providers"`
 	Connections       []store.ConnectionRecord  `json:"connections"`
 	Models            []store.Model             `json:"models"`
@@ -37,6 +38,7 @@ type BundleDiff struct {
 	TransformBindingsAdded   int      `json:"transformBindingsAdded"`
 	TransformBindingsRemoved int      `json:"transformBindingsRemoved"`
 	TransformBindingsChanged int      `json:"transformBindingsChanged"`
+	LossCeilingChanged       bool     `json:"lossCeilingChanged"`
 	Changes                  []string `json:"changes"`
 }
 
@@ -65,7 +67,14 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 2, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	lossCeiling, configured, err := s.CompatibilityLossCeiling()
+	if err != nil {
+		return ConfigBundle{}, err
+	}
+	bundle := ConfigBundle{Version: 3, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	if configured {
+		bundle.LossCeiling = &lossCeiling
+	}
 	roots := bundleDependencyRoots(bundle)
 	if catalog == nil {
 		if len(roots) > 0 {
@@ -82,7 +91,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 2 {
+	if bundle.Version != 3 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
 	if bundle.Dependencies.Version != 1 {
@@ -90,6 +99,14 @@ func ValidateBundle(bundle ConfigBundle) error {
 	}
 	if !sameExtensionRefs(bundle.Dependencies.Roots, bundleDependencyRoots(bundle)) {
 		return fmt.Errorf("extension dependency lock roots do not match bundle contents")
+	}
+	if bundle.LossCeiling != nil {
+		if bundle.LossCeiling.IsEmpty() {
+			return fmt.Errorf("empty compatibility loss ceiling must be omitted")
+		}
+		if err := kernel.ValidateLossPolicyCeiling(*bundle.LossCeiling); err != nil {
+			return fmt.Errorf("compatibility loss ceiling: %w", err)
+		}
 	}
 	for _, physical := range bundle.Physical {
 		if err := kernel.ValidateLossPolicy(physical.LossPolicy); err != nil {
@@ -310,6 +327,10 @@ func DiffBundle(current, desired ConfigBundle, strategyCatalogs ...*kernel.Strat
 	result.CombosAdded, result.CombosRemoved = countDelta(comboIDs(current.Combos), comboIDs(desired.Combos), "combo model", &result.Changes)
 	result.TransformBindingsAdded, result.TransformBindingsRemoved = countDelta(transformBindingIDs(current.TransformBindings), transformBindingIDs(desired.TransformBindings), "transform binding", &result.Changes)
 	result.TransformBindingsChanged = changedTransformBindings(current.TransformBindings, desired.TransformBindings, &result.Changes)
+	if !reflect.DeepEqual(current.LossCeiling, desired.LossCeiling) {
+		result.LossCeilingChanged = true
+		result.Changes = append(result.Changes, "compatibility loss ceiling changed")
+	}
 	return result, nil
 }
 
@@ -337,6 +358,19 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 		return err
 	}
 	defer tx.Rollback()
+	if bundle.LossCeiling == nil {
+		if _, err = tx.Exec(`DELETE FROM settings WHERE key=?`, store.CompatibilityLossCeilingSetting); err != nil {
+			return err
+		}
+	} else {
+		encoded, marshalErr := json.Marshal(bundle.LossCeiling)
+		if marshalErr != nil {
+			return fmt.Errorf("encode compatibility loss ceiling: %w", marshalErr)
+		}
+		if _, err = tx.Exec(`INSERT INTO settings(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`, store.CompatibilityLossCeilingSetting, string(encoded)); err != nil {
+			return err
+		}
+	}
 	if _, err = tx.Exec(`DELETE FROM transform_bindings`); err != nil {
 		return err
 	}

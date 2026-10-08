@@ -585,6 +585,24 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	switch request.Method {
 	case "status":
 		return IPCResponse{ID: request.ID, OK: true, Result: d.server.Status()}
+	case "compatibility.loss-ceiling.get":
+		ceiling, configured, err := d.store.CompatibilityLossCeiling()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]any{"configured": configured, "ceiling": ceiling})
+	case "compatibility.loss-ceiling.set":
+		var ceiling kernel.LossPolicyCeiling
+		if err := decodeParams(request.Params, &ceiling); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.store.SetCompatibilityLossCeiling(ceiling); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.server.Reload(); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, d.server.Status())
 	case "config.export":
 		bundle, err := controlplane.ExportBundle(d.store, d.strategyCatalog.Extensions())
 		if err != nil {

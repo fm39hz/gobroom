@@ -164,7 +164,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, CompatibilityPolicy{}, credential, writer, started, map[string]bool{})
+	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, CompatibilityPolicy{LossCeiling: snapshot.LossCeiling}, credential, writer, started, map[string]bool{})
 }
 
 func mergeRequirements(required, derived []normalize.FeatureRequirement) []normalize.FeatureRequirement {
@@ -201,6 +201,7 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		compatibilityContext.Policy.AllowedLosses = append([]string(nil), lossPolicy.AllowedLosses...)
 		compatibilityContext.Policy.DeniedLosses = append([]string(nil), lossPolicy.DeniedLosses...)
 		compatibilityContext.Policy.LossSources = cloneLossSources(lossPolicy.LossSources)
+		compatibilityContext.Policy.LossCeiling = cloneLossCeiling(lossPolicy.LossCeiling)
 		for _, event := range RequiredResponseEvents(request) {
 			compatibilityContext.Policy.RequiredFacets = append(compatibilityContext.Policy.RequiredFacets, ResponseEventFacet(event))
 		}

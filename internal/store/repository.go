@@ -12,4 +12,5 @@ type SnapshotRepository interface {
 	PhysicalModels() ([]PhysicalModel, error)
 	ComboModels() ([]ComboModel, error)
 	TransformBindings() ([]kernel.TransformBinding, error)
+	CompatibilityLossCeiling() (kernel.LossPolicyCeiling, bool, error)
 }

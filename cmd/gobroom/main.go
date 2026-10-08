@@ -58,7 +58,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
 	root.AddCommand(extensionCommands())
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), logsCommand(), routeExplainCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), logsCommand(), routeExplainCommand(), compatibilityCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
 	return root
 }
 
@@ -363,6 +363,23 @@ func routeExplainCommand() *cobra.Command {
 	cmd.Flags().StringVar(&requestClass, "request-class", "", "request class bucket")
 	cmd.Flags().StringVar(&sessionID, "session", "", "session affinity ID")
 	return cmd
+}
+
+func compatibilityCommand() *cobra.Command {
+	command := &cobra.Command{Use: "compatibility", Short: "manage semantic compatibility policy"}
+	ceiling := &cobra.Command{Use: "loss-ceiling", Short: "manage the server-wide named-loss ceiling"}
+	ceiling.AddCommand(listCommand("get", "compatibility.loss-ceiling.get", nil))
+	var allowOnly bool
+	var allowed, denied []string
+	set := &cobra.Command{Use: "set", Short: "set the server-wide loss ceiling", RunE: func(*cobra.Command, []string) error {
+		return invoke("compatibility.loss-ceiling.set", map[string]any{"allowOnly": allowOnly, "allow": allowed, "deny": denied})
+	}}
+	set.Flags().BoolVar(&allowOnly, "allow-only", false, "require every enabled model loss to be listed in --allow")
+	set.Flags().StringArrayVar(&allowed, "allow", nil, "named loss admitted by the server ceiling (repeatable)")
+	set.Flags().StringArrayVar(&denied, "deny", nil, "named loss denied by the server ceiling (repeatable; denial wins)")
+	ceiling.AddCommand(set)
+	command.AddCommand(ceiling)
+	return command
 }
 
 func listCommand(use, method string, flags map[string]*string) *cobra.Command {

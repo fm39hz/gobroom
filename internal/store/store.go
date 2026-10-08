@@ -735,6 +735,38 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
+const CompatibilityLossCeilingSetting = "compatibility.loss-ceiling"
+
+func (s *Store) CompatibilityLossCeiling() (kernel.LossPolicyCeiling, bool, error) {
+	value, exists, err := s.Setting(CompatibilityLossCeilingSetting)
+	if err != nil || !exists {
+		return kernel.LossPolicyCeiling{}, exists, err
+	}
+	var ceiling kernel.LossPolicyCeiling
+	if err := json.Unmarshal([]byte(value), &ceiling); err != nil {
+		return kernel.LossPolicyCeiling{}, true, fmt.Errorf("decode compatibility loss ceiling: %w", err)
+	}
+	if err := kernel.ValidateLossPolicyCeiling(ceiling); err != nil {
+		return kernel.LossPolicyCeiling{}, true, fmt.Errorf("validate compatibility loss ceiling: %w", err)
+	}
+	return ceiling, !ceiling.IsEmpty(), nil
+}
+
+func (s *Store) SetCompatibilityLossCeiling(ceiling kernel.LossPolicyCeiling) error {
+	if err := kernel.ValidateLossPolicyCeiling(ceiling); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(ceiling)
+	if err != nil {
+		return fmt.Errorf("encode compatibility loss ceiling: %w", err)
+	}
+	if ceiling.IsEmpty() {
+		_, err := s.DB.Exec(`DELETE FROM settings WHERE key=?`, CompatibilityLossCeilingSetting)
+		return err
+	}
+	return s.SetSetting(CompatibilityLossCeilingSetting, string(encoded))
+}
+
 type Credential struct{ ID, Type, Secret string }
 
 func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {

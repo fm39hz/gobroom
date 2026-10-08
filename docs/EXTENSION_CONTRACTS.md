@@ -281,11 +281,14 @@ values, semantic paths and the policy source that permitted the change.
 Physical and Combo nodes currently persist typed `LossPolicy {allow, deny}`
 through SQLite, secret-free config bundles and the immutable serving snapshot.
 Grants accumulate down the selected graph path; denials accumulate and win.
+An optional server ceiling can further deny IDs or set `allowOnly` to constrain
+the complete set of model grants; an enabled empty allowlist denies every loss.
 The compatibility planner admits a lossy mapping only when every reported loss
 ID is granted and not denied, and durable usage records retain the resulting
 fidelity plus each loss's requested/effective values, semantic paths and
-granting model-node sources. A server-wide allow ceiling remains conformance
-work; model policy grants alone cannot establish a global maximum.
+granting model-node sources. The server ceiling is exposed through the
+`compatibility loss-ceiling` CLI and portable config bundle v3, and its changes
+participate in bundle dry-run diff.
 
 Reasoning `exact`, `allow_clamp` and `best_effort` bind to this policy as specified
 in [Physical models](PHYSICAL_MODELS.md#strictness-and-translation). Explicit

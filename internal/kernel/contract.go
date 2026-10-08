@@ -77,6 +77,7 @@ type RouteOperationBinding struct {
 
 type Snapshot struct {
 	Version      uint64
+	LossCeiling  LossPolicyCeiling
 	PublicModels map[string]PublicModel
 	Routes       map[string]Route
 	// RouteGroups expands a logical catalog route into one candidate per

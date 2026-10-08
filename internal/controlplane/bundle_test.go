@@ -38,7 +38,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 2
+	bundle.Version = 3
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -109,10 +109,17 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err := s.UpsertComboModel(combo); err != nil {
 		t.Fatal(err)
 	}
+	ceiling := kernel.LossPolicyCeiling{AllowOnly: true, Allow: []string{"reasoning.effort.clamped"}, Deny: []string{"tools.arguments.dropped"}}
+	if err := s.SetCompatibilityLossCeiling(ceiling); err != nil {
+		t.Fatal(err)
+	}
 	catalog := bundleTestCatalog(t)
 	bundle, err := ExportBundle(s, catalog.Extensions())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if bundle.Version != 3 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
 	if err != nil {
@@ -135,6 +142,32 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	gotCombo, err := s.ComboModel("role")
 	if err != nil || !reflect.DeepEqual(gotCombo.LossPolicy, combo.LossPolicy) {
 		t.Fatalf("combo loss policy round trip=%#v err=%v", gotCombo.LossPolicy, err)
+	}
+	gotCeiling, configured, err := s.CompatibilityLossCeiling()
+	if err != nil || !configured || !reflect.DeepEqual(gotCeiling, ceiling) {
+		t.Fatalf("server loss ceiling round trip=%#v configured=%v err=%v", gotCeiling, configured, err)
+	}
+}
+
+func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
+	catalog := bundleTestCatalog(t)
+	current := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
+	desired := bundleWithDependencyLock(t, ConfigBundle{LossCeiling: &kernel.LossPolicyCeiling{AllowOnly: true, Allow: []string{"reasoning.clamped"}}}, catalog)
+	diff, err := DiffBundle(current, desired, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diff.LossCeilingChanged {
+		t.Fatalf("server loss ceiling change missing from bundle diff: %#v", diff)
+	}
+}
+
+func TestConfigBundleRejectsPreviousContractVersion(t *testing.T) {
+	catalog := bundleTestCatalog(t)
+	bundle := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
+	bundle.Version = 2
+	if err := ValidateBundleWithStrategies(bundle, catalog); err == nil {
+		t.Fatal("previous config bundle contract version was accepted")
 	}
 }
 
@@ -187,15 +220,15 @@ func TestDiffBundleReportsTypedChanges(t *testing.T) {
 	if diff.ProvidersAdded != 1 || diff.ProvidersRemoved != 1 || len(diff.Changes) != 2 {
 		t.Fatalf("diff=%#v", diff)
 	}
-	encoded, err := json.Marshal(BundleDiff{ProvidersAdded: 1, ProvidersRemoved: 2, ConnectionsAdded: 3, ConnectionsRemoved: 4, ModelsAdded: 5, ModelsRemoved: 6, PhysicalAdded: 7, PhysicalRemoved: 8, CombosAdded: 9, CombosRemoved: 10, TransformBindingsAdded: 11, TransformBindingsRemoved: 12, TransformBindingsChanged: 13})
+	encoded, err := json.Marshal(BundleDiff{ProvidersAdded: 1, ProvidersRemoved: 2, ConnectionsAdded: 3, ConnectionsRemoved: 4, ModelsAdded: 5, ModelsRemoved: 6, PhysicalAdded: 7, PhysicalRemoved: 8, CombosAdded: 9, CombosRemoved: 10, TransformBindingsAdded: 11, TransformBindingsRemoved: 12, TransformBindingsChanged: 13, LossCeilingChanged: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var fields map[string]int
+	var fields map[string]any
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if len(fields) != 14 || fields["providersRemoved"] != 2 || fields["connectionsAdded"] != 3 || fields["physicalRemoved"] != 8 || fields["combosRemoved"] != 10 || fields["transformBindingsChanged"] != 13 {
+	if len(fields) != 15 || fields["providersRemoved"] != float64(2) || fields["connectionsAdded"] != float64(3) || fields["physicalRemoved"] != float64(8) || fields["combosRemoved"] != float64(10) || fields["transformBindingsChanged"] != float64(13) || fields["lossCeilingChanged"] != true {
 		t.Fatalf("bundle diff JSON lost field tags: %s", encoded)
 	}
 }

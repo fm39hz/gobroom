@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -140,6 +141,22 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	}
 	if !hasStickyLimit {
 		t.Fatal("strategy catalog omitted round-robin-fallback's stickyLimit contract")
+	}
+	response = d.handleIPC(nil, IPCRequest{ID: "loss-ceiling-get", Method: "compatibility.loss-ceiling.get"})
+	if !response.OK {
+		t.Fatal(response.Error)
+	}
+	ceiling := kernel.LossPolicyCeiling{AllowOnly: true, Allow: []string{"reasoning.effort.clamped"}, Deny: []string{"tools.history.dropped"}}
+	response = d.handleIPC(nil, IPCRequest{ID: "loss-ceiling-set", Method: "compatibility.loss-ceiling.set", Params: map[string]any{"allowOnly": ceiling.AllowOnly, "allow": ceiling.Allow, "deny": ceiling.Deny}})
+	if !response.OK {
+		t.Fatal(response.Error)
+	}
+	loadedCeiling, configured, err := s.CompatibilityLossCeiling()
+	if err != nil || !configured || !reflect.DeepEqual(loadedCeiling, ceiling) {
+		t.Fatalf("IPC loss ceiling=%#v configured=%v err=%v", loadedCeiling, configured, err)
+	}
+	if snapshotCeiling := d.server.Control().Snapshot().LossCeiling; !reflect.DeepEqual(snapshotCeiling, ceiling) {
+		t.Fatalf("IPC loss ceiling did not enter the serving snapshot: %#v", snapshotCeiling)
 	}
 	response = d.handleIPC(nil, IPCRequest{ID: "4", Method: "providers.catalog"})
 	providerDefinitions, ok := response.Result.([]provider.DefinitionMetadata)

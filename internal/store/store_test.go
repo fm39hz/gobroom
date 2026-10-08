@@ -143,6 +143,32 @@ func TestSnapshotVersionSettingSurvivesStoreReopen(t *testing.T) {
 	}
 }
 
+func TestCompatibilityLossCeilingValidationAndClear(t *testing.T) {
+	s, err := Open(t.TempDir() + "/loss-ceiling.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	want := kernel.LossPolicyCeiling{AllowOnly: true, Allow: []string{"reasoning.clamped"}, Deny: []string{"tool.history.dropped"}}
+	if err := s.SetCompatibilityLossCeiling(want); err != nil {
+		t.Fatal(err)
+	}
+	got, configured, err := s.CompatibilityLossCeiling()
+	if err != nil || !configured || !reflect.DeepEqual(got, want) {
+		t.Fatalf("ceiling=%#v configured=%v err=%v", got, configured, err)
+	}
+	if err := s.SetCompatibilityLossCeiling(kernel.LossPolicyCeiling{Allow: []string{"reasoning.clamped"}}); err == nil {
+		t.Fatal("allowlist without allowOnly was accepted")
+	}
+	if err := s.SetCompatibilityLossCeiling(kernel.LossPolicyCeiling{}); err != nil {
+		t.Fatal(err)
+	}
+	got, configured, err = s.CompatibilityLossCeiling()
+	if err != nil || configured || !reflect.DeepEqual(got, kernel.LossPolicyCeiling{}) {
+		t.Fatalf("cleared ceiling=%#v configured=%v err=%v", got, configured, err)
+	}
+}
+
 func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {

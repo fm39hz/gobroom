@@ -35,6 +35,10 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	if err := s.UpsertComboModel(store.ComboModel{Name: "junior", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "model-a", Weight: 4}}, Strategy: store.StrategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 2}}, LossPolicy: kernel.LossPolicy{Deny: []string{"tools.history.loss"}}, Discoverable: true, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
+	ceiling := kernel.LossPolicyCeiling{AllowOnly: true, Allow: []string{"reasoning.clamped"}}
+	if err := s.SetCompatibilityLossCeiling(ceiling); err != nil {
+		t.Fatal(err)
+	}
 	registry, err := provider.NewRuntimeRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +93,9 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	}
 	if got := snapshot.Nodes["junior"].LossPolicy; !reflect.DeepEqual(got, (kernel.LossPolicy{Deny: []string{"tools.history.loss"}})) {
 		t.Fatalf("combo loss policy did not reach immutable snapshot: %#v", got)
+	}
+	if !reflect.DeepEqual(snapshot.LossCeiling, ceiling) {
+		t.Fatalf("server loss ceiling did not reach immutable snapshot: %#v", snapshot.LossCeiling)
 	}
 	if _, ok := snapshot.PublicModels["junior"]; !ok {
 		t.Fatal("discoverable combo was not projected as a public model")

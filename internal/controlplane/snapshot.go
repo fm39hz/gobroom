@@ -49,8 +49,12 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	if err != nil {
 		return kernel.Snapshot{}, err
 	}
+	lossCeiling, _, err := l.Store.CompatibilityLossCeiling()
+	if err != nil {
+		return kernel.Snapshot{}, err
+	}
 
-	input := kernel.SnapshotInput{RouteGroups: map[string][]string{}, TransformBindings: transformBindings}
+	input := kernel.SnapshotInput{RouteGroups: map[string][]string{}, TransformBindings: transformBindings, LossCeiling: lossCeiling}
 	// Catalog identity must outlive current connection entitlement. A Physical
 	// model may legitimately reference a discovered route before its account is
 	// tested; represent that route group as empty until positive evidence adds

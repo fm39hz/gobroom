@@ -74,6 +74,12 @@ func cloneNode(node ModelNode) ModelNode {
 	return node
 }
 
+func cloneLossCeiling(ceiling LossPolicyCeiling) LossPolicyCeiling {
+	ceiling.Allow = append([]string(nil), ceiling.Allow...)
+	ceiling.Deny = append([]string(nil), ceiling.Deny...)
+	return ceiling
+}
+
 func ResolveModelNode(s Snapshot, name string) (ModelNode, error) {
 	s.Nodes = cloneNodes(s.Nodes)
 	public, ok := s.PublicModels[name]

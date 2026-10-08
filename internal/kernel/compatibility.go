@@ -81,6 +81,7 @@ type CompatibilityPolicy struct {
 	AllowedLosses  []string
 	DeniedLosses   []string
 	LossSources    map[string][]string
+	LossCeiling    LossPolicyCeiling
 }
 
 // LossPolicy is attached to a node in the model graph. Grants accumulate down
@@ -88,6 +89,26 @@ type CompatibilityPolicy struct {
 type LossPolicy struct {
 	Allow []string `json:"allow,omitempty"`
 	Deny  []string `json:"deny,omitempty"`
+}
+
+// LossPolicyCeiling is a daemon-level limit on model-node grants. Deny is
+// always enforced; AllowOnly restricts grants to the listed IDs, including an
+// empty list which means that no degradation may be enabled by model policy.
+type LossPolicyCeiling struct {
+	AllowOnly bool     `json:"allowOnly,omitempty"`
+	Allow     []string `json:"allow,omitempty"`
+	Deny      []string `json:"deny,omitempty"`
+}
+
+func (ceiling LossPolicyCeiling) IsEmpty() bool {
+	return !ceiling.AllowOnly && len(ceiling.Allow) == 0 && len(ceiling.Deny) == 0
+}
+
+func ValidateLossPolicyCeiling(ceiling LossPolicyCeiling) error {
+	if !ceiling.AllowOnly && len(ceiling.Allow) > 0 {
+		return fmt.Errorf("loss ceiling allow list requires allowOnly=true")
+	}
+	return ValidateLossPolicy(LossPolicy{Allow: ceiling.Allow, Deny: ceiling.Deny})
 }
 
 func AddLossPolicy(policy CompatibilityPolicy, source string, node LossPolicy) CompatibilityPolicy {
@@ -167,6 +188,8 @@ func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPoli
 
 	allowed := stringSet(policy.AllowedLosses)
 	denied := stringSet(policy.DeniedLosses)
+	ceilingAllowed := stringSet(policy.LossCeiling.Allow)
+	ceilingDenied := stringSet(policy.LossCeiling.Deny)
 	plan := CompatibilityPlan{Supported: true, Fidelity: FidelityNative}
 	for _, facet := range facets {
 		stages := byFacet[facet]
@@ -213,9 +236,9 @@ func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPoli
 		}
 		for i := range combined.Losses {
 			loss := &combined.Losses[i]
-			if denied[loss.ID] || !allowed[loss.ID] {
+			if denied[loss.ID] || ceilingDenied[loss.ID] || !allowed[loss.ID] || (policy.LossCeiling.AllowOnly && !ceilingAllowed[loss.ID]) {
 				combined.Disposition = FacetUnsupported
-				combined.Reason = fmt.Sprintf("loss %q is not permitted by compatibility policy", loss.ID)
+				combined.Reason = fmt.Sprintf("loss %q is not permitted by compatibility policy and server ceiling", loss.ID)
 			} else {
 				loss.PolicySources = appendUnique(loss.PolicySources, policy.LossSources[loss.ID]...)
 			}

@@ -149,9 +149,10 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 }
 
 func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T) {
-	makeGateway := func(comboPolicy, physicalPolicy LossPolicy) (*Kernel, *[]string) {
+	makeGateway := func(comboPolicy, physicalPolicy LossPolicy, ceiling LossPolicyCeiling) (*Kernel, *[]string) {
 		attempts := []string{}
 		snapshot, err := BuildSnapshot(SnapshotInput{
+			LossCeiling: ceiling,
 			PublicModels: []PublicModel{{Name: "role", TargetRef: "combo"}},
 			Nodes: []ModelNode{
 				{ID: "combo", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberModel, ID: "physical"}}, LossPolicy: comboPolicy},
@@ -173,13 +174,13 @@ func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T)
 	}
 
 	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
-	denied, deniedAttempts := makeGateway(LossPolicy{}, LossPolicy{})
+	denied, deniedAttempts := makeGateway(LossPolicy{}, LossPolicy{}, LossPolicyCeiling{})
 	if err := denied.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err == nil || len(*deniedAttempts) != 0 {
 		t.Fatalf("ungranted loss was dispatched: err=%v attempts=%v", err, *deniedAttempts)
 	}
 	denied.Close()
 
-	allowed, attempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{})
+	allowed, attempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{}, LossPolicyCeiling{AllowOnly: true, Allow: []string{"generation.temperature.clamped"}})
 	if err := allowed.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err != nil {
 		t.Fatalf("ancestor grant did not reach candidate: %v", err)
 	}
@@ -196,11 +197,17 @@ func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T)
 	}
 	allowed.Close()
 
-	deniedByChild, childAttempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{Deny: []string{"generation.temperature.clamped"}})
+	deniedByChild, childAttempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{Deny: []string{"generation.temperature.clamped"}}, LossPolicyCeiling{AllowOnly: true, Allow: []string{"generation.temperature.clamped"}})
 	if err := deniedByChild.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err == nil || len(*childAttempts) != 0 {
 		t.Fatalf("child denial did not dominate ancestor grant: err=%v attempts=%v", err, *childAttempts)
 	}
 	deniedByChild.Close()
+
+	deniedByServer, serverAttempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{}, LossPolicyCeiling{AllowOnly: true, Allow: []string{"reasoning.effort.clamped"}})
+	if err := deniedByServer.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err == nil || len(*serverAttempts) != 0 {
+		t.Fatalf("model grant exceeded server loss ceiling: err=%v attempts=%v", err, *serverAttempts)
+	}
+	deniedByServer.Close()
 }
 
 func TestKernelRejectsAdapterWithoutRequiredFacetDeclarationBeforeDispatch(t *testing.T) {

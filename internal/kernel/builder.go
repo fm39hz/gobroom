@@ -5,6 +5,7 @@ import "fmt"
 import "github.com/fm39hz/gobroom/internal/normalize"
 
 type SnapshotInput struct {
+	LossCeiling       LossPolicyCeiling
 	PublicModels      []PublicModel
 	Routes            []Route
 	RouteGroups       map[string][]string
@@ -17,7 +18,7 @@ type SnapshotInput struct {
 // data-plane representation. Storage adapters stay outside the kernel.
 func BuildSnapshot(input SnapshotInput, version uint64) (Snapshot, error) {
 	snapshot := Snapshot{
-		Version: version, PublicModels: map[string]PublicModel{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, Nodes: map[string]ModelNode{},
+		Version: version, LossCeiling: cloneLossCeiling(input.LossCeiling), PublicModels: map[string]PublicModel{}, Routes: map[string]Route{}, RouteGroups: map[string][]string{}, WireRoutes: map[string][]string{}, Nodes: map[string]ModelNode{},
 		TransformBindings: cloneTransformBindings(input.TransformBindings),
 	}
 	for _, item := range input.PublicModels {

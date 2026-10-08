@@ -11,6 +11,7 @@ type SnapshotStore struct{ current atomic.Pointer[Snapshot] }
 
 func NewSnapshotStore(initial Snapshot) (*SnapshotStore, error) {
 	initial.TransformBindings = cloneTransformBindings(initial.TransformBindings)
+	initial.LossCeiling = cloneLossCeiling(initial.LossCeiling)
 	if err := ensureModelNodes(&initial); err != nil {
 		return nil, err
 	}
@@ -26,6 +27,7 @@ func (s *SnapshotStore) Load() Snapshot {
 	if value := s.current.Load(); value != nil {
 		loaded := *value
 		loaded.TransformBindings = cloneTransformBindings(value.TransformBindings)
+		loaded.LossCeiling = cloneLossCeiling(value.LossCeiling)
 		return loaded
 	}
 	return Snapshot{}
@@ -33,6 +35,7 @@ func (s *SnapshotStore) Load() Snapshot {
 
 func (s *SnapshotStore) Publish(next Snapshot) error {
 	next.TransformBindings = cloneTransformBindings(next.TransformBindings)
+	next.LossCeiling = cloneLossCeiling(next.LossCeiling)
 	if err := ensureModelNodes(&next); err != nil {
 		return err
 	}
@@ -46,6 +49,9 @@ func (s *SnapshotStore) Publish(next Snapshot) error {
 func ValidateSnapshot(s Snapshot) error {
 	if s.PublicModels == nil || s.Routes == nil || s.RouteGroups == nil || s.WireRoutes == nil || s.Nodes == nil {
 		return ErrSnapshotInvalid
+	}
+	if err := ValidateLossPolicyCeiling(s.LossCeiling); err != nil {
+		return fmt.Errorf("snapshot loss ceiling: %w", err)
 	}
 	for name, public := range s.PublicModels {
 		if name == "" || public.TargetRef == "" {

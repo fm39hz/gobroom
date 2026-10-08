@@ -361,7 +361,9 @@ flow down the selected model path while denials are inherited and take
 precedence. This is distinct from reasoning strictness: a codec must declare a
 named degradation before any policy can permit it. Admitted fidelity and loss
 records (requested/effective values, semantic paths and granting model nodes)
-are retained in usage. A server-wide loss ceiling remains pending.
+are retained in usage. The daemon can additionally impose a server-wide allow
+ceiling or denials with `gobroom compatibility loss-ceiling`; model nodes
+cannot grant past that ceiling, and it travels in config bundle v3.
 
 ## Performance and capacity
 
