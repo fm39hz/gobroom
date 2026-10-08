@@ -78,6 +78,91 @@ func TestRegisteredNonChatOperationValidatesItsOwnPayload(t *testing.T) {
 	}
 }
 
+func TestOperationArtifactOutputsAreTypedBoundedAndRecipientScoped(t *testing.T) {
+	catalog := extensions.NewCatalog()
+	registry, err := NewRegistry(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerSchema := func(ref extensions.Ref, schema string) {
+		t.Helper()
+		document, err := extensions.BindSchemaDocument(ref, json.RawMessage(schema))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := catalog.RegisterSchema(ref, document); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inputRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "test.image-output.input", ContractVersion: 1}
+	eventRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "test.image-output.event", ContractVersion: 1}
+	registerSchema(inputRef, `{"type":"object"}`)
+	registerSchema(eventRef, `{"type":"object","required":["kind"],"properties":{"kind":{"type":"string"}},"additionalProperties":true}`)
+	operationRef := extensions.Ref{Kind: "operation", ID: "image.generate", ContractVersion: 1}
+	artifactRef := extensions.Ref{Kind: extensions.ArtifactKind, ID: "image.generated", ContractVersion: 1}
+	policy := extensions.ArtifactPolicy{
+		OwnerDomains: []string{"provider"}, ReplayScopes: []extensions.ArtifactReplayScope{extensions.ArtifactReplayRequest},
+		SensitivityLimit: extensions.ArtifactPrivate, AllowedMediaTypes: []string{"image/png"}, RecipientContracts: []extensions.Ref{operationRef},
+	}
+	if err := catalog.Register(extensions.Descriptor{
+		Ref: artifactRef, ImplementationVersion: "1", DisplayName: "Generated image", Description: "A response image artifact.",
+		ArtifactPolicy: &policy, ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 1024},
+	}, func(json.RawMessage) (any, error) { return struct{}{}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(Definition{
+		Ref: operationRef, DisplayName: "Image generation", Description: "Generate image artifact.",
+		InputSchemaRef: inputRef, EventSchemaRefs: []extensions.Ref{eventRef},
+		ArtifactInputs:  []ArtifactInput{{Role: "image", TypeRef: artifactRef, MinCount: 0, MaxCount: 1}},
+		ArtifactOutputs: []ArtifactOutput{{Role: "image", TypeRef: artifactRef, MinCount: 1, MaxCount: 2}},
+		ResourceBounds:  DefaultResourceBounds(), ReplaySafety: ReplayNever,
+		InputPayload:        func(normalize.Request) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
+		CompileRequirements: func(normalize.Request) ([]normalize.FeatureRequirement, error) { return nil, nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sealedCatalog, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.Seal(sealedCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationDescriptor, ok := sealedCatalog.Descriptor(operationRef)
+	if !ok || len(operationDescriptor.ArtifactOutputs) != 1 || operationDescriptor.ArtifactOutputs[0] != (ArtifactOutput{Role: "image", TypeRef: artifactRef, MinCount: 1, MaxCount: 2}) {
+		t.Fatalf("catalog omitted the typed artifact output port: %#v", operationDescriptor.ArtifactOutputs)
+	}
+	resolved, ok := snapshot.Resolve(operationRef)
+	if !ok {
+		t.Fatal("registered operation disappeared")
+	}
+	resolved.ArtifactOutputs[0].MaxCount = 99
+	if outputs, ok := snapshot.ArtifactOutputs(operationRef); !ok || outputs[0].MaxCount != 2 {
+		t.Fatalf("operation snapshot exposed mutable output ports: %#v", outputs)
+	}
+	owner := extensions.ArtifactOwner{Domain: "provider", IssuerRef: &extensions.Ref{Kind: "provider-definition", ID: "image-host", ContractVersion: 1}, ProviderDefinitionID: "image-host", ConnectionID: "conn-a", ModelIdentity: "image-v1"}
+	receiver := extensions.ArtifactOwner{Domain: "harness", ClientContract: "openai_chat"}
+	artifact := extensions.ArtifactRef{
+		TypeRef: artifactRef, Role: "image", Owner: owner, ReplayScope: extensions.ArtifactReplayRequest,
+		Sensitivity: extensions.ArtifactPrivate, MediaType: "image/png", SizeBytes: 4,
+		Body: &extensions.BodyRef{ID: "body-1", MediaType: "image/png", SizeBytes: 4},
+	}
+	counts := map[string]int{}
+	if err := snapshot.ValidateArtifactOutputs(operationRef, []extensions.ArtifactRef{artifact}, receiver, operationRef, counts); err != nil {
+		t.Fatalf("valid output transfer rejected: %v", err)
+	}
+	if err := snapshot.ValidateArtifactOutputCounts(operationRef, counts); err != nil {
+		t.Fatalf("required output count rejected: %v", err)
+	}
+	if err := snapshot.ValidateArtifactOutputs(operationRef, []extensions.ArtifactRef{artifact}, receiver, extensions.Ref{Kind: "operation", ID: "other", ContractVersion: 1}, map[string]int{}); err == nil {
+		t.Fatal("output artifact crossed to an undeclared recipient")
+	}
+	if err := snapshot.ValidateArtifactOutputs(operationRef, []extensions.ArtifactRef{artifact, artifact, artifact}, receiver, operationRef, map[string]int{}); err == nil {
+		t.Fatal("output count exceeded its operation port bound")
+	}
+}
+
 func TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode(t *testing.T) {
 	catalog := extensions.NewCatalog()
 	registry, err := NewRegistry(catalog)

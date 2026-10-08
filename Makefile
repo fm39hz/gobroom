@@ -47,6 +47,7 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/tui -run '^TestUsageEntryShowsCompatibilityPlanSummary$$' -count=1
 	go test ./internal/kernel -run '^TestExplainCompatibilityUsesModelPathAndDoesNotDispatch$$' -count=1
 	go test ./internal/daemon -run '^TestRouteExplainIPCPreflightsRequestCompatibility$$' -count=1
+	go test ./internal/operations -run '^TestOperationArtifactOutputsAreTypedBoundedAndRecipientScoped$$' -count=1
 	go test ./internal/operations ./internal/kernel -run '^(TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode|TestComposedSemanticPipelineBoundsEachDecodedResponseEvent|TestResponseCommitWriterEnforcesOperationOutputBound)$$' -count=1
 	go test ./internal/extensions ./internal/operations -run '^(TestArtifactContractEnforcesOwnerScopeSensitivityAndBoundedBodyRef|TestOperationAcceptsOnlyRegisteredOwnedArtifacts)$$' -count=1
 	go test ./internal/artifacts -run '^(TestFileStoreStreamsBoundedOwnerScopedLeases|TestFileStoreEnforcesPerBodyTotalAndContextBounds|TestFileStorePrunesExpiredBodyReferences|TestContextArtifactAccessRequiresExactRecipientAndPolicy)$$' -count=1

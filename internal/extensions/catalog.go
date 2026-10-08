@@ -70,23 +70,34 @@ type ArtifactInput struct {
 	MaxCount int    `json:"maxCount"`
 }
 
+// ArtifactOutput declares a named, bounded artifact port emitted by an
+// operation response. Response bodies remain leases; only their typed refs
+// cross canonical events and client renderers.
+type ArtifactOutput struct {
+	Role     string `json:"role"`
+	TypeRef  Ref    `json:"typeRef"`
+	MinCount int    `json:"minCount"`
+	MaxCount int    `json:"maxCount"`
+}
+
 type Descriptor struct {
-	Ref                   Ref             `json:"ref"`
-	ImplementationVersion string          `json:"implementationVersion"`
-	DisplayName           string          `json:"displayName"`
-	Description           string          `json:"description"`
-	OptionsSchemaRef      *Ref            `json:"optionsSchemaRef,omitempty"`
-	InputSchemaRef        *Ref            `json:"inputSchemaRef,omitempty"`
-	ResultSchemaRef       *Ref            `json:"resultSchemaRef,omitempty"`
-	EventSchemaRefs       []Ref           `json:"eventSchemaRefs,omitempty"`
-	ReplaySafety          string          `json:"replaySafety,omitempty"`
-	Dependencies          []Ref           `json:"dependencies,omitempty"`
-	SemanticContracts     []Ref           `json:"semanticContracts,omitempty"`
-	ArtifactInputs        []ArtifactInput `json:"artifactInputs,omitempty"`
-	LifecycleCapabilities []string        `json:"lifecycleCapabilities,omitempty"`
-	ResourceBounds        ResourceBounds  `json:"resourceBounds"`
-	ArtifactPolicy        *ArtifactPolicy `json:"artifactPolicy,omitempty"`
-	SetupView             json.RawMessage `json:"setupView,omitempty"`
+	Ref                   Ref              `json:"ref"`
+	ImplementationVersion string           `json:"implementationVersion"`
+	DisplayName           string           `json:"displayName"`
+	Description           string           `json:"description"`
+	OptionsSchemaRef      *Ref             `json:"optionsSchemaRef,omitempty"`
+	InputSchemaRef        *Ref             `json:"inputSchemaRef,omitempty"`
+	ResultSchemaRef       *Ref             `json:"resultSchemaRef,omitempty"`
+	EventSchemaRefs       []Ref            `json:"eventSchemaRefs,omitempty"`
+	ReplaySafety          string           `json:"replaySafety,omitempty"`
+	Dependencies          []Ref            `json:"dependencies,omitempty"`
+	SemanticContracts     []Ref            `json:"semanticContracts,omitempty"`
+	ArtifactInputs        []ArtifactInput  `json:"artifactInputs,omitempty"`
+	ArtifactOutputs       []ArtifactOutput `json:"artifactOutputs,omitempty"`
+	LifecycleCapabilities []string         `json:"lifecycleCapabilities,omitempty"`
+	ResourceBounds        ResourceBounds   `json:"resourceBounds"`
+	ArtifactPolicy        *ArtifactPolicy  `json:"artifactPolicy,omitempty"`
+	SetupView             json.RawMessage  `json:"setupView,omitempty"`
 }
 
 type Schema struct {
@@ -269,15 +280,28 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	if len(descriptor.ArtifactInputs) > 0 && descriptor.Ref.Kind != "operation" {
 		return Descriptor{}, fmt.Errorf("only operation extensions may declare artifact input ports")
 	}
-	seenArtifactRoles := map[string]bool{}
+	if len(descriptor.ArtifactOutputs) > 0 && descriptor.Ref.Kind != "operation" {
+		return Descriptor{}, fmt.Errorf("only operation extensions may declare artifact output ports")
+	}
+	seenInputRoles := map[string]bool{}
 	for _, input := range descriptor.ArtifactInputs {
-		if strings.TrimSpace(input.Role) == "" || seenArtifactRoles[input.Role] || input.MinCount < 0 || input.MaxCount <= 0 || input.MinCount > input.MaxCount {
+		if strings.TrimSpace(input.Role) == "" || seenInputRoles[input.Role] || input.MinCount < 0 || input.MaxCount <= 0 || input.MinCount > input.MaxCount {
 			return Descriptor{}, fmt.Errorf("extension %q has an invalid or duplicate artifact input role", descriptor.Ref.Key())
 		}
 		if err := input.TypeRef.Validate(); err != nil || input.TypeRef.Kind != ArtifactKind {
 			return Descriptor{}, fmt.Errorf("extension %q artifact input %q requires an exact artifact type", descriptor.Ref.Key(), input.Role)
 		}
-		seenArtifactRoles[input.Role] = true
+		seenInputRoles[input.Role] = true
+	}
+	seenOutputRoles := map[string]bool{}
+	for _, output := range descriptor.ArtifactOutputs {
+		if strings.TrimSpace(output.Role) == "" || seenOutputRoles[output.Role] || output.MinCount < 0 || output.MaxCount <= 0 || output.MinCount > output.MaxCount {
+			return Descriptor{}, fmt.Errorf("extension %q has an invalid or duplicate artifact output role", descriptor.Ref.Key())
+		}
+		if err := output.TypeRef.Validate(); err != nil || output.TypeRef.Kind != ArtifactKind {
+			return Descriptor{}, fmt.Errorf("extension %q artifact output %q requires an exact artifact type", descriptor.Ref.Key(), output.Role)
+		}
+		seenOutputRoles[output.Role] = true
 	}
 	if descriptor.Ref.Kind == ArtifactKind {
 		if descriptor.ArtifactPolicy == nil || descriptor.ResourceBounds.MaxInputBytes <= 0 {
@@ -468,6 +492,9 @@ func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
 		dependencies = append(dependencies, item.descriptor.SemanticContracts...)
 		for _, input := range item.descriptor.ArtifactInputs {
 			dependencies = append(dependencies, input.TypeRef)
+		}
+		for _, output := range item.descriptor.ArtifactOutputs {
+			dependencies = append(dependencies, output.TypeRef)
 		}
 		if item.descriptor.ArtifactPolicy != nil {
 			dependencies = append(dependencies, item.descriptor.ArtifactPolicy.RecipientContracts...)
@@ -774,6 +801,12 @@ func (c *Catalog) validateGraph() error {
 				return fmt.Errorf("operation %q artifact input %q references missing artifact contract %q", descriptor.Ref.Key(), input.Role, input.TypeRef.Key())
 			}
 		}
+		for _, output := range descriptor.ArtifactOutputs {
+			artifact, ok := c.registrations[output.TypeRef]
+			if !ok || artifact.descriptor.ArtifactPolicy == nil {
+				return fmt.Errorf("operation %q artifact output %q references missing artifact contract %q", descriptor.Ref.Key(), output.Role, output.TypeRef.Key())
+			}
+		}
 		if descriptor.ArtifactPolicy != nil {
 			for _, recipient := range descriptor.ArtifactPolicy.RecipientContracts {
 				if _, ok := c.registrations[recipient]; !ok {
@@ -933,6 +966,7 @@ func cloneDescriptor(descriptor Descriptor) Descriptor {
 	descriptor.Dependencies = append([]Ref(nil), descriptor.Dependencies...)
 	descriptor.SemanticContracts = append([]Ref(nil), descriptor.SemanticContracts...)
 	descriptor.ArtifactInputs = append([]ArtifactInput(nil), descriptor.ArtifactInputs...)
+	descriptor.ArtifactOutputs = append([]ArtifactOutput(nil), descriptor.ArtifactOutputs...)
 	descriptor.EventSchemaRefs = append([]Ref(nil), descriptor.EventSchemaRefs...)
 	descriptor.LifecycleCapabilities = append([]string(nil), descriptor.LifecycleCapabilities...)
 	descriptor.SetupView = append(json.RawMessage(nil), descriptor.SetupView...)

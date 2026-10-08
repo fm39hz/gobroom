@@ -31,6 +31,7 @@ type Definition struct {
 	ResultSchemaRef     *extensions.Ref
 	EventSchemaRefs     []extensions.Ref
 	ArtifactInputs      []ArtifactInput
+	ArtifactOutputs     []ArtifactOutput
 	NewResultProjector  ResultProjectorFactory
 	ResourceBounds      extensions.ResourceBounds
 	ReplaySafety        ReplaySafety
@@ -53,6 +54,7 @@ type ResultProjectorFactory func(extensions.ResourceBounds) (ResultProjector, er
 // ArtifactInput is a named semantic input port shared with the frozen
 // extension descriptor contract.
 type ArtifactInput = extensions.ArtifactInput
+type ArtifactOutput = extensions.ArtifactOutput
 
 type Registry struct {
 	mu      sync.RWMutex
@@ -177,18 +179,29 @@ func (r *Registry) Register(definition Definition) error {
 			return fmt.Errorf("operation %q has invalid event schema reference", definition.Ref.Key())
 		}
 	}
-	seenArtifactRoles := map[string]bool{}
+	seenInputRoles := map[string]bool{}
 	for _, input := range definition.ArtifactInputs {
-		if strings.TrimSpace(input.Role) == "" || seenArtifactRoles[input.Role] || input.MinCount < 0 || input.MaxCount <= 0 || input.MinCount > input.MaxCount {
+		if strings.TrimSpace(input.Role) == "" || seenInputRoles[input.Role] || input.MinCount < 0 || input.MaxCount <= 0 || input.MinCount > input.MaxCount {
 			return fmt.Errorf("operation %q has an invalid or duplicate artifact input role", definition.Ref.Key())
 		}
 		if err := input.TypeRef.Validate(); err != nil || input.TypeRef.Kind != extensions.ArtifactKind {
 			return fmt.Errorf("operation %q artifact input %q has an invalid artifact type ref", definition.Ref.Key(), input.Role)
 		}
-		seenArtifactRoles[input.Role] = true
+		seenInputRoles[input.Role] = true
+	}
+	seenOutputRoles := map[string]bool{}
+	for _, output := range definition.ArtifactOutputs {
+		if strings.TrimSpace(output.Role) == "" || seenOutputRoles[output.Role] || output.MinCount < 0 || output.MaxCount <= 0 || output.MinCount > output.MaxCount {
+			return fmt.Errorf("operation %q has an invalid or duplicate artifact output role", definition.Ref.Key())
+		}
+		if err := output.TypeRef.Validate(); err != nil || output.TypeRef.Kind != extensions.ArtifactKind {
+			return fmt.Errorf("operation %q artifact output %q has an invalid artifact type ref", definition.Ref.Key(), output.Role)
+		}
+		seenOutputRoles[output.Role] = true
 	}
 	definition.EventSchemaRefs = append([]extensions.Ref(nil), definition.EventSchemaRefs...)
 	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
+	definition.ArtifactOutputs = append([]ArtifactOutput(nil), definition.ArtifactOutputs...)
 	if definition.ResultSchemaRef != nil {
 		copy := *definition.ResultSchemaRef
 		definition.ResultSchemaRef = &copy
@@ -197,7 +210,7 @@ func (r *Registry) Register(definition Definition) error {
 		Ref: definition.Ref, ImplementationVersion: fmt.Sprint(definition.Ref.ContractVersion),
 		DisplayName: definition.DisplayName, Description: definition.Description,
 		InputSchemaRef: &definition.InputSchemaRef, ResultSchemaRef: definition.ResultSchemaRef,
-		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactInputTypeRefs(definition.ArtifactInputs), ArtifactInputs: definition.ArtifactInputs, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
+		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactPortTypeRefs(definition.ArtifactInputs, definition.ArtifactOutputs), ArtifactInputs: definition.ArtifactInputs, ArtifactOutputs: definition.ArtifactOutputs, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
 	}
 	if err := r.catalog.Register(descriptor, func(json.RawMessage) (any, error) { return definition, nil }); err != nil {
 		return err
@@ -288,7 +301,13 @@ func (r *Registry) Seal(catalog *extensions.Snapshot) (*Snapshot, error) {
 				return nil, fmt.Errorf("operation %q artifact type %q is missing or has no artifact policy", ref.Key(), artifactInput.TypeRef.Key())
 			}
 		}
-		definitions[ref] = definition
+		for _, artifactOutput := range definition.ArtifactOutputs {
+			descriptor, ok := catalog.Descriptor(artifactOutput.TypeRef)
+			if !ok || descriptor.ArtifactPolicy == nil {
+				return nil, fmt.Errorf("operation %q artifact output type %q is missing or has no artifact policy", ref.Key(), artifactOutput.TypeRef.Key())
+			}
+		}
+		definitions[ref] = cloneDefinition(definition)
 	}
 	r.sealed = &Snapshot{definitions: definitions, catalog: catalog}
 	return r.sealed, nil
@@ -299,7 +318,18 @@ func (s *Snapshot) Resolve(ref extensions.Ref) (Definition, bool) {
 		return Definition{}, false
 	}
 	definition, ok := s.definitions[ref]
-	return definition, ok
+	return cloneDefinition(definition), ok
+}
+
+func cloneDefinition(definition Definition) Definition {
+	definition.EventSchemaRefs = append([]extensions.Ref(nil), definition.EventSchemaRefs...)
+	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
+	definition.ArtifactOutputs = append([]ArtifactOutput(nil), definition.ArtifactOutputs...)
+	if definition.ResultSchemaRef != nil {
+		result := *definition.ResultSchemaRef
+		definition.ResultSchemaRef = &result
+	}
+	return definition
 }
 
 func (s *Snapshot) ExtensionCatalog() *extensions.Snapshot {
@@ -350,6 +380,58 @@ func (s *Snapshot) ArtifactInputs(operationRef extensions.Ref) ([]ArtifactInput,
 		return nil, false
 	}
 	return append([]ArtifactInput(nil), definition.ArtifactInputs...), true
+}
+
+func (s *Snapshot) ArtifactOutputs(operationRef extensions.Ref) ([]ArtifactOutput, bool) {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return nil, false
+	}
+	return append([]ArtifactOutput(nil), definition.ArtifactOutputs...), true
+}
+
+// ValidateArtifactOutputs validates one event's artifact references against
+// the operation's declared response ports and the recipient's exact contract.
+// Counts are returned for aggregation across the response stream.
+func (s *Snapshot) ValidateArtifactOutputs(operationRef extensions.Ref, artifacts []extensions.ArtifactRef, receiver extensions.ArtifactOwner, recipient extensions.Ref, counts map[string]int) error {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return fmt.Errorf("operation %q is not registered", operationRef.Key())
+	}
+	if counts == nil && len(artifacts) > 0 {
+		return fmt.Errorf("artifact output count accumulator is required")
+	}
+	allowed := make(map[string]ArtifactOutput, len(definition.ArtifactOutputs))
+	for _, output := range definition.ArtifactOutputs {
+		allowed[output.Role] = output
+	}
+	for _, artifact := range artifacts {
+		output, exists := allowed[artifact.Role]
+		if !exists || output.TypeRef != artifact.TypeRef {
+			return fmt.Errorf("artifact role/type %q/%q is not allowed by operation %q output", artifact.Role, artifact.TypeRef.Key(), operationRef.Key())
+		}
+		counts[artifact.Role]++
+		if counts[artifact.Role] > output.MaxCount {
+			return fmt.Errorf("artifact output role %q exceeds maximum count %d", artifact.Role, output.MaxCount)
+		}
+		if err := s.catalog.ValidateArtifact(artifact, receiver, recipient, time.Now()); err != nil {
+			return fmt.Errorf("artifact %q for %s: %w", artifact.TypeRef.Key(), recipient.Key(), err)
+		}
+	}
+	return nil
+}
+
+func (s *Snapshot) ValidateArtifactOutputCounts(operationRef extensions.Ref, counts map[string]int) error {
+	definition, ok := s.Resolve(operationRef)
+	if !ok {
+		return fmt.Errorf("operation %q is not registered", operationRef.Key())
+	}
+	for _, output := range definition.ArtifactOutputs {
+		if counts[output.Role] < output.MinCount {
+			return fmt.Errorf("artifact output role %q requires at least %d item(s)", output.Role, output.MinCount)
+		}
+	}
+	return nil
 }
 
 // ValidateEvent validates one canonical operation event against its exact
@@ -494,13 +576,19 @@ func (s *Snapshot) Prepare(request normalize.Request) (Prepared, error) {
 	return Prepared{Ref: ref, InputPayload: append(json.RawMessage(nil), payload...), Requirements: requirements, ReplaySafety: definition.ReplaySafety, ResourceBounds: definition.ResourceBounds, Artifacts: artifacts}, nil
 }
 
-func artifactInputTypeRefs(inputs []ArtifactInput) []extensions.Ref {
-	refs := make([]extensions.Ref, 0, len(inputs))
+func artifactPortTypeRefs(inputs []ArtifactInput, outputs []ArtifactOutput) []extensions.Ref {
+	refs := make([]extensions.Ref, 0, len(inputs)+len(outputs))
 	seen := map[extensions.Ref]bool{}
 	for _, input := range inputs {
 		if !seen[input.TypeRef] {
 			refs = append(refs, input.TypeRef)
 			seen[input.TypeRef] = true
+		}
+	}
+	for _, output := range outputs {
+		if !seen[output.TypeRef] {
+			refs = append(refs, output.TypeRef)
+			seen[output.TypeRef] = true
 		}
 	}
 	return refs
