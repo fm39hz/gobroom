@@ -1,7 +1,7 @@
 # Implementation roadmap
 
 Status is based on the repository implementation and tests inspected on
-2026-10-06. This is the project roadmap and the source of truth for milestone
+2026-10-08. This is the project roadmap and the source of truth for milestone
 status. Architecture and compatibility documents describe contracts/evidence;
 they do not override this status table.
 
@@ -42,6 +42,9 @@ provider node + connections
 No automatic 9router database importer is planned. Existing setup migration is
 manual. Product and compatibility claims must be grounded in checked source,
 tests or an explicitly labeled inference; see [compatibility matrix](COMPATIBILITY_MATRIX.md).
+Reuse decisions from the local CLIProxyAPI source review are recorded in
+[CLIProxyAPI reuse review](CLIPROXYAPI_REUSE_REVIEW.md); that source informs
+provider fixtures but is not a Gobroom runtime dependency.
 
 ### Deliberately outside the core
 
