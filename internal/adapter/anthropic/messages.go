@@ -58,6 +58,13 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 			} else {
 				mapping.Reason = "one or more function declarations have no representable name"
 			}
+		case kernel.FacetToolChoice:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+			} else if anthropicToolChoiceRepresentable(input.Request.ToolChoice) && anthropicToolChoiceMatchesTools(input.Request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "canonical tool choice is mapped to Anthropic tool_choice"
+			}
 		case kernel.FacetReasoningIntent:
 			if native {
 				mapping.Disposition = kernel.FacetPreserved
@@ -75,10 +82,61 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the native Anthropic payload is forwarded without rewriting"
 			}
+		case kernel.FacetReasoningSignature, kernel.FacetOpaqueContent, kernel.FacetToolResultStatus, kernel.FacetToolBlockOrder, kernel.FacetClientMetadata:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "provider-only Anthropic semantics are forwarded in the native request"
+			}
 		}
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func anthropicToolChoiceRepresentable(choice normalize.ToolChoice) bool {
+	if !choice.Set {
+		return true
+	}
+	switch choice.Mode {
+	case "auto", "any", "none":
+		return choice.Name == ""
+	case "tool":
+		return strings.TrimSpace(choice.Name) != ""
+	default:
+		return false
+	}
+}
+
+func anthropicToolChoice(choice normalize.ToolChoice) map[string]any {
+	if !choice.Set {
+		return nil
+	}
+	result := map[string]any{"type": choice.Mode}
+	if choice.Mode == "tool" {
+		result["name"] = choice.Name
+	}
+	if choice.DisableParallelTools {
+		result["disable_parallel_tool_use"] = true
+	}
+	return result
+}
+
+func anthropicToolChoiceMatchesTools(request kernel.NormalizedRequest) bool {
+	if !request.ToolChoice.Set || request.ToolChoice.Mode != "tool" {
+		return true
+	}
+	for _, tool := range request.Tools {
+		name := tool.Name
+		if tool.Function != nil {
+			if functionName, ok := tool.Function["name"].(string); ok && functionName != "" {
+				name = functionName
+			}
+		}
+		if name == request.ToolChoice.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func anthropicPromptLayersRepresentable(request kernel.NormalizedRequest) bool {
@@ -395,6 +453,12 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 		}
 		if len(request.Tools) > 0 {
 			body["tools"] = anthropicTools(request.Tools)
+		}
+		if request.ToolChoice.Set {
+			if !anthropicToolChoiceRepresentable(request.ToolChoice) || !anthropicToolChoiceMatchesTools(request) {
+				return kernel.UpstreamRequest{}, fmt.Errorf("Anthropic codec cannot represent tool choice %q", request.ToolChoice.Mode)
+			}
+			body["tool_choice"] = anthropicToolChoice(request.ToolChoice)
 		}
 	}
 	body["model"] = route.ExternalModel

@@ -58,6 +58,57 @@ func TestEndpointWinsOverBodyHeuristic(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesNormalizeToTypedConversationToolsAndOptions(t *testing.T) {
+	result, err := JSON("/v1/messages", http.Header{}, []byte(`{
+"model":"role","max_tokens":512,"temperature":0.2,"top_p":0.9,"stop_sequences":["done"],
+"system":[{"type":"text","text":"Follow policy."}],
+"tools":[{"name":"lookup","description":"Look up information","input_schema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}],
+"tool_choice":{"type":"tool","name":"lookup","disable_parallel_tool_use":true},
+"messages":[
+ {"role":"user","content":[{"type":"text","text":"Find weather."}]},
+ {"role":"assistant","content":[{"type":"text","text":"Checking."},{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"weather"}}]},
+ {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"Sunny."}]}
+]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := result.Request
+	if request.SourceFormat != FormatAnthropic || len(request.Prompt.Layers) != 1 || len(request.Prompt.Layers[0].Parts) != 1 || request.Prompt.Layers[0].Parts[0].Text != "Follow policy." {
+		t.Fatalf("Anthropic system prompt normalization=%#v", request.Prompt)
+	}
+	if len(request.Tools) != 1 || request.Tools[0].Name != "lookup" || request.Tools[0].Function["parameters"] == nil {
+		t.Fatalf("Anthropic tools normalization=%#v", request.Tools)
+	}
+	if request.ToolChoice.Mode != "tool" || request.ToolChoice.Name != "lookup" || !request.ToolChoice.DisableParallelTools {
+		t.Fatalf("Anthropic tool choice normalization=%#v", request.ToolChoice)
+	}
+	if request.Generation.MaxOutputTokens == nil || *request.Generation.MaxOutputTokens != 512 || request.Generation.Temperature == nil || *request.Generation.Temperature != 0.2 || request.Generation.TopP == nil || *request.Generation.TopP != 0.9 || len(request.Generation.StopSequences) != 1 || request.Generation.StopSequences[0] != "done" {
+		t.Fatalf("Anthropic generation options normalization=%#v", request.Generation)
+	}
+	if len(request.Messages) != 3 || request.Messages[1].Role != "assistant" || len(request.Messages[1].ToolCalls) != 1 || request.Messages[1].ToolCalls[0].ID != "call_1" || request.Messages[2].Role != "tool" || request.Messages[2].ToolCallID != "call_1" || request.Messages[2].Content != "Sunny." {
+		t.Fatalf("Anthropic tool-use history normalization=%#v", request.Messages)
+	}
+	if len(request.UnsupportedFacets) != 0 {
+		t.Fatalf("representable Anthropic request marked unsupported: %v", request.UnsupportedFacets)
+	}
+}
+
+func TestAnthropicOpaqueThinkingAndToolResultErrorsBecomeExplicitFacets(t *testing.T) {
+	result, err := JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":128,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"private","signature":"issuer-signature"},{"type":"tool_use","id":"call_1","name":"lookup","input":{}},{"type":"text","text":"trailing text"}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"failed","is_error":true}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, facet := range result.Request.UnsupportedFacets {
+		got[facet] = true
+	}
+	for _, required := range []string{"reasoning.signature", "tools.block_order", "tools.result_status"} {
+		if !got[required] {
+			t.Errorf("unsupported Anthropic semantic %q was not retained: %v", required, result.Request.UnsupportedFacets)
+		}
+	}
+}
+
 func TestStreamingDefaultsToNonStreamAndHonorsExplicitChoice(t *testing.T) {
 	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"} {
 		result, err := Map(path, http.Header{}, map[string]any{"model": "model-a", "messages": []any{}})

@@ -31,8 +31,14 @@ const (
 	FacetPromptLayers            = "prompt.layers"
 	FacetToolDefinitions         = "tools.definitions"
 	FacetToolHistory             = "tools.history"
+	FacetToolChoice              = "tools.choice"
 	FacetReasoningIntent         = "reasoning.intent"
+	FacetReasoningSignature      = "reasoning.signature"
 	FacetContinuity              = "continuity.previous_response"
+	FacetOpaqueContent           = "content.opaque"
+	FacetToolResultStatus        = "tools.result_status"
+	FacetToolBlockOrder          = "tools.block_order"
+	FacetClientMetadata          = "client.metadata"
 	FacetVisionInput             = "input.vision"
 	FacetAudioInput              = "input.audio"
 	FacetVideoInput              = "input.video"
@@ -176,6 +182,9 @@ func RequiredRequestFacets(request NormalizedRequest) []string {
 	if len(request.Tools) > 0 {
 		required = append(required, FacetToolDefinitions)
 	}
+	if request.ToolChoice.Set {
+		required = append(required, FacetToolChoice)
+	}
 	if requestHasToolHistory(request.Messages) {
 		required = append(required, FacetToolHistory)
 	}
@@ -202,9 +211,10 @@ func RequiredRequestFacets(request NormalizedRequest) []string {
 			required = append(required, OperationArtifactFacet(artifact.Role))
 		}
 	}
-	if hasGenerationOptions(request.Raw) {
+	if request.Generation.HasOptions() || hasGenerationOptions(request.Raw, request.SourceFormat) {
 		required = append(required, FacetGenerationOptions)
 	}
+	required = append(required, request.UnsupportedFacets...)
 	return uniqueSorted(required)
 }
 
@@ -248,12 +258,17 @@ func uniqueEventKinds(events []ResponseEventKind) []ResponseEventKind {
 	return result
 }
 
-func hasGenerationOptions(raw map[string]any) bool {
+func hasGenerationOptions(raw map[string]any, format normalize.Format) bool {
 	structural := map[string]bool{
 		"model": true, "stream": true, "messages": true, "input": true, "contents": true,
 		"tools": true, "reasoning_effort": true, "thinking": true, "reasoning": true,
 		"conversation_id": true, "response_id": true, "previous_response_id": true,
 		"operationPayload": true,
+	}
+	if format == normalize.FormatAnthropic {
+		for _, key := range []string{"system", "tool_choice", "max_tokens", "temperature", "top_p", "stop_sequences", "metadata"} {
+			structural[key] = true
+		}
 	}
 	for key := range raw {
 		if !structural[key] {

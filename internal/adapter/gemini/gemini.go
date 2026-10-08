@@ -62,6 +62,13 @@ func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []k
 			} else {
 				mapping.Reason = "tool history lacks a representable role, function name or JSON-object arguments"
 			}
+		case kernel.FacetToolChoice:
+			if geminiToolChoiceRepresentable(request.Raw) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "OpenAI tool choice is mapped to Gemini function-calling configuration"
+			} else {
+				mapping.Reason = "tool choice has no declared Gemini function-calling mapping"
+			}
 		case kernel.FacetReasoningIntent:
 			if _, err := geminiThinkingConfigFor(request.Thinking); err == nil {
 				mapping.Disposition = kernel.FacetTranslated
@@ -234,6 +241,19 @@ func geminiGenerationOptionsRepresentable(raw map[string]any) bool {
 		}
 	}
 	return true
+}
+
+func geminiToolChoiceRepresentable(raw map[string]any) bool {
+	value, exists := raw["tool_choice"]
+	if !exists || value == nil {
+		return true
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	_, err = geminiToolMode(encoded)
+	return err == nil
 }
 
 type responseDecoder struct{ adapter Gemini }

@@ -12,6 +12,21 @@ import (
 func CloneRequest(request Request) Request {
 	clone := request
 	clone.OperationPayload = append(json.RawMessage(nil), request.OperationPayload...)
+	if request.Generation.MaxOutputTokens != nil {
+		value := *request.Generation.MaxOutputTokens
+		clone.Generation.MaxOutputTokens = &value
+	}
+	if request.Generation.Temperature != nil {
+		value := *request.Generation.Temperature
+		clone.Generation.Temperature = &value
+	}
+	if request.Generation.TopP != nil {
+		value := *request.Generation.TopP
+		clone.Generation.TopP = &value
+	}
+	clone.Generation.StopSequences = append([]string(nil), request.Generation.StopSequences...)
+	clone.Generation.Unsupported = append([]string(nil), request.Generation.Unsupported...)
+	clone.UnsupportedFacets = append([]string(nil), request.UnsupportedFacets...)
 	clone.Artifacts = make([]extensions.ArtifactRef, len(request.Artifacts))
 	for i, artifact := range request.Artifacts {
 		clone.Artifacts[i] = artifact.Clone()

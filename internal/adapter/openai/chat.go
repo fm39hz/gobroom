@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ func (c chatRequestCodec) Prepare(ctx context.Context, request kernel.Normalized
 
 func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat normalize.Format) []kernel.FacetMapping {
 	native := input.Request.SourceFormat == nativeFormat
+	anthropic := input.Request.SourceFormat == normalize.FormatAnthropic
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
 		if kernel.IsResponseCompatibilityFacet(facet) {
@@ -39,14 +41,150 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Chat request codec has no declared mapping for this input facet"}
 		if native {
 			switch facet {
-			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetReasoningIntent, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Chat request is forwarded in its native wire contract"
+			}
+		} else if anthropic {
+			mapping.Disposition = kernel.FacetUnsupported
+			mapping.Reason = "Anthropic request semantics are not represented by the OpenAI Chat codec"
+			switch facet {
+			case kernel.FacetWireRequest:
+				mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Anthropic Messages envelopes are rebuilt from typed request IR"
+			case kernel.FacetPromptLayers:
+				if openAIAnthropicPromptRepresentable(input.Request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "text system blocks are encoded as OpenAI Chat system messages"
+				}
+			case kernel.FacetToolDefinitions:
+				if openAIAnthropicToolsRepresentable(input.Request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Anthropic input schemas are encoded as OpenAI function declarations"
+				}
+			case kernel.FacetToolHistory:
+				if openAIAnthropicHistoryRepresentable(input.Request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "tool_use/tool_result history is mapped to assistant tool_calls and tool messages"
+				}
+			case kernel.FacetToolChoice:
+				if openAIAnthropicToolChoiceRepresentable(input.Request.ToolChoice) && openAIAnthropicToolChoiceMatchesTools(input.Request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Anthropic tool choice is mapped to OpenAI Chat tool_choice"
+				}
+			case kernel.FacetGenerationOptions:
+				if openAIAnthropicGenerationRepresentable(input.Request.Generation) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "common token, temperature, top-p and stop options are encoded as OpenAI Chat fields"
+				}
+			case kernel.FacetVisionInput:
+				if openAIAnthropicContentRepresentable(input.Request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Anthropic base64/URL image sources are encoded as OpenAI image_url parts"
+				}
 			}
 		}
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func openAIAnthropicPromptRepresentable(request kernel.NormalizedRequest) bool {
+	for _, layer := range request.Prompt.Layers {
+		if len(layer.Parts) == 0 {
+			continue
+		}
+		for _, part := range layer.Parts {
+			if part.Type != "text" || part.Metadata["cache_control"] != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func openAIAnthropicToolsRepresentable(request kernel.NormalizedRequest) bool {
+	for _, unsupported := range request.UnsupportedFacets {
+		if unsupported == kernel.FacetToolDefinitions {
+			return false
+		}
+	}
+	for _, tool := range request.Tools {
+		name := tool.Name
+		if tool.Function != nil {
+			if value, ok := tool.Function["name"].(string); ok && value != "" {
+				name = value
+			}
+		}
+		if strings.TrimSpace(name) == "" || tool.Function == nil || tool.Function["parameters"] == nil {
+			return false
+		}
+	}
+	return true
+}
+
+func openAIAnthropicHistoryRepresentable(request kernel.NormalizedRequest) bool {
+	for _, facet := range request.UnsupportedFacets {
+		if facet == kernel.FacetToolHistory || facet == kernel.FacetReasoningSignature || facet == kernel.FacetToolResultStatus || facet == kernel.FacetToolBlockOrder || facet == kernel.FacetOpaqueContent {
+			return false
+		}
+	}
+	return openAIAnthropicContentRepresentable(request)
+}
+
+func openAIAnthropicToolChoiceRepresentable(choice normalize.ToolChoice) bool {
+	if !choice.Set {
+		return true
+	}
+	switch choice.Mode {
+	case "auto", "any", "none":
+		return choice.Name == ""
+	case "tool":
+		return strings.TrimSpace(choice.Name) != ""
+	default:
+		return false
+	}
+}
+
+func openAIAnthropicToolChoiceMatchesTools(request kernel.NormalizedRequest) bool {
+	if !request.ToolChoice.Set || request.ToolChoice.Mode != "tool" {
+		return true
+	}
+	for _, tool := range request.Tools {
+		name := tool.Name
+		if tool.Function != nil {
+			if value, ok := tool.Function["name"].(string); ok && value != "" {
+				name = value
+			}
+		}
+		if name == request.ToolChoice.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIAnthropicGenerationRepresentable(options normalize.GenerationOptions) bool {
+	if len(options.Unsupported) > 0 {
+		return false
+	}
+	if options.MaxOutputTokens != nil && *options.MaxOutputTokens <= 0 {
+		return false
+	}
+	if options.Temperature != nil && (*options.Temperature < 0 || *options.Temperature > 2) {
+		return false
+	}
+	if options.TopP != nil && (*options.TopP < 0 || *options.TopP > 1) {
+		return false
+	}
+	return true
+}
+
+func openAIAnthropicContentRepresentable(request kernel.NormalizedRequest) bool {
+	for _, message := range request.Messages {
+		if _, err := openAIChatContent(message.Content); err != nil {
+			return false
+		}
+		for _, call := range message.ToolCalls {
+			if call.ID == "" || strings.TrimSpace(call.Name) == "" {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 type chatResponseDecoder struct{ adapter Chat }
@@ -93,19 +231,36 @@ func (Chat) DecodeResponse(ctx context.Context, response kernel.UpstreamResponse
 
 func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	url := "/chat/completions"
-	body := map[string]any{}
-	for key, value := range request.Raw {
-		body[key] = value
-	}
-	body["model"] = route.ExternalModel
-	body["stream"] = request.Stream
-	if len(request.Messages) > 0 {
-		messages := make([]kernel.Message, 0, len(request.Messages)+len(request.Prompt.Layers))
-		for _, layer := range request.Prompt.Layers {
-			messages = append(messages, kernel.Message{Role: layer.Role, Content: layer.Text})
+	var body map[string]any
+	if request.SourceFormat == normalize.FormatOpenAIChat {
+		body = make(map[string]any, len(request.Raw)+2)
+		for key, value := range request.Raw {
+			body[key] = value
 		}
-		messages = append(messages, request.Messages...)
-		body["messages"] = messages
+		body["model"] = route.ExternalModel
+		body["stream"] = request.Stream
+		if len(request.Messages) > 0 {
+			messages := make([]kernel.Message, 0, len(request.Messages)+len(request.Prompt.Layers))
+			for _, layer := range request.Prompt.Layers {
+				messages = append(messages, kernel.Message{Role: layer.Role, Content: layer.Text})
+			}
+			messages = append(messages, request.Messages...)
+			body["messages"] = messages
+		}
+	} else if request.SourceFormat == normalize.FormatAnthropic {
+		if len(request.UnsupportedFacets) > 0 {
+			return kernel.UpstreamRequest{}, fmt.Errorf("Anthropic request contains unsupported semantic facets: %s", strings.Join(request.UnsupportedFacets, ", "))
+		}
+		if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" || request.Thinking.Effort != "" || request.Thinking.BudgetTokens > 0 {
+			return kernel.UpstreamRequest{}, fmt.Errorf("OpenAI Chat codec cannot translate Anthropic thinking intent without a declared provider capability")
+		}
+		var err error
+		body, err = encodeAnthropicRequestAsOpenAIChat(request, route.ExternalModel)
+		if err != nil {
+			return kernel.UpstreamRequest{}, err
+		}
+	} else {
+		return kernel.UpstreamRequest{}, fmt.Errorf("OpenAI Chat codec cannot encode client format %q", request.SourceFormat)
 	}
 	data, err := json.Marshal(body)
 	if err != nil {

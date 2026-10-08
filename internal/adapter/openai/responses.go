@@ -29,7 +29,7 @@ func (c responsesRequestCodec) DescribeCompatibility(input kernel.CompatibilityC
 		}
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Responses request codec cannot safely translate this facet from the client contract"}
 		switch {
-		case native && (facet == kernel.FacetWireRequest || facet == kernel.FacetPromptLayers || facet == kernel.FacetToolDefinitions || facet == kernel.FacetToolHistory || facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity || facet == kernel.FacetVisionInput || facet == kernel.FacetAudioInput || facet == kernel.FacetVideoInput || facet == kernel.FacetDocumentInput || facet == kernel.FacetGenerationOptions):
+		case native && (facet == kernel.FacetWireRequest || facet == kernel.FacetPromptLayers || facet == kernel.FacetToolDefinitions || facet == kernel.FacetToolHistory || facet == kernel.FacetToolChoice || facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity || facet == kernel.FacetVisionInput || facet == kernel.FacetAudioInput || facet == kernel.FacetVideoInput || facet == kernel.FacetDocumentInput || facet == kernel.FacetGenerationOptions):
 			mapping.Disposition = kernel.FacetPreserved
 			mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
 		case !native && (facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity):

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
@@ -16,7 +17,7 @@ import (
 
 func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	adapter := NewAdapter()
-	request := normalize.Request{Model: "public", Stream: true, Raw: map[string]any{"model": "public", "messages": []any{map[string]any{"role": "user", "content": "hi"}}}}
+	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Stream: true, Raw: map[string]any{"model": "public", "messages": []any{map[string]any{"role": "user", "content": "hi"}}}}
 	route := kernel.Route{ID: "route:test", BaseURL: "https://provider.example/v1", ExternalModel: "upstream-model", Enabled: true}
 	prepared, err := adapter.Prepare(context.Background(), request, route, kernel.Credential{Secret: "secret"})
 	if err != nil {
@@ -79,7 +80,7 @@ func TestOpenAIChatDecoderRendersAnthropicMessagesFromSemanticEvents(t *testing.
 }
 
 func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
-	request := normalize.Request{Model: "public", Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
+	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
 	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
 	if err != nil {
 		t.Fatal(err)
@@ -204,3 +205,112 @@ func TestChatJSONRendererPreservesBodyAndEmitsText(t *testing.T) {
 		t.Fatalf("events=%#v", events)
 	}
 }
+
+func TestAnthropicMessagesRequestMapsToOpenAIChatFromTypedIR(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{
+"model":"junior","max_tokens":512,"temperature":0.2,"top_p":0.9,"stop_sequences":["stop"],
+"system":[{"type":"text","text":"Be concise."}],
+"tools":[{"name":"lookup","description":"Search","input_schema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"]}}],
+"tool_choice":{"type":"tool","name":"lookup"},
+"messages":[{"role":"user","content":[{"type":"text","text":"Check weather."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},
+{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"weather"}}]},
+{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"Sunny."}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	plan := composed.PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}})
+	if !plan.Supported || plan.Fidelity != kernel.FidelityTranslated {
+		t.Fatalf("representable Anthropic request was not admitted: %#v", plan)
+	}
+	route := kernel.Route{ID: "openai-route", BaseURL: "https://provider.test/v1", ExternalModel: "upstream-model", Enabled: true}
+	prepared, err := composed.Prepare(context.Background(), parsed.Request, route, kernel.Credential{Secret: "credential"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["model"] != "upstream-model" || body["stream"] != false || body["max_tokens"] != float64(512) || body["temperature"] != 0.2 || body["top_p"] != 0.9 {
+		t.Fatalf("translated OpenAI request options=%#v", body)
+	}
+	if stop, ok := body["stop"].([]any); !ok || len(stop) != 1 || stop[0] != "stop" {
+		t.Fatalf("translated stop sequences=%#v", body["stop"])
+	}
+	if choice, ok := body["tool_choice"].(map[string]any); !ok || choice["type"] != "function" || choice["function"].(map[string]any)["name"] != "lookup" {
+		t.Fatalf("translated tool choice=%#v", body["tool_choice"])
+	}
+	messages, ok := body["messages"].([]any)
+	if !ok || len(messages) != 4 {
+		t.Fatalf("translated messages=%#v", body["messages"])
+	}
+	if messages[0].(map[string]any)["role"] != "system" || messages[0].(map[string]any)["content"] != "Be concise." {
+		t.Fatalf("translated system prompt=%#v", messages[0])
+	}
+	userParts := messages[1].(map[string]any)["content"].([]any)
+	imageURL := userParts[1].(map[string]any)["image_url"].(map[string]any)["url"]
+	if imageURL != "data:image/png;base64,aGVsbG8=" {
+		t.Fatalf("translated Anthropic image source=%#v", userParts[1])
+	}
+	assistant := messages[2].(map[string]any)
+	calls := assistant["tool_calls"].([]any)
+	function := calls[0].(map[string]any)["function"].(map[string]any)
+	if function["name"] != "lookup" || function["arguments"] != `{"q":"weather"}` {
+		t.Fatalf("translated tool call=%#v", calls[0])
+	}
+	toolResult := messages[3].(map[string]any)
+	if toolResult["role"] != "tool" || toolResult["tool_call_id"] != "call_1" || toolResult["content"] != "Sunny." {
+		t.Fatalf("translated tool result=%#v", toolResult)
+	}
+}
+
+func TestAnthropicThinkingIntentIsRejectedByOpenAIChatCompatibilityBeforeEncoding(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"junior","max_tokens":512,"thinking":{"type":"enabled","budget_tokens":2000},"messages":[{"role":"user","content":"think"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	plan := composed.PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}})
+	if plan.Supported || plan.Fidelity != kernel.FidelityUnsupported {
+		t.Fatalf("unmapped Anthropic thinking budget was admitted to OpenAI Chat: %#v", plan)
+	}
+}
+
+func TestKernelExcludesOpenAIChatRouteForAnthropicThinkingBeforeDispatch(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":1024,"thinking":{"type":"enabled","budget_tokens":2048},"messages":[{"role":"user","content":"reason carefully"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "openai-route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{ID: "openai-route", Enabled: true, BaseURL: "http://provider.test/v1", ExternalModel: "model", OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}},
+		}}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dispatched atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		dispatched.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})}}
+	gateway, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	gateway.Adapters["openai-chat"] = composed
+	writer := httptest.NewRecorder()
+	err = gateway.Execute(context.Background(), parsed.Request, kernel.Credential{}, writer)
+	if err == nil || dispatched.Load() != 0 {
+		t.Fatalf("unmapped Anthropic thinking intent reached OpenAI Chat: err=%v dispatches=%d", err, dispatched.Load())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }

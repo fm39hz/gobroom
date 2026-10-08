@@ -33,11 +33,14 @@ type Request struct {
 	Messages                 []Message                `json:"messages,omitempty"`
 	Prompt                   PromptPlan               `json:"prompt,omitempty"`
 	Tools                    []Tool                   `json:"tools,omitempty"`
+	ToolChoice               ToolChoice               `json:"toolChoice,omitempty"`
+	Generation               GenerationOptions        `json:"generation,omitempty"`
 	Thinking                 ThinkingIntent           `json:"thinking,omitempty"`
 	Session                  SessionContext           `json:"-"`
 	Continuity               ContinuityState          `json:"-"`
 	Modalities               Modalities               `json:"-"`
 	Requirements             []FeatureRequirement     `json:"-"`
+	UnsupportedFacets        []string                 `json:"-"`
 	Transport                TransportHints           `json:"-"`
 	Extensions               map[string]any           `json:"-"`
 	Raw                      map[string]any           `json:"-"`
@@ -146,6 +149,27 @@ type Tool struct {
 	Name     string         `json:"name,omitempty"`
 	Function map[string]any `json:"function,omitempty"`
 	Metadata map[string]any `json:"-"`
+}
+
+type ToolChoice struct {
+	Mode                 string
+	Name                 string
+	DisableParallelTools bool
+	Set                  bool
+}
+
+// GenerationOptions is the typed subset shared across request dialects.
+// Unsupported source options remain explicit so adapters can fail closed.
+type GenerationOptions struct {
+	MaxOutputTokens *int
+	Temperature     *float64
+	TopP            *float64
+	StopSequences   []string
+	Unsupported     []string
+}
+
+func (o GenerationOptions) HasOptions() bool {
+	return o.MaxOutputTokens != nil || o.Temperature != nil || o.TopP != nil || len(o.StopSequences) > 0 || len(o.Unsupported) > 0
 }
 
 type ThinkingIntent struct {
