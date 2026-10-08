@@ -85,6 +85,70 @@ func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 	}
 }
 
+func TestProviderOperationBindsOnlyValidIdempotencyHeaderNames(t *testing.T) {
+	runtime, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition, ok := runtime.Primitives.Definition("openai-compatible-chat")
+	if !ok {
+		t.Fatal("built-in generic provider definition missing")
+	}
+	replayTask := extensions.Ref{Kind: "operation", ID: "job.submit.idempotent", ContractVersion: 1}
+	if err := runtime.Primitives.Operations.RegisterRawPayload(replayTask, "Submit idempotent job", "Idempotent provider operation fixture.", json.RawMessage(`{"type":"object"}`), operations.ReplayWithKey); err != nil {
+		t.Fatal(err)
+	}
+	definition.ID = "idempotency-header-fixture"
+	definition.Operations = cloneOperationBindings(definition.Operations)
+	binding := definition.Operations[OperationChat]
+	binding.TaskRef = &replayTask
+	binding.IdempotencyHeader = "Idempotency-Key"
+	definition.Operations[OperationChat] = binding
+	encoded, err := EncodeProviderDefinitionJSON(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeProviderDefinitionJSON(encoded)
+	if err != nil || decoded.Operations[OperationChat].IdempotencyHeader != "Idempotency-Key" {
+		t.Fatalf("provider definition lost idempotency header through JSON: %q err=%v", decoded.Operations[OperationChat].IdempotencyHeader, err)
+	}
+	if err := runtime.Primitives.RegisterDefinition(definition); err != nil {
+		t.Fatalf("valid idempotency header rejected: %v", err)
+	}
+	runtimeBinding, err := NewRuntimeBindingBuilder(runtime).Build(definition.ID, OperationChat)
+	if err != nil || runtimeBinding.IdempotencyHeader != "Idempotency-Key" {
+		t.Fatalf("runtime idempotency header=%q err=%v", runtimeBinding.IdempotencyHeader, err)
+	}
+	nonReplayable := definition
+	nonReplayable.ID = "idempotency-header-without-replay-contract"
+	nonReplayable.Operations = cloneOperationBindings(definition.Operations)
+	binding = nonReplayable.Operations[OperationChat]
+	binding.TaskRef = OperationRef(normalize.OperationChatGenerate, 1)
+	nonReplayable.Operations[OperationChat] = binding
+	if err := runtime.Primitives.RegisterDefinition(nonReplayable); err == nil {
+		t.Fatal("provider idempotency header overrode the operation's replay contract")
+	}
+	for index, header := range []string{"Bad Header\r\nInjected: yes", "Authorization"} {
+		invalid := definition
+		invalid.ID = fmt.Sprintf("invalid-idempotency-header-fixture-%d", index)
+		invalid.Operations = cloneOperationBindings(definition.Operations)
+		binding = invalid.Operations[OperationChat]
+		binding.IdempotencyHeader = header
+		invalid.Operations[OperationChat] = binding
+		if err := runtime.Primitives.RegisterDefinition(invalid); err == nil {
+			t.Fatalf("invalid idempotency header was accepted: %q", header)
+		}
+	}
+}
+
+func cloneOperationBindings(bindings map[Operation]OperationBinding) map[Operation]OperationBinding {
+	cloned := make(map[Operation]OperationBinding, len(bindings))
+	for operation, binding := range bindings {
+		cloned[operation] = binding
+	}
+	return cloned
+}
+
 func TestPrimitiveRegistryRejectsUnknownPrimitiveAndDuplicateDefinition(t *testing.T) {
 	r := NewPrimitiveRegistry()
 	if err := r.RegisterDefinition(ProviderDefinition{ContractVersion: 1, ID: "bad", Version: "1", DisplayName: "Bad", Operations: map[Operation]OperationBinding{OperationChat: {Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "missing", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "missing", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "missing", ContractVersion: 1}}}}); err == nil {

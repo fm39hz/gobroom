@@ -52,6 +52,10 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/kernel -run '^TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease$$' -count=1
 	go test ./internal/kernel -run '^TestResponseTransformCannotRewriteArtifactReference$$' -count=1
 	go test ./internal/kernel -run '^TestResponseTransformDoesNotRewriteProviderUsageAccounting$$' -count=1
+	go test ./internal/normalize -run '^TestIdempotencyKeyIsRequestScopedAndValidated$$' -count=1
+	go test ./internal/provider -run '^TestProviderOperationBindsOnlyValidIdempotencyHeaderNames$$' -count=1
+	go test ./internal/controlplane -run '^TestLoaderBuildsTypedPhysicalAndComboGraph$$' -count=1
+	go test ./internal/kernel -run '^(TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader|TestReplayWithKeyNeverFallsBackAcrossIssuerAfterAmbiguousRetry|TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch)$$' -count=1
 	go test ./internal/operations ./internal/kernel -run '^(TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode|TestComposedSemanticPipelineBoundsEachDecodedResponseEvent|TestResponseCommitWriterEnforcesOperationOutputBound)$$' -count=1
 	go test ./internal/extensions ./internal/operations -run '^(TestArtifactContractEnforcesOwnerScopeSensitivityAndBoundedBodyRef|TestOperationAcceptsOnlyRegisteredOwnedArtifacts)$$' -count=1
 	go test ./internal/artifacts -run '^(TestFileStoreStreamsBoundedOwnerScopedLeases|TestFileStoreEnforcesPerBodyTotalAndContextBounds|TestFileStorePrunesExpiredBodyReferences|TestContextArtifactAccessRequiresExactRecipientAndPolicy)$$' -count=1

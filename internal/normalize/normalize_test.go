@@ -2,6 +2,7 @@ package normalize
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,22 @@ func TestResponsesNormalizesToSemanticMessages(t *testing.T) {
 	}
 	if result.Request.SourceFormat != FormatOpenAIResponses || len(result.Request.Messages) != 1 || result.Request.Messages[0].Role != "user" {
 		t.Fatalf("unexpected result: %#v", result.Request)
+	}
+}
+
+func TestIdempotencyKeyIsRequestScopedAndValidated(t *testing.T) {
+	headers := http.Header{"Idempotency-Key": []string{"client-key-01"}}
+	result, err := Map("/v1/chat/completions", headers, map[string]any{"model": "m", "messages": []any{map[string]any{"role": "user", "content": "hello"}}})
+	if err != nil || result.Request.Transport.IdempotencyKey != "client-key-01" {
+		t.Fatalf("idempotency key=%q err=%v", result.Request.Transport.IdempotencyKey, err)
+	}
+	for _, invalid := range []string{"invalid\r\nX-Injected: yes", strings.Repeat("x", 256)} {
+		if _, err := Map("/v1/chat/completions", http.Header{"Idempotency-Key": []string{invalid}}, map[string]any{"model": "m"}); err == nil {
+			t.Fatalf("invalid idempotency key was accepted: %q", invalid)
+		}
+	}
+	if _, err := Map("/v1/chat/completions", http.Header{"Idempotency-Key": []string{"first", "second"}}, map[string]any{"model": "m"}); err == nil {
+		t.Fatal("duplicate Idempotency-Key headers were accepted")
 	}
 }
 

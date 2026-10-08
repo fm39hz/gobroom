@@ -22,12 +22,20 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	if strings.TrimSpace(model) == "" {
 		return Result{}, fmt.Errorf("model is required")
 	}
+	idempotencyValues := headers.Values("Idempotency-Key")
+	if len(idempotencyValues) > 1 {
+		return Result{}, fmt.Errorf("Idempotency-Key must be supplied at most once")
+	}
+	idempotencyKey, err := clientIdempotencyKey(headers.Get("Idempotency-Key"))
+	if err != nil {
+		return Result{}, err
+	}
 
 	r := Request{
 		Model: model, Operation: OperationChatGenerate, OperationContractVersion: 1, SourceFormat: format, Stream: boolValue(body["stream"], false),
 		Tools: normalizeTools(body["tools"], format), ToolChoice: normalizeToolChoice(body["tool_choice"], format),
 		Generation: normalizeGenerationOptions(body, format), Extensions: map[string]any{}, Raw: body,
-		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id")},
+		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id"), IdempotencyKey: idempotencyKey},
 	}
 	if format == FormatAnthropic {
 		r.Messages, r.UnsupportedFacets = normalizeAnthropicMessages(body)
@@ -75,6 +83,22 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	}
 	normalizeToolCalls(&r)
 	return Result{Request: r, ReceivedAt: time.Now()}, nil
+}
+
+func clientIdempotencyKey(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", nil
+	}
+	if len(value) > 255 {
+		return "", fmt.Errorf("Idempotency-Key exceeds 255 bytes")
+	}
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x21 || value[index] > 0x7e {
+			return "", fmt.Errorf("Idempotency-Key contains unsupported characters")
+		}
+	}
+	return value, nil
 }
 
 func inlinePromptPlan(messages []Message) PromptPlan {

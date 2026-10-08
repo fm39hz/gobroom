@@ -19,6 +19,7 @@ type RuntimeBinding struct {
 	DefinitionRef       extensions.Ref
 	Operation           Operation
 	TaskRef             extensions.Ref
+	IdempotencyHeader   string
 	Protocol            kernel.Protocol
 	ProviderFormat      normalize.Format
 	EndpointID          string
@@ -301,7 +302,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	} else if binding.RequestCodec.ID != "" {
 		return RuntimeBinding{}, fmt.Errorf("provider %q %q inference binding requires a semantic task ref", definitionID, operation)
 	}
-	result := RuntimeBinding{DefinitionID: definitionID, DefinitionRef: ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation: operation, TaskRef: taskRef, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, EndpointRef: extensionRef(binding.Endpoint), Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, TransportRef: extensionRef(binding.Transport), Transport: transport, RequestCodecID: binding.RequestCodec.ID, RequestCodecOptions: append(json.RawMessage(nil), binding.RequestCodecOptions...), ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageSourceRef: usageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStoreRef: sessionStoreRef, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifierRef: errorClassifierRef, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSourceRef: quotaSourceRef, QuotaEndpointRef: extensionRef(binding.Endpoint), QuotaTransportRef: extensionRef(binding.Transport), QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
+	result := RuntimeBinding{DefinitionID: definitionID, DefinitionRef: ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation: operation, TaskRef: taskRef, IdempotencyHeader: binding.IdempotencyHeader, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, EndpointRef: extensionRef(binding.Endpoint), Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, TransportRef: extensionRef(binding.Transport), Transport: transport, RequestCodecID: binding.RequestCodec.ID, RequestCodecOptions: append(json.RawMessage(nil), binding.RequestCodecOptions...), ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageSourceRef: usageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStoreRef: sessionStoreRef, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifierRef: errorClassifierRef, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSourceRef: quotaSourceRef, QuotaEndpointRef: extensionRef(binding.Endpoint), QuotaTransportRef: extensionRef(binding.Transport), QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
 	if binding.RequestCodec.ID == "" && binding.ResponseDecoder.ID == "" {
 		return result, nil
 	}

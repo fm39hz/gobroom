@@ -162,6 +162,7 @@ func validJSONPointer(path string) bool {
 type OperationBinding struct {
 	Protocol               kernel.Protocol           `json:"protocol,omitempty"`
 	TaskRef                *extensions.Ref           `json:"task,omitempty"`
+	IdempotencyHeader      string                    `json:"idempotencyHeader,omitempty"`
 	ProviderFormat         normalize.Format          `json:"providerFormat,omitempty"`
 	Endpoint               PrimitiveRef              `json:"endpoint"`
 	EndpointOptions        kernel.EndpointOptions    `json:"endpointOptions,omitempty"`
@@ -1155,6 +1156,18 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		if operation == "" || binding.Endpoint.ID == "" || binding.Transport.ID == "" {
 			return fmt.Errorf("provider %q has incomplete %q operation binding", def.ID, operation)
 		}
+		if binding.IdempotencyHeader != "" && !validIdempotencyHeaderName(binding.IdempotencyHeader) {
+			return fmt.Errorf("provider %q %q operation has an invalid idempotency header name", def.ID, operation)
+		}
+		if binding.IdempotencyHeader != "" {
+			if binding.TaskRef == nil || r.Operations == nil {
+				return fmt.Errorf("provider %q %q idempotency header requires an exact replayable task ref", def.ID, operation)
+			}
+			replaySafety, registered := r.Operations.ReplayContract(*binding.TaskRef)
+			if !registered || replaySafety != operations.ReplayWithKey {
+				return fmt.Errorf("provider %q %q idempotency header requires operation %q to declare scoped_idempotency_key", def.ID, operation, binding.TaskRef.Key())
+			}
+		}
 		requestResponseOperation := binding.RequestCodec.ID != "" || binding.ResponseDecoder.ID != ""
 		if requestResponseOperation && (binding.RequestCodec.ID == "" || binding.ResponseDecoder.ID == "") {
 			return fmt.Errorf("provider %q has incomplete %q codec binding", def.ID, operation)
@@ -1235,6 +1248,28 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	}
 	r.definitions[def.ID] = def
 	return nil
+}
+
+func validIdempotencyHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "host", "content-length", "content-type", "transfer-encoding":
+		return false
+	}
+	for _, char := range []byte(name) {
+		if (char >= '0' && char <= '9') || (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') {
+			continue
+		}
+		switch char {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // RegisterDefinitionIfAbsent merges a persisted portable definition with an

@@ -205,6 +205,7 @@ type TransportHints struct {
 	ForceStream           bool
 	TargetFormat          Format
 	PreferredConnectionID string
+	IdempotencyKey        string
 }
 
 type Result struct {

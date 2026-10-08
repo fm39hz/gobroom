@@ -268,6 +268,19 @@ func (r *Registry) Contains(ref extensions.Ref) bool {
 	return exists
 }
 
+func (r *Registry) ReplayContract(ref extensions.Ref) (ReplaySafety, bool) {
+	if r == nil {
+		return "", false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	definition, ok := r.items[ref]
+	if !ok {
+		return "", false
+	}
+	return definition.ReplaySafety, true
+}
+
 func (r *Registry) Seal(catalog *extensions.Snapshot) (*Snapshot, error) {
 	if r == nil || catalog == nil {
 		return nil, fmt.Errorf("operation registry and frozen extension catalog are required")

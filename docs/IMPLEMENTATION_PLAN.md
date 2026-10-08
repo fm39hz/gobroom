@@ -225,8 +225,12 @@ pending.
    failure and accepted-response decode/render failure stop instead of trying a
    second upstream route; `confirmed_rejection_only` may continue after an
    explicitly classified rejection such as 429. Missing effect evidence is
-   unsafe. Remaining: actual issuer-scoped idempotency-key binding, provider
-   operation replay overrides, async job effects, and a real non-chat
+   unsafe. `scoped_idempotency_key` now requires a validated client key plus a
+   provider-operation header binding; the kernel derives a deterministic key
+   scoped to provider definition, node/endpoint, credential, protocol, upstream
+   model and operation, then permits one same-route replay for ambiguous effects
+   only. It never grants cross-issuer fallback. Remaining: real provider
+   idempotency semantics/expiry, async job effects, and a real non-chat
    payload/result through the shared graph executor while preserving the
    pre/post-client-commit boundary.
 6. **C6 — integrated extension proof:** implement SG1–SG7 with a provider module

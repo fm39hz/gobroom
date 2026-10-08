@@ -516,10 +516,17 @@ establishes rejection (for example, a recognized 429); network errors, timeout,
 5xx and unknown effects do not qualify. A 2xx response followed by decode or
 render failure is still an accepted upstream effect, even if no client bytes
 were committed, and does not authorize a duplicate call. `scoped_idempotency_key`
-is usable only when the attempt actually carries a key bound to the same issuer;
-without that proof it fails closed. An idempotency key does not make
-cross-provider fallback idempotent. Replay permission is operation/binding
-specific and is never inherited automatically by image/job/tool execution.
+is usable only when ingress supplies a validated `Idempotency-Key` and the
+selected provider-operation binding declares the upstream header that honors
+it, and registration rejects that header unless the exact operation contract
+declares `scoped_idempotency_key`. Gobroom hashes the client key with the exact provider definition,
+node/endpoint, credential, protocol, upstream model and operation, then retries
+at most once on that same route for an ambiguous transport or explicitly
+retryable unknown-effect response. The derived header is redacted from logs and
+is never stored in usage/config. Missing client proof or provider header
+binding fails closed. An idempotency key does not make cross-provider fallback
+idempotent. Replay permission is operation/binding specific and is never
+inherited automatically by image/job/tool execution.
 An ambiguous outcome reports replay suppression instead of launching a
 potentially duplicate upstream job.
 

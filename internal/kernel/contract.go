@@ -70,6 +70,7 @@ type Route struct {
 type RouteOperationBinding struct {
 	ContractVersion    uint64
 	AdapterIDs         []string
+	IdempotencyHeaders map[string]string
 	ErrorClassifierRef extensions.Ref
 	UsageSourceRef     extensions.Ref
 	UsageOptions       UsageSourceOptions

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync/atomic"
 )
 
@@ -74,6 +75,21 @@ func ValidateSnapshot(s Snapshot) error {
 					return fmt.Errorf("route %q operation %q has an empty adapter ID", id, operation)
 				}
 			}
+			for adapterID, header := range binding.IdempotencyHeaders {
+				if header == "" || !validHTTPHeaderName(header) {
+					return fmt.Errorf("route %q operation %q has an invalid idempotency header", id, operation)
+				}
+				found := false
+				for _, boundAdapterID := range binding.AdapterIDs {
+					if boundAdapterID == adapterID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return fmt.Errorf("route %q operation %q assigns an idempotency header to an unbound adapter", id, operation)
+				}
+			}
 		}
 	}
 	transformBindingIDs := make(map[string]bool, len(s.TransformBindings))
@@ -87,6 +103,28 @@ func ValidateSnapshot(s Snapshot) error {
 		transformBindingIDs[binding.ID] = true
 	}
 	return validateModelGraph(s)
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "host", "content-length", "content-type", "transfer-encoding":
+		return false
+	}
+	for _, char := range []byte(name) {
+		if (char >= '0' && char <= '9') || (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') {
+			continue
+		}
+		switch char {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func ResolvePublicNode(s Snapshot, name string) (ModelNode, error) {

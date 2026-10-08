@@ -79,6 +79,13 @@ func cloneRoute(route Route) Route {
 		bindings := make(map[normalize.Operation]RouteOperationBinding, len(route.OperationBindings))
 		for operation, binding := range route.OperationBindings {
 			binding.AdapterIDs = append([]string(nil), binding.AdapterIDs...)
+			if binding.IdempotencyHeaders != nil {
+				headers := make(map[string]string, len(binding.IdempotencyHeaders))
+				for adapterID, header := range binding.IdempotencyHeaders {
+					headers[adapterID] = header
+				}
+				binding.IdempotencyHeaders = headers
+			}
 			bindings[operation] = binding
 		}
 		route.OperationBindings = bindings

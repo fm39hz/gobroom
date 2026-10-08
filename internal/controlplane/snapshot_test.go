@@ -43,7 +43,7 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.Primitives.Operations.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: "audio.transcribe.v1", ContractVersion: 1}, "Audio transcription", "Transcribe audio input", []byte(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+	if err := registry.Primitives.Operations.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: "audio.transcribe.v1", ContractVersion: 1}, "Audio transcription", "Transcribe audio input", []byte(`{"type":"object","properties":{"audio":{"type":"string","minLength":1}},"required":["audio"],"additionalProperties":false}`), operations.ReplayWithKey); err != nil {
 		t.Fatal(err)
 	}
 	if err := registry.Primitives.RegisterDefinition(provider.ProviderDefinition{ContractVersion: 1, ID: "manifest-selected-provider", Version: "1", DisplayName: "Manifest selected",
@@ -65,12 +65,13 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 				}},
 			},
 			provider.Operation("audio.transcribe.v1"): {
-				Protocol:        kernel.Protocol("vendor.audio.v1"),
-				TaskRef:         provider.OperationRef("audio.transcribe.v1", 1),
-				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
-				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
-				RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "gemini-json", ContractVersion: 1},
-				ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "gemini-json", ContractVersion: 1},
+				Protocol:          kernel.Protocol("vendor.audio.v1"),
+				TaskRef:           provider.OperationRef("audio.transcribe.v1", 1),
+				IdempotencyHeader: "X-Idempotency-Key",
+				Endpoint:          provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:         provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+				RequestCodec:      provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "gemini-json", ContractVersion: 1},
+				ResponseDecoder:   provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "gemini-json", ContractVersion: 1},
 			},
 			provider.OperationQuota: {
 				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -110,7 +111,7 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	}
 	mediaRoute := snapshot.Routes["route:audio"]
 	mediaBinding := mediaRoute.OperationBindings["audio.transcribe.v1"]
-	if mediaRoute.Protocol != "vendor.audio.v1" || len(mediaBinding.AdapterIDs) != 1 || mediaBinding.AdapterIDs[0] != "manifest-selected-provider:audio.transcribe.v1" {
+	if mediaRoute.Protocol != "vendor.audio.v1" || len(mediaBinding.AdapterIDs) != 1 || mediaBinding.AdapterIDs[0] != "manifest-selected-provider:audio.transcribe.v1" || mediaBinding.IdempotencyHeaders["manifest-selected-provider:audio.transcribe.v1"] != "X-Idempotency-Key" {
 		t.Fatalf("namespaced operation binding did not reach the route snapshot: %#v", mediaRoute)
 	}
 	combo := snapshot.Nodes["junior"]

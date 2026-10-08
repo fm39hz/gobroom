@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -366,6 +368,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if adapter == nil {
 				continue
 			}
+			idempotencyHeader := operationBinding.IdempotencyHeaders[adapter.ID()]
+			idempotencyKey := ""
+			if replaySafety == operations.ReplayWithKey && candidateRequest.Transport.IdempotencyKey != "" && idempotencyHeader != "" {
+				idempotencyKey = deriveIssuerIdempotencyKey(candidateRequest.Transport.IdempotencyKey, candidate, operationRef)
+			}
 			var resultProjector operations.ResultProjector
 			if definition, exists := k.Operations.Resolve(operationRef); exists && definition.ResultSchemaRef != nil {
 				projector, projectorErr := k.Operations.NewResultProjector(operationRef)
@@ -424,19 +431,34 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				responseArtifactAccess = &access
 			}
 			refreshed := false
+			idempotencyRetried := false
 		retryUpstream:
 			upstream, err := adapter.Prepare(attemptCtx, candidateRequest, candidate, selectedCredential)
 			if err != nil {
 				k.Scheduler.Release(candidate)
+				if idempotencyRetried {
+					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: err}
+				}
 				failureClass, memberErr = ErrorRetryable, err
 				continue
 			}
+			if idempotencyKey != "" {
+				if upstream.Headers == nil {
+					upstream.Headers = make(http.Header)
+				}
+				upstream.Headers.Set(idempotencyHeader, idempotencyKey)
+			}
 			response, err := adapter.Execute(attemptCtx, upstream)
 			if err != nil {
-				k.Scheduler.Release(candidate)
 				if ctx.Err() != nil {
+					k.Scheduler.Release(candidate)
 					return ctx.Err()
 				}
+				if idempotencyKey != "" && !idempotencyRetried {
+					idempotencyRetried = true
+					goto retryUpstream
+				}
+				k.Scheduler.Release(candidate)
 				failureClass, memberErr = kernelErrorClass(err), err
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Effect: EffectUnknown, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
@@ -459,12 +481,21 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if outcome.Effect == "" {
 					outcome.Effect = inferUpstreamEffect(response.Status, outcome.Cause)
 				}
-				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canReplayAfterDispatch(replaySafety, outcome.Effect) {
+				if idempotencyKey != "" && !idempotencyRetried && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
+					_ = response.Body.Close()
+					idempotencyRetried = true
+					goto retryUpstream
+				}
+				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && !idempotencyRetried)
+				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canRefresh {
 					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
 					if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {
 						_ = response.Body.Close()
 						selectedCredential = refreshedCredential
 						refreshed = true
+						if replaySafety == operations.ReplayWithKey && idempotencyKey != "" {
+							idempotencyRetried = true
+						}
 						goto retryUpstream
 					}
 				}
@@ -857,6 +888,15 @@ func inferUpstreamEffect(status int, cause OutcomeCause) UpstreamEffect {
 
 func canReplayAfterDispatch(safety operations.ReplaySafety, effect UpstreamEffect) bool {
 	return safety == operations.ReplayOnRejection && effect == EffectRejected
+}
+
+func deriveIssuerIdempotencyKey(clientKey string, route Route, operation extensions.Ref) string {
+	hasher := sha256.New()
+	for _, part := range []string{"gobroom/idempotency/v1", clientKey, route.DefinitionRef.Key(), route.NodeID, route.BaseURL, route.CredentialID, route.ExternalModel, string(route.Protocol), operation.Key()} {
+		_, _ = hasher.Write([]byte(part))
+		_, _ = hasher.Write([]byte{0})
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 func kernelErrorClass(err error) ErrorClass {
