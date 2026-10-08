@@ -287,7 +287,7 @@ The compatibility planner admits a lossy mapping only when every reported loss
 ID is granted and not denied, and durable usage records retain the resulting
 fidelity plus each loss's requested/effective values, semantic paths and
 granting model-node sources. The server ceiling is exposed through the
-`compatibility loss-ceiling` CLI and portable config bundle v3, and its changes
+`compatibility loss-ceiling` CLI and portable config bundle v4, and its changes
 participate in bundle dry-run diff.
 
 Reasoning `exact`, `allow_clamp` and `best_effort` bind to this policy as specified
