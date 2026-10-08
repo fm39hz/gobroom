@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
 )
@@ -206,6 +207,36 @@ func TestComposedAdapterRejectsRendererEventMissingFromDecoderContract(t *testin
 		}
 	}
 	t.Fatalf("plan did not retain the missing completion-event reason: %#v", plan)
+}
+
+func TestComposedCompatibilityPlanRetainsTransformAndArtifactStages(t *testing.T) {
+	request := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+	requestTransform := RequestTransformPlanStep{BindingID: "daemon.compress", TransformRef: extensions.Ref{Kind: RequestTransformKind, ID: "compress", ContractVersion: 1}, Scope: daemonTransformScope(), Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}}
+	responseTransform := ResponseTransformPlanStep{BindingID: "route.mask", TransformRef: extensions.Ref{Kind: ResponseTransformKind, ID: "mask", ContractVersion: 1}, Scope: TransformScope{Kind: TransformScopeRoute, ID: "route-a"}, Effects: []ResponseTransformEffect{ResponseEffectText}}
+	artifactTransfer := ArtifactTransfer{TypeRef: extensions.Ref{Kind: extensions.ArtifactKind, ID: "document", ContractVersion: 1}, Role: "source-document", OperationRef: extensions.Ref{Kind: "operation", ID: "chat.generate", ContractVersion: 1}, SourceDomain: "client", TargetProvider: extensions.Ref{Kind: "provider-definition", ID: "fixture", ContractVersion: 1}, ReplayScope: extensions.ArtifactReplayRequest, Sensitivity: extensions.ArtifactPrivate, MediaType: "application/pdf", SizeBytes: 9, BodyLease: true}
+	input := CompatibilityContext{
+		Request: request, Operation: request.Operation,
+		RequestTransformSteps: []RequestTransformPlanStep{requestTransform}, ResponseTransformSteps: []ResponseTransformPlanStep{responseTransform},
+		ArtifactTransfers: []ArtifactTransfer{artifactTransfer},
+	}
+	input.Policy.RequiredFacets = append(RequiredRequestFacets(request), FacetWireResponse)
+	for _, event := range RequiredResponseEvents(request) {
+		input.Policy.RequiredFacets = append(input.Policy.RequiredFacets, ResponseEventFacet(event))
+	}
+	adapter := ComposedAdapter{
+		AdapterID: "compatibility-plan-test", Request: eventDeclarationTestRequest{},
+		Response:       eventDeclarationTestDecoder{events: []ResponseEventKind{EventTextDelta, EventResponseComplete}},
+		Renderers:      map[normalize.Format]ResponseRenderer{normalize.FormatOpenAIChat: eventDeclarationTestRenderer{}},
+		ProviderFormat: normalize.Format("fixture.provider"),
+	}
+	plan := adapter.PlanCompatibility(input)
+	if !plan.Supported || !reflect.DeepEqual(plan.RequestTransformSteps, input.RequestTransformSteps) || !reflect.DeepEqual(plan.ResponseTransformSteps, input.ResponseTransformSteps) || !reflect.DeepEqual(plan.ArtifactTransfers, input.ArtifactTransfers) {
+		t.Fatalf("composed plan dropped execution stages: %#v", plan)
+	}
+	plan.ArtifactTransfers[0].Role = "mutated"
+	if input.ArtifactTransfers[0].Role != "source-document" {
+		t.Fatal("compatibility plan aliases the caller's artifact-transfer slice")
+	}
 }
 
 func TestReplaySafetyAllowsPostDispatchReplayOnlyForConfirmedRejection(t *testing.T) {

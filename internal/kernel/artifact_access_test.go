@@ -16,10 +16,16 @@ import (
 	"github.com/fm39hz/gobroom/internal/operations"
 )
 
-type artifactConsumerAdapter struct{ received string }
+type artifactConsumerAdapter struct {
+	received string
+	planned  *CompatibilityContext
+}
 
 func (a *artifactConsumerAdapter) ID() string { return "artifact-consumer" }
 func (a *artifactConsumerAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	if a.planned != nil {
+		*a.planned = input
+	}
 	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 }
 func (a *artifactConsumerAdapter) Prepare(ctx context.Context, request NormalizedRequest, _ Route, _ Credential) (UpstreamRequest, error) {
@@ -116,7 +122,8 @@ func TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient(t *testing.T)
 	}
 	defer spool.Close()
 	gateway.ArtifactStore = spool
-	adapter := &artifactConsumerAdapter{}
+	var planned CompatibilityContext
+	adapter := &artifactConsumerAdapter{planned: &planned}
 	gateway.Adapters[adapter.ID()] = adapter
 	owner := extensions.ArtifactOwner{Domain: "client", ClientContract: "fixture-multipart"}
 	bodyRef, err := spool.Put(context.Background(), owner, "application/octet-stream", strings.NewReader("private-document"), 64, time.Minute, true)
@@ -134,6 +141,13 @@ func TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient(t *testing.T)
 	}
 	if adapter.received != "private-document" || response.Body.String() != "ok" {
 		t.Fatalf("adapter body=%q response=%q", adapter.received, response.Body.String())
+	}
+	if len(planned.ArtifactTransfers) != 1 {
+		t.Fatalf("compatibility plan omitted authorized artifact transfer: %#v", planned.ArtifactTransfers)
+	}
+	transfer := planned.ArtifactTransfers[0]
+	if transfer.TypeRef != artifactRef || transfer.Role != "source-document" || transfer.OperationRef != operationRef || transfer.SourceDomain != "client" || transfer.TargetProvider != providerRef || transfer.Sensitivity != extensions.ArtifactPrivate || transfer.ReplayScope != extensions.ArtifactReplayRequest || transfer.MediaType != "application/octet-stream" || transfer.SizeBytes != int64(len("private-document")) || !transfer.BodyLease {
+		t.Fatalf("artifact transfer plan=%#v", transfer)
 	}
 	if err := spool.Release(owner, bodyRef); err != nil {
 		t.Fatal(err)

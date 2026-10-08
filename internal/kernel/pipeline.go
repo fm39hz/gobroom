@@ -122,6 +122,10 @@ type ComposedAdapter struct {
 
 func (a ComposedAdapter) ID() string { return a.AdapterID }
 func (a ComposedAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return cloneCompatibilityPlanContext(a.planCompatibility(input), input)
+}
+
+func (a ComposedAdapter) planCompatibility(input CompatibilityContext) CompatibilityPlan {
 	format := input.Request.SourceFormat
 	streaming := input.Request.Stream
 	renderer, ok := a.Renderers[format]

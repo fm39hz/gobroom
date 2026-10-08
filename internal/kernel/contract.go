@@ -354,6 +354,9 @@ type CompatibilityContext struct {
 	Requirements            RequestRequirements
 	Policy                  CompatibilityPolicy
 	ActiveResponseTransform bool
+	RequestTransformSteps   []RequestTransformPlanStep
+	ResponseTransformSteps  []ResponseTransformPlanStep
+	ArtifactTransfers       []ArtifactTransfer
 }
 
 type CompatibilityFidelity string

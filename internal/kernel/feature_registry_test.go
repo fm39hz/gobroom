@@ -126,13 +126,17 @@ func TestFeatureRegistryFailsClosedForUnknownExtension(t *testing.T) {
 }
 
 type featureRouteAdapter struct {
-	id   string
-	used *[]string
-	seen *NormalizedRequest
+	id      string
+	used    *[]string
+	seen    *NormalizedRequest
+	planned *CompatibilityContext
 }
 
 func (a featureRouteAdapter) ID() string { return a.id }
 func (a featureRouteAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	if a.planned != nil {
+		*a.planned = input
+	}
 	return fixtureCompatibilityPlan(input, normalize.FormatAnthropic, FidelityNative)
 }
 func (a featureRouteAdapter) Prepare(_ context.Context, request NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {

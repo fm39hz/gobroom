@@ -193,9 +193,15 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		if adapter == nil {
 			continue
 		}
+		requestTransforms := k.Transforms.Plan(transformBindings, scopes...)
+		responseTransforms := k.ResponseTransforms.Plan(transformBindings, scopes...)
+		operationRef := extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: operationBinding.ContractVersion}
 		compatibilityContext := CompatibilityContext{
 			Request: request, Route: route, Operation: operation, Requirements: requirements,
-			ActiveResponseTransform: k.ResponseTransforms.Active(transformBindings, scopes...),
+			ActiveResponseTransform: len(responseTransforms) > 0,
+			RequestTransformSteps:   requestTransforms,
+			ResponseTransformSteps:  responseTransforms,
+			ArtifactTransfers:       PlanArtifactTransfers(request, operationRef, route.DefinitionRef),
 		}
 		compatibilityContext.Policy.RequiredFacets = RequiredRequestFacets(request)
 		compatibilityContext.Policy.AllowedLosses = append([]string(nil), lossPolicy.AllowedLosses...)
@@ -209,6 +215,7 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		policy := compatibilityContext.Policy
 		policy.RequiredFacets = append(policy.RequiredFacets, FacetWireResponse)
 		plan = ComposeCompatibilityPlan([][]FacetMapping{plan.Mappings}, policy)
+		plan = cloneCompatibilityPlanContext(plan, compatibilityContext)
 		if !plan.Supported || (plan.Fidelity != FidelityNative && plan.Fidelity != FidelityTranslated && plan.Fidelity != FidelityLossy) {
 			continue
 		}

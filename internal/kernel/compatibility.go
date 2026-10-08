@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
@@ -151,11 +152,65 @@ func ValidateLossPolicy(policy LossPolicy) error {
 // request. It records facet-level reasoning instead of collapsing it to a
 // format boolean.
 type CompatibilityPlan struct {
-	Supported bool
-	Fidelity  CompatibilityFidelity
-	Mappings  []FacetMapping
-	Losses    []LossRecord
-	Reason    string
+	Supported              bool
+	Fidelity               CompatibilityFidelity
+	Mappings               []FacetMapping
+	Losses                 []LossRecord
+	RequestTransformSteps  []RequestTransformPlanStep
+	ResponseTransformSteps []ResponseTransformPlanStep
+	ArtifactTransfers      []ArtifactTransfer
+	Reason                 string
+}
+
+// ArtifactTransfer is the request-local, payload-free summary of one
+// operation-authorized artifact handoff to an upstream provider definition.
+type ArtifactTransfer struct {
+	TypeRef        extensions.Ref                 `json:"typeRef"`
+	Role           string                         `json:"role,omitempty"`
+	OperationRef   extensions.Ref                 `json:"operationRef"`
+	SourceDomain   string                         `json:"sourceDomain"`
+	TargetProvider extensions.Ref                 `json:"targetProvider"`
+	ReplayScope    extensions.ArtifactReplayScope `json:"replayScope"`
+	Sensitivity    extensions.ArtifactSensitivity `json:"sensitivity"`
+	MediaType      string                         `json:"mediaType"`
+	SizeBytes      int64                          `json:"sizeBytes"`
+	BodyLease      bool                           `json:"bodyLease,omitempty"`
+}
+
+func PlanArtifactTransfers(request normalize.Request, operationRef extensions.Ref, recipient extensions.Ref) []ArtifactTransfer {
+	result := make([]ArtifactTransfer, 0, len(request.Artifacts))
+	for _, artifact := range request.Artifacts {
+		result = append(result, ArtifactTransfer{
+			TypeRef: artifact.TypeRef, Role: artifact.Role, OperationRef: operationRef,
+			SourceDomain: artifact.Owner.Domain, TargetProvider: recipient,
+			ReplayScope: artifact.ReplayScope, Sensitivity: artifact.Sensitivity,
+			MediaType: artifact.MediaType, SizeBytes: artifact.SizeBytes, BodyLease: artifact.Body != nil,
+		})
+	}
+	return result
+}
+
+func cloneCompatibilityPlanContext(plan CompatibilityPlan, input CompatibilityContext) CompatibilityPlan {
+	plan.RequestTransformSteps = cloneRequestTransformSteps(input.RequestTransformSteps)
+	plan.ResponseTransformSteps = cloneResponseTransformSteps(input.ResponseTransformSteps)
+	plan.ArtifactTransfers = append([]ArtifactTransfer(nil), input.ArtifactTransfers...)
+	return plan
+}
+
+func cloneRequestTransformSteps(steps []RequestTransformPlanStep) []RequestTransformPlanStep {
+	result := append([]RequestTransformPlanStep(nil), steps...)
+	for index := range result {
+		result[index].Effects = append([]TransformEffect(nil), result[index].Effects...)
+	}
+	return result
+}
+
+func cloneResponseTransformSteps(steps []ResponseTransformPlanStep) []ResponseTransformPlanStep {
+	result := append([]ResponseTransformPlanStep(nil), steps...)
+	for index := range result {
+		result[index].Effects = append([]ResponseTransformEffect(nil), result[index].Effects...)
+	}
+	return result
 }
 
 // ComposeCompatibilityPlan combines stage reports in execution order. A

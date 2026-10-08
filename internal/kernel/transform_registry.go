@@ -47,6 +47,15 @@ type TransformBinding struct {
 	Options      json.RawMessage `json:"options,omitempty"`
 }
 
+type RequestTransformPlanStep struct {
+	BindingID    string            `json:"bindingId"`
+	TransformRef extensions.Ref    `json:"transformRef"`
+	Scope        TransformScope    `json:"scope"`
+	Order        int               `json:"order,omitempty"`
+	Stage        TransformStage    `json:"stage"`
+	Effects      []TransformEffect `json:"effects"`
+}
+
 type TransformEffect string
 
 const (
@@ -102,6 +111,14 @@ type ResponseTransformDefinition struct {
 	OptionsSchemaRef      *extensions.Ref           `json:"optionsSchemaRef,omitempty"`
 	ResourceBounds        extensions.ResourceBounds `json:"resourceBounds,omitempty"`
 	Effects               []ResponseTransformEffect `json:"effects"`
+}
+
+type ResponseTransformPlanStep struct {
+	BindingID    string                    `json:"bindingId"`
+	TransformRef extensions.Ref            `json:"transformRef"`
+	Scope        TransformScope            `json:"scope"`
+	Order        int                       `json:"order,omitempty"`
+	Effects      []ResponseTransformEffect `json:"effects"`
 }
 
 type ResponseTransformRegistry struct {
@@ -184,6 +201,28 @@ func (r *ResponseTransformRegistry) ValidateBindings(bindings []TransformBinding
 
 func (r *ResponseTransformRegistry) Active(bindings []TransformBinding, scopes ...TransformScope) bool {
 	return len(orderedBindings(bindings, scopes, ResponseTransformKind)) > 0
+}
+
+func (r *ResponseTransformRegistry) Plan(bindings []TransformBinding, scopes ...TransformScope) []ResponseTransformPlanStep {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	selected := orderedBindings(bindings, scopes, ResponseTransformKind)
+	result := make([]ResponseTransformPlanStep, 0, len(selected))
+	for _, binding := range selected {
+		transform := r.transforms[binding.TransformRef]
+		if transform == nil {
+			continue
+		}
+		definition := transform.Definition()
+		result = append(result, ResponseTransformPlanStep{
+			BindingID: binding.ID, TransformRef: definition.Ref, Scope: binding.Scope,
+			Order: binding.Order, Effects: append([]ResponseTransformEffect(nil), definition.Effects...),
+		})
+	}
+	return result
 }
 
 func (r *ResponseTransformRegistry) ApplyScopes(ctx context.Context, event ResponseEvent, bindings []TransformBinding, scopes ...TransformScope) (ResponseEvent, error) {
@@ -321,6 +360,28 @@ func validateTransformOptions(catalog *extensions.Snapshot, bindings []Transform
 
 func (r *RequestTransformRegistry) Active(bindings []TransformBinding, scopes ...TransformScope) bool {
 	return len(orderedBindings(bindings, scopes, RequestTransformKind)) > 0
+}
+
+func (r *RequestTransformRegistry) Plan(bindings []TransformBinding, scopes ...TransformScope) []RequestTransformPlanStep {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	selected := orderedBindings(bindings, scopes, RequestTransformKind)
+	result := make([]RequestTransformPlanStep, 0, len(selected))
+	for _, binding := range selected {
+		transform := r.transforms[binding.TransformRef]
+		if transform == nil {
+			continue
+		}
+		definition := transform.Definition()
+		result = append(result, RequestTransformPlanStep{
+			BindingID: binding.ID, TransformRef: definition.Ref, Scope: binding.Scope,
+			Order: binding.Order, Stage: definition.Stage, Effects: append([]TransformEffect(nil), definition.Effects...),
+		})
+	}
+	return result
 }
 
 func (r *RequestTransformRegistry) ApplyScopes(ctx context.Context, request *NormalizedRequest, bindings []TransformBinding, scopes ...TransformScope) error {

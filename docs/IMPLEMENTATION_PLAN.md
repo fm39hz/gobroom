@@ -181,9 +181,11 @@ pending.
    usage. Repeatable CLI `--allow-loss`/`--deny-loss` and portable bundle v5
    carry the policy. A server allow/deny ceiling is managed through the CLI and
    SQLite-backed snapshot. Loss records retain requested/effective values,
-   semantic paths and granting model nodes. Remaining: scoped transforms and
-   artifact transfers in the plan, route-level explanations, and full SG1/SG4
-   compatibility matrices.
+   semantic paths and granting model nodes. Candidate plans now include the
+   ordered request/response transform chains and authorized operation-to-
+   provider artifact handoffs. Remaining: expose the selected plan through
+   route explanations/usage and close the full SG1/SG4 matrices, including
+   response artifact rendering and transform fallback accounting.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

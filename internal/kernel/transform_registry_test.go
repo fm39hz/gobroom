@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -73,6 +74,33 @@ func (responseMarkTransform) ApplyResponse(_ context.Context, event ResponseEven
 	return event, nil
 }
 
+func TestTransformRegistriesProjectScopedCompatibilitySteps(t *testing.T) {
+	requestRegistry := NewRequestTransformRegistry()
+	if err := requestRegistry.Register(promptCompressionFixture{}); err != nil {
+		t.Fatal(err)
+	}
+	responseRegistry := NewResponseTransformRegistry()
+	if err := responseRegistry.Register(responseMarkTransform{}); err != nil {
+		t.Fatal(err)
+	}
+	daemonScope := daemonTransformScope()
+	modelScope := TransformScope{Kind: TransformScopeModel, ID: "physical"}
+	routeScope := TransformScope{Kind: TransformScopeRoute, ID: "route"}
+	requestSteps := requestRegistry.Plan([]TransformBinding{
+		{ID: "model.compress", TransformRef: promptCompressionFixture{}.Definition().Ref, Enabled: true, Scope: modelScope, Order: 2},
+		{ID: "daemon.compress", TransformRef: promptCompressionFixture{}.Definition().Ref, Enabled: true, Scope: daemonScope, Order: 1},
+	}, daemonScope, modelScope)
+	if len(requestSteps) != 2 || requestSteps[0].BindingID != "daemon.compress" || requestSteps[1].BindingID != "model.compress" || requestSteps[0].Stage != TransformBeforeRequirements || !reflect.DeepEqual(requestSteps[0].Effects, []TransformEffect{TransformInput}) {
+		t.Fatalf("request transform compatibility chain=%#v", requestSteps)
+	}
+	responseSteps := responseRegistry.Plan([]TransformBinding{{
+		ID: "route.mark", TransformRef: responseMarkTransform{}.Definition().Ref, Enabled: true, Scope: routeScope,
+	}}, daemonScope, routeScope)
+	if len(responseSteps) != 1 || responseSteps[0].BindingID != "route.mark" || responseSteps[0].Scope != routeScope || !reflect.DeepEqual(responseSteps[0].Effects, []ResponseTransformEffect{ResponseEffectText}) {
+		t.Fatalf("response transform compatibility chain=%#v", responseSteps)
+	}
+}
+
 func (invalidIdentityTransform) Definition() TransformDefinition {
 	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.invalid-identity.v1", ContractVersion: 1}, ImplementationVersion: "1", Label: "Invalid identity", Description: "Must be rejected.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformOptions}}
 }
@@ -91,10 +119,13 @@ func (undeclaredPromptMutation) Apply(_ context.Context, request *NormalizedRequ
 
 func TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding(t *testing.T) {
 	snapshot, err := BuildSnapshot(SnapshotInput{
-		PublicModels:      []PublicModel{{Name: "public", TargetRef: "physical"}},
-		Nodes:             []ModelNode{{ID: "physical", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
-		Routes:            []Route{{ID: "route", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"fixture"}}}}},
-		TransformBindings: []TransformBinding{{ID: "daemon.compress", TransformRef: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.prompt-compression.v1", ContractVersion: 1}, Enabled: true, Scope: daemonTransformScope()}},
+		PublicModels: []PublicModel{{Name: "public", TargetRef: "physical"}},
+		Nodes:        []ModelNode{{ID: "physical", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
+		Routes:       []Route{{ID: "route", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"fixture"}}}}},
+		TransformBindings: []TransformBinding{
+			{ID: "daemon.compress", TransformRef: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.prompt-compression.v1", ContractVersion: 1}, Enabled: true, Scope: daemonTransformScope()},
+			{ID: "daemon.response-mark", TransformRef: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.response-mark.v1", ContractVersion: 1}, Enabled: true, Scope: daemonTransformScope()},
+		},
 	}, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +137,12 @@ func TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding
 	defer k.Close()
 	var attempted []string
 	var encoded NormalizedRequest
-	k.Adapters["fixture"] = featureRouteAdapter{id: "fixture", used: &attempted, seen: &encoded}
+	var planned CompatibilityContext
+	k.Adapters["fixture"] = featureRouteAdapter{id: "fixture", used: &attempted, seen: &encoded, planned: &planned}
 	if err := k.Transforms.Register(promptCompressionFixture{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ResponseTransforms.Register(responseMarkTransform{}); err != nil {
 		t.Fatal(err)
 	}
 	request := NormalizedRequest{Model: "public", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatAnthropic, Messages: []Message{{Role: "user", Content: "very long fixture context"}}}
@@ -116,6 +151,12 @@ func TestRequestTransformRegistryRunsBeforeKernelRequirementsAndProviderEncoding
 	}
 	if len(attempted) != 1 || encoded.Messages[0].Content != "compressed-context" {
 		t.Fatalf("transform did not run before provider encoding: routes=%v request=%#v", attempted, encoded)
+	}
+	if len(planned.RequestTransformSteps) != 1 || planned.RequestTransformSteps[0].BindingID != "daemon.compress" || planned.RequestTransformSteps[0].TransformRef.ID != "fixture.prompt-compression.v1" || planned.RequestTransformSteps[0].Scope != daemonTransformScope() || !reflect.DeepEqual(planned.RequestTransformSteps[0].Effects, []TransformEffect{TransformInput}) {
+		t.Fatalf("compatibility context lost the scoped request-transform chain: %#v", planned.RequestTransformSteps)
+	}
+	if len(planned.ResponseTransformSteps) != 1 || planned.ResponseTransformSteps[0].BindingID != "daemon.response-mark" || planned.ResponseTransformSteps[0].TransformRef.ID != "fixture.response-mark.v1" || planned.ResponseTransformSteps[0].Scope != daemonTransformScope() || !reflect.DeepEqual(planned.ResponseTransformSteps[0].Effects, []ResponseTransformEffect{ResponseEffectText}) {
+		t.Fatalf("compatibility context lost the scoped response-transform chain: %#v", planned.ResponseTransformSteps)
 	}
 }
 
