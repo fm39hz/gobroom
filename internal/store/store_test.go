@@ -173,8 +173,12 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	if err != nil || len(sessions) != 1 || sessions[0].State.ResponseID != "resp-a" || string(sessions[0].State.ProviderData) != `{"signature":"opaque"}` || sessions[0].State.ExpiresAt.IsZero() {
 		t.Fatalf("provider sessions=%#v err=%v", sessions, err)
 	}
-	if err := s.SaveUsageEvent(kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5}); err != nil {
+	if err := s.SaveUsageEvent(kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5, CompatibilityFidelity: kernel.FidelityLossy, CompatibilityLosses: []string{"reasoning.clamped"}}); err != nil {
 		t.Fatal(err)
+	}
+	usage, err := s.UsageEvents(1)
+	if err != nil || len(usage) != 1 || usage[0].CompatibilityFidelity != kernel.FidelityLossy || len(usage[0].CompatibilityLosses) != 1 || usage[0].CompatibilityLosses[0] != "reasoning.clamped" {
+		t.Fatalf("compatibility outcome was not persisted with usage: %#v err=%v", usage, err)
 	}
 	var runtimeCount, modelCount, transportCount, extensionCount, sessionCount, dailyCount int
 	if err := s.DB.QueryRow(`SELECT count(*) FROM connection_runtime`).Scan(&runtimeCount); err != nil {

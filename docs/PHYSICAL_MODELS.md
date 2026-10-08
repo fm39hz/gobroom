@@ -355,6 +355,14 @@ back to provider defaults.
 Cross-protocol adapters own dialect translation. Metadata fields do not control
 reasoning and cannot substitute for real Anthropic/Gemini thinking fields.
 
+Physical and Combo model nodes also carry a generic named-loss policy. The
+headless CLI exposes repeatable `--allow-loss` and `--deny-loss` flags; grants
+flow down the selected model path while denials are inherited and take
+precedence. This is distinct from reasoning strictness: a codec must declare a
+named degradation before any policy can permit it. Admitted fidelity and loss
+IDs are retained in usage records. Server-wide ceilings and complete
+requested/effective-value provenance remain pending.
+
 ## Performance and capacity
 
 Physical Models do not have fixed throughput. Runtime observations are scoped

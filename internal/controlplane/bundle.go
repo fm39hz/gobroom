@@ -92,11 +92,17 @@ func ValidateBundle(bundle ConfigBundle) error {
 		return fmt.Errorf("extension dependency lock roots do not match bundle contents")
 	}
 	for _, physical := range bundle.Physical {
+		if err := kernel.ValidateLossPolicy(physical.LossPolicy); err != nil {
+			return fmt.Errorf("physical model %q loss policy: %w", physical.Name, err)
+		}
 		if err := validateStrategyReference(physical.Policy.Ref); err != nil {
 			return fmt.Errorf("physical model %q strategy: %w", physical.Name, err)
 		}
 	}
 	for _, combo := range bundle.Combos {
+		if err := kernel.ValidateLossPolicy(combo.LossPolicy); err != nil {
+			return fmt.Errorf("combo model %q loss policy: %w", combo.Name, err)
+		}
 		if err := validateStrategyReference(combo.Strategy.Ref); err != nil {
 			return fmt.Errorf("combo model %q strategy: %w", combo.Name, err)
 		}
@@ -360,10 +366,11 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 	for _, item := range bundle.Physical {
 		identity, _ := json.Marshal(item.Identity)
 		reasoning, _ := json.Marshal(item.Reasoning)
+		lossPolicy, _ := json.Marshal(item.LossPolicy)
 		policy, _ := json.Marshal(item.Policy)
 		profile, _ := json.Marshal(item.Profile)
 		limits, _ := json.Marshal(item.Limits)
-		if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,allow_compatible_sources,allow_dynamic_sources,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,allow_compatible_sources=excluded.allow_compatible_sources,allow_dynamic_sources=excluded.allow_dynamic_sources,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), boolInt(item.AllowCompatibleSources), boolInt(item.AllowDynamicSources), string(policy), string(profile), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+		if _, err = tx.Exec(`INSERT INTO physical_models(name,identity_json,reasoning_json,loss_policy_json,allow_compatible_sources,allow_dynamic_sources,policy_json,capabilities_json,limits_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET identity_json=excluded.identity_json,reasoning_json=excluded.reasoning_json,loss_policy_json=excluded.loss_policy_json,allow_compatible_sources=excluded.allow_compatible_sources,allow_dynamic_sources=excluded.allow_dynamic_sources,policy_json=excluded.policy_json,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(identity), string(reasoning), string(lossPolicy), boolInt(item.AllowCompatibleSources), boolInt(item.AllowDynamicSources), string(policy), string(profile), string(limits), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(`DELETE FROM physical_model_sources WHERE physical_name=?`, item.Name); err != nil {
@@ -381,8 +388,9 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 	}
 	for _, item := range bundle.Combos {
 		reasoning, _ := json.Marshal(item.Reasoning)
+		lossPolicy, _ := json.Marshal(item.LossPolicy)
 		strategy, _ := json.Marshal(item.Strategy)
-		if _, err = tx.Exec(`INSERT INTO combo_models(name,reasoning_json,strategy_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,strategy_json=excluded.strategy_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(reasoning), string(strategy), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
+		if _, err = tx.Exec(`INSERT INTO combo_models(name,reasoning_json,loss_policy_json,strategy_json,discoverable,enabled,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(name) DO UPDATE SET reasoning_json=excluded.reasoning_json,loss_policy_json=excluded.loss_policy_json,strategy_json=excluded.strategy_json,discoverable=excluded.discoverable,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, item.Name, string(reasoning), string(lossPolicy), string(strategy), boolInt(item.Discoverable), boolInt(item.Enabled)); err != nil {
 			return err
 		}
 		if _, err = tx.Exec(`DELETE FROM combo_model_members WHERE combo_name=?`, item.Name); err != nil {

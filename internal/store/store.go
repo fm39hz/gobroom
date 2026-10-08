@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
   status TEXT, latency_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost REAL NOT NULL DEFAULT 0
+  output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost REAL NOT NULL DEFAULT 0,
+  compatibility_fidelity TEXT NOT NULL DEFAULT '', compatibility_losses_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
 CREATE TABLE IF NOT EXISTS quota_snapshots (
@@ -165,7 +166,7 @@ CREATE TABLE IF NOT EXISTS usage_daily (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 -- Typed model graph: discovered routes, physical identities and role combos.
 CREATE TABLE IF NOT EXISTS physical_models (
-  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', allow_compatible_sources INTEGER NOT NULL DEFAULT 0, allow_dynamic_sources INTEGER NOT NULL DEFAULT 0, policy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',
+  name TEXT PRIMARY KEY, identity_json TEXT NOT NULL DEFAULT '{}', reasoning_json TEXT NOT NULL DEFAULT '{}', loss_policy_json TEXT NOT NULL DEFAULT '{}', allow_compatible_sources INTEGER NOT NULL DEFAULT 0, allow_dynamic_sources INTEGER NOT NULL DEFAULT 0, policy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',
   capabilities_json TEXT NOT NULL DEFAULT '{}', limits_json TEXT NOT NULL DEFAULT '{}', discoverable INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -177,7 +178,7 @@ CREATE TABLE IF NOT EXISTS physical_model_sources (
 );
 CREATE INDEX IF NOT EXISTS idx_physical_sources_route ON physical_model_sources(route_id);
 CREATE TABLE IF NOT EXISTS combo_models (
-  name TEXT PRIMARY KEY, reasoning_json TEXT NOT NULL DEFAULT '{}', strategy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',
+  name TEXT PRIMARY KEY, reasoning_json TEXT NOT NULL DEFAULT '{}', loss_policy_json TEXT NOT NULL DEFAULT '{}', strategy_json TEXT NOT NULL DEFAULT '{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1},"config":{}}',
   discoverable INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -198,6 +199,8 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN ttft_ms INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN output_tokens_per_second REAL NOT NULL DEFAULT 0`)
+	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_fidelity TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_losses_json TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN identity_json TEXT NOT NULL DEFAULT '{}'`)
@@ -205,6 +208,8 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE physical_model_sources ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN reasoning_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE combo_models ADD COLUMN reasoning_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN loss_policy_json TEXT NOT NULL DEFAULT '{}'`)
+	_, _ = s.DB.Exec(`ALTER TABLE combo_models ADD COLUMN loss_policy_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN allow_compatible_sources INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN allow_dynamic_sources INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`UPDATE provider_nodes SET definition_id=CASE protocol WHEN 'openai_chat' THEN 'openai-compatible-chat' WHEN 'chat' THEN 'openai-compatible-chat' WHEN 'openai_responses' THEN 'openai-compatible-responses' WHEN 'responses' THEN 'openai-compatible-responses' WHEN 'anthropic' THEN 'anthropic-messages' ELSE definition_id END WHERE definition_id=''`)
@@ -788,7 +793,11 @@ func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens,estimated_cost,request_class,session_id,ttft_ms,output_tokens_per_second) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond); err != nil {
+	losses, err := json.Marshal(event.CompatibilityLosses)
+	if err != nil {
+		return fmt.Errorf("encode usage compatibility losses: %w", err)
+	}
+	if _, err = tx.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens,estimated_cost,request_class,session_id,ttft_ms,output_tokens_per_second,compatibility_fidelity,compatibility_losses_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses)); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(`INSERT INTO usage_daily(date_key,requests,prompt_tokens,completion_tokens,estimated_cost,updated_at) VALUES(?,1,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(date_key) DO UPDATE SET requests=requests+1,prompt_tokens=prompt_tokens+excluded.prompt_tokens,completion_tokens=completion_tokens+excluded.completion_tokens,estimated_cost=estimated_cost+excluded.estimated_cost,updated_at=CURRENT_TIMESTAMP`, dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
@@ -805,6 +814,8 @@ type UsageRecord struct {
 	RequestClass, SessionID                                                      string
 	TTFTMS                                                                       int64
 	OutputTokensPerSecond                                                        float64
+	CompatibilityFidelity                                                        kernel.CompatibilityFidelity `json:"compatibilityFidelity,omitempty"`
+	CompatibilityLosses                                                          []string                     `json:"compatibilityLosses,omitempty"`
 }
 
 type UsageSummary struct {
@@ -851,7 +862,7 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,estimated_cost,COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,estimated_cost,COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -859,8 +870,12 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	var result []UsageRecord
 	for rows.Next() {
 		var item UsageRecord
-		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.EstimatedCost, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond); err != nil {
+		var losses string
+		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.EstimatedCost, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses); err != nil {
 			return nil, err
+		}
+		if err := decodeJSON(losses, &item.CompatibilityLosses); err != nil {
+			return nil, fmt.Errorf("usage event %d compatibility losses: %w", item.ID, err)
 		}
 		result = append(result, item)
 	}

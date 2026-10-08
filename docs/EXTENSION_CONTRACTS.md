@@ -278,6 +278,15 @@ issuer ownership, tool-call correlation and response commitment are hard
 invariants and cannot be waived. Loss records include requested/effective
 values, semantic paths and the policy source that permitted the change.
 
+Physical and Combo nodes currently persist typed `LossPolicy {allow, deny}`
+through SQLite, secret-free config bundles and the immutable serving snapshot.
+Grants accumulate down the selected graph path; denials accumulate and win.
+The compatibility planner admits a lossy mapping only when every reported loss
+ID is granted and not denied, and durable usage records retain the resulting
+fidelity and loss IDs. A server-wide allow ceiling, requested/effective values,
+semantic-path and policy-source details remain conformance work; this compact
+usage summary is not a substitute for those richer records.
+
 Reasoning `exact`, `allow_clamp` and `best_effort` bind to this policy as specified
 in [Physical models](PHYSICAL_MODELS.md#strictness-and-translation). Explicit
 client intent and selected presets retain their precedence over Combo,

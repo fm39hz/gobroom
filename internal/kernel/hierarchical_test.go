@@ -15,6 +15,7 @@ import (
 type attemptAdapter struct{ attempts *[]string }
 type undeclaredCompatibilityAdapter struct{ attemptAdapter }
 type ambiguousExecutionAdapter struct{ attemptAdapter }
+type namedLossAdapter struct{ attemptAdapter }
 
 func (undeclaredCompatibilityAdapter) PlanCompatibility(CompatibilityContext) CompatibilityPlan {
 	return CompatibilityPlan{Supported: true, Fidelity: FidelityNative}
@@ -54,6 +55,22 @@ func (s observingStrategy) OnFailure(failure StrategyFailure, _ *StrategyState) 
 func (a attemptAdapter) ID() string { return "test" }
 func (a attemptAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
 	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
+}
+func (a namedLossAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	base := fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
+	return ComposeCompatibilityPlan([][]FacetMapping{
+		base.Mappings,
+		{{Facet: "generation.temperature", Paths: []string{"request.temperature"}, Disposition: FacetDegraded, LossIDs: []string{"generation.temperature.clamped"}, Reason: "temperature was clamped to the provider range"}},
+	}, input.Policy)
+}
+func (namedLossAdapter) RenderResponse(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+	if _, err := io.Copy(writer, response.Body); err != nil {
+		return err
+	}
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(UsageEvent{Status: "ok"})
+	}
+	return nil
 }
 func (a attemptAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
 	return UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
@@ -126,6 +143,61 @@ func TestExecutePreservesHierarchicalFallbackBoundariesAndState(t *testing.T) {
 			t.Fatalf("failure transitions crossed policy boundaries: %v", failedNodes)
 		}
 	}
+}
+
+func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T) {
+	makeGateway := func(comboPolicy, physicalPolicy LossPolicy) (*Kernel, *[]string) {
+		attempts := []string{}
+		snapshot, err := BuildSnapshot(SnapshotInput{
+			PublicModels: []PublicModel{{Name: "role", TargetRef: "combo"}},
+			Nodes: []ModelNode{
+				{ID: "combo", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberModel, ID: "physical"}}, LossPolicy: comboPolicy},
+				{ID: "physical", Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}, LossPolicy: physicalPolicy},
+			},
+			Routes: []Route{{ID: "route", Enabled: true, Protocol: ProtocolOpenAIChat, OperationBindings: map[normalize.Operation]RouteOperationBinding{
+				normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"loss"}},
+			}}},
+		}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gateway, err := New(snapshot, nil, 8)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gateway.Adapters["loss"] = namedLossAdapter{attemptAdapter{attempts: &attempts}}
+		return gateway, &attempts
+	}
+
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+	denied, deniedAttempts := makeGateway(LossPolicy{}, LossPolicy{})
+	if err := denied.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err == nil || len(*deniedAttempts) != 0 {
+		t.Fatalf("ungranted loss was dispatched: err=%v attempts=%v", err, *deniedAttempts)
+	}
+	denied.Close()
+
+	allowed, attempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{})
+	if err := allowed.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err != nil {
+		t.Fatalf("ancestor grant did not reach candidate: %v", err)
+	}
+	if len(*attempts) != 1 {
+		t.Fatalf("allowed route attempts=%v", *attempts)
+	}
+	select {
+	case event := <-allowed.Events:
+		if event.CompatibilityFidelity != FidelityLossy || len(event.CompatibilityLosses) != 1 || event.CompatibilityLosses[0] != "generation.temperature.clamped" {
+			t.Fatalf("compatibility outcome missing from usage event: %#v", event)
+		}
+	default:
+		t.Fatal("usage event was not emitted")
+	}
+	allowed.Close()
+
+	deniedByChild, childAttempts := makeGateway(LossPolicy{Allow: []string{"generation.temperature.clamped"}}, LossPolicy{Deny: []string{"generation.temperature.clamped"}})
+	if err := deniedByChild.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err == nil || len(*childAttempts) != 0 {
+		t.Fatalf("child denial did not dominate ancestor grant: err=%v attempts=%v", err, *childAttempts)
+	}
+	deniedByChild.Close()
 }
 
 func TestKernelRejectsAdapterWithoutRequiredFacetDeclarationBeforeDispatch(t *testing.T) {

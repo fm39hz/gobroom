@@ -171,9 +171,13 @@ pending.
    transform-invalid signatures reject admission. Fake OpenAI Chat and
    Responses decoder→Anthropic renderer fixtures prove JSON/SSE cross-wire
    verticals. Remaining:
-   bind loss policy from model nodes, include scoped transforms and artifact
-   transfers in the plan, retain route-level explanations and complete the
-   full SG1/SG4 compatibility matrices.
+   Physical/Combo nodes now persist named loss grants/denials; grants flow down
+   the model path, denial wins, and admitted lossy plans add fidelity/loss IDs
+   to durable usage records. Repeatable CLI `--allow-loss`/`--deny-loss` and
+   portable bundles carry this typed policy. Remaining: server-wide loss
+   ceilings, requested/effective-value and policy-source records, include
+   scoped transforms/artifact transfers in the plan, retain route-level
+   explanations and complete the full SG1/SG4 compatibility matrices.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

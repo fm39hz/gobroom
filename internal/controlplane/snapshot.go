@@ -92,7 +92,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 			}
 		}
 		quotaBinding := l.Bindings[provider.RuntimeBindingKey(row.DefinitionID, provider.OperationQuota)]
-	input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
 		baseID := row.ID
 		if at := strings.IndexByte(baseID, '@'); at >= 0 {
 			baseID = baseID[:at]
@@ -111,7 +111,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if row.Policy.Config == nil {
 			strategyConfig = json.RawMessage(`{}`)
 		}
-		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: definition.Runtime, StrategyRef: row.Policy.Ref, StrategyConfig: strategyConfig, StickyLimit: stickyLimit, Identity: row.Identity, Reasoning: row.Reasoning, AllowCompatibleSources: row.AllowCompatibleSources, AllowDynamicSources: row.AllowDynamicSources}
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelPhysical, Strategy: definition.Runtime, StrategyRef: row.Policy.Ref, StrategyConfig: strategyConfig, StickyLimit: stickyLimit, Identity: row.Identity, Reasoning: row.Reasoning, LossPolicy: row.LossPolicy, AllowCompatibleSources: row.AllowCompatibleSources, AllowDynamicSources: row.AllowDynamicSources}
 		for _, source := range row.Sources {
 			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberRouteGroup, ID: source.RouteID, Fidelity: source.Fidelity, Evidence: source.Evidence})
 		}
@@ -132,7 +132,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		if row.Strategy.Config == nil {
 			strategyConfig = json.RawMessage(`{}`)
 		}
-		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelCombo, Strategy: definition.Runtime, StrategyRef: row.Strategy.Ref, StrategyConfig: strategyConfig, StickyLimit: stickyLimit, Reasoning: row.Reasoning}
+		node := kernel.ModelNode{ID: row.Name, Kind: kernel.ModelCombo, Strategy: definition.Runtime, StrategyRef: row.Strategy.Ref, StrategyConfig: strategyConfig, StickyLimit: stickyLimit, Reasoning: row.Reasoning, LossPolicy: row.LossPolicy}
 		for _, member := range row.Members {
 			node.Members = append(node.Members, kernel.MemberRef{Kind: kernel.MemberModel, ID: member.ID, Weight: member.Weight})
 		}

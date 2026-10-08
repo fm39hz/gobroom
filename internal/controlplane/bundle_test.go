@@ -95,6 +95,49 @@ func TestTransformBindingsRoundTripThroughTypedConfigBundle(t *testing.T) {
 	}
 }
 
+func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/loss-policy-bundle.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	physical := store.PhysicalModel{Name: "physical", Policy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, LossPolicy: kernel.LossPolicy{Allow: []string{"reasoning.effort.clamped"}}, Enabled: true}
+	if err := s.UpsertPhysicalModel(physical); err != nil {
+		t.Fatal(err)
+	}
+	combo := store.ComboModel{Name: "role", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: "physical"}}, Strategy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, LossPolicy: kernel.LossPolicy{Deny: []string{"tools.arguments.dropped"}}, Discoverable: true, Enabled: true}
+	if err := s.UpsertComboModel(combo); err != nil {
+		t.Fatal(err)
+	}
+	catalog := bundleTestCatalog(t)
+	bundle, err := ExportBundle(s, catalog.Extensions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var portable ConfigBundle
+	if err := json.Unmarshal(encoded, &portable); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateBundleWithStrategies(portable, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyBundle(s, portable, catalog); err != nil {
+		t.Fatal(err)
+	}
+	gotPhysical, err := s.PhysicalModel("physical")
+	if err != nil || !reflect.DeepEqual(gotPhysical.LossPolicy, physical.LossPolicy) {
+		t.Fatalf("physical loss policy round trip=%#v err=%v", gotPhysical.LossPolicy, err)
+	}
+	gotCombo, err := s.ComboModel("role")
+	if err != nil || !reflect.DeepEqual(gotCombo.LossPolicy, combo.LossPolicy) {
+		t.Fatalf("combo loss policy round trip=%#v err=%v", gotCombo.LossPolicy, err)
+	}
+}
+
 func TestValidateBundleRejectsUnknownTypedReferences(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	bundle := bundleWithDependencyLock(t, ConfigBundle{Providers: []store.ProviderNode{{ID: "p"}}, Connections: []store.ConnectionRecord{{ID: "c", ProviderNodeID: "p"}}, Models: []store.Model{{ID: "r"}}, Physical: []store.PhysicalModel{{Name: "qwen", Policy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, Sources: []store.RouteReference{{RouteID: "missing"}}}}}, catalog)

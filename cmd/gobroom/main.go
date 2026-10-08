@@ -215,6 +215,7 @@ func resourceCommands() []*cobra.Command {
 	physical := &cobra.Command{Use: "physical-models", Short: "manage physical model identities"}
 	var physicalName, physicalPolicy, physicalPolicyOptions string
 	var physicalSources []string
+	var physicalAllowedLosses, physicalDeniedLosses []string
 	var physicalDiscoverable bool
 	var allowCompatibleSources, allowDynamicSources bool
 	physical.AddCommand(listCommand("list", "physical_models.list", nil))
@@ -232,7 +233,7 @@ func resourceCommands() []*cobra.Command {
 				return fmt.Errorf("policy options: %w", err)
 			}
 		}
-		return invoke("physical_models.upsert", map[string]any{"name": physicalName, "sources": sources, "policy": map[string]any{"id": physicalPolicy, "config": policyOptions}, "allowCompatibleSources": allowCompatibleSources, "allowDynamicSources": allowDynamicSources, "discoverable": physicalDiscoverable, "enabled": true})
+		return invoke("physical_models.upsert", map[string]any{"name": physicalName, "sources": sources, "policy": map[string]any{"id": physicalPolicy, "config": policyOptions}, "lossPolicy": map[string]any{"allow": physicalAllowedLosses, "deny": physicalDeniedLosses}, "allowCompatibleSources": allowCompatibleSources, "allowDynamicSources": allowDynamicSources, "discoverable": physicalDiscoverable, "enabled": true})
 	}}
 	physicalUpsert.Flags().StringVar(&physicalName, "name", "", "physical model name")
 	physicalUpsert.Flags().StringArrayVar(&physicalSources, "source", nil, "discovered route ID (repeat for multiple sources)")
@@ -241,12 +242,15 @@ func resourceCommands() []*cobra.Command {
 	physicalUpsert.Flags().BoolVar(&physicalDiscoverable, "discoverable", false, "include this model in /v1/models")
 	physicalUpsert.Flags().BoolVar(&allowCompatibleSources, "allow-compatible-sources", false, "allow compatible revisions as Physical candidates")
 	physicalUpsert.Flags().BoolVar(&allowDynamicSources, "allow-dynamic-sources", false, "allow dynamic upstream routing sources")
+	physicalUpsert.Flags().StringArrayVar(&physicalAllowedLosses, "allow-loss", nil, "allow a named semantic loss on this model path (repeatable)")
+	physicalUpsert.Flags().StringArrayVar(&physicalDeniedLosses, "deny-loss", nil, "deny a named semantic loss on this model path (repeatable; denial wins)")
 	physical.AddCommand(physicalUpsert, idCommand("delete", "delete physical model", "physical_models.delete", "name", &physicalName))
 
 	typedCombos := &cobra.Command{Use: "combo-models", Short: "manage typed combo models"}
 	var typedComboName, typedComboStrategy string
 	var typedComboOptions string
 	var typedMembers []string
+	var comboAllowedLosses, comboDeniedLosses []string
 	var comboDiscoverable bool
 	typedCombos.AddCommand(listCommand("list", "combo_models.list", nil))
 	typedCombos.AddCommand(listCommand("strategies", "strategies.list", nil))
@@ -279,13 +283,15 @@ func resourceCommands() []*cobra.Command {
 				return fmt.Errorf("strategy options: %w", err)
 			}
 		}
-		return invoke("combo_models.upsert", map[string]any{"name": typedComboName, "members": members, "strategy": map[string]any{"id": typedComboStrategy, "config": options}, "discoverable": comboDiscoverable, "enabled": true})
+		return invoke("combo_models.upsert", map[string]any{"name": typedComboName, "members": members, "strategy": map[string]any{"id": typedComboStrategy, "config": options}, "lossPolicy": map[string]any{"allow": comboAllowedLosses, "deny": comboDeniedLosses}, "discoverable": comboDiscoverable, "enabled": true})
 	}}
 	typedComboUpsert.Flags().StringVar(&typedComboName, "name", "", "combo model name")
 	typedComboUpsert.Flags().StringArrayVar(&typedMembers, "member", nil, `ordered typed member JSON, e.g. {"kind":"physical","id":"qwen-3.7-max","weight":3}`)
 	typedComboUpsert.Flags().StringVar(&typedComboStrategy, "strategy", "ordered-fallback", "execution strategy primitive ID")
 	typedComboUpsert.Flags().StringVar(&typedComboOptions, "strategy-options", "{}", "JSON object validated against the selected strategy schema")
 	typedComboUpsert.Flags().BoolVar(&comboDiscoverable, "discoverable", false, "include this combo in /v1/models")
+	typedComboUpsert.Flags().StringArrayVar(&comboAllowedLosses, "allow-loss", nil, "allow a named semantic loss on this model path (repeatable)")
+	typedComboUpsert.Flags().StringArrayVar(&comboDeniedLosses, "deny-loss", nil, "deny a named semantic loss on this model path (repeatable; denial wins)")
 	typedCombos.AddCommand(typedComboUpsert, idCommand("delete", "delete combo model", "combo_models.delete", "name", &typedComboName))
 
 	return []*cobra.Command{providers, connections, models, physical, typedCombos}

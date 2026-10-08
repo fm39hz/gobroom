@@ -164,7 +164,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, credential, writer, started, map[string]bool{})
+	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, CompatibilityPolicy{}, credential, writer, started, map[string]bool{})
 }
 
 func mergeRequirements(required, derived []normalize.FeatureRequirement) []normalize.FeatureRequirement {
@@ -181,11 +181,11 @@ func mergeRequirements(required, derived []normalize.FeatureRequirement) []norma
 	return result
 }
 
-func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements, transformBindings []TransformBinding, scopes []TransformScope) ProviderAdapter {
+func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements, transformBindings []TransformBinding, scopes []TransformScope, lossPolicy CompatibilityPolicy) (ProviderAdapter, CompatibilityPlan) {
 	operation := requirements.Operation
 	operationBinding, ok := route.OperationBindings[operation]
 	if !ok || requirements.OperationContractVersion == 0 || operationBinding.ContractVersion != requirements.OperationContractVersion {
-		return nil
+		return nil, CompatibilityPlan{Fidelity: FidelityUnsupported, Reason: "route has no matching operation binding"}
 	}
 	adapterIDs := operationBinding.AdapterIDs
 	for _, adapterID := range adapterIDs {
@@ -198,6 +198,8 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 			ActiveResponseTransform: k.ResponseTransforms.Active(transformBindings, scopes...),
 		}
 		compatibilityContext.Policy.RequiredFacets = RequiredRequestFacets(request)
+		compatibilityContext.Policy.AllowedLosses = append([]string(nil), lossPolicy.AllowedLosses...)
+		compatibilityContext.Policy.DeniedLosses = append([]string(nil), lossPolicy.DeniedLosses...)
 		for _, event := range RequiredResponseEvents(request) {
 			compatibilityContext.Policy.RequiredFacets = append(compatibilityContext.Policy.RequiredFacets, ResponseEventFacet(event))
 		}
@@ -205,20 +207,25 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		policy := compatibilityContext.Policy
 		policy.RequiredFacets = append(policy.RequiredFacets, FacetWireResponse)
 		plan = ComposeCompatibilityPlan([][]FacetMapping{plan.Mappings}, policy)
-		if !plan.Supported || (plan.Fidelity != FidelityNative && plan.Fidelity != FidelityTranslated) || len(plan.Losses) > 0 {
+		if !plan.Supported || (plan.Fidelity != FidelityNative && plan.Fidelity != FidelityTranslated && plan.Fidelity != FidelityLossy) {
 			continue
 		}
-		return adapter
+		return adapter, plan
 	}
-	return nil
+	return nil, CompatibilityPlan{Fidelity: FidelityUnsupported, Reason: "no adapter satisfies the effective compatibility policy"}
 }
 
-func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, resourceBounds extensions.ResourceBounds, externalRequirements []normalize.FeatureRequirement, transformBindings []TransformBinding, scopes []TransformScope, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
+func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, resourceBounds extensions.ResourceBounds, externalRequirements []normalize.FeatureRequirement, transformBindings []TransformBinding, scopes []TransformScope, lossPolicy CompatibilityPolicy, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
 	if stack[node.ID] {
 		return fmt.Errorf("model cycle at %q", node.ID)
 	}
 	stack[node.ID] = true
 	defer delete(stack, node.ID)
+	mergedLossPolicy := MergeLossPolicies(
+		LossPolicy{Allow: lossPolicy.AllowedLosses, Deny: lossPolicy.DeniedLosses},
+		node.LossPolicy,
+	)
+	lossPolicy = mergedLossPolicy
 	if req.Thinking.Mode == "" || req.Thinking.Mode == "inherit" {
 		if node.Reasoning.Mode != "" && node.Reasoning.Mode != "inherit" {
 			req.Thinking = node.Reasoning
@@ -246,7 +253,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if !ok {
 				return fmt.Errorf("unknown model node %q", member.ID)
 			}
-			err := k.executeNode(ctx, snapshot, child, req, replaySafety, resourceBounds, externalRequirements, transformBindings, scopes, credential, writer, started, stack)
+			err := k.executeNode(ctx, snapshot, child, req, replaySafety, resourceBounds, externalRequirements, transformBindings, scopes, lossPolicy, credential, writer, started, stack)
 			if err == nil {
 				return nil
 			} else if !errors.Is(err, ErrNoRoute) {
@@ -323,7 +330,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if eligible, _ := k.Features.Evaluate(candidate, requirements.Features); !eligible {
 				continue
 			}
-			adapter := k.adapterForRoute(candidate, candidateRequest, requirements, transformBindings, candidateScopes)
+			adapter, compatibilityPlan := k.adapterForRoute(candidate, candidateRequest, requirements, transformBindings, candidateScopes, lossPolicy)
 			if adapter == nil {
 				continue
 			}
@@ -528,6 +535,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					emitEvent(ResponseEvent{At: at, Kind: EventResponseStarted})
 				}
 			}, OnComplete: func(event UsageEvent) {
+				event.CompatibilityFidelity = compatibilityPlan.Fidelity
+				event.CompatibilityLosses = append([]string(nil), compatibilityPlan.Losses...)
 				releaseAttempt()
 				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {

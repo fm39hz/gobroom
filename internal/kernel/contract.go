@@ -136,6 +136,7 @@ type ModelNode struct {
 	Members                []MemberRef
 	Identity               PhysicalIdentity
 	Reasoning              NormalizedRequestReasoning
+	LossPolicy             LossPolicy
 	AllowCompatibleSources bool
 	AllowDynamicSources    bool
 }
@@ -451,6 +452,8 @@ type UsageEvent struct {
 	InputTokens           int64
 	OutputTokens          int64
 	EstimatedCost         float64
+	CompatibilityFidelity CompatibilityFidelity `json:"compatibilityFidelity,omitempty"`
+	CompatibilityLosses   []string              `json:"compatibilityLosses,omitempty"`
 }
 
 type UsageSourceOptions struct {

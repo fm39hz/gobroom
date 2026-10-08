@@ -69,6 +69,43 @@ type CompatibilityPolicy struct {
 	DeniedLosses   []string
 }
 
+// LossPolicy is attached to a node in the model graph. Grants accumulate down
+// the selected path; denials accumulate as hard ceilings and always win.
+type LossPolicy struct {
+	Allow []string `json:"allow,omitempty"`
+	Deny  []string `json:"deny,omitempty"`
+}
+
+func MergeLossPolicies(path ...LossPolicy) CompatibilityPolicy {
+	var result CompatibilityPolicy
+	for _, policy := range path {
+		result.AllowedLosses = appendUnique(result.AllowedLosses, policy.Allow...)
+		result.DeniedLosses = appendUnique(result.DeniedLosses, policy.Deny...)
+	}
+	result.AllowedLosses = uniqueSorted(result.AllowedLosses)
+	result.DeniedLosses = uniqueSorted(result.DeniedLosses)
+	return result
+}
+
+func ValidateLossPolicy(policy LossPolicy) error {
+	for _, item := range []struct {
+		field string
+		ids   []string
+	}{{field: "allow", ids: policy.Allow}, {field: "deny", ids: policy.Deny}} {
+		seen := make(map[string]bool, len(item.ids))
+		for _, id := range item.ids {
+			if id == "" || strings.TrimSpace(id) != id || strings.ContainsAny(id, " \t\r\n") {
+				return fmt.Errorf("loss policy %s contains invalid loss ID %q", item.field, id)
+			}
+			if seen[id] {
+				return fmt.Errorf("loss policy %s contains duplicate loss ID %q", item.field, id)
+			}
+			seen[id] = true
+		}
+	}
+	return nil
+}
+
 // CompatibilityPlan is immutable evidence for admitting one adapter on one
 // request. It records facet-level reasoning instead of collapsing it to a
 // format boolean.

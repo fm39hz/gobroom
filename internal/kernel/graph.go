@@ -19,6 +19,9 @@ func ensureModelNodes(snapshot *Snapshot) error {
 		}
 	}
 	for id, node := range snapshot.Nodes {
+		if err := ValidateLossPolicy(node.LossPolicy); err != nil {
+			return fmt.Errorf("model node %q loss policy: %w", id, err)
+		}
 		if node.ID == "" {
 			node.ID = id
 		}
@@ -66,6 +69,8 @@ func classifyMember(snapshot Snapshot, ref string) MemberRef {
 func cloneNode(node ModelNode) ModelNode {
 	node.Members = append([]MemberRef(nil), node.Members...)
 	node.StrategyConfig = append(json.RawMessage(nil), node.StrategyConfig...)
+	node.LossPolicy.Allow = append([]string(nil), node.LossPolicy.Allow...)
+	node.LossPolicy.Deny = append([]string(nil), node.LossPolicy.Deny...)
 	return node
 }
 

@@ -38,11 +38,12 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	}
 
 	physical := PhysicalModel{
-		Name:     "qwen-3.7-max",
-		Identity: kernel.PhysicalIdentity{CanonicalName: "qwen-3.7-max"},
-		Sources:  []RouteReference{{RouteID: "route-b", Fidelity: kernel.FidelityUnknown}, {RouteID: "route-a", Fidelity: kernel.FidelityUnknown}},
-		Policy:   StrategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 2}},
-		Profile:  map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
+		Name:       "qwen-3.7-max",
+		Identity:   kernel.PhysicalIdentity{CanonicalName: "qwen-3.7-max"},
+		Sources:    []RouteReference{{RouteID: "route-b", Fidelity: kernel.FidelityUnknown}, {RouteID: "route-a", Fidelity: kernel.FidelityUnknown}},
+		Policy:     StrategySpec{Ref: kernel.StrategyRef("round-robin-fallback", 1), Config: map[string]any{"stickyLimit": 2}},
+		LossPolicy: kernel.LossPolicy{Allow: []string{"reasoning.clamped"}, Deny: []string{"tool.arguments.dropped"}},
+		Profile:    map[string]kernel.Capability{"reasoning": {State: kernel.SupportNative}}, Discoverable: false, Enabled: true,
 	}
 	if err := s.UpsertPhysicalModel(physical); err != nil {
 		t.Fatal(err)
@@ -51,7 +52,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotPhysical.Sources, physical.Sources) || gotPhysical.Policy.Ref != kernel.StrategyRef("round-robin-fallback", 1) || gotPhysical.Discoverable {
+	if !reflect.DeepEqual(gotPhysical.Sources, physical.Sources) || gotPhysical.Policy.Ref != kernel.StrategyRef("round-robin-fallback", 1) || !reflect.DeepEqual(gotPhysical.LossPolicy, physical.LossPolicy) || gotPhysical.Discoverable {
 		t.Fatalf("physical=%#v", gotPhysical)
 	}
 
@@ -59,6 +60,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 		Name:         "junior",
 		Members:      []ModelReference{{Kind: PhysicalReference, ID: "qwen-3.7-max", Weight: 3}},
 		Strategy:     StrategySpec{Ref: kernel.StrategyRef("weighted-fallback", 1)},
+		LossPolicy:   kernel.LossPolicy{Allow: []string{"generation.clamped"}},
 		Discoverable: true, Enabled: true,
 	}
 	if err := s.UpsertComboModel(combo); err != nil {
@@ -68,7 +70,7 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(gotCombo.Members, combo.Members) || gotCombo.Strategy.Ref != combo.Strategy.Ref || !gotCombo.Discoverable {
+	if !reflect.DeepEqual(gotCombo.Members, combo.Members) || gotCombo.Strategy.Ref != combo.Strategy.Ref || !reflect.DeepEqual(gotCombo.LossPolicy, combo.LossPolicy) || !gotCombo.Discoverable {
 		t.Fatalf("combo=%#v", gotCombo)
 	}
 
