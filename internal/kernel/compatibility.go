@@ -225,7 +225,7 @@ func RequiredResponseEvents(request NormalizedRequest) []ResponseEventKind {
 	if len(request.Tools) > 0 {
 		events = append(events, EventToolCallDelta)
 	}
-	if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" || request.Thinking.Effort != "" || request.Thinking.BudgetTokens > 0 {
+	if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" && request.Thinking.Mode != "disabled" || request.Thinking.Effort != "" || request.Thinking.BudgetTokens > 0 {
 		events = append(events, EventThinkingDelta)
 	}
 	return uniqueEventKinds(events)
@@ -266,7 +266,7 @@ func hasGenerationOptions(raw map[string]any, format normalize.Format) bool {
 		"operationPayload": true,
 	}
 	if format == normalize.FormatAnthropic {
-		for _, key := range []string{"system", "tool_choice", "max_tokens", "temperature", "top_p", "stop_sequences", "metadata"} {
+		for _, key := range []string{"system", "tool_choice", "max_tokens", "temperature", "top_p", "stop_sequences", "metadata", "output_config"} {
 			structural[key] = true
 		}
 	}

@@ -100,6 +100,12 @@ and adapter fixtures. The Anthropic Messages renderer can semantically encode
 text and tool events from other providers. Reasoning blocks are rendered only
 when the decoder preserves the issuer signature and no semantic response
 transform can invalidate it; otherwise the route is rejected before dispatch.
+Anthropic adaptive effort and explicit token budgets are distinct canonical
+intents: only an effort level with a target-dialect equivalent can be encoded
+as OpenAI Responses reasoning effort. Thinking-token budgets are not silently
+reinterpreted as a total response-output cap. A complete Anthropic-client
+route additionally needs issuer-signed thinking egress; without that response
+contract, compatibility planning excludes the candidate before dispatch.
 
 ## Streaming invariants
 

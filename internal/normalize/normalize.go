@@ -56,7 +56,15 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 		r.Prompt = inlinePromptPlan(r.Messages)
 	}
 	r.Messages = conversationMessages(r.Messages)
-	r.Thinking = normalizeThinking(body)
+	if format == FormatAnthropic {
+		var valid bool
+		r.Thinking, valid = normalizeAnthropicThinking(body)
+		if !valid {
+			r.UnsupportedFacets = append(r.UnsupportedFacets, "reasoning.intent")
+		}
+	} else {
+		r.Thinking = normalizeThinking(body)
+	}
 	r.Session = SessionContext{ID: stringValue(headers.Get("x-session-id")), Client: headers.Get("user-agent"), Conversation: stringValue(body["conversation_id"])}
 	r.Continuity = normalizeContinuity(body)
 	r.Modalities = detectModalities(body)
@@ -429,7 +437,7 @@ func normalizeGenerationOptions(body map[string]any, format Format) GenerationOp
 	}
 	known := map[string]bool{
 		"model": true, "messages": true, "system": true, "stream": true, "tools": true,
-		"tool_choice": true, "thinking": true, "metadata": true, "max_tokens": true,
+		"tool_choice": true, "thinking": true, "output_config": true, "metadata": true, "max_tokens": true,
 		"temperature": true, "top_p": true, "stop_sequences": true,
 	}
 	for key := range body {
@@ -517,6 +525,64 @@ func normalizeThinking(body map[string]any) ThinkingIntent {
 	return ThinkingIntent{Mode: "inherit", Source: "absent"}
 }
 
+func normalizeAnthropicThinking(body map[string]any) (ThinkingIntent, bool) {
+	thinking, hasThinking := body["thinking"].(map[string]any)
+	outputConfig, hasOutputConfig := body["output_config"].(map[string]any)
+	if _, exists := body["thinking"]; exists && !hasThinking {
+		return ThinkingIntent{Mode: "inherit", Source: "thinking"}, false
+	}
+	if _, exists := body["output_config"]; exists && !hasOutputConfig {
+		return ThinkingIntent{Mode: "inherit", Source: "output_config"}, false
+	}
+	if hasOutputConfig && !anthropicOnlyKeys(outputConfig, "effort") {
+		return ThinkingIntent{Mode: "inherit", Source: "output_config"}, false
+	}
+	effort := stringValue(outputConfig["effort"])
+	if rawEffort, exists := outputConfig["effort"]; exists && (effort == "" || rawEffort == nil) {
+		return ThinkingIntent{Mode: "inherit", Source: "output_config"}, false
+	}
+	if hasThinking && !anthropicOnlyKeys(thinking, "type", "budget_tokens") {
+		return ThinkingIntent{Mode: "inherit", Source: "thinking"}, false
+	}
+	mode := stringValue(thinking["type"])
+	switch mode {
+	case "":
+		if hasThinking {
+			return ThinkingIntent{Mode: "inherit", Source: "thinking"}, false
+		}
+		if hasOutputConfig {
+			return ThinkingIntent{Mode: "inherit", Source: "output_config"}, false
+		}
+		return ThinkingIntent{Mode: "inherit", Source: "absent"}, true
+	case "enabled":
+		budget, validBudget := integerPointer(thinking["budget_tokens"])
+		if !validBudget || *budget <= 0 || effort != "" {
+			if validBudget {
+				return ThinkingIntent{Mode: "budget", BudgetTokens: *budget, Source: "thinking"}, false
+			}
+			return ThinkingIntent{Mode: "budget", Source: "thinking"}, false
+		}
+		return ThinkingIntent{Mode: "budget", BudgetTokens: *budget, Source: "thinking"}, true
+	case "disabled":
+		_, hasBudget := thinking["budget_tokens"]
+		if hasBudget || effort != "" {
+			return ThinkingIntent{Mode: "disabled", Source: "thinking"}, false
+		}
+		return ThinkingIntent{Mode: "disabled", Source: "thinking"}, true
+	case "adaptive":
+		_, hasBudget := thinking["budget_tokens"]
+		if hasBudget {
+			return ThinkingIntent{Mode: "auto", Source: "thinking"}, false
+		}
+		if effort != "" {
+			return ThinkingIntent{Mode: "level", Effort: effort, Source: "output_config"}, true
+		}
+		return ThinkingIntent{Mode: "auto", Source: "thinking"}, true
+	default:
+		return ThinkingIntent{Mode: "inherit", Source: "thinking"}, false
+	}
+}
+
 func normalizeContinuity(body map[string]any) ContinuityState {
 	return ContinuityState{ResponseID: stringValue(body["response_id"]), PreviousResponse: stringValue(body["previous_response_id"])}
 }
@@ -572,7 +638,7 @@ func isCoreKey(k string) bool {
 
 func isAnthropicCoreKey(key string) bool {
 	switch key {
-	case "system", "tool_choice", "max_tokens", "temperature", "top_p", "stop_sequences", "metadata":
+	case "system", "tool_choice", "max_tokens", "temperature", "top_p", "stop_sequences", "thinking", "output_config", "metadata":
 		return true
 	default:
 		return false

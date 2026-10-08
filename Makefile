@@ -53,7 +53,9 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/adapter/openai -run '^TestOpenAIResponsesDecoderPreservesToolIdentityForAnthropicEgress$$' -count=1
 	go test ./internal/adapter/anthropic -run '^TestAnthropicDecoderEmitsThinkingSignatureAsCanonicalEvent$$' -count=1
 	go test ./internal/normalize -run '^(TestAnthropicMessagesNormalizeToTypedConversationToolsAndOptions|TestAnthropicOpaqueThinkingAndToolResultErrorsBecomeExplicitFacets)$$' -count=1
+	go test ./internal/normalize -run '^(TestAnthropicAdaptiveEffortBecomesTypedReasoningIntent|TestAnthropicMalformedThinkingIntentIsExplicitlyUnsupported)$$' -count=1
 	go test ./internal/adapter/openai -run '^(TestAnthropicMessagesRequestMapsToOpenAIChatFromTypedIR|TestAnthropicThinkingIntentIsRejectedByOpenAIChatCompatibilityBeforeEncoding|TestKernelExcludesOpenAIChatRouteForAnthropicThinkingBeforeDispatch)$$' -count=1
+	go test ./internal/adapter/openai -run '^(TestAnthropicMessagesRequestMapsToOpenAIResponsesFromTypedIR|TestAnthropicThinkingBudgetIsRejectedByResponsesBeforeEncoding|TestAnthropicEffortRouteRequiresSignedThinkingEgress|TestKernelExcludesOpenAIResponsesRouteForAnthropicThinkingBudgetBeforeDispatch)$$' -count=1
 	go test ./internal/store -run '^TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential$$' -count=1
 
 	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1

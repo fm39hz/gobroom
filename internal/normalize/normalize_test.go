@@ -109,6 +109,45 @@ func TestAnthropicOpaqueThinkingAndToolResultErrorsBecomeExplicitFacets(t *testi
 	}
 }
 
+func TestAnthropicAdaptiveEffortBecomesTypedReasoningIntent(t *testing.T) {
+	result, err := JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":256,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"think"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Request.Thinking.Mode != "level" || result.Request.Thinking.Effort != "high" || result.Request.Thinking.Source != "output_config" {
+		t.Fatalf("reasoning intent=%#v", result.Request.Thinking)
+	}
+	for _, facet := range result.Request.UnsupportedFacets {
+		if facet == "reasoning.intent" {
+			t.Fatalf("valid adaptive effort marked unsupported: %v", result.Request.UnsupportedFacets)
+		}
+	}
+}
+
+func TestAnthropicMalformedThinkingIntentIsExplicitlyUnsupported(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"role","thinking":{},"messages":[]}`,
+		`{"model":"role","thinking":{"type":"enabled"},"messages":[]}`,
+		`{"model":"role","thinking":{"type":"enabled","budget_tokens":1.5},"messages":[]}`,
+		`{"model":"role","thinking":{"type":"adaptive","budget_tokens":1000},"messages":[]}`,
+		`{"model":"role","thinking":{"type":"future-mode"},"messages":[]}`,
+		`{"model":"role","thinking":{"type":"adaptive"},"output_config":{"effort":"high","future":true},"messages":[]}`,
+		`{"model":"role","thinking":{"type":"adaptive"},"output_config":{"effort":4},"messages":[]}`,
+	} {
+		result, err := JSON("/v1/messages", http.Header{}, []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, facet := range result.Request.UnsupportedFacets {
+			found = found || facet == "reasoning.intent"
+		}
+		if !found {
+			t.Errorf("malformed reasoning intent was not retained as unsupported: %s", body)
+		}
+	}
+}
+
 func TestStreamingDefaultsToNonStreamAndHonorsExplicitChoice(t *testing.T) {
 	for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/v1/responses"} {
 		result, err := Map(path, http.Header{}, map[string]any{"model": "model-a", "messages": []any{}})

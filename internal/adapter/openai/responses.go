@@ -21,24 +21,80 @@ type responsesRequestCodec struct{ adapter Responses }
 
 func (c responsesRequestCodec) ID() string { return "openai-responses-json" }
 func (c responsesRequestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
-	native := input.Request.SourceFormat == normalize.FormatOpenAIResponses
+	return openAIResponsesFacetReport(input)
+}
+
+func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.FacetMapping {
+	request := input.Request
+	native := request.SourceFormat == normalize.FormatOpenAIResponses
+	anthropic := request.SourceFormat == normalize.FormatAnthropic
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
 		if kernel.IsResponseCompatibilityFacet(facet) {
 			continue
 		}
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Responses request codec cannot safely translate this facet from the client contract"}
-		switch {
-		case native && (facet == kernel.FacetWireRequest || facet == kernel.FacetPromptLayers || facet == kernel.FacetToolDefinitions || facet == kernel.FacetToolHistory || facet == kernel.FacetToolChoice || facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity || facet == kernel.FacetVisionInput || facet == kernel.FacetAudioInput || facet == kernel.FacetVideoInput || facet == kernel.FacetDocumentInput || facet == kernel.FacetGenerationOptions):
-			mapping.Disposition = kernel.FacetPreserved
-			mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
-		case !native && (facet == kernel.FacetReasoningIntent || facet == kernel.FacetContinuity):
-			mapping.Disposition = kernel.FacetTranslated
-			mapping.Reason = "the canonical reasoning or previous-response value is encoded as an OpenAI Responses field"
+		if native {
+			switch facet {
+			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetContinuity, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
+			}
+		} else if anthropic {
+			mapping.Reason = "Anthropic Messages semantics have no declared Responses mapping"
+			if responsesAnthropicFacetRepresentable(request, facet) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "Anthropic Messages semantics are rebuilt from typed IR into the Responses input contract"
+			}
 		}
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func responsesAnthropicFacetRepresentable(request kernel.NormalizedRequest, facet string) bool {
+	if hasUnsupportedFacet(request, facet) {
+		return false
+	}
+	switch facet {
+	case kernel.FacetWireRequest:
+		return true
+	case kernel.FacetPromptLayers:
+		return openAIAnthropicPromptRepresentable(request)
+	case kernel.FacetToolDefinitions:
+		return openAIAnthropicToolsRepresentable(request)
+	case kernel.FacetToolHistory:
+		if !openAIAnthropicHistoryRepresentable(request) {
+			return false
+		}
+		for _, message := range request.Messages {
+			if message.Role == "tool" {
+				if _, err := anthropicToolOutputText(message.Content); err != nil {
+					return false
+				}
+			}
+		}
+		return true
+	case kernel.FacetToolChoice:
+		return openAIAnthropicToolChoiceRepresentable(request.ToolChoice) && openAIAnthropicToolChoiceMatchesTools(request)
+	case kernel.FacetReasoningIntent:
+		return openAIResponsesAnthropicReasoningRepresentable(request.Thinking)
+	case kernel.FacetGenerationOptions:
+		return openAIAnthropicResponsesGenerationRepresentable(request.Generation)
+	case kernel.FacetVisionInput:
+		return openAIAnthropicContentRepresentable(request)
+	default:
+		return false
+	}
+}
+
+func hasUnsupportedFacet(request kernel.NormalizedRequest, facet string) bool {
+	for _, unsupported := range request.UnsupportedFacets {
+		if unsupported == facet {
+			return true
+		}
+	}
+	return false
 }
 func (c responsesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
@@ -73,10 +129,18 @@ func (Responses) DecodeResponse(ctx context.Context, response kernel.UpstreamRes
 func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	url := "/responses"
 	body := map[string]any{}
-	for key, value := range request.Raw {
-		body[key] = value
+	if request.SourceFormat == normalize.FormatAnthropic {
+		var err error
+		body, err = encodeAnthropicRequestAsOpenAIResponses(request, route.ExternalModel)
+		if err != nil {
+			return kernel.UpstreamRequest{}, err
+		}
+	} else {
+		for key, value := range request.Raw {
+			body[key] = value
+		}
 	}
-	if request.SourceFormat != normalize.FormatOpenAIResponses {
+	if request.SourceFormat != normalize.FormatOpenAIResponses && request.SourceFormat != normalize.FormatAnthropic {
 		delete(body, "reasoning_effort")
 		for key, value := range normalize.OpenAIResponsesReasoning(request.Thinking) {
 			body[key] = value
