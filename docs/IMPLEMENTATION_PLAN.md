@@ -170,14 +170,14 @@ pending.
    renderer now maps text/tool/usage and issuer-signed thinking; missing or
    transform-invalid signatures reject admission. Fake OpenAI Chat and
    Responses decoder→Anthropic renderer fixtures prove JSON/SSE cross-wire
-   verticals. Remaining:
-   Physical/Combo nodes now persist named loss grants/denials; grants flow down
+   verticals. Physical/Combo nodes now persist named loss grants/denials; grants flow down
    the model path, denial wins, and admitted lossy plans add fidelity/loss IDs
    to durable usage records. Repeatable CLI `--allow-loss`/`--deny-loss` and
-   portable bundles carry this typed policy. Remaining: server-wide loss
-   ceilings, requested/effective-value and policy-source records, include
-   scoped transforms/artifact transfers in the plan, retain route-level
-   explanations and complete the full SG1/SG4 compatibility matrices.
+   portable bundles carry this typed policy. Usage loss records include
+   requested/effective values, semantic paths and granting model nodes.
+   Remaining: server-wide loss ceilings, scoped transforms/artifact transfers
+   in the plan, route-level explanations, and the full SG1/SG4 compatibility
+   matrices.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

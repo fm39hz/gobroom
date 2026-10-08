@@ -283,9 +283,9 @@ through SQLite, secret-free config bundles and the immutable serving snapshot.
 Grants accumulate down the selected graph path; denials accumulate and win.
 The compatibility planner admits a lossy mapping only when every reported loss
 ID is granted and not denied, and durable usage records retain the resulting
-fidelity and loss IDs. A server-wide allow ceiling, requested/effective values,
-semantic-path and policy-source details remain conformance work; this compact
-usage summary is not a substitute for those richer records.
+fidelity plus each loss's requested/effective values, semantic paths and
+granting model-node sources. A server-wide allow ceiling remains conformance
+work; model policy grants alone cannot establish a global maximum.
 
 Reasoning `exact`, `allow_clamp` and `best_effort` bind to this policy as specified
 in [Physical models](PHYSICAL_MODELS.md#strictness-and-translation). Explicit

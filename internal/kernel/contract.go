@@ -453,7 +453,7 @@ type UsageEvent struct {
 	OutputTokens          int64
 	EstimatedCost         float64
 	CompatibilityFidelity CompatibilityFidelity `json:"compatibilityFidelity,omitempty"`
-	CompatibilityLosses   []string              `json:"compatibilityLosses,omitempty"`
+	CompatibilityLosses   []LossRecord          `json:"compatibilityLosses,omitempty"`
 }
 
 type UsageSourceOptions struct {

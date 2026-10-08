@@ -169,7 +169,7 @@ func (a ComposedAdapter) PlanCompatibility(input CompatibilityContext) Compatibi
 	if decision.Fidelity == FidelityLossy || len(decision.Losses) > 0 {
 		disposition = FacetDegraded
 	}
-	mapping := FacetMapping{Facet: FacetWireResponse, Paths: []string{"response"}, Disposition: disposition, LossIDs: append([]string(nil), decision.Losses...), Reason: decision.Reason}
+	mapping := FacetMapping{Facet: FacetWireResponse, Paths: []string{"response"}, Disposition: disposition, Losses: cloneLossRecords(decision.Losses), Reason: decision.Reason}
 	responseReport := []FacetMapping{mapping}
 	if len(decision.Mappings) > 0 {
 		responseReport = append([]FacetMapping(nil), decision.Mappings...)

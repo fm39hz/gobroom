@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -60,7 +61,9 @@ func (a namedLossAdapter) PlanCompatibility(input CompatibilityContext) Compatib
 	base := fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 	return ComposeCompatibilityPlan([][]FacetMapping{
 		base.Mappings,
-		{{Facet: "generation.temperature", Paths: []string{"request.temperature"}, Disposition: FacetDegraded, LossIDs: []string{"generation.temperature.clamped"}, Reason: "temperature was clamped to the provider range"}},
+		{{Facet: "generation.temperature", Paths: []string{"request.temperature"}, Disposition: FacetDegraded, Losses: []LossRecord{{
+			ID: "generation.temperature.clamped", Requested: map[string]any{"temperature": 0.8}, Effective: map[string]any{"temperature": 0.3}, SemanticPaths: []string{"request.temperature"},
+		}}, Reason: "temperature was clamped to the provider range"}},
 	}, input.Policy)
 }
 func (namedLossAdapter) RenderResponse(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
@@ -185,7 +188,7 @@ func TestNodeLossPoliciesFlowDownAndPermittedLossIsRecordedInUsage(t *testing.T)
 	}
 	select {
 	case event := <-allowed.Events:
-		if event.CompatibilityFidelity != FidelityLossy || len(event.CompatibilityLosses) != 1 || event.CompatibilityLosses[0] != "generation.temperature.clamped" {
+		if event.CompatibilityFidelity != FidelityLossy || len(event.CompatibilityLosses) != 1 || event.CompatibilityLosses[0].ID != "generation.temperature.clamped" || !reflect.DeepEqual(event.CompatibilityLosses[0].Requested, map[string]any{"temperature": 0.8}) || !reflect.DeepEqual(event.CompatibilityLosses[0].Effective, map[string]any{"temperature": 0.3}) || !reflect.DeepEqual(event.CompatibilityLosses[0].SemanticPaths, []string{"request.temperature"}) || !reflect.DeepEqual(event.CompatibilityLosses[0].PolicySources, []string{"combo"}) {
 			t.Fatalf("compatibility outcome missing from usage event: %#v", event)
 		}
 	default:

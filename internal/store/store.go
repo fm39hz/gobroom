@@ -815,7 +815,7 @@ type UsageRecord struct {
 	TTFTMS                                                                       int64
 	OutputTokensPerSecond                                                        float64
 	CompatibilityFidelity                                                        kernel.CompatibilityFidelity `json:"compatibilityFidelity,omitempty"`
-	CompatibilityLosses                                                          []string                     `json:"compatibilityLosses,omitempty"`
+	CompatibilityLosses                                                          []kernel.LossRecord          `json:"compatibilityLosses,omitempty"`
 }
 
 type UsageSummary struct {

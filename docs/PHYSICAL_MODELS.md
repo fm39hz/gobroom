@@ -360,8 +360,8 @@ headless CLI exposes repeatable `--allow-loss` and `--deny-loss` flags; grants
 flow down the selected model path while denials are inherited and take
 precedence. This is distinct from reasoning strictness: a codec must declare a
 named degradation before any policy can permit it. Admitted fidelity and loss
-IDs are retained in usage records. Server-wide ceilings and complete
-requested/effective-value provenance remain pending.
+records (requested/effective values, semantic paths and granting model nodes)
+are retained in usage. A server-wide loss ceiling remains pending.
 
 ## Performance and capacity
 

@@ -200,6 +200,7 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 		compatibilityContext.Policy.RequiredFacets = RequiredRequestFacets(request)
 		compatibilityContext.Policy.AllowedLosses = append([]string(nil), lossPolicy.AllowedLosses...)
 		compatibilityContext.Policy.DeniedLosses = append([]string(nil), lossPolicy.DeniedLosses...)
+		compatibilityContext.Policy.LossSources = cloneLossSources(lossPolicy.LossSources)
 		for _, event := range RequiredResponseEvents(request) {
 			compatibilityContext.Policy.RequiredFacets = append(compatibilityContext.Policy.RequiredFacets, ResponseEventFacet(event))
 		}
@@ -215,17 +216,24 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 	return nil, CompatibilityPlan{Fidelity: FidelityUnsupported, Reason: "no adapter satisfies the effective compatibility policy"}
 }
 
+func cloneLossSources(sources map[string][]string) map[string][]string {
+	if sources == nil {
+		return nil
+	}
+	clone := make(map[string][]string, len(sources))
+	for id, nodes := range sources {
+		clone[id] = append([]string(nil), nodes...)
+	}
+	return clone
+}
+
 func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, resourceBounds extensions.ResourceBounds, externalRequirements []normalize.FeatureRequirement, transformBindings []TransformBinding, scopes []TransformScope, lossPolicy CompatibilityPolicy, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
 	if stack[node.ID] {
 		return fmt.Errorf("model cycle at %q", node.ID)
 	}
 	stack[node.ID] = true
 	defer delete(stack, node.ID)
-	mergedLossPolicy := MergeLossPolicies(
-		LossPolicy{Allow: lossPolicy.AllowedLosses, Deny: lossPolicy.DeniedLosses},
-		node.LossPolicy,
-	)
-	lossPolicy = mergedLossPolicy
+	lossPolicy = AddLossPolicy(lossPolicy, node.ID, node.LossPolicy)
 	if req.Thinking.Mode == "" || req.Thinking.Mode == "inherit" {
 		if node.Reasoning.Mode != "" && node.Reasoning.Mode != "inherit" {
 			req.Thinking = node.Reasoning
@@ -536,7 +544,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 			}, OnComplete: func(event UsageEvent) {
 				event.CompatibilityFidelity = compatibilityPlan.Fidelity
-				event.CompatibilityLosses = append([]string(nil), compatibilityPlan.Losses...)
+				event.CompatibilityLosses = cloneLossRecords(compatibilityPlan.Losses)
 				releaseAttempt()
 				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {

@@ -1,6 +1,8 @@
 package kernel
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -56,17 +58,29 @@ func IsOperationArtifactFacet(facet string) bool {
 // FacetMapping is a stage-local declaration. Mappings are composed in runtime
 // order; a downstream stage must accept the output semantics of its upstream.
 type FacetMapping struct {
-	Facet       string
-	Paths       []string
-	Disposition FacetDisposition
-	LossIDs     []string
-	Reason      string
+	Facet       string           `json:"facet"`
+	Paths       []string         `json:"paths,omitempty"`
+	Disposition FacetDisposition `json:"disposition"`
+	Losses      []LossRecord     `json:"losses,omitempty"`
+	Reason      string           `json:"reason,omitempty"`
+}
+
+// LossRecord describes an explicit value change rather than only naming it.
+// Requested/effective are JSON values owned by the codec that declares the
+// degradation; policy sources are added by the model-path planner.
+type LossRecord struct {
+	ID            string   `json:"id"`
+	Requested     any      `json:"requested"`
+	Effective     any      `json:"effective"`
+	SemanticPaths []string `json:"semanticPaths"`
+	PolicySources []string `json:"policySources,omitempty"`
 }
 
 type CompatibilityPolicy struct {
 	RequiredFacets []string
 	AllowedLosses  []string
 	DeniedLosses   []string
+	LossSources    map[string][]string
 }
 
 // LossPolicy is attached to a node in the model graph. Grants accumulate down
@@ -76,15 +90,21 @@ type LossPolicy struct {
 	Deny  []string `json:"deny,omitempty"`
 }
 
-func MergeLossPolicies(path ...LossPolicy) CompatibilityPolicy {
-	var result CompatibilityPolicy
-	for _, policy := range path {
-		result.AllowedLosses = appendUnique(result.AllowedLosses, policy.Allow...)
-		result.DeniedLosses = appendUnique(result.DeniedLosses, policy.Deny...)
+func AddLossPolicy(policy CompatibilityPolicy, source string, node LossPolicy) CompatibilityPolicy {
+	policy.AllowedLosses = appendUnique(policy.AllowedLosses, node.Allow...)
+	policy.DeniedLosses = appendUnique(policy.DeniedLosses, node.Deny...)
+	if policy.LossSources == nil {
+		policy.LossSources = make(map[string][]string)
 	}
-	result.AllowedLosses = uniqueSorted(result.AllowedLosses)
-	result.DeniedLosses = uniqueSorted(result.DeniedLosses)
-	return result
+	for _, id := range node.Allow {
+		policy.LossSources[id] = appendUnique(policy.LossSources[id], source)
+	}
+	policy.AllowedLosses = uniqueSorted(policy.AllowedLosses)
+	policy.DeniedLosses = uniqueSorted(policy.DeniedLosses)
+	for id := range policy.LossSources {
+		policy.LossSources[id] = uniqueSorted(policy.LossSources[id])
+	}
+	return policy
 }
 
 func ValidateLossPolicy(policy LossPolicy) error {
@@ -113,7 +133,7 @@ type CompatibilityPlan struct {
 	Supported bool
 	Fidelity  CompatibilityFidelity
 	Mappings  []FacetMapping
-	Losses    []string
+	Losses    []LossRecord
 	Reason    string
 }
 
@@ -156,7 +176,19 @@ func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPoli
 		combined := FacetMapping{Facet: facet, Disposition: FacetPreserved}
 		for _, stage := range stages {
 			combined.Paths = appendUnique(combined.Paths, stage.Paths...)
-			combined.LossIDs = appendUnique(combined.LossIDs, stage.LossIDs...)
+			for _, loss := range stage.Losses {
+				if err := validateLossRecord(loss); err != nil {
+					return unsupportedPlan(fmt.Sprintf("facet %q has an invalid loss declaration: %v", facet, err))
+				}
+				// Policy provenance is planner-owned; a codec can declare the
+				// degradation but cannot self-authorize the caller's grant.
+				loss.PolicySources = nil
+				var err error
+				combined.Losses, err = mergeLossRecord(combined.Losses, loss)
+				if err != nil {
+					return unsupportedPlan(fmt.Sprintf("facet %q has conflicting loss declarations: %v", facet, err))
+				}
+			}
 			if stage.Reason != "" {
 				combined.Reason = stage.Reason
 			}
@@ -173,19 +205,22 @@ func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPoli
 				}
 			}
 		}
-		if len(combined.LossIDs) > 0 && combined.Disposition != FacetUnknown && combined.Disposition != FacetUnsupported {
+		if len(combined.Losses) > 0 && combined.Disposition != FacetUnknown && combined.Disposition != FacetUnsupported {
 			combined.Disposition = FacetDegraded
 		}
-		if combined.Disposition == FacetDegraded && len(combined.LossIDs) == 0 {
+		if combined.Disposition == FacetDegraded && len(combined.Losses) == 0 {
 			return unsupportedPlan(fmt.Sprintf("facet %q reports degradation without a named loss", facet))
 		}
-		for _, lossID := range combined.LossIDs {
-			if denied[lossID] || !allowed[lossID] {
+		for i := range combined.Losses {
+			loss := &combined.Losses[i]
+			if denied[loss.ID] || !allowed[loss.ID] {
 				combined.Disposition = FacetUnsupported
-				combined.Reason = fmt.Sprintf("loss %q is not permitted by compatibility policy", lossID)
+				combined.Reason = fmt.Sprintf("loss %q is not permitted by compatibility policy", loss.ID)
+			} else {
+				loss.PolicySources = appendUnique(loss.PolicySources, policy.LossSources[loss.ID]...)
 			}
 		}
-		if (requiredSet[facet] || len(combined.LossIDs) > 0) && (combined.Disposition == FacetUnknown || combined.Disposition == FacetUnsupported) {
+		if (requiredSet[facet] || len(combined.Losses) > 0) && (combined.Disposition == FacetUnknown || combined.Disposition == FacetUnsupported) {
 			plan.Supported = false
 			if plan.Reason == "" {
 				plan.Reason = combined.Reason
@@ -196,7 +231,13 @@ func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPoli
 		}
 		if combined.Disposition == FacetDegraded {
 			plan.Fidelity = FidelityLossy
-			plan.Losses = appendUnique(plan.Losses, combined.LossIDs...)
+			for _, loss := range combined.Losses {
+				var err error
+				plan.Losses, err = mergeLossRecord(plan.Losses, loss)
+				if err != nil {
+					return unsupportedPlan(fmt.Sprintf("conflicting loss records for %q: %v", loss.ID, err))
+				}
+			}
 		} else if combined.Disposition == FacetTranslated && plan.Fidelity == FidelityNative {
 			plan.Fidelity = FidelityTranslated
 		}
@@ -339,8 +380,103 @@ func unsupportedPlan(reason string) CompatibilityPlan {
 
 func cloneFacetMapping(mapping FacetMapping) FacetMapping {
 	mapping.Paths = append([]string(nil), mapping.Paths...)
-	mapping.LossIDs = append([]string(nil), mapping.LossIDs...)
+	mapping.Losses = cloneLossRecords(mapping.Losses)
 	return mapping
+}
+
+func validateLossRecord(loss LossRecord) error {
+	const maxLossValueBytes = 4096
+	const maxLossPathBytes = 256
+	if loss.ID == "" || strings.TrimSpace(loss.ID) != loss.ID || strings.ContainsAny(loss.ID, " \t\r\n") {
+		return fmt.Errorf("loss ID is invalid")
+	}
+	if loss.Requested == nil || loss.Effective == nil {
+		return fmt.Errorf("requested and effective values are required")
+	}
+	if len(loss.SemanticPaths) == 0 {
+		return fmt.Errorf("at least one semantic path is required")
+	}
+	requested, err := json.Marshal(loss.Requested)
+	if err != nil {
+		return fmt.Errorf("requested value is not JSON-compatible: %w", err)
+	}
+	if len(requested) > maxLossValueBytes {
+		return fmt.Errorf("requested value exceeds %d encoded bytes", maxLossValueBytes)
+	}
+	effective, err := json.Marshal(loss.Effective)
+	if err != nil {
+		return fmt.Errorf("effective value is not JSON-compatible: %w", err)
+	}
+	if len(effective) > maxLossValueBytes {
+		return fmt.Errorf("effective value exceeds %d encoded bytes", maxLossValueBytes)
+	}
+	for _, path := range loss.SemanticPaths {
+		if path == "" || len(path) > maxLossPathBytes {
+			return fmt.Errorf("semantic path is empty or exceeds %d bytes", maxLossPathBytes)
+		}
+	}
+	return nil
+}
+
+func mergeLossRecord(records []LossRecord, incoming LossRecord) ([]LossRecord, error) {
+	for index := range records {
+		current := &records[index]
+		if current.ID != incoming.ID {
+			continue
+		}
+		requestedEqual, err := jsonValuesEqual(current.Requested, incoming.Requested)
+		if err != nil || !requestedEqual {
+			return records, fmt.Errorf("loss %q has conflicting requested values", incoming.ID)
+		}
+		effectiveEqual, err := jsonValuesEqual(current.Effective, incoming.Effective)
+		if err != nil || !effectiveEqual {
+			return records, fmt.Errorf("loss %q has conflicting effective values", incoming.ID)
+		}
+		current.SemanticPaths = appendUnique(current.SemanticPaths, incoming.SemanticPaths...)
+		current.PolicySources = appendUnique(current.PolicySources, incoming.PolicySources...)
+		return records, nil
+	}
+	cloned := cloneLossRecord(incoming)
+	return append(records, cloned), nil
+}
+
+func jsonValuesEqual(left, right any) (bool, error) {
+	leftJSON, err := json.Marshal(left)
+	if err != nil {
+		return false, err
+	}
+	rightJSON, err := json.Marshal(right)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(leftJSON, rightJSON), nil
+}
+
+func cloneLossRecords(records []LossRecord) []LossRecord {
+	result := make([]LossRecord, len(records))
+	for index, record := range records {
+		result[index] = cloneLossRecord(record)
+	}
+	return result
+}
+
+func cloneLossRecord(record LossRecord) LossRecord {
+	cloneValue := func(value any) any {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return value
+		}
+		var clone any
+		if json.Unmarshal(encoded, &clone) != nil {
+			return value
+		}
+		return clone
+	}
+	record.Requested = cloneValue(record.Requested)
+	record.Effective = cloneValue(record.Effective)
+	record.SemanticPaths = append([]string(nil), record.SemanticPaths...)
+	record.PolicySources = append([]string(nil), record.PolicySources...)
+	return record
 }
 
 func uniqueSorted(values []string) []string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -111,19 +112,48 @@ func TestCompatibilityPlanFailsClosedForRequiredUnknownOrUnsupportedFacet(t *tes
 }
 
 func TestCompatibilityPlanRequiresNamedAndGrantedLosses(t *testing.T) {
-	report := [][]FacetMapping{{{Facet: "reasoning.effort", Disposition: FacetDegraded, LossIDs: []string{"reasoning.clamped"}}}}
+	report := [][]FacetMapping{{{Facet: "reasoning.effort", Disposition: FacetDegraded, Losses: []LossRecord{{
+		ID: "reasoning.clamped", Requested: "xhigh", Effective: "high", SemanticPaths: []string{"request.reasoning.effort"}, PolicySources: []string{"forged-by-codec"},
+	}}}}}
 	policy := CompatibilityPolicy{RequiredFacets: []string{"reasoning.effort"}}
 	denied := ComposeCompatibilityPlan(report, policy)
 	if denied.Supported || denied.Fidelity != FidelityUnsupported {
 		t.Fatalf("ungranted degradation must be rejected: %#v", denied)
 	}
-	allowed := ComposeCompatibilityPlan(report, CompatibilityPolicy{RequiredFacets: policy.RequiredFacets, AllowedLosses: []string{"reasoning.clamped"}})
-	if !allowed.Supported || allowed.Fidelity != FidelityLossy || !reflect.DeepEqual(allowed.Losses, []string{"reasoning.clamped"}) {
+	allowed := ComposeCompatibilityPlan(report, CompatibilityPolicy{RequiredFacets: policy.RequiredFacets, AllowedLosses: []string{"reasoning.clamped"}, LossSources: map[string][]string{"reasoning.clamped": {"combo.senior"}}})
+	if !allowed.Supported || allowed.Fidelity != FidelityLossy || len(allowed.Losses) != 1 || allowed.Losses[0].ID != "reasoning.clamped" || allowed.Losses[0].Requested != "xhigh" || allowed.Losses[0].Effective != "high" || !reflect.DeepEqual(allowed.Losses[0].SemanticPaths, []string{"request.reasoning.effort"}) || !reflect.DeepEqual(allowed.Losses[0].PolicySources, []string{"combo.senior"}) {
 		t.Fatalf("explicitly granted loss was not retained in plan: %#v", allowed)
 	}
 	deniedAgain := ComposeCompatibilityPlan(report, CompatibilityPolicy{RequiredFacets: policy.RequiredFacets, AllowedLosses: []string{"reasoning.clamped"}, DeniedLosses: []string{"reasoning.clamped"}})
 	if deniedAgain.Supported {
 		t.Fatalf("explicit denial must dominate a grant: %#v", deniedAgain)
+	}
+}
+
+func TestCompatibilityPlanBoundsLossEvidenceAndRejectsConflictingDeclarations(t *testing.T) {
+	base := LossRecord{ID: "prompt.loss", Requested: "original", Effective: "changed", SemanticPaths: []string{"request.prompt"}}
+	cases := []struct {
+		name    string
+		records []LossRecord
+	}{
+		{name: "oversized requested value", records: []LossRecord{{ID: base.ID, Requested: strings.Repeat("x", 4097), Effective: base.Effective, SemanticPaths: base.SemanticPaths}}},
+		{name: "missing semantic path", records: []LossRecord{{ID: base.ID, Requested: base.Requested, Effective: base.Effective}}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			plan := ComposeCompatibilityPlan([][]FacetMapping{{{Facet: "prompt", Disposition: FacetDegraded, Losses: test.records}}}, CompatibilityPolicy{})
+			if plan.Supported || !strings.Contains(plan.Reason, "invalid loss declaration") {
+				t.Fatalf("invalid loss evidence accepted: %#v", plan)
+			}
+		})
+	}
+	conflicting := LossRecord{ID: base.ID, Requested: "different", Effective: base.Effective, SemanticPaths: []string{"request.prompt"}}
+	plan := ComposeCompatibilityPlan([][]FacetMapping{
+		{{Facet: "prompt", Disposition: FacetDegraded, Losses: []LossRecord{base}}},
+		{{Facet: "prompt", Disposition: FacetDegraded, Losses: []LossRecord{conflicting}}},
+	}, CompatibilityPolicy{})
+	if plan.Supported || !strings.Contains(plan.Reason, "conflicting loss declarations") {
+		t.Fatalf("conflicting loss records were accepted: %#v", plan)
 	}
 }
 
