@@ -85,7 +85,7 @@ install-all: install ## install binaries and user systemd unit
 	systemctl --user daemon-reload
 	systemctl --user enable gobroomd 2>/dev/null || true
 	systemctl --user restart gobroomd
-	@for attempt in $$(seq 1 50); do \
+	@for attempt in $$(seq 1 150); do \
 		if test -S /run/user/$$(id -u)/gobroom.sock; then exit 0; fi; \
 		sleep 0.1; \
 	done; \
