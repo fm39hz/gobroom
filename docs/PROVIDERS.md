@@ -281,10 +281,14 @@ is fixed in [Auth driver and interactive session](EXTENSION_CONTRACTS.md#5-auth-
 
 All configurable primitives contribute the same versioned descriptor/schema
 metadata. User definitions and enabled bindings are part of portable bundles;
-compiled-module dependencies are checked before application. Credentials and
-live auth sessions remain excluded. See
+secret-free provider definitions are embedded, while opaque/sensitive
+definitions are exact external dependencies checked before application. Newly
+imported portable definitions are stored and require a daemon restart to enter
+the frozen runtime catalog. Credentials and live auth sessions remain excluded.
+Implementation binaries/custom primitive code are never embedded. See
 [configuration binding](EXTENSION_CONTRACTS.md#1-extension-descriptor-and-configuration-binding)
-for the target contract; current bundles do not yet carry this complete catalog.
+for the dependency-lock contract; operators install external primitive modules
+on the target before applying bundles that depend on them.
 
 Interactive authorization-code/device-flow start/callback handling, usage
 extraction, provider sessions, quota APIs, embeddings/media operations and
