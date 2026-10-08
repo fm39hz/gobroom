@@ -206,7 +206,8 @@ pending.
    checked against declared semantic effects; response event mutations are
    similarly checked. Remaining: schema-driven TUI binding UX, complete opaque
    artifact/effect coverage, scoped safe-fail-open/resource budgets, and full
-   fallback, cancellation and original-versus-rendered accounting proofs.
+   fallback and cancellation accounting proofs; provider usage is now proven
+   immutable under client-side usage projection.
 4. **C4 — daemon auth coordinator (in progress):** authorization-code IPC owns
    state/S256 PKCE, bounded expiry/exchange, callback validation, cancellation
    and replay rejection. RFC 8628 uses `x/oauth2` DeviceAuth/DeviceAccessToken;

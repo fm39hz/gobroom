@@ -51,6 +51,7 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/artifacts -run '^(TestResponseArtifactScopeStreamsAuthorizesAndReleasesLease|TestResponseArtifactScopeRejectsUnauthorizedRecipientWithoutSpooling|TestResponseArtifactScopeEnforcesAggregateOperationOutputBound)$$' -count=1
 	go test ./internal/kernel -run '^TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease$$' -count=1
 	go test ./internal/kernel -run '^TestResponseTransformCannotRewriteArtifactReference$$' -count=1
+	go test ./internal/kernel -run '^TestResponseTransformDoesNotRewriteProviderUsageAccounting$$' -count=1
 	go test ./internal/operations ./internal/kernel -run '^(TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode|TestComposedSemanticPipelineBoundsEachDecodedResponseEvent|TestResponseCommitWriterEnforcesOperationOutputBound)$$' -count=1
 	go test ./internal/extensions ./internal/operations -run '^(TestArtifactContractEnforcesOwnerScopeSensitivityAndBoundedBodyRef|TestOperationAcceptsOnlyRegisteredOwnedArtifacts)$$' -count=1
 	go test ./internal/artifacts -run '^(TestFileStoreStreamsBoundedOwnerScopedLeases|TestFileStoreEnforcesPerBodyTotalAndContextBounds|TestFileStorePrunesExpiredBodyReferences|TestContextArtifactAccessRequiresExactRecipientAndPolicy)$$' -count=1
