@@ -44,6 +44,7 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/daemon -run '^(TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart|TestDaemonLoadsPortableProviderDefinitionFromStoreBeforeRuntimeBinding)$$' -count=1
 	go test ./internal/store -run '^TestCompatibilityLossCeilingValidationAndClear$$' -count=1
 	go test ./internal/store -run '^TestNormalizedRuntimePrimitivesPersistSeparately$$' -count=1
+	go test ./internal/store -run '^TestTransformBindingFailureModeMigrationDefaultsClosed$$' -count=1
 	go test ./internal/tui -run '^TestUsageEntryShowsCompatibilityPlanSummary$$' -count=1
 	go test ./internal/kernel -run '^TestExplainCompatibilityUsesModelPathAndDoesNotDispatch$$' -count=1
 	go test ./internal/daemon -run '^TestRouteExplainIPCPreflightsRequestCompatibility$$' -count=1
@@ -52,6 +53,8 @@ test-conformance: ## architectural extension change simulations (M15)
 	go test ./internal/kernel -run '^TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease$$' -count=1
 	go test ./internal/kernel -run '^TestResponseTransformCannotRewriteArtifactReference$$' -count=1
 	go test ./internal/kernel -run '^TestResponseTransformDoesNotRewriteProviderUsageAccounting$$' -count=1
+	go test ./internal/kernel -run '^(TestRequestTransformSafeFailOpenRollsBackAndReportsWithoutErrorText|TestTransformCannotFailOpenProtectedIdentityOrUndeclaredDescriptorMode|TestResponseTransformSafeFailOpenOnlyBeforeOutput|TestResponseSafeFailOpenStopsAfterFirstRenderedEvent|TestKernelRecordsRequestTransformSafeFailOpenInUsagePlan)$$' -count=1
+	go test ./internal/provider -run '^TestRuntimeCatalogPinsTransformFailureModes$$' -count=1
 	go test ./internal/normalize -run '^TestIdempotencyKeyIsRequestScopedAndValidated$$' -count=1
 	go test ./internal/provider -run '^TestProviderOperationBindsOnlyValidIdempotencyHeaderNames$$' -count=1
 	go test ./internal/controlplane -run '^TestLoaderBuildsTypedPhysicalAndComboGraph$$' -count=1

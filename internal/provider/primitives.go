@@ -396,7 +396,7 @@ func (r *RuntimeRegistry) RegisterRequestTransform(transform kernel.RequestTrans
 	if err := validateRuntimeTransformRegistration(definition.Ref, definition.ImplementationVersion, definition.OptionsSchemaRef, optionsSchema); err != nil {
 		return err
 	}
-	if err := registerTransformDescriptor(r.Primitives.catalog, definition.Ref, definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef, definition.ResourceBounds, string(definition.Stage), transformEffects(definition.Effects), optionsSchema, transform); err != nil {
+	if err := registerTransformDescriptor(r.Primitives.catalog, definition.Ref, definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef, definition.ResourceBounds, string(definition.Stage), transformEffects(definition.Effects), transformFailureModes(definition.FailureModes), optionsSchema, transform); err != nil {
 		return err
 	}
 	return nil
@@ -420,7 +420,7 @@ func (r *RuntimeRegistry) RegisterResponseTransform(transform kernel.ResponseTra
 	for i, effect := range definition.Effects {
 		capabilities[i] = string(effect)
 	}
-	if err := registerTransformDescriptor(r.Primitives.catalog, definition.Ref, definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef, definition.ResourceBounds, "response.semantic", capabilities, optionsSchema, transform); err != nil {
+	if err := registerTransformDescriptor(r.Primitives.catalog, definition.Ref, definition.ImplementationVersion, definition.Label, definition.Description, definition.OptionsSchemaRef, definition.ResourceBounds, "response.semantic", capabilities, transformFailureModes(definition.FailureModes), optionsSchema, transform); err != nil {
 		return err
 	}
 	return nil
@@ -461,7 +461,7 @@ func validateRuntimeTransformRegistration(ref extensions.Ref, implementationVers
 	return nil
 }
 
-func registerTransformDescriptor(catalog *extensions.Catalog, ref extensions.Ref, implementationVersion, label, description string, schemaRef *extensions.Ref, bounds extensions.ResourceBounds, stage string, effects []string, schemaShape json.RawMessage, implementation any) error {
+func registerTransformDescriptor(catalog *extensions.Catalog, ref extensions.Ref, implementationVersion, label, description string, schemaRef *extensions.Ref, bounds extensions.ResourceBounds, stage string, effects, failureModes []string, schemaShape json.RawMessage, implementation any) error {
 	if err := ref.Validate(); err != nil {
 		return err
 	}
@@ -485,8 +485,16 @@ func registerTransformDescriptor(catalog *extensions.Catalog, ref extensions.Ref
 	}
 	return catalog.Register(extensions.Descriptor{
 		Ref: ref, ImplementationVersion: implementationVersion, DisplayName: label, Description: description,
-		OptionsSchemaRef: schemaRef, LifecycleCapabilities: append([]string{stage}, effects...), ResourceBounds: bounds,
+		OptionsSchemaRef: schemaRef, LifecycleCapabilities: append([]string{stage}, effects...), FailureModes: append([]string(nil), failureModes...), ResourceBounds: bounds,
 	}, func(json.RawMessage) (any, error) { return implementation, nil })
+}
+
+func transformFailureModes(modes []kernel.TransformFailureMode) []string {
+	result := make([]string, len(modes))
+	for index, mode := range modes {
+		result[index] = string(mode)
+	}
+	return result
 }
 
 func transformEffects[T ~string](effects []T) []string {

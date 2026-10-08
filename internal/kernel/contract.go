@@ -360,6 +360,7 @@ type CompatibilityContext struct {
 	ResponseTransformSteps  []ResponseTransformPlanStep
 	ArtifactTransfers       []ArtifactTransfer
 	ArtifactOutputs         []extensions.ArtifactOutput
+	TransformFailures       []TransformFailure
 	ArtifactOutputRequired  bool
 }
 

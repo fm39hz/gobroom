@@ -2,11 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
@@ -45,6 +47,44 @@ func TestSQLitePragmasApplyToEveryPooledConnection(t *testing.T) {
 		if journal != "wal" || synchronous != 1 || foreignKeys != 1 || busyTimeout != 5000 {
 			t.Fatalf("pooled connection %d pragmas: journal=%q synchronous=%d foreign_keys=%d busy_timeout=%d", i, journal, synchronous, foreignKeys, busyTimeout)
 		}
+	}
+}
+
+func TestTransformBindingFailureModeMigrationDefaultsClosed(t *testing.T) {
+	path := t.TempDir() + "/transform-migration.db"
+	current, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := kernel.TransformBinding{
+		ID: "old-transform", TransformRef: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.old-transform", ContractVersion: 1},
+		Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon},
+	}
+	if err := current.UpsertTransformBinding(binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Close(); err != nil {
+		t.Fatal(err)
+	}
+	legacyDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacyDB.Exec(`ALTER TABLE transform_bindings DROP COLUMN failure_mode`); err != nil {
+		legacyDB.Close()
+		t.Fatalf("prepare pre-mode schema fixture: %v", err)
+	}
+	if err := legacyDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	bindings, err := reopened.TransformBindings()
+	if err != nil || len(bindings) != 1 || bindings[0].FailureMode != kernel.TransformFailClosed {
+		t.Fatalf("migrated transform failure mode=%#v err=%v", bindings, err)
 	}
 }
 
@@ -203,7 +243,8 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	loss := kernel.LossRecord{ID: "reasoning.clamped", Requested: "xhigh", Effective: "high", SemanticPaths: []string{"request.reasoning.effort"}, PolicySources: []string{"combo.deep"}}
 	plan := &kernel.CompatibilityPlanSummary{
 		Supported: true, Fidelity: kernel.FidelityLossy,
-		Mappings: []kernel.CompatibilityMappingSummary{{Facet: "reasoning.effort", Paths: []string{"request.reasoning.effort"}, Disposition: kernel.FacetDegraded, Reason: "clamped"}},
+		Mappings:          []kernel.CompatibilityMappingSummary{{Facet: "reasoning.effort", Paths: []string{"request.reasoning.effort"}, Disposition: kernel.FacetDegraded, Reason: "clamped"}},
+		TransformFailures: []kernel.TransformFailure{{BindingID: "best-effort", TransformRef: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.best-effort", ContractVersion: 1}, Scope: kernel.TransformScope{Kind: kernel.TransformScopeModel, ID: "junior"}, Mode: kernel.TransformSafeFailOpen, Reason: kernel.TransformFailureApply}},
 	}
 	if err := s.SaveUsageEvent(kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5, CompatibilityFidelity: kernel.FidelityLossy, CompatibilityLosses: []kernel.LossRecord{loss}, CompatibilityPlan: plan}); err != nil {
 		t.Fatal(err)

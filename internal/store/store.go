@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS transform_bindings (
   scope_kind TEXT NOT NULL,
   scope_id TEXT NOT NULL DEFAULT '',
   ordering INTEGER NOT NULL DEFAULT 0,
+  failure_mode TEXT NOT NULL DEFAULT 'fail_closed',
   options_json TEXT NOT NULL DEFAULT 'null',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -208,6 +209,7 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_fidelity TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_losses_json TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_plan_json TEXT NOT NULL DEFAULT 'null'`)
+	_, _ = s.DB.Exec(`ALTER TABLE transform_bindings ADD COLUMN failure_mode TEXT NOT NULL DEFAULT 'fail_closed'`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN identity_json TEXT NOT NULL DEFAULT '{}'`)

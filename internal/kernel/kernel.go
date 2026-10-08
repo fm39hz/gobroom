@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -149,14 +150,17 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	req.Requirements = mergeRequirements(externalRequirements, preparedOperation.Requirements)
 	transformBindings := cloneTransformBindings(snapshot.TransformBindings)
 	scopes := []TransformScope{daemonTransformScope()}
+	var transformFailures []TransformFailure
 	if k.Transforms.Active(transformBindings, daemonTransformScope()) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		req = normalize.CloneRequest(req)
-		if err := k.Transforms.ApplyScopes(ctx, &req, transformBindings, daemonTransformScope()); err != nil {
+		report, err := k.Transforms.ApplyScopesWithReport(ctx, &req, transformBindings, daemonTransformScope())
+		if err != nil {
 			return err
 		}
+		transformFailures = append(transformFailures, report.Failures...)
 		preparedOperation, err = k.Operations.Prepare(req)
 		if err != nil {
 			return err
@@ -166,7 +170,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, CompatibilityPolicy{LossCeiling: snapshot.LossCeiling}, credential, writer, started, map[string]bool{})
+	return k.executeNode(ctx, snapshot, root, req, preparedOperation.ReplaySafety, preparedOperation.ResourceBounds, externalRequirements, transformBindings, scopes, transformFailures, CompatibilityPolicy{LossCeiling: snapshot.LossCeiling}, credential, writer, started, map[string]bool{})
 }
 
 func mergeRequirements(required, derived []normalize.FeatureRequirement) []normalize.FeatureRequirement {
@@ -183,7 +187,7 @@ func mergeRequirements(required, derived []normalize.FeatureRequirement) []norma
 	return result
 }
 
-func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements, transformBindings []TransformBinding, scopes []TransformScope, lossPolicy CompatibilityPolicy) (ProviderAdapter, CompatibilityPlan) {
+func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements, transformBindings []TransformBinding, scopes []TransformScope, transformFailures []TransformFailure, lossPolicy CompatibilityPolicy) (ProviderAdapter, CompatibilityPlan) {
 	operation := requirements.Operation
 	operationBinding, ok := route.OperationBindings[operation]
 	if !ok || requirements.OperationContractVersion == 0 || operationBinding.ContractVersion != requirements.OperationContractVersion {
@@ -208,6 +212,7 @@ func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, require
 			RequestTransformSteps:   requestTransforms,
 			ResponseTransformSteps:  responseTransforms,
 			ArtifactTransfers:       PlanArtifactTransfers(request, operationRef, route.DefinitionRef),
+			TransformFailures:       append([]TransformFailure(nil), transformFailures...),
 		}
 		if len(artifactOutputs) > 0 {
 			compatibilityContext.ArtifactOutputs = append([]extensions.ArtifactOutput(nil), artifactOutputs...)
@@ -248,7 +253,7 @@ func cloneLossSources(sources map[string][]string) map[string][]string {
 	return clone
 }
 
-func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, resourceBounds extensions.ResourceBounds, externalRequirements []normalize.FeatureRequirement, transformBindings []TransformBinding, scopes []TransformScope, lossPolicy CompatibilityPolicy, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
+func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelNode, req NormalizedRequest, replaySafety operations.ReplaySafety, resourceBounds extensions.ResourceBounds, externalRequirements []normalize.FeatureRequirement, transformBindings []TransformBinding, scopes []TransformScope, transformFailures []TransformFailure, lossPolicy CompatibilityPolicy, credential Credential, writer http.ResponseWriter, started time.Time, stack map[string]bool) error {
 	if stack[node.ID] {
 		return fmt.Errorf("model cycle at %q", node.ID)
 	}
@@ -264,9 +269,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 	scopes = append(append([]TransformScope(nil), scopes...), modelScope)
 	if k.Transforms.Active(transformBindings, modelScope) {
 		req = normalize.CloneRequest(req)
-		if err := k.Transforms.ApplyScopes(ctx, &req, transformBindings, modelScope); err != nil {
+		report, err := k.Transforms.ApplyScopesWithReport(ctx, &req, transformBindings, modelScope)
+		if err != nil {
 			return err
 		}
+		transformFailures = append(append([]TransformFailure(nil), transformFailures...), report.Failures...)
 		prepared, err := k.Operations.Prepare(req)
 		if err != nil {
 			return err
@@ -282,7 +289,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if !ok {
 				return fmt.Errorf("unknown model node %q", member.ID)
 			}
-			err := k.executeNode(ctx, snapshot, child, req, replaySafety, resourceBounds, externalRequirements, transformBindings, scopes, lossPolicy, credential, writer, started, stack)
+			err := k.executeNode(ctx, snapshot, child, req, replaySafety, resourceBounds, externalRequirements, transformBindings, scopes, append([]TransformFailure(nil), transformFailures...), lossPolicy, credential, writer, started, stack)
 			if err == nil {
 				return nil
 			} else if !errors.Is(err, ErrNoRoute) {
@@ -310,6 +317,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 		}
 		for _, candidate := range routes {
 			candidateRequest := req
+			candidateTransformFailures := append([]TransformFailure(nil), transformFailures...)
 			attemptScopes := []TransformScope{{Kind: TransformScopeRoute, ID: candidate.ID}}
 			if candidate.NodeID != "" {
 				attemptScopes = append(attemptScopes, TransformScope{Kind: TransformScopeProvider, ID: candidate.NodeID})
@@ -320,9 +328,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidateScopes := append(append([]TransformScope(nil), scopes...), attemptScopes...)
 			if k.Transforms.Active(transformBindings, attemptScopes...) {
 				candidateRequest = normalize.CloneRequest(req)
-				if err := k.Transforms.ApplyScopes(ctx, &candidateRequest, transformBindings, attemptScopes...); err != nil {
+				report, err := k.Transforms.ApplyScopesWithReport(ctx, &candidateRequest, transformBindings, attemptScopes...)
+				if err != nil {
 					return err
 				}
+				candidateTransformFailures = append(candidateTransformFailures, report.Failures...)
 				prepared, err := k.Operations.Prepare(candidateRequest)
 				if err != nil {
 					return err
@@ -364,7 +374,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if eligible, _ := k.Features.Evaluate(candidate, requirements.Features); !eligible {
 				continue
 			}
-			adapter, compatibilityPlan := k.adapterForRoute(candidate, candidateRequest, requirements, transformBindings, candidateScopes, lossPolicy)
+			adapter, compatibilityPlan := k.adapterForRoute(candidate, candidateRequest, requirements, transformBindings, candidateScopes, candidateTransformFailures, lossPolicy)
 			if adapter == nil {
 				continue
 			}
@@ -587,10 +597,18 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				return nil
 			}
 			var responseTransform func(context.Context, ResponseEvent) (ResponseEvent, error)
+			var responseTransformFailures []TransformFailure
+			var responseTransformFailuresMu sync.Mutex
 			responseTransformScopes := append([]TransformScope(nil), candidateScopes...)
 			if k.ResponseTransforms.Active(transformBindings, responseTransformScopes...) {
 				responseTransform = func(transformCtx context.Context, event ResponseEvent) (ResponseEvent, error) {
-					return k.ResponseTransforms.ApplyScopes(transformCtx, event, transformBindings, responseTransformScopes...)
+					updated, report, err := k.ResponseTransforms.ApplyScopesWithReport(transformCtx, event, transformBindings, responseTransformScopes...)
+					if err == nil && len(report.Failures) > 0 {
+						responseTransformFailuresMu.Lock()
+						responseTransformFailures = append(responseTransformFailures, report.Failures...)
+						responseTransformFailuresMu.Unlock()
+					}
+					return updated, err
 				}
 			}
 			attemptReleased := false
@@ -635,6 +653,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}, OnComplete: func(event UsageEvent) {
 				event.CompatibilityFidelity = compatibilityPlan.Fidelity
 				event.CompatibilityLosses = cloneLossRecords(compatibilityPlan.Losses)
+				responseTransformFailuresMu.Lock()
+				compatibilityPlan.TransformFailures = append(compatibilityPlan.TransformFailures, responseTransformFailures...)
+				responseTransformFailuresMu.Unlock()
 				compatibilitySummary := SummarizeCompatibilityPlan(compatibilityPlan)
 				event.CompatibilityPlan = &compatibilitySummary
 				releaseAttempt()

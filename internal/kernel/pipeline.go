@@ -50,6 +50,15 @@ type ResponseRenderer interface {
 	Begin(context.Context, ResponseRenderContext, http.ResponseWriter) (ResponseRenderSession, error)
 }
 
+func responseWriterOutputStarted(writer http.ResponseWriter) bool {
+	if committed, ok := writer.(interface{ Committed() bool }); ok {
+		return committed.Committed()
+	}
+	// A renderer with an untracked writer cannot prove that Begin/Emit has not
+	// already exposed client bytes, so safe fail-open is unavailable.
+	return true
+}
+
 type Transport interface {
 	ID() string
 	Execute(context.Context, UpstreamRequest) (UpstreamResponse, error)
@@ -260,6 +269,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	}
 	providerComplete := false
 	firstEvent := false
+	responseOutputStarted := responseWriterOutputStarted(writer)
 	var totalEventBytes int64
 	emit := func(event ResponseEvent) error {
 		if event.Kind == EventResponseComplete {
@@ -276,7 +286,11 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 			signalFirstByte(time.Now())
 		}
 		if hooks.TransformResponse != nil {
-			transformed, transformErr := hooks.TransformResponse(ctx, event)
+			transformCtx := ctx
+			if responseOutputStarted || responseWriterOutputStarted(writer) {
+				transformCtx = withResponseOutputStarted(ctx)
+			}
+			transformed, transformErr := hooks.TransformResponse(transformCtx, event)
 			if transformErr != nil {
 				return transformErr
 			}
@@ -307,7 +321,11 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		if hooks.OnEvent != nil {
 			hooks.OnEvent(event)
 		}
-		return session.Emit(rendererCtx, event)
+		if err := session.Emit(rendererCtx, event); err != nil {
+			return err
+		}
+		responseOutputStarted = responseWriterOutputStarted(writer)
+		return nil
 	}
 	decodeErr := a.Response.Decode(ctx, response, emit, decodeHooks)
 	if decodeErr == nil && !providerComplete {

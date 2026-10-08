@@ -3,12 +3,15 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -31,6 +34,9 @@ type undeclaredPromptMutation struct{}
 
 type responseMarkTransform struct{}
 type artifactMutationTransform struct{}
+type safeFailOpenRequestTransform struct{}
+type safeFailOpenEffectTransform struct{}
+type safeFailOpenResponseTransform struct{}
 
 type scopedProbeAdapter struct{ attempts *[]string }
 
@@ -73,6 +79,182 @@ func (responseMarkTransform) ApplyResponse(_ context.Context, event ResponseEven
 		event.Text += "!"
 	}
 	return event, nil
+}
+
+func (safeFailOpenRequestTransform) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.fail-open.apply", ContractVersion: 1}, ImplementationVersion: "1", Label: "Best effort request", Description: "Fixture failure-open request transform.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+func (safeFailOpenRequestTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	request.Messages[0].Content = "partial mutation that must roll back"
+	return errors.New("sensitive internal detail must not enter the report")
+}
+
+func (safeFailOpenEffectTransform) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.fail-open.effect", ContractVersion: 1}, ImplementationVersion: "1", Label: "Best effort effect", Description: "Fixture undeclared effect.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+func (safeFailOpenEffectTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	request.Raw["unknown_option"] = "changed"
+	return nil
+}
+
+func (safeFailOpenResponseTransform) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.fail-open.response", ContractVersion: 1}, ImplementationVersion: "1", Label: "Best effort response", Description: "Fixture response safe failure.", Effects: []ResponseTransformEffect{ResponseEffectText}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+func (safeFailOpenResponseTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	event.Text = "partially rewritten"
+	return event, errors.New("rendering failed")
+}
+
+func TestRequestTransformSafeFailOpenRollsBackAndReportsWithoutErrorText(t *testing.T) {
+	registry := NewRequestTransformRegistry()
+	for _, transform := range []RequestTransform{safeFailOpenRequestTransform{}, safeFailOpenEffectTransform{}} {
+		if err := registry.Register(transform); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scope := daemonTransformScope()
+	request := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "original"}}, Raw: map[string]any{"model": "model", "messages": "original"}}
+	bindings := []TransformBinding{
+		{ID: "apply-failure", TransformRef: safeFailOpenRequestTransform{}.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen},
+		{ID: "effect-failure", TransformRef: safeFailOpenEffectTransform{}.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen, Order: 1},
+	}
+	if err := registry.ValidateBindings(bindings); err != nil {
+		t.Fatal(err)
+	}
+	report, err := registry.ApplyScopesWithReport(context.Background(), &request, bindings, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.Messages[0].Content != "original" || request.Raw["unknown_option"] != nil {
+		t.Fatalf("safe fail-open published partial mutations: %#v", request)
+	}
+	if len(report.Failures) != 2 || report.Failures[0].Reason != TransformFailureApply || report.Failures[1].Reason != TransformFailureEffect {
+		t.Fatalf("safe failure report=%#v", report)
+	}
+	if strings.Contains(fmt.Sprint(report), "sensitive internal detail") {
+		t.Fatalf("safe failure report exposed transform error text: %#v", report)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	cancelledRequest := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "original"}}}
+	if report, err := registry.ApplyScopesWithReport(cancelled, &cancelledRequest, bindings[:1], scope); err == nil || len(report.Failures) != 0 || cancelledRequest.Messages[0].Content != "original" {
+		t.Fatalf("cancellation was allowed to fail open: request=%#v report=%#v err=%v", cancelledRequest, report, err)
+	}
+}
+
+func TestTransformCannotFailOpenProtectedIdentityOrUndeclaredDescriptorMode(t *testing.T) {
+	registry := NewRequestTransformRegistry()
+	transform := transformFailureModeFixture{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	scope := daemonTransformScope()
+	request := NormalizedRequest{Model: "before", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Raw: map[string]any{"model": "before"}}
+	bindings := []TransformBinding{{ID: "identity", TransformRef: transform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	if err := registry.ValidateBindings(bindings); err == nil {
+		t.Fatal("safe fail-open was accepted when the implementation did not declare it")
+	}
+	identityRegistry := NewRequestTransformRegistry()
+	identity := failOpenIdentityTransform{}
+	if err := identityRegistry.Register(identity); err != nil {
+		t.Fatal(err)
+	}
+	bindings[0].TransformRef = identity.Definition().Ref
+	if err := identityRegistry.ValidateBindings(bindings); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := identityRegistry.ApplyScopesWithReport(context.Background(), &request, bindings, scope); err == nil || len(report.Failures) != 0 || request.Model != "before" {
+		t.Fatalf("identity violation did not fail closed transactionally: request=%#v report=%#v err=%v", request, report, err)
+	}
+}
+
+type transformFailureModeFixture struct{}
+
+func (transformFailureModeFixture) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.no-fail-open", ContractVersion: 1}, ImplementationVersion: "1", Label: "No fail open", Description: "Fixture without fail-open permission.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}}
+}
+func (transformFailureModeFixture) Apply(context.Context, *NormalizedRequest, json.RawMessage) error {
+	return nil
+}
+
+type failOpenIdentityTransform struct{}
+
+func (failOpenIdentityTransform) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.fail-open-identity", ContractVersion: 1}, ImplementationVersion: "1", Label: "Identity mutation", Description: "Must fail closed despite the binding mode.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+func (failOpenIdentityTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	request.Model = "after"
+	return nil
+}
+
+func TestResponseTransformSafeFailOpenOnlyBeforeOutput(t *testing.T) {
+	registry := NewResponseTransformRegistry()
+	transform := safeFailOpenResponseTransform{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	scope := daemonTransformScope()
+	bindings := []TransformBinding{{ID: "response-best-effort", TransformRef: transform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	if err := registry.ValidateBindings(bindings); err != nil {
+		t.Fatal(err)
+	}
+	original := ResponseEvent{Kind: EventTextDelta, Text: "original"}
+	updated, report, err := registry.ApplyScopesWithReport(context.Background(), original, bindings, scope)
+	if err != nil || updated.Text != "original" || len(report.Failures) != 1 {
+		t.Fatalf("pre-output safe fail-open result=%#v report=%#v err=%v", updated, report, err)
+	}
+	_, report, err = registry.ApplyScopesWithReport(withResponseOutputStarted(context.Background()), original, bindings, scope)
+	if err == nil || len(report.Failures) != 0 {
+		t.Fatalf("post-output transform failure did not fail closed: report=%#v err=%v", report, err)
+	}
+}
+
+func TestKernelRecordsRequestTransformSafeFailOpenInUsagePlan(t *testing.T) {
+	transform := safeFailOpenRequestTransform{}
+	bindings := []TransformBinding{{
+		ID: "daemon.best-effort", TransformRef: transform.Definition().Ref, Enabled: true,
+		Scope: daemonTransformScope(), FailureMode: TransformSafeFailOpen,
+	}}
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "junior", TargetRef: "junior"}},
+		Routes: []Route{{ID: "route", Enabled: true, Protocol: ProtocolOpenAIChat, OperationBindings: map[normalize.Operation]RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"scoped-probe"}},
+		}}},
+		Nodes:             []ModelNode{{ID: "junior", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
+		TransformBindings: bindings,
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := New(snapshot, nil, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if err := k.Transforms.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	attempts := []string{}
+	k.Adapters["scoped-probe"] = scopedProbeAdapter{attempts: &attempts}
+	request := NormalizedRequest{Model: "junior", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Messages: []Message{{Role: "user", Content: "original"}}}
+	if err := k.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != 1 || attempts[0] != "route" {
+		t.Fatalf("safe fail-open changed the selected request branch: %v", attempts)
+	}
+	select {
+	case event := <-k.Events:
+		if event.CompatibilityPlan == nil || len(event.CompatibilityPlan.TransformFailures) != 1 {
+			t.Fatalf("usage plan omitted safe-fail-open evidence: %#v", event.CompatibilityPlan)
+		}
+		failure := event.CompatibilityPlan.TransformFailures[0]
+		if failure.BindingID != "daemon.best-effort" || failure.Mode != TransformSafeFailOpen || failure.Reason != TransformFailureApply {
+			t.Fatalf("unexpected transform failure evidence: %#v", failure)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("safe fail-open request did not produce a usage plan")
+	}
 }
 
 func (artifactMutationTransform) Definition() ResponseTransformDefinition {

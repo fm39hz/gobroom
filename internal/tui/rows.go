@@ -431,6 +431,9 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 				for _, output := range value.CompatibilityPlan.ArtifactOutputs {
 					detail += fmt.Sprintf("\n  artifact output    %s · %s · %d–%d", output.Role, output.TypeRef.ID, output.MinCount, output.MaxCount)
 				}
+				for _, failure := range value.CompatibilityPlan.TransformFailures {
+					detail += fmt.Sprintf("\n  transform failure  %s · %s · %s", failure.BindingID, failure.Mode, failure.Reason)
+				}
 			}
 			entries = append(entries, entry{key: fmt.Sprintf("%d", value.ID), title: value.LogicalModel, summary: fmt.Sprintf("%s · %d ms", value.Status, value.LatencyMS), detail: detail, payload: value})
 		}

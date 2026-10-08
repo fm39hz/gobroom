@@ -320,6 +320,15 @@ func ValidateBundleWithStrategies(bundle ConfigBundle, strategies *kernel.Strate
 	if err := strategies.Extensions().ValidateDependencyLock(bundle.Dependencies); err != nil {
 		return fmt.Errorf("validate extension dependency lock: %w", err)
 	}
+	for _, binding := range bundle.TransformBindings {
+		descriptor, exists := strategies.Extensions().Descriptor(binding.TransformRef)
+		if !exists {
+			return fmt.Errorf("transform binding %q references missing descriptor %q", binding.ID, binding.TransformRef.Key())
+		}
+		if err := kernel.ValidateTransformBindingFailureMode(binding, descriptor.FailureModes); err != nil {
+			return err
+		}
+	}
 	for _, definition := range bundle.ProviderDefinitions {
 		ref := provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion)
 		_, implementation, err := strategies.Extensions().Bind(ref, nil)

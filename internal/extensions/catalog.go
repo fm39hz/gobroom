@@ -95,6 +95,7 @@ type Descriptor struct {
 	ArtifactInputs        []ArtifactInput  `json:"artifactInputs,omitempty"`
 	ArtifactOutputs       []ArtifactOutput `json:"artifactOutputs,omitempty"`
 	LifecycleCapabilities []string         `json:"lifecycleCapabilities,omitempty"`
+	FailureModes          []string         `json:"failureModes,omitempty"`
 	ResourceBounds        ResourceBounds   `json:"resourceBounds"`
 	ArtifactPolicy        *ArtifactPolicy  `json:"artifactPolicy,omitempty"`
 	SetupView             json.RawMessage  `json:"setupView,omitempty"`
@@ -282,6 +283,16 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	}
 	if len(descriptor.ArtifactOutputs) > 0 && descriptor.Ref.Kind != "operation" {
 		return Descriptor{}, fmt.Errorf("only operation extensions may declare artifact output ports")
+	}
+	if len(descriptor.FailureModes) > 0 && descriptor.Ref.Kind != "request_transform" && descriptor.Ref.Kind != "response_transform" {
+		return Descriptor{}, fmt.Errorf("only request and response transforms may declare failure modes")
+	}
+	seenFailureModes := map[string]bool{}
+	for _, mode := range descriptor.FailureModes {
+		if mode != "safe_fail_open" || seenFailureModes[mode] {
+			return Descriptor{}, fmt.Errorf("extension %q has an unsupported or duplicate failure mode %q", descriptor.Ref.Key(), mode)
+		}
+		seenFailureModes[mode] = true
 	}
 	seenInputRoles := map[string]bool{}
 	for _, input := range descriptor.ArtifactInputs {
@@ -969,6 +980,7 @@ func cloneDescriptor(descriptor Descriptor) Descriptor {
 	descriptor.ArtifactOutputs = append([]ArtifactOutput(nil), descriptor.ArtifactOutputs...)
 	descriptor.EventSchemaRefs = append([]Ref(nil), descriptor.EventSchemaRefs...)
 	descriptor.LifecycleCapabilities = append([]string(nil), descriptor.LifecycleCapabilities...)
+	descriptor.FailureModes = append([]string(nil), descriptor.FailureModes...)
 	descriptor.SetupView = append(json.RawMessage(nil), descriptor.SetupView...)
 	if descriptor.OptionsSchemaRef != nil {
 		copy := *descriptor.OptionsSchemaRef

@@ -17,6 +17,8 @@ type responseCommitWriter struct {
 	written   int64
 }
 
+func (w *responseCommitWriter) Committed() bool { return w != nil && w.committed }
+
 func (w *responseCommitWriter) WriteHeader(status int) {
 	if w.committed {
 		return

@@ -53,11 +53,14 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 	request.Requirements = mergeRequirements(externalRequirements, prepared.Requirements)
 	bindings := cloneTransformBindings(snapshot.TransformBindings)
 	scopes := []TransformScope{daemonTransformScope()}
+	var transformFailures []TransformFailure
 	if k.Transforms.Active(bindings, scopes...) {
 		request = normalize.CloneRequest(request)
-		if err := k.Transforms.ApplyScopes(ctx, &request, bindings, scopes...); err != nil {
+		report, err := k.Transforms.ApplyScopesWithReport(ctx, &request, bindings, scopes...)
+		if err != nil {
 			return nil, fmt.Errorf("daemon request transform: %w", err)
 		}
+		transformFailures = append(transformFailures, report.Failures...)
 		prepared, err = k.Operations.Prepare(request)
 		if err != nil {
 			return nil, err
@@ -85,6 +88,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 		}
 		modelPath := make([]string, 0, len(path.nodes))
 		candidateRequest := normalize.CloneRequest(request)
+		candidateTransformFailures := append([]TransformFailure(nil), transformFailures...)
 		candidateScopes := append([]TransformScope(nil), scopes...)
 		policy := CompatibilityPolicy{LossCeiling: cloneLossCeiling(snapshot.LossCeiling)}
 		var preflightErr error
@@ -97,10 +101,12 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 			scope := TransformScope{Kind: TransformScopeModel, ID: node.ID}
 			candidateScopes = append(candidateScopes, scope)
 			if k.Transforms.Active(bindings, scope) {
-				if applyErr := k.Transforms.ApplyScopes(ctx, &candidateRequest, bindings, scope); applyErr != nil {
+				report, applyErr := k.Transforms.ApplyScopesWithReport(ctx, &candidateRequest, bindings, scope)
+				if applyErr != nil {
 					preflightErr = fmt.Errorf("model %q request transform: %w", node.ID, applyErr)
 					break
 				}
+				candidateTransformFailures = append(candidateTransformFailures, report.Failures...)
 				prepared, prepareErr := k.Operations.Prepare(candidateRequest)
 				if prepareErr != nil {
 					preflightErr = prepareErr
@@ -119,11 +125,12 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 		candidateScopes = append(candidateScopes, attemptScopes...)
 		if preflightErr == nil && k.Transforms.Active(bindings, attemptScopes...) {
 			candidateRequest = normalize.CloneRequest(candidateRequest)
-			if applyErr := k.Transforms.ApplyScopes(ctx, &candidateRequest, bindings, attemptScopes...); applyErr != nil {
+			if report, applyErr := k.Transforms.ApplyScopesWithReport(ctx, &candidateRequest, bindings, attemptScopes...); applyErr != nil {
 				preflightErr = fmt.Errorf("route %q request transform: %w", path.route.ID, applyErr)
 			} else if prepared, prepareErr := k.Operations.Prepare(candidateRequest); prepareErr != nil {
 				preflightErr = prepareErr
 			} else {
+				candidateTransformFailures = append(candidateTransformFailures, report.Failures...)
 				candidateRequest.Requirements = mergeRequirements(externalRequirements, prepared.Requirements)
 			}
 		}
@@ -133,6 +140,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 		plan := CompatibilityPlan{Supported: false, Fidelity: FidelityUnsupported}
 		plan.RequestTransformSteps = k.Transforms.Plan(bindings, candidateScopes...)
 		plan.ResponseTransformSteps = k.ResponseTransforms.Plan(bindings, candidateScopes...)
+		plan.TransformFailures = append([]TransformFailure(nil), candidateTransformFailures...)
 		reason := path.sourceReason
 		if reason == "" && preflightErr != nil {
 			reason = preflightErr.Error()
@@ -163,7 +171,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 						reason = why
 					} else if eligible, why := k.Features.Evaluate(candidate, requirements.Features); !eligible {
 						reason = why
-					} else if _, plan = k.adapterForRoute(candidate, candidateRequest, requirements, bindings, candidateScopes, policy); !plan.Supported {
+					} else if _, plan = k.adapterForRoute(candidate, candidateRequest, requirements, bindings, candidateScopes, candidateTransformFailures, policy); !plan.Supported {
 						reason = plan.Reason
 					}
 				}

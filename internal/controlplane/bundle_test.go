@@ -22,6 +22,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 		descriptor := extensions.Descriptor{Ref: ref, ImplementationVersion: "fixture-1", DisplayName: ref.ID, Description: "Bundle dependency fixture."}
 		if ref.Kind == kernel.RequestTransformKind || ref.Kind == kernel.ResponseTransformKind {
 			descriptor.ResourceBounds = extensions.ResourceBounds{MaxBufferedBytes: 1024, DeadlineMillis: 1000}
+			descriptor.FailureModes = []string{"safe_fail_open"}
 		}
 		if err := base.Register(descriptor, func(json.RawMessage) (any, error) { return struct{}{}, nil }); err != nil {
 			t.Fatal(err)
@@ -57,7 +58,7 @@ func TestTransformBindingsRoundTripThroughTypedConfigBundle(t *testing.T) {
 	defer s.Close()
 	binding := kernel.TransformBinding{
 		ID: "daemon.compress", TransformRef: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "tokens.compress.v1", ContractVersion: 1},
-		Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}, Order: 10,
+		Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}, Order: 10, FailureMode: kernel.TransformSafeFailOpen,
 		Options: json.RawMessage(`{"ratio":0.5}`),
 	}
 	catalog := bundleTestCatalog(t, binding.TransformRef)

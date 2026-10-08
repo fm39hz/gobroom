@@ -10,7 +10,7 @@ import (
 )
 
 func (s *Store) TransformBindings() ([]kernel.TransformBinding, error) {
-	rows, err := s.DB.Query(`SELECT id,transform_kind,transform_id,contract_version,enabled,scope_kind,scope_id,ordering,options_json FROM transform_bindings ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT id,transform_kind,transform_id,contract_version,enabled,scope_kind,scope_id,ordering,failure_mode,options_json FROM transform_bindings ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -20,7 +20,7 @@ func (s *Store) TransformBindings() ([]kernel.TransformBinding, error) {
 		var binding kernel.TransformBinding
 		var enabled int
 		var options string
-		if err := rows.Scan(&binding.ID, &binding.TransformRef.Kind, &binding.TransformRef.ID, &binding.TransformRef.ContractVersion, &enabled, &binding.Scope.Kind, &binding.Scope.ID, &binding.Order, &options); err != nil {
+		if err := rows.Scan(&binding.ID, &binding.TransformRef.Kind, &binding.TransformRef.ID, &binding.TransformRef.ContractVersion, &enabled, &binding.Scope.Kind, &binding.Scope.ID, &binding.Order, &binding.FailureMode, &options); err != nil {
 			return nil, err
 		}
 		binding.Enabled = enabled != 0
@@ -84,8 +84,8 @@ func upsertTransformBinding(executor transformBindingExecutor, binding kernel.Tr
 	if len(binding.Options) > 0 {
 		options = string(binding.Options)
 	}
-	_, err := executor.Exec(`INSERT INTO transform_bindings(id,transform_kind,transform_id,contract_version,enabled,scope_kind,scope_id,ordering,options_json,updated_at)
-VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
-ON CONFLICT(id) DO UPDATE SET transform_kind=excluded.transform_kind,transform_id=excluded.transform_id,contract_version=excluded.contract_version,enabled=excluded.enabled,scope_kind=excluded.scope_kind,scope_id=excluded.scope_id,ordering=excluded.ordering,options_json=excluded.options_json,updated_at=CURRENT_TIMESTAMP`, binding.ID, binding.TransformRef.Kind, binding.TransformRef.ID, binding.TransformRef.ContractVersion, boolInt(binding.Enabled), binding.Scope.Kind, binding.Scope.ID, binding.Order, options)
+	_, err := executor.Exec(`INSERT INTO transform_bindings(id,transform_kind,transform_id,contract_version,enabled,scope_kind,scope_id,ordering,failure_mode,options_json,updated_at)
+VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+ON CONFLICT(id) DO UPDATE SET transform_kind=excluded.transform_kind,transform_id=excluded.transform_id,contract_version=excluded.contract_version,enabled=excluded.enabled,scope_kind=excluded.scope_kind,scope_id=excluded.scope_id,ordering=excluded.ordering,failure_mode=excluded.failure_mode,options_json=excluded.options_json,updated_at=CURRENT_TIMESTAMP`, binding.ID, binding.TransformRef.Kind, binding.TransformRef.ID, binding.TransformRef.ContractVersion, boolInt(binding.Enabled), binding.Scope.Kind, binding.Scope.ID, binding.Order, binding.FailureMode, options)
 	return err
 }

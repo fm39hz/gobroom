@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -45,6 +46,20 @@ func testPrimitiveRegistry() *PrimitiveRegistry {
 
 type schemaBoundRequestTransform struct{ optionsSchemaRef extensions.Ref }
 
+type safeFailOpenCatalogTransform struct{}
+
+func (safeFailOpenCatalogTransform) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{
+		Ref:                   extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.catalog-fail-open", ContractVersion: 1},
+		ImplementationVersion: "1", Label: "Best effort", Description: "Catalog-declared safe failure mode.",
+		Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformInput},
+		FailureModes: []kernel.TransformFailureMode{kernel.TransformSafeFailOpen},
+	}
+}
+func (safeFailOpenCatalogTransform) Apply(context.Context, *kernel.NormalizedRequest, json.RawMessage) error {
+	return nil
+}
+
 func (schemaBoundRequestTransform) Definition() kernel.TransformDefinition {
 	optionsRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "fixture.transform-options", ContractVersion: 1}
 	return kernel.TransformDefinition{
@@ -82,6 +97,36 @@ func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 	}
 	if _, ok := r.Definition("openai-compatible"); !ok {
 		t.Fatal("definition was not registered")
+	}
+}
+
+func TestRuntimeCatalogPinsTransformFailureModes(t *testing.T) {
+	runtime, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	transform := safeFailOpenCatalogTransform{}
+	if err := runtime.RegisterRequestTransform(transform, nil); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := runtime.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, exists := catalog.Descriptor(transform.Definition().Ref)
+	if !exists || !reflect.DeepEqual(descriptor.FailureModes, []string{string(kernel.TransformSafeFailOpen)}) {
+		t.Fatalf("catalog omitted failure mode contract: %#v", descriptor)
+	}
+	registry, err := kernel.NewRequestTransformRegistryFromCatalog(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := kernel.TransformBinding{
+		ID: "best-effort", TransformRef: transform.Definition().Ref, Enabled: true,
+		Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}, FailureMode: kernel.TransformSafeFailOpen,
+	}
+	if err := registry.ValidateBindings([]kernel.TransformBinding{binding}); err != nil {
+		t.Fatalf("catalog-authorized safe failure mode rejected: %v", err)
 	}
 }
 

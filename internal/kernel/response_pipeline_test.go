@@ -24,6 +24,7 @@ type precommitFailureAdapter struct {
 type usageAccountingDecoder struct{}
 type usageAccountingRenderer struct{ rendered *UsageEvent }
 type usageAccountingTransform struct{}
+type commitOnEventRenderer struct{}
 
 func (usageAccountingDecoder) ID() string { return "usage-accounting-decoder" }
 func (usageAccountingDecoder) PossibleEvents() []ResponseEventKind {
@@ -63,6 +64,58 @@ func (s usageAccountingSession) Emit(_ context.Context, event ResponseEvent) err
 	return nil
 }
 func (usageAccountingSession) Finish(context.Context, error) error { return nil }
+func (commitOnEventRenderer) ID() normalize.Format                 { return normalize.FormatOpenAIChat }
+func (commitOnEventRenderer) SupportsResponse(options ResponseRenderContext) CompatibilityPlan {
+	report := []FacetMapping{{Facet: FacetWireResponse, Disposition: FacetPreserved}}
+	policy := CompatibilityPolicy{RequiredFacets: []string{FacetWireResponse}}
+	for _, event := range options.RequiredEvents {
+		report = append(report, FacetMapping{Facet: ResponseEventFacet(event), Disposition: FacetPreserved})
+		policy.RequiredFacets = append(policy.RequiredFacets, ResponseEventFacet(event))
+	}
+	return ComposeCompatibilityPlan([][]FacetMapping{report}, policy)
+}
+func (commitOnEventRenderer) Begin(_ context.Context, _ ResponseRenderContext, writer http.ResponseWriter) (ResponseRenderSession, error) {
+	return commitOnEventSession{writer: writer}, nil
+}
+
+type commitOnEventSession struct{ writer http.ResponseWriter }
+
+func (s commitOnEventSession) Emit(context.Context, ResponseEvent) error {
+	_, err := s.writer.Write([]byte("event"))
+	return err
+}
+func (commitOnEventSession) Finish(context.Context, error) error { return nil }
+
+func TestResponseSafeFailOpenStopsAfterFirstRenderedEvent(t *testing.T) {
+	registry := NewResponseTransformRegistry()
+	transform := safeFailOpenResponseTransform{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	scope := daemonTransformScope()
+	bindings := []TransformBinding{{ID: "best-effort-response", TransformRef: transform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	if err := registry.ValidateBindings(bindings); err != nil {
+		t.Fatal(err)
+	}
+	adapter := ComposedAdapter{
+		AdapterID: "response-safe-fail-open", Request: eventDeclarationTestRequest{}, Response: usageAccountingDecoder{},
+		Renderers: map[normalize.Format]ResponseRenderer{normalize.FormatOpenAIChat: commitOnEventRenderer{}},
+	}
+	writer := &responseCommitWriter{ResponseWriter: httptest.NewRecorder(), maxBytes: 1024}
+	err := adapter.RenderResponse(context.Background(), UpstreamResponse{Status: http.StatusOK, Headers: make(http.Header), Body: io.NopCloser(strings.NewReader(""))}, writer, normalize.FormatOpenAIChat, StreamHooks{
+		TransformResponse: func(ctx context.Context, event ResponseEvent) (ResponseEvent, error) {
+			updated, _, applyErr := registry.ApplyScopesWithReport(ctx, event, bindings, scope)
+			return updated, applyErr
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "response transform") {
+		t.Fatalf("post-output transform error was allowed to fail open: %v", err)
+	}
+	if !writer.committed {
+		t.Fatal("fixture did not commit its first event before the second transform failure")
+	}
+}
+
 func (usageAccountingTransform) Definition() ResponseTransformDefinition {
 	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.usage-projection", ContractVersion: 1}, ImplementationVersion: "1", Label: "Usage projection", Description: "Rewrite client-visible usage only.", Effects: []ResponseTransformEffect{ResponseEffectUsage}}
 }
