@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -455,6 +456,87 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			entries = append(entries, entry{key: fmt.Sprintf("%d", index), title: title, summary: summary, detail: detail, payload: value})
 		}
 		return entries, nil
+	case "transform_bindings.list":
+		var values []kernel.TransformBinding
+		if err := decode(&values); err != nil {
+			return nil, err
+		}
+		entries := make([]entry, 0, len(values))
+		for _, value := range values {
+			scope := string(value.Scope.Kind)
+			if value.Scope.ID != "" {
+				scope += ":" + value.Scope.ID
+			}
+			state := "enabled"
+			if !value.Enabled {
+				state = "disabled"
+			}
+			options := "{}"
+			if len(value.Options) > 0 {
+				var formatted any
+				if json.Unmarshal(value.Options, &formatted) == nil {
+					options = pretty(formatted)
+				}
+			}
+			detail := fmt.Sprintf("Transform binding\n\nID          %s\nTransform   %s\nScope       %s\nOrder       %d\nState       %s\nFailure     %s\nOptions\n%s", value.ID, value.TransformRef.Key(), scope, value.Order, state, value.FailureMode, options)
+			entries = append(entries, entry{key: value.ID, title: value.ID, summary: fmt.Sprintf("%s · %s · %s", value.TransformRef.ID, scope, state), detail: detail, payload: value})
+		}
+		return entries, nil
+	case "extensions.catalog":
+		var catalog extensions.CatalogView
+		if err := decode(&catalog); err != nil {
+			return nil, err
+		}
+		schemas := make(map[extensions.Ref]extensions.Schema, len(catalog.Schemas))
+		for _, schema := range catalog.Schemas {
+			schemas[schema.Ref] = schema
+		}
+		entries := make([]entry, 0)
+		for _, descriptor := range catalog.Descriptors {
+			if descriptor.Ref.Kind != kernel.RequestTransformKind && descriptor.Ref.Kind != kernel.ResponseTransformKind {
+				continue
+			}
+			options := "none"
+			if descriptor.OptionsSchemaRef != nil {
+				options = descriptor.OptionsSchemaRef.Key()
+				if schema, ok := schemas[*descriptor.OptionsSchemaRef]; ok {
+					var document struct {
+						Properties map[string]json.RawMessage `json:"properties"`
+						Required   []string                   `json:"required"`
+					}
+					if json.Unmarshal(schema.Document, &document) == nil && len(document.Properties) > 0 {
+						names := make([]string, 0, len(document.Properties))
+						for name := range document.Properties {
+							names = append(names, name)
+						}
+						sort.Strings(names)
+						options += "\nOptions:"
+						for _, name := range names {
+							var field struct {
+								Type        string `json:"type"`
+								Description string `json:"description"`
+							}
+							_ = json.Unmarshal(document.Properties[name], &field)
+							marker := ""
+							if slices.Contains(document.Required, name) {
+								marker = " required"
+							}
+							options += fmt.Sprintf("\n  %s · %s%s", name, field.Type, marker)
+							if field.Description != "" {
+								options += " — " + field.Description
+							}
+						}
+					}
+				}
+			}
+			failureModes := "fail_closed"
+			if len(descriptor.FailureModes) > 0 {
+				failureModes += " | " + strings.Join(descriptor.FailureModes, " | ")
+			}
+			detail := fmt.Sprintf("%s\n\n%s\n\nContract    %s\nVersion     %s\nEffects     %s\nFailure mode %s\nOptions     %s\nResource    input %d · output %d · buffer %d · deadline %d ms", descriptor.DisplayName, descriptor.Description, descriptor.Ref.Key(), descriptor.ImplementationVersion, strings.Join(descriptor.LifecycleCapabilities, ", "), failureModes, options, descriptor.ResourceBounds.MaxInputBytes, descriptor.ResourceBounds.MaxOutputBytes, descriptor.ResourceBounds.MaxBufferedBytes, descriptor.ResourceBounds.DeadlineMillis)
+			entries = append(entries, entry{key: descriptor.Ref.Key(), title: descriptor.DisplayName, summary: fmt.Sprintf("%s · v%d", descriptor.Ref.Kind, descriptor.Ref.ContractVersion), detail: detail, filterValue: descriptor.DisplayName + " " + descriptor.Ref.Key() + " " + descriptor.Description, payload: descriptor})
+		}
+		return entries, nil
 	default:
 		return nil, fmt.Errorf("unsupported TUI resource %q", method)
 	}
@@ -466,6 +548,19 @@ func pretty(value any) string {
 		return fmt.Sprint(value)
 	}
 	return string(data)
+}
+
+func findTransformDescriptor(raw json.RawMessage, ref extensions.Ref) (extensions.Descriptor, bool) {
+	var catalog extensions.CatalogView
+	if json.Unmarshal(raw, &catalog) != nil {
+		return extensions.Descriptor{}, false
+	}
+	for _, descriptor := range catalog.Descriptors {
+		if descriptor.Ref == ref && (ref.Kind == kernel.RequestTransformKind || ref.Kind == kernel.ResponseTransformKind) {
+			return descriptor, true
+		}
+	}
+	return extensions.Descriptor{}, false
 }
 
 func makeConnectionEntries(providerJSON, connectionJSON json.RawMessage, knownProviders []providerNode) ([]entry, error) {

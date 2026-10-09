@@ -39,6 +39,8 @@ const (
 	sectionComboModels
 	sectionStrategies
 	sectionProviderCatalog
+	sectionTransformBindings
+	sectionExtensionCatalog
 )
 
 type section struct {
@@ -61,6 +63,8 @@ var sections = []section{
 	{id: sectionComboModels, label: "Combos", method: "combo_models.list"},
 	{id: sectionStrategies, label: "Strategies", method: "strategies.list"},
 	{id: sectionProviderCatalog, label: "Provider definition catalog", method: "providers.catalog"},
+	{id: sectionTransformBindings, label: "Transform bindings", method: "transform_bindings.list"},
+	{id: sectionExtensionCatalog, label: "Extension catalog", method: "extensions.catalog"},
 }
 
 type dashboardPaneID int
@@ -70,6 +74,7 @@ const (
 	dashboardConnections
 	dashboardModels
 	dashboardRuntime
+	dashboardTransforms
 )
 
 type dashboardPaneDef struct {
@@ -105,6 +110,10 @@ var dashboardPanes = []dashboardBlockDef{
 	{key: "5", label: "Runtime", tabs: []dashboardPaneDef{
 		{id: dashboardRuntime, key: "health", label: "Health", sources: []sectionID{sectionHealth}, view: "health"},
 		{id: dashboardRuntime, key: "logs", label: "Logs", sources: []sectionID{sectionLogs}, view: "logs"},
+	}},
+	{key: "6", label: "Transforms", tabs: []dashboardPaneDef{
+		{id: dashboardTransforms, key: "bindings", label: "Bindings", sources: []sectionID{sectionTransformBindings}, view: "transform-bindings"},
+		{id: dashboardTransforms, key: "catalog", label: "Catalog", sources: []sectionID{sectionExtensionCatalog}, view: "transform-catalog"},
 	}},
 }
 
@@ -176,6 +185,10 @@ func (h keyHelp) shortHelp() []key.Binding {
 			bindings = append(bindings, key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "create Physical")))
 		case "physical", "combos":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/p/d"), key.WithHelp("e/p/d", "edit/expose/delete")))
+		case "transform-bindings":
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/d"), key.WithHelp("e/d", "edit/delete binding")))
+		case "transform-catalog":
+			bindings = append(bindings, key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "bind selected transform")))
 		}
 		return append(bindings,
 			key.NewBinding(key.WithKeys("H/L"), key.WithHelp("H/L", "scroll horizontally")),
@@ -193,6 +206,10 @@ func (h keyHelp) shortHelp() []key.Binding {
 		bindings = append(bindings, key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "create Physical")))
 	case "physical", "combos":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("c/p"), key.WithHelp("c/p", "compose/expose")))
+	case "transform-bindings":
+		bindings = append(bindings, key.NewBinding(key.WithKeys("e/d"), key.WithHelp("e/d", "edit/delete binding")))
+	case "transform-catalog":
+		bindings = append(bindings, key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "bind selected transform")))
 	}
 	bindings = append(bindings,
 		key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
@@ -205,7 +222,7 @@ func (h keyHelp) ShortHelp() []key.Binding { return h.shortHelp() }
 
 func (keyHelp) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{key.NewBinding(key.WithKeys("h/l"), key.WithHelp("h/l", "previous/next block")), key.NewBinding(key.WithKeys("1-5"), key.WithHelp("1-5", "focus block"))},
+		{key.NewBinding(key.WithKeys("h/l"), key.WithHelp("h/l", "previous/next block")), key.NewBinding(key.WithKeys("1-6"), key.WithHelp("1-6", "focus block"))},
 		{key.NewBinding(key.WithKeys("[/]"), key.WithHelp("[/]", "previous/next tab")), key.NewBinding(key.WithKeys("0"), key.WithHelp("0", "focus main view"))},
 		{key.NewBinding(key.WithKeys("j/k"), key.WithHelp("j/k", "move inside pane")), key.NewBinding(key.WithKeys("gg/G"), key.WithHelp("gg/G", "first/last item"))},
 		{key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "focus inspector")), key.NewBinding(key.WithKeys("space"), key.WithHelp("space", "select model"))},
@@ -1067,6 +1084,17 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.focus = focusInspector
 			}
 			return model, cmd
+		case "n":
+			if current.definition.view == "transform-catalog" {
+				m.focus = focusDashboard
+				model, cmd := m.updateDashboardAction(msg)
+				if m.mode != modeBrowse {
+					m.focus = focusInspector
+				} else if m.focus == focusDashboard {
+					m.focus = focusInspector
+				}
+				return model, cmd
+			}
 		}
 		if keyText == "H" {
 			m.detail.ScrollLeft(6)
@@ -1128,6 +1156,22 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.pendingPreviewKey = selected.key
 		return m, m.invoke("routes.explain", map[string]any{"model": selected.publicName})
 	case "n":
+		if current.definition.view == "transform-catalog" {
+			selected := m.selectedEntry()
+			if selected == nil {
+				m.status = "select a transform descriptor first"
+				return m, nil
+			}
+			descriptor, ok := selected.payload.(extensions.Descriptor)
+			if !ok {
+				m.status = "selected catalog row is not a transform"
+				return m, nil
+			}
+			m.form = newTransformBindingForm(descriptor, m.raw[sectionExtensionCatalog], nil)
+			m.mode = modeForm
+			m.resize()
+			return m, nil
+		}
 		m.form = m.newModelForm()
 		if m.form == nil {
 			m.status = "no create action in this pane"
@@ -1142,9 +1186,16 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "focus a row first"
 			return m, nil
 		}
-		switch selected.payload.(type) {
+		switch value := selected.payload.(type) {
 		case physicalModel, comboModel:
 			m.form = newResourceForm(0, selected, "")
+		case kernel.TransformBinding:
+			descriptor, found := findTransformDescriptor(m.raw[sectionExtensionCatalog], value.TransformRef)
+			if !found {
+				m.status = "transform descriptor unavailable; refresh catalog"
+				return m, nil
+			}
+			m.form = newTransformBindingForm(descriptor, m.raw[sectionExtensionCatalog], &value)
 		default:
 			m.status = "this row is not an editable typed model"
 			return m, nil
@@ -1487,6 +1538,10 @@ func (m *app) rebuildDashboardPane(index int) tea.Cmd {
 		items, err = makeEntries("logs.list", m.raw[sectionLogs], m.providers)
 	case "health":
 		items, err = makeEntries("health.list", m.raw[sectionHealth], m.providers)
+	case "transform-bindings":
+		items, err = makeEntries("transform_bindings.list", m.raw[sectionTransformBindings], m.providers)
+	case "transform-catalog":
+		items, err = makeEntries("extensions.catalog", m.raw[sectionExtensionCatalog], m.providers)
 	case "unavailable-usage":
 		items = []entry{{key: "usage-unavailable", title: "Usage API unavailable", summary: "daemon has no usage read endpoint", detail: "Usage data is not available through the current daemon IPC contract."}}
 	}
@@ -2145,6 +2200,8 @@ func (m *app) confirmDelete() tea.Cmd {
 		method, params = "physical_models.delete", map[string]any{"name": value.Name}
 	case comboModel:
 		method, params = "combo_models.delete", map[string]any{"name": value.Name}
+	case kernel.TransformBinding:
+		method, params = "transform_bindings.delete", map[string]any{"id": value.ID}
 	default:
 		m.status = "source catalog rows are managed through their provider"
 		return nil
@@ -2191,6 +2248,8 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 		resources = []sectionID{sectionPhysical}
 	case "combo_models.upsert", "combo_models.delete":
 		resources = []sectionID{sectionComboModels}
+	case "transform_bindings.upsert", "transform_bindings.delete":
+		resources = []sectionID{sectionTransformBindings}
 	default:
 		return m.refreshPane(m.activePanel)
 	}
@@ -2275,6 +2334,16 @@ func (m *app) newModelForm() *formState {
 		default:
 			return nil
 		}
+	case dashboardTransforms:
+		if m.active().definition.view == "transform-catalog" {
+			if selected := m.selectedEntry(); selected != nil {
+				if descriptor, ok := selected.payload.(extensions.Descriptor); ok {
+					return newTransformBindingForm(descriptor, m.raw[sectionExtensionCatalog], nil)
+				}
+			}
+			return nil
+		}
+		return nil
 	default:
 		return nil
 	}

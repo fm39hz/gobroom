@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -22,20 +23,26 @@ type fieldSpec struct {
 }
 
 type formState struct {
-	title, method  string
-	fields         []fieldSpec
-	inputs         []textinput.Model
-	active         int
-	typedSources   []routeReference
-	typedMembers   []modelReference
-	memberInput    textinput.Model
-	memberMode     bool
-	addingMember   bool
-	memberCursor   int
-	extra          map[string]any
-	providerPreset string
-	authSchema     []provider.SetupField
-	hasAuthSchema  bool
+	title, method    string
+	fields           []fieldSpec
+	inputs           []textinput.Model
+	active           int
+	typedSources     []routeReference
+	typedMembers     []modelReference
+	memberInput      textinput.Model
+	memberMode       bool
+	addingMember     bool
+	memberCursor     int
+	extra            map[string]any
+	providerPreset   string
+	authSchema       []provider.SetupField
+	hasAuthSchema    bool
+	transformOptions map[string]transformOptionSpec
+}
+
+type transformOptionSpec struct {
+	typeName string
+	required bool
 }
 
 func buildForm(title, method string, specs []fieldSpec, values map[string]string) *formState {
@@ -66,6 +73,109 @@ func buildForm(title, method string, specs []fieldSpec, values map[string]string
 	f.memberInput.CharLimit = 512
 	f.memberInput.SetWidth(64)
 	f.memberInput.Blur()
+	return f
+}
+
+func newTransformBindingForm(descriptor extensions.Descriptor, catalogJSON json.RawMessage, existing *kernel.TransformBinding) *formState {
+	var catalog extensions.CatalogView
+	_ = json.Unmarshal(catalogJSON, &catalog)
+	var optionsSchema json.RawMessage
+	if descriptor.OptionsSchemaRef != nil {
+		for _, schema := range catalog.Schemas {
+			if schema.Ref == *descriptor.OptionsSchemaRef {
+				optionsSchema = schema.Document
+				break
+			}
+		}
+	}
+	properties := map[string]json.RawMessage{}
+	var requiredNames []string
+	if len(optionsSchema) > 0 {
+		var document struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+			Required   []string                   `json:"required"`
+		}
+		if json.Unmarshal(optionsSchema, &document) == nil {
+			properties = document.Properties
+			requiredNames = document.Required
+		}
+	}
+	required := make(map[string]bool, len(requiredNames))
+	for _, name := range requiredNames {
+		required[name] = true
+	}
+	values := map[string]string{"id": descriptor.Ref.ID + ".daemon", "scopeKind": string(kernel.TransformScopeDaemon), "enabled": "true", "order": "0", "failureMode": string(kernel.TransformFailClosed)}
+	if existing != nil {
+		values["id"] = existing.ID
+		values["scopeKind"] = string(existing.Scope.Kind)
+		values["scopeID"] = existing.Scope.ID
+		values["enabled"] = strconv.FormatBool(existing.Enabled)
+		values["order"] = strconv.Itoa(existing.Order)
+		values["failureMode"] = string(existing.FailureMode)
+	}
+	var currentOptions map[string]json.RawMessage
+	if existing != nil && len(existing.Options) > 0 {
+		_ = json.Unmarshal(existing.Options, &currentOptions)
+	}
+	fields := []fieldSpec{
+		{key: "id", label: "Binding ID", placeholder: "unique instance name"},
+		{key: "scopeKind", label: "Scope", placeholder: "daemon | model | route | provider | connection"},
+		{key: "scopeID", label: "Scope ID", placeholder: "empty for daemon scope"},
+		{key: "order", label: "Order", placeholder: "0"},
+		{key: "enabled", label: "Enabled", placeholder: "true | false"},
+		{key: "failureMode", label: "Failure mode", placeholder: "fail_closed | safe_fail_open"},
+	}
+	optionSpecs := make(map[string]transformOptionSpec, len(properties))
+	optionNames := make([]string, 0, len(properties))
+	for name := range properties {
+		optionNames = append(optionNames, name)
+	}
+	sort.Strings(optionNames)
+	for _, name := range optionNames {
+		var property struct {
+			Type        string          `json:"type"`
+			Title       string          `json:"title"`
+			Description string          `json:"description"`
+			Default     json.RawMessage `json:"default"`
+			Enum        []any           `json:"enum"`
+		}
+		_ = json.Unmarshal(properties[name], &property)
+		label := property.Title
+		if label == "" {
+			label = name
+		}
+		placeholder := property.Description
+		if len(property.Enum) > 0 {
+			placeholder = "one of: " + strings.Trim(strings.ReplaceAll(fmt.Sprint(property.Enum), " ", " | "), "[]")
+		}
+		if len(property.Default) > 0 {
+			var defaultValue any
+			if json.Unmarshal(property.Default, &defaultValue) == nil {
+				if property.Type == "object" || property.Type == "array" {
+					if encoded, err := json.Marshal(defaultValue); err == nil {
+						values["option:"+name] = string(encoded)
+					}
+				} else {
+					values["option:"+name] = fmt.Sprint(defaultValue)
+				}
+			}
+		}
+		if raw := currentOptions[name]; len(raw) > 0 {
+			var value any
+			if json.Unmarshal(raw, &value) == nil {
+				if property.Type == "object" || property.Type == "array" {
+					values["option:"+name] = string(raw)
+				} else {
+					values["option:"+name] = fmt.Sprint(value)
+				}
+			}
+		}
+		fields = append(fields, fieldSpec{key: "option:" + name, label: label, placeholder: placeholder})
+		optionSpecs[name] = transformOptionSpec{typeName: property.Type, required: required[name]}
+	}
+	f := buildForm("Configure transform binding · "+descriptor.DisplayName, "transform_bindings.upsert", fields, values)
+	f.transformOptions = optionSpecs
+	f.extra["transformRef"] = descriptor.Ref
 	return f
 }
 
@@ -465,6 +575,9 @@ func (f *formState) removeMember() {
 }
 
 func (f *formState) Params() (map[string]any, error) {
+	if f.method == "transform_bindings.upsert" {
+		return f.transformBindingParams()
+	}
 	params := make(map[string]any, len(f.fields)+2)
 	authValues := map[string]string{}
 	for index, field := range f.fields {
@@ -614,6 +727,79 @@ func (f *formState) Params() (map[string]any, error) {
 		}
 	}
 	return params, nil
+}
+
+func (f *formState) transformBindingParams() (map[string]any, error) {
+	transformRef, ok := f.extra["transformRef"].(extensions.Ref)
+	if !ok {
+		return nil, fmt.Errorf("transform descriptor is missing")
+	}
+	values := make(map[string]string, len(f.fields))
+	options := make(map[string]any, len(f.transformOptions))
+	for index, field := range f.fields {
+		value := strings.TrimSpace(f.inputs[index].Value())
+		if !strings.HasPrefix(field.key, "option:") {
+			values[field.key] = value
+			continue
+		}
+		name := strings.TrimPrefix(field.key, "option:")
+		spec := f.transformOptions[name]
+		if value == "" {
+			if spec.required {
+				return nil, fmt.Errorf("transform option %s is required", name)
+			}
+			continue
+		}
+		var parsed any
+		var err error
+		switch spec.typeName {
+		case "string", "":
+			parsed = value
+		case "boolean":
+			parsed, err = strconv.ParseBool(value)
+		case "integer":
+			parsed, err = strconv.ParseInt(value, 10, 64)
+		case "number":
+			parsed, err = strconv.ParseFloat(value, 64)
+		case "object", "array":
+			err = json.Unmarshal([]byte(value), &parsed)
+		default:
+			err = fmt.Errorf("unsupported option type %q; enter JSON", spec.typeName)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("transform option %s: %w", name, err)
+		}
+		options[name] = parsed
+	}
+	id := strings.TrimSpace(values["id"])
+	if id == "" {
+		return nil, fmt.Errorf("binding ID is required")
+	}
+	scopeKind := kernel.TransformScopeKind(strings.TrimSpace(values["scopeKind"]))
+	if scopeKind == "" {
+		return nil, fmt.Errorf("scope is required")
+	}
+	order := 0
+	if text := values["order"]; text != "" {
+		parsed, err := strconv.Atoi(text)
+		if err != nil {
+			return nil, fmt.Errorf("order must be an integer")
+		}
+		order = parsed
+	}
+	enabled, err := strconv.ParseBool(values["enabled"])
+	if err != nil {
+		return nil, fmt.Errorf("enabled must be true or false")
+	}
+	failureMode := kernel.TransformFailureMode(values["failureMode"])
+	if failureMode == "" {
+		failureMode = kernel.TransformFailClosed
+	}
+	return map[string]any{
+		"id": id, "transformRef": transformRef, "enabled": enabled,
+		"scope": kernel.TransformScope{Kind: scopeKind, ID: strings.TrimSpace(values["scopeID"])},
+		"order": order, "failureMode": failureMode, "options": options,
+	}, nil
 }
 
 func strategyOptionsFromParams(params map[string]any, key string) (map[string]any, error) {

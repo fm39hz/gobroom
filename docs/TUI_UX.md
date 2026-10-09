@@ -45,7 +45,7 @@ Esc         return to the parent context
 Space       select or toggle the focused item
 /           filter the focused view
 n / N       next / previous filter match
-1..5        jump directly to a side block
+1..6        jump directly to a side block
 0           focus the main view
 ?           context-sensitive actions and keybindings
 + / _       next / previous screen mode
@@ -83,12 +83,22 @@ Reference behavior:
 └──────────────────────────────┘ │                                          │
 ┌─ [5] Runtime·Logs ───────────┐ │                                          │
 │ health / cooldown / events │ │                                          │
-└──────────────────────────────┘ └──────────────────────────────────────────┘
+└──────────────────────────────┘ ┌─ [6] Transforms·Bindings·Catalog ───┐   │
+                                 │ scoped extension policies           │   │
+                                 └──────────────────────────────────────┘   │
+                                 └──────────────────────────────────────────┘
 ```
 
 The dot-separated names in a frame are tabs in one panel, analogous to
 LazyGit's Files/Worktrees/Submodules or Branches/Remotes/Tags groups. A layer
 may later be promoted to its own block without changing its context contract.
+
+The Transforms block separates active bindings from the versioned transform
+catalog. From Catalog, `n` opens a binding form generated from the selected
+descriptor's options schema; from Bindings, `e` edits and `d` deletes. The
+form derives top-level option fields, defaults, primitive types and required
+fields from the schema; structured values are entered as JSON. The daemon
+validates exact refs/options and the full binding set before publish.
 
 ## Provider and connection onboarding
 

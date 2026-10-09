@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
@@ -87,6 +89,65 @@ func TestQuotaPaneDecodesRuntimeMapContract(t *testing.T) {
 	if len(items) != 1 || items[0].title != "model-a" || !strings.Contains(items[0].detail, "daily") {
 		t.Fatalf("unexpected quota pane rows: %#v", items)
 	}
+}
+
+func TestTransformCatalogDrivesTypedBindingForm(t *testing.T) {
+	transformRef := extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.prompt", ContractVersion: 2}
+	schemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "fixture.prompt.options", ContractVersion: 1}
+	descriptor := extensions.Descriptor{Ref: transformRef, ImplementationVersion: "3", DisplayName: "Prompt transform", Description: "Normalize prompt content.", OptionsSchemaRef: &schemaRef, LifecycleCapabilities: []string{"request.before_requirements", "prompt"}, FailureModes: []string{"safe_fail_open"}, ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 4096, MaxOutputBytes: 4096, MaxBufferedBytes: 8192, DeadlineMillis: 100}}
+	catalog := extensions.CatalogView{Descriptors: []extensions.Descriptor{descriptor}, Schemas: []extensions.Schema{{Ref: schemaRef, Document: json.RawMessage(`{"type":"object","properties":{"enabled":{"type":"boolean","default":true},"ratio":{"type":"number","description":"Scale factor"},"tags":{"type":"array"}},"required":["ratio"]}`)}}}
+	catalogJSON, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := makeEntries("extensions.catalog", catalogJSON, nil)
+	if err != nil || len(entries) != 1 || entries[0].payload.(extensions.Descriptor).Ref != transformRef || !strings.Contains(entries[0].detail, "ratio · number required") {
+		t.Fatalf("transform descriptor/schema was not projected: entries=%#v err=%v", entries, err)
+	}
+
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 120, 35
+	model.activePanel = len(dashboardPanes) - 1
+	model.activeTabs[model.activePanel] = 1
+	model.raw[sectionExtensionCatalog] = catalogJSON
+	model.setPaneItems(model.activeContextIndex(), entries)
+	_, _ = model.updateDashboardAction(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if model.mode != modeForm || model.form == nil || model.form.method != "transform_bindings.upsert" {
+		t.Fatalf("catalog n did not open transform binding form: mode=%v form=%#v status=%q", model.mode, model.form, model.status)
+	}
+	setFormValue(model.form, "scopeKind", string(kernel.TransformScopeModel))
+	setFormValue(model.form, "scopeID", "junior")
+	setFormValue(model.form, "option:ratio", "0.75")
+	setFormValue(model.form, "option:tags", `["system","user"]`)
+	params, err := model.form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["transformRef"] != transformRef || params["failureMode"] != kernel.TransformFailClosed {
+		t.Fatalf("form lost exact transform ref/default failure mode: %#v", params)
+	}
+	options, ok := params["options"].(map[string]any)
+	if !ok || options["enabled"] != true || options["ratio"] != 0.75 || !reflect.DeepEqual(options["tags"], []any{"system", "user"}) {
+		t.Fatalf("schema defaults/types were not bound into options: %#v", params["options"])
+	}
+
+	model.mode = modeBrowse
+	model.form = nil
+	model.focus = focusInspector
+	_, _ = model.updateKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if model.mode != modeForm || model.form == nil || model.form.method != "transform_bindings.upsert" || model.focus != focusInspector {
+		t.Fatalf("inspector n did not preserve focus while opening binding form: mode=%v focus=%v form=%#v", model.mode, model.focus, model.form)
+	}
+}
+
+func setFormValue(form *formState, key, value string) {
+	for index, field := range form.fields {
+		if field.key == key {
+			form.inputs[index].SetValue(value)
+			return
+		}
+	}
+	panic("form field not found: " + key)
 }
 
 func TestConnectionFormMasksSecretAndOmitsUnchangedSecret(t *testing.T) {
