@@ -18,6 +18,16 @@ import (
 )
 
 type nativeChatRequestTransform struct{}
+type appendCanonicalChatMessageTransform struct{}
+
+func (appendCanonicalChatMessageTransform) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.append-chat-image", ContractVersion: 1}, ImplementationVersion: "1", Label: "Append canonical image message", Description: "Exercise typed Chat egress for an appended IR message.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformInput}}
+}
+
+func (appendCanonicalChatMessageTransform) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	request.Messages = append(request.Messages, normalize.Message{Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "inspect"}, {Type: "image", URL: "https://example.test/appended.png"}}})
+	return nil
+}
 
 func (nativeChatRequestTransform) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.native-chat-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Native Chat options", Description: "Change typed options and tools for native egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions}}
@@ -168,6 +178,42 @@ func TestChatPrepareEncodesAddedCanonicalTypedMessage(t *testing.T) {
 	content := added["content"].([]any)
 	if added["role"] != "user" || content[0].(map[string]any)["text"] != "added" || content[1].(map[string]any)["type"] != "image_url" {
 		t.Fatalf("added canonical message was not encoded as Chat content: %#v", messages)
+	}
+}
+
+func TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/chat/completions", http.Header{}, []byte(`{"model":"public","messages":[{"role":"user","content":"original"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transform := appendCanonicalChatMessageTransform{}
+	registry := kernel.NewRequestTransformRegistry()
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	binding := kernel.TransformBinding{ID: "append-image", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}
+	if err := registry.ApplyScopes(context.Background(), &parsed.Request, []kernel.TransformBinding{binding}, kernel.TransformScope{Kind: kernel.TransformScopeDaemon}); err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Request.Mutations.Messages {
+		t.Fatal("kernel did not mark the appended message facet")
+	}
+	prepared, err := (Chat{}).Prepare(context.Background(), parsed.Request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	messages := body["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("messages=%#v", messages)
+	}
+	added := messages[1].(map[string]any)
+	content := added["content"].([]any)
+	if added["role"] != "user" || content[0].(map[string]any)["text"] != "inspect" || content[1].(map[string]any)["image_url"].(map[string]any)["url"] != "https://example.test/appended.png" {
+		t.Fatalf("canonical suffix was not mapped to OpenAI Chat wire: %#v", added)
 	}
 }
 

@@ -121,6 +121,9 @@ partially added message reaches the invocation consumed by routing or egress.
 codec projects canonical text/image parts into the Chat wire content schema;
 `TestNativeChatMessageRejectsUnmappedCanonicalContentParts` proves unsupported
 parts fail closed instead of serializing Go IR fields as provider JSON.
+`TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix` composes the
+kernel transform registry's mutation marker with `Chat.Prepare` and proves the
+canonical append reaches wire JSON in the expected order and image shape.
 
 `TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit`
 adds serving-boundary cancellation evidence: client cancellation during a
