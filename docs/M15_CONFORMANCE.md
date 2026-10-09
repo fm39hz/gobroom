@@ -125,10 +125,10 @@ provider blocks by patching their original wire positions. It does not silently
 send the original order as if the transform succeeded.
 
 `TestClientDisconnectCancelsDataPlaneExecution` runs an actual streamed HTTP
-request, closes the client response after the first flushed bytes, and verifies
-the handler's executor context is cancelled. Together with the kernel response
-transform cancellation tests, this verifies both HTTP cancellation propagation
-and kernel fail-closed handling; daemon-shutdown stress remains open.
+request through the API, fallback kernel, and a blocked response transform;
+closing the client after the first flushed bytes cancels the transform, prevents
+fallback to the second route, and suppresses successful usage completion.
+Concurrent-disconnect and daemon-shutdown stress remain open.
 
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`

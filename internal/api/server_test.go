@@ -123,20 +123,37 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
+	transform := &disconnectResponseTransform{entered: make(chan struct{}), cancelled: make(chan error, 1)}
+	binding := kernel.TransformBinding{ID: "daemon.disconnect-response", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "disconnect-test", TargetRef: "role"}},
+		Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelCombo, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route-a"}, {Kind: kernel.MemberRoute, ID: "route-b"}}}},
+		Routes: []kernel.Route{
+			disconnectRoute("route-a"),
+			disconnectRoute("route-b"),
+		},
+		TransformBindings: []kernel.TransformBinding{binding},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if err := engine.ResponseTransforms.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	attempts := make(chan string, 2)
+	completed := make(chan struct{}, 1)
+	engine.Adapters["disconnect-stream"] = disconnectStreamAdapter{attempts: attempts, completed: completed}
 	server := NewServerWithRuntimeBindings(state, nil)
-	started := make(chan struct{})
-	cancelled := make(chan error, 1)
-	server.SetExecutor(func(ctx context.Context, _ normalize.Request, writer http.ResponseWriter) error {
-		writer.Header().Set("Content-Type", "text/event-stream")
-		writer.WriteHeader(http.StatusOK)
-		if _, err := writer.Write([]byte("ready\n")); err != nil {
-			return err
-		}
-		writer.(http.Flusher).Flush()
-		close(started)
-		<-ctx.Done()
-		cancelled <- ctx.Err()
-		return ctx.Err()
+	executionResult := make(chan error, 1)
+	server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
+		err := engine.Execute(ctx, request, kernel.Credential{}, writer)
+		executionResult <- err
+		return err
 	})
 	httpServer := httptest.NewServer(server.HandlerWithOptions(HandlerOptions{DataPlane: true}))
 	defer httpServer.Close()
@@ -147,21 +164,139 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	line, err := bufio.NewReader(response.Body).ReadString('\n')
-	if err != nil || line != "ready\n" {
+	if err != nil || line != "started\n" {
 		response.Body.Close()
 		t.Fatalf("stream did not reach client before disconnect: line=%q err=%v", line, err)
 	}
-	<-started
+	select {
+	case <-transform.entered:
+	case <-time.After(2 * time.Second):
+		response.Body.Close()
+		t.Fatal("response transform did not start after the first committed chunk")
+	}
 	if err := response.Body.Close(); err != nil {
 		t.Fatalf("close client response: %v", err)
 	}
 	select {
-	case err := <-cancelled:
+	case err := <-transform.cancelled:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("executor context ended with %v, want context.Canceled", err)
+			t.Fatalf("response transform context ended with %v, want context.Canceled", err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("client disconnect did not cancel the data-plane execution context")
+		t.Fatal("client disconnect did not cancel the in-flight response transform")
+	}
+	select {
+	case err := <-executionResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("kernel execution ended with %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("kernel execution did not return after client disconnect")
+	}
+	if route := <-attempts; route != "route-a" {
+		t.Fatalf("first route attempt=%q want route-a", route)
+	}
+	select {
+	case route := <-attempts:
+		t.Fatalf("kernel attempted fallback route %q after client cancellation", route)
+	default:
+	}
+	select {
+	case <-completed:
+		t.Fatal("cancelled stream emitted successful usage completion")
+	default:
+	}
+}
+
+type disconnectResponseTransform struct {
+	entered   chan struct{}
+	cancelled chan error
+}
+
+func (transform *disconnectResponseTransform) Definition() kernel.ResponseTransformDefinition {
+	return kernel.ResponseTransformDefinition{
+		Ref:                   extensions.Ref{Kind: kernel.ResponseTransformKind, ID: "fixture.disconnect-response", ContractVersion: 1},
+		ImplementationVersion: "1", Label: "Disconnect response transform", Description: "Wait for cancellation at the HTTP boundary.",
+		Effects: []kernel.ResponseTransformEffect{kernel.ResponseEffectText},
+	}
+}
+
+func (transform *disconnectResponseTransform) ApplyResponse(ctx context.Context, event kernel.ResponseEvent, _ json.RawMessage) (kernel.ResponseEvent, error) {
+	select {
+	case <-transform.entered:
+	default:
+		close(transform.entered)
+	}
+	<-ctx.Done()
+	transform.cancelled <- ctx.Err()
+	return event, ctx.Err()
+}
+
+type disconnectStreamAdapter struct {
+	attempts  chan<- string
+	completed chan<- struct{}
+}
+
+func (disconnectStreamAdapter) ID() string { return "disconnect-stream" }
+func (disconnectStreamAdapter) PlanCompatibility(input kernel.CompatibilityContext) kernel.CompatibilityPlan {
+	requestFacets := kernel.RequiredRequestFacets(input.Request)
+	responseFacets := []string{kernel.FacetWireResponse}
+	for _, event := range kernel.RequiredResponseEvents(input.Request) {
+		responseFacets = append(responseFacets, kernel.ResponseEventFacet(event))
+	}
+	allFacets := append(append([]string(nil), requestFacets...), responseFacets...)
+	mappings := make([]kernel.FacetMapping, 0, len(allFacets))
+	for _, facet := range allFacets {
+		mappings = append(mappings, kernel.FacetMapping{Facet: facet, Disposition: kernel.FacetPreserved})
+	}
+	return kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{mappings}, kernel.CompatibilityPolicy{RequiredFacets: allFacets})
+}
+func (disconnectStreamAdapter) Prepare(_ context.Context, _ kernel.NormalizedRequest, route kernel.Route, _ kernel.Credential) (kernel.UpstreamRequest, error) {
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
+}
+func (adapter disconnectStreamAdapter) Execute(_ context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	adapter.attempts <- request.URL
+	return kernel.UpstreamResponse{Status: http.StatusOK, Body: http.NoBody}, nil
+}
+func (disconnectStreamAdapter) ClassifyError(int, []byte) kernel.ErrorClass {
+	return kernel.ErrorRetryable
+}
+func (adapter disconnectStreamAdapter) RenderResponse(ctx context.Context, _ kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.WriteHeader(http.StatusOK)
+	if _, err := writer.Write([]byte("started\n")); err != nil {
+		return err
+	}
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	event := kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventTextDelta, Text: "done"}
+	if hooks.TransformResponse != nil {
+		transformed, err := hooks.TransformResponse(ctx, event)
+		if err != nil {
+			if hooks.OnError != nil {
+				hooks.OnError(err)
+			}
+			return err
+		}
+		event = transformed
+	}
+	if _, err := writer.Write([]byte(event.Text)); err != nil {
+		return err
+	}
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
+	}
+	adapter.completed <- struct{}{}
+	return nil
+}
+
+func disconnectRoute(id string) kernel.Route {
+	return kernel.Route{
+		ID: id, Enabled: true, Protocol: kernel.ProtocolOpenAIChat,
+		OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"disconnect-stream"}},
+		},
 	}
 }
 
