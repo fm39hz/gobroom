@@ -43,6 +43,17 @@ type oversizedRequestOutputTransform struct{}
 type oversizedResponseOutputTransform struct{}
 type cancelRequestTransform struct{ cancel context.CancelFunc }
 type cancelResponseTransform struct{ cancel context.CancelFunc }
+type requestMutationFixture struct {
+	id      string
+	effects []TransformEffect
+	mutate  func(*NormalizedRequest)
+}
+type responseOpaqueMutationFixture struct{}
+type responseMutationFixture struct {
+	id      string
+	effects []ResponseTransformEffect
+	mutate  func(ResponseEvent) ResponseEvent
+}
 
 type scopedProbeAdapter struct{ attempts *[]string }
 
@@ -99,7 +110,7 @@ func (safeFailOpenEffectTransform) Definition() TransformDefinition {
 	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.fail-open.effect", ContractVersion: 1}, ImplementationVersion: "1", Label: "Best effort effect", Description: "Fixture undeclared effect.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
 }
 func (safeFailOpenEffectTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
-	request.Raw["unknown_option"] = "changed"
+	request.Raw["temperature"] = 0.5
 	return nil
 }
 
@@ -171,6 +182,32 @@ func (transform cancelResponseTransform) ApplyResponse(_ context.Context, event 
 	event.Text = "partial mutation"
 	transform.cancel()
 	return event, nil
+}
+
+func (transform requestMutationFixture) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: transform.id, ContractVersion: 1}, ImplementationVersion: "1", Label: "Request mutation fixture", Description: "Fixture for exhaustive transform effect validation.", Stage: TransformBeforeRequirements, Effects: transform.effects}
+}
+
+func (transform requestMutationFixture) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	transform.mutate(request)
+	return nil
+}
+
+func (responseOpaqueMutationFixture) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.opaque-response-mutation", ContractVersion: 1}, ImplementationVersion: "1", Label: "Opaque response mutation", Description: "Fixture for opaque response protection.", Effects: []ResponseTransformEffect{ResponseEffectText}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+
+func (responseOpaqueMutationFixture) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	event.Opaque = json.RawMessage(`{"signature":"rewritten"}`)
+	return event, nil
+}
+
+func (transform responseMutationFixture) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: transform.id, ContractVersion: 1}, ImplementationVersion: "1", Label: "Response mutation fixture", Description: "Fixture for response effect validation.", Effects: transform.effects}
+}
+
+func (transform responseMutationFixture) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	return transform.mutate(event), nil
 }
 
 func TestTransformsEnforcePayloadAndDeadlineBounds(t *testing.T) {
@@ -312,7 +349,7 @@ func TestRequestTransformSafeFailOpenRollsBackAndReportsWithoutErrorText(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Messages[0].Content != "original" || request.Raw["unknown_option"] != nil {
+	if request.Messages[0].Content != "original" || request.Raw["temperature"] != nil {
 		t.Fatalf("safe fail-open published partial mutations: %#v", request)
 	}
 	if len(report.Failures) != 2 || report.Failures[0].Reason != TransformFailureApply || report.Failures[1].Reason != TransformFailureEffect {
@@ -441,6 +478,55 @@ func TestKernelRecordsRequestTransformSafeFailOpenInUsagePlan(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("safe fail-open request did not produce a usage plan")
+	}
+}
+
+func TestFallbackUsageDoesNotIncludeTransformFailureFromRejectedModelBranch(t *testing.T) {
+	transform := safeFailOpenRequestTransform{}
+	bindings := []TransformBinding{{
+		ID: "model.rejected.best-effort", TransformRef: transform.Definition().Ref, Enabled: true,
+		Scope: TransformScope{Kind: TransformScopeModel, ID: "physical-a"}, FailureMode: TransformSafeFailOpen,
+	}}
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
+		Nodes: []ModelNode{
+			{ID: "role", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberModel, ID: "physical-a"}, {Kind: MemberModel, ID: "physical-b"}}},
+			{ID: "physical-a", Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "unavailable", Fidelity: FidelityExact}}},
+			{ID: "physical-b", Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "selected", Fidelity: FidelityExact}}},
+		},
+		Routes: []Route{
+			{ID: "unavailable", Enabled: false, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"scoped-probe"}}}},
+			{ID: "selected", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"scoped-probe"}}}},
+		},
+		TransformBindings: bindings,
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if err := k.Transforms.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	var attempts []string
+	k.Adapters["scoped-probe"] = scopedProbeAdapter{attempts: &attempts}
+	request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Messages: []Message{{Role: "user", Content: "original"}}}
+	if err := k.Execute(context.Background(), request, Credential{}, httptest.NewRecorder()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(attempts, []string{"selected"}) {
+		t.Fatalf("fallback selected unexpected provider attempts: %v", attempts)
+	}
+	select {
+	case usage := <-k.Events:
+		if usage.CompatibilityPlan == nil || len(usage.CompatibilityPlan.TransformFailures) != 0 {
+			t.Fatalf("selected branch inherited transform failure from rejected branch: %#v", usage.CompatibilityPlan)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("selected fallback branch did not emit usage")
 	}
 }
 
@@ -699,6 +785,167 @@ func TestRequestTransformRejectsUndeclaredMutationTransactionally(t *testing.T) 
 	}
 	if request.Messages[0].Content != "original" {
 		t.Fatalf("failed transform leaked its partial mutation: %#v", request.Messages)
+	}
+}
+
+func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing.T) {
+	setMessageContent := func(request *NormalizedRequest) {
+		request.Messages[0].Content.([]normalize.ContentPart)[0].Text = "rewritten"
+	}
+	setPromptContent := func(request *NormalizedRequest) { request.Prompt.Layers[0].Parts[0].Text = "rewritten" }
+	setToolDefinition := func(request *NormalizedRequest) {
+		request.Tools[0].Function = map[string]any{"name": "search", "description": "updated"}
+	}
+	setToolArguments := func(request *NormalizedRequest) {
+		request.Messages[0].ToolCalls[0].Arguments.(map[string]any)["query"] = "updated"
+	}
+	setThinkingEffort := func(request *NormalizedRequest) { request.Thinking.Effort = "high" }
+	setContinuity := func(request *NormalizedRequest) { request.Continuity.PreviousResponse = "response-1" }
+	setOperationInput := func(request *NormalizedRequest) { request.OperationPayload = json.RawMessage(`{"prompt":"rewritten"}`) }
+	setModality := func(request *NormalizedRequest) { request.Modalities.Vision = true }
+	setRequirement := func(request *NormalizedRequest) {
+		request.Requirements = append(request.Requirements, normalize.FeatureRequirement{Ref: extensions.Ref{Kind: "feature", ID: "image", ContractVersion: 1}})
+	}
+	setExtension := func(request *NormalizedRequest) {
+		request.Extensions = map[string]any{"vendor.example/options": map[string]any{"mode": "fast"}}
+	}
+	setRawTemperature := func(request *NormalizedRequest) { request.Raw["temperature"] = 0.5 }
+	setTemperature := func(request *NormalizedRequest) {
+		value := 0.4
+		request.Generation.Temperature = &value
+	}
+	setToolChoice := func(request *NormalizedRequest) {
+		request.ToolChoice = normalize.ToolChoice{Mode: "required", Set: true}
+	}
+	tests := []struct {
+		name      string
+		effects   []TransformEffect
+		mutate    func(*NormalizedRequest)
+		wantError string
+	}{
+		{name: "generation requires options", effects: []TransformEffect{TransformInput}, mutate: setTemperature, wantError: "generation options"},
+		{name: "tool choice requires tools", effects: []TransformEffect{TransformInput}, mutate: setToolChoice, wantError: "tool choice"},
+		{name: "generation options declared", effects: []TransformEffect{TransformOptions}, mutate: setTemperature},
+		{name: "tool choice declared", effects: []TransformEffect{TransformTools}, mutate: setToolChoice},
+		{name: "message input declared", effects: []TransformEffect{TransformInput}, mutate: setMessageContent},
+		{name: "prompt declared", effects: []TransformEffect{TransformPrompt}, mutate: setPromptContent},
+		{name: "tool definition declared", effects: []TransformEffect{TransformTools}, mutate: setToolDefinition},
+		{name: "tool arguments declared", effects: []TransformEffect{TransformTools}, mutate: setToolArguments},
+		{name: "thinking intent declared", effects: []TransformEffect{TransformThinking}, mutate: setThinkingEffort},
+		{name: "continuity declared", effects: []TransformEffect{TransformContinuity}, mutate: setContinuity},
+		{name: "operation payload declared", effects: []TransformEffect{TransformInput}, mutate: setOperationInput},
+		{name: "modality declared", effects: []TransformEffect{TransformInput}, mutate: setModality},
+		{name: "derived requirement declared", effects: []TransformEffect{TransformInput}, mutate: setRequirement},
+		{name: "namespaced extension declared", effects: []TransformEffect{TransformOptions}, mutate: setExtension},
+		{name: "known raw generation option declared", effects: []TransformEffect{TransformOptions}, mutate: setRawTemperature},
+		{name: "unsupported evidence immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) { request.UnsupportedFacets = nil }, wantError: "unsupported-facet evidence"},
+		{name: "unsupported generation evidence immutable", effects: []TransformEffect{TransformOptions}, mutate: func(request *NormalizedRequest) { request.Generation.Unsupported = nil }, wantError: "unsupported generation-option evidence"},
+		{name: "thinking source immutable", effects: []TransformEffect{TransformThinking}, mutate: func(request *NormalizedRequest) { request.Thinking.Source = "rewritten" }, wantError: "thinking provenance"},
+		{name: "provider session state opaque", effects: []TransformEffect{TransformContinuity}, mutate: func(request *NormalizedRequest) {
+			request.Session.ProviderState = json.RawMessage(`{"state":"rewritten"}`)
+		}, wantError: "opaque provider session state"},
+		{name: "opaque raw extension immutable", effects: []TransformEffect{TransformOptions}, mutate: func(request *NormalizedRequest) {
+			request.Raw["vendor_extension"].(map[string]any)["opaque"] = "rewritten"
+		}, wantError: "opaque raw request field"},
+		{name: "content metadata immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) {
+			request.Messages[0].Content.([]normalize.ContentPart)[0].Metadata["cache_control"] = "rewritten"
+		}, wantError: "opaque content structure or metadata"},
+		{name: "prompt metadata immutable", effects: []TransformEffect{TransformPrompt}, mutate: func(request *NormalizedRequest) {
+			request.Prompt.Layers[0].Parts[0].Metadata["cache_control"] = "rewritten"
+		}, wantError: "opaque prompt metadata or content structure"},
+		{name: "tool metadata immutable", effects: []TransformEffect{TransformTools}, mutate: func(request *NormalizedRequest) { request.Tools[0].Metadata["vendor"] = "rewritten" }, wantError: "opaque tool metadata"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transform := requestMutationFixture{id: fmt.Sprintf("fixture.effect-matrix-%d", index), effects: test.effects, mutate: test.mutate}
+			registry := NewRequestTransformRegistry()
+			if err := registry.Register(transform); err != nil {
+				t.Fatal(err)
+			}
+			request := NormalizedRequest{
+				Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+				Raw:               map[string]any{"model": "model", "vendor_extension": map[string]any{"opaque": "original"}},
+				Messages:          []Message{{Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "original", Metadata: map[string]any{"cache_control": "ephemeral"}}}, ToolCalls: []normalize.ToolCall{{ID: "call-1", Type: "function", Name: "search", Arguments: map[string]any{"query": "before"}}}}},
+				Prompt:            normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptProvider, Role: "system", Parts: []normalize.ContentPart{{Type: "text", Text: "instruction", Metadata: map[string]any{"cache_control": "ephemeral"}}}}}},
+				Tools:             []normalize.Tool{{Name: "search", Metadata: map[string]any{"vendor": "original"}}},
+				UnsupportedFacets: []string{"content.opaque"},
+				Generation:        normalize.GenerationOptions{Unsupported: []string{"vendor_option"}},
+				Thinking:          normalize.ThinkingIntent{Mode: "level", Effort: "medium", Source: "ingress"},
+				Session:           normalize.SessionContext{ProviderState: json.RawMessage(`{"state":"provider-owned"}`)},
+			}
+			binding := TransformBinding{ID: "matrix", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}
+			err := registry.ApplyScopes(context.Background(), &request, []TransformBinding{binding}, daemonTransformScope())
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("declared effect was rejected: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("mutation error=%v want substring %q", err, test.wantError)
+			}
+			if len(request.UnsupportedFacets) != 1 || request.UnsupportedFacets[0] != "content.opaque" || request.Generation.Unsupported[0] != "vendor_option" || request.Messages[0].Content.([]normalize.ContentPart)[0].Metadata["cache_control"] != "ephemeral" || request.Prompt.Layers[0].Parts[0].Metadata["cache_control"] != "ephemeral" || request.Tools[0].Metadata["vendor"] != "original" || request.Raw["vendor_extension"].(map[string]any)["opaque"] != "original" || string(request.Session.ProviderState) != `{"state":"provider-owned"}` {
+				t.Fatalf("rejected transform leaked a mutation: %#v", request)
+			}
+		})
+	}
+}
+
+func TestResponseTransformCannotMutateOpaquePayloadEvenWithFailOpen(t *testing.T) {
+	registry := NewResponseTransformRegistry()
+	transform := responseOpaqueMutationFixture{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	updated, report, err := registry.ApplyScopesWithReport(context.Background(), ResponseEvent{Kind: EventTextDelta, Text: "visible", Opaque: json.RawMessage(`{"signature":"provider-owned"}`)}, []TransformBinding{{
+		ID: "opaque", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope(), FailureMode: TransformSafeFailOpen,
+	}}, daemonTransformScope())
+	if err == nil || !errors.Is(err, ErrTransformSafetyViolation) || len(report.Failures) != 0 || len(updated.Opaque) != 0 {
+		t.Fatalf("opaque response mutation was accepted or failed open: updated=%#v report=%#v err=%v", updated, report, err)
+	}
+}
+
+func TestResponseTransformEffectMatrixAcceptsOnlyDeclaredSemanticPayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		event  ResponseEvent
+		mutate func(ResponseEvent) ResponseEvent
+		effect ResponseTransformEffect
+	}{
+		{name: "text", event: ResponseEvent{Kind: EventTextDelta, Text: "before"}, mutate: func(event ResponseEvent) ResponseEvent { event.Text = "after"; return event }, effect: ResponseEffectText},
+		{name: "thinking", event: ResponseEvent{Kind: EventThinkingDelta, Text: "before"}, mutate: func(event ResponseEvent) ResponseEvent { event.Text = "after"; return event }, effect: ResponseEffectThinking},
+		{name: "tool arguments", event: ResponseEvent{Kind: EventToolCallDelta, ToolCallID: "call-1", ToolName: "search", ToolArguments: `{}`}, mutate: func(event ResponseEvent) ResponseEvent { event.ToolArguments = `{"q":"x"}`; return event }, effect: ResponseEffectToolArguments},
+		{name: "usage", event: ResponseEvent{Kind: EventUsage, Usage: &UsageEvent{InputTokens: 1}}, mutate: func(event ResponseEvent) ResponseEvent { event.Usage.OutputTokens = 2; return event }, effect: ResponseEffectUsage},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transform := responseMutationFixture{id: fmt.Sprintf("fixture.response-effect-%d", index), effects: []ResponseTransformEffect{test.effect}, mutate: test.mutate}
+			registry := NewResponseTransformRegistry()
+			if err := registry.Register(transform); err != nil {
+				t.Fatal(err)
+			}
+			updated, err := registry.ApplyScopes(context.Background(), test.event, []TransformBinding{{ID: "effect", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}}, daemonTransformScope())
+			if err != nil || reflect.DeepEqual(updated, test.event) {
+				t.Fatalf("declared response effect failed to apply: updated=%#v err=%v", updated, err)
+			}
+		})
+	}
+}
+
+func TestResponseTransformRejectsUndeclaredSemanticEffect(t *testing.T) {
+	transform := responseMutationFixture{
+		id: "fixture.response-undeclared-effect", effects: []ResponseTransformEffect{ResponseEffectUsage},
+		mutate: func(event ResponseEvent) ResponseEvent { event.Text = "rewritten"; return event },
+	}
+	registry := NewResponseTransformRegistry()
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := registry.ApplyScopes(context.Background(), ResponseEvent{Kind: EventTextDelta, Text: "original"}, []TransformBinding{{
+		ID: "undeclared", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope(),
+	}}, daemonTransformScope())
+	if err == nil || !strings.Contains(err.Error(), "undeclared event content") || updated.Text != "" {
+		t.Fatalf("undeclared response effect was accepted or published: updated=%#v err=%v", updated, err)
 	}
 }
 

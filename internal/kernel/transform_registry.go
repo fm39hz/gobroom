@@ -726,11 +726,33 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	if !promptLayerIdentityEqual(before.Prompt, after.Prompt) {
 		return fmt.Errorf("%w: changed prompt provenance, role or layer ordering", ErrTransformSafetyViolation)
 	}
+	if !promptLayerOpaqueFacetsEqual(before.Prompt, after.Prompt) {
+		return fmt.Errorf("%w: changed opaque prompt metadata or content structure", ErrTransformSafetyViolation)
+	}
 	if !reflect.DeepEqual(before.Artifacts, after.Artifacts) {
 		return fmt.Errorf("%w: changed artifact references or ownership", ErrTransformSafetyViolation)
 	}
 	if err := require(!reflect.DeepEqual(before.Tools, after.Tools), TransformTools, "tool definitions"); err != nil {
 		return err
+	}
+	if len(before.Tools) == len(after.Tools) {
+		for index := range before.Tools {
+			if !reflect.DeepEqual(before.Tools[index].Metadata, after.Tools[index].Metadata) {
+				return fmt.Errorf("%w: changed opaque tool metadata", ErrTransformSafetyViolation)
+			}
+		}
+	}
+	if err := require(!reflect.DeepEqual(before.ToolChoice, after.ToolChoice), TransformTools, "tool choice"); err != nil {
+		return err
+	}
+	if err := require(!reflect.DeepEqual(before.Generation, after.Generation), TransformOptions, "generation options"); err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(before.UnsupportedFacets, after.UnsupportedFacets) {
+		return fmt.Errorf("%w: changed ingress unsupported-facet evidence", ErrTransformSafetyViolation)
+	}
+	if !reflect.DeepEqual(before.Generation.Unsupported, after.Generation.Unsupported) {
+		return fmt.Errorf("%w: changed unsupported generation-option evidence", ErrTransformSafetyViolation)
 	}
 	if len(before.Messages) != len(after.Messages) {
 		if err := require(true, TransformInput, "message count"); err != nil {
@@ -745,6 +767,9 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 		if !reflect.DeepEqual(left.Content, right.Content) {
 			if err := require(true, TransformInput, "message content"); err != nil {
 				return err
+			}
+			if !contentOpaqueFacetsEqual(left.Content, right.Content) {
+				return fmt.Errorf("%w: changed opaque content structure or metadata", ErrTransformSafetyViolation)
 			}
 		}
 		if len(left.ToolCalls) != len(right.ToolCalls) {
@@ -768,7 +793,13 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	if err := require(!reflect.DeepEqual(before.Thinking, after.Thinking), TransformThinking, "thinking intent"); err != nil {
 		return err
 	}
-	if err := require(!reflect.DeepEqual(before.Continuity, after.Continuity) || !bytes.Equal(before.Session.ProviderState, after.Session.ProviderState), TransformContinuity, "continuity state"); err != nil {
+	if before.Thinking.Source != after.Thinking.Source {
+		return fmt.Errorf("%w: changed thinking provenance", ErrTransformSafetyViolation)
+	}
+	if !bytes.Equal(before.Session.ProviderState, after.Session.ProviderState) {
+		return fmt.Errorf("%w: changed opaque provider session state", ErrTransformSafetyViolation)
+	}
+	if err := require(!reflect.DeepEqual(before.Continuity, after.Continuity), TransformContinuity, "continuity state"); err != nil {
 		return err
 	}
 	if err := require(!reflect.DeepEqual(before.Requirements, after.Requirements), TransformInput, "compiled request requirements"); err != nil {
@@ -781,7 +812,7 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	}
 	if !reflect.DeepEqual(before.Raw, after.Raw) {
 		beforeRaw, afterRaw := before.Raw, after.Raw
-		for _, key := range []string{"model", "stream"} {
+		for _, key := range []string{"model", "stream", "conversation_id"} {
 			if !reflect.DeepEqual(beforeRaw[key], afterRaw[key]) {
 				return fmt.Errorf("%w: changed immutable raw request field %q", ErrTransformSafetyViolation, key)
 			}
@@ -796,8 +827,8 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 				return fmt.Errorf("%w: changed protected raw request field %q", ErrTransformSafetyViolation, key)
 			}
 		}
-		if !rawChangesHaveDeclaredEffect(definition, beforeRaw, afterRaw) {
-			return fmt.Errorf("changed raw request options without declaring a corresponding effect")
+		if err := validateRawChangesHaveDeclaredEffects(definition, beforeRaw, afterRaw); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -824,7 +855,19 @@ func promptLayerIdentityEqual(before, after normalize.PromptPlan) bool {
 	return true
 }
 
-func rawChangesHaveDeclaredEffect(definition TransformDefinition, before, after map[string]any) bool {
+func promptLayerOpaqueFacetsEqual(before, after normalize.PromptPlan) bool {
+	if len(before.Layers) != len(after.Layers) {
+		return false
+	}
+	for index := range before.Layers {
+		if !contentOpaqueFacetsEqual(before.Layers[index].Parts, after.Layers[index].Parts) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRawChangesHaveDeclaredEffects(definition TransformDefinition, before, after map[string]any) error {
 	keys := make(map[string]bool, len(before)+len(after))
 	for key := range before {
 		keys[key] = true
@@ -836,26 +879,88 @@ func rawChangesHaveDeclaredEffect(definition TransformDefinition, before, after 
 		if reflect.DeepEqual(before[key], after[key]) {
 			continue
 		}
-		var effect TransformEffect
-		switch key {
-		case "model", "stream":
-			return false
-		case "messages", "input", "contents", "prompt", "operationPayload":
-			effect = TransformInput
-		case "tools":
-			effect = TransformTools
-		case "thinking", "reasoning", "reasoning_effort":
-			effect = TransformThinking
-		case "previous_response_id", "response_id", "encrypted_content":
-			effect = TransformContinuity
-		default:
-			effect = TransformOptions
+		effect, known := rawFieldEffect(key)
+		if !known {
+			return fmt.Errorf("%w: changed opaque raw request field %q", ErrTransformSafetyViolation, key)
 		}
 		if !requestTransformHasEffect(definition, effect) {
-			return false
+			return fmt.Errorf("changed raw request field %q without declaring effect %q", key, effect)
 		}
 	}
-	return true
+	return nil
+}
+
+func rawFieldEffect(key string) (TransformEffect, bool) {
+	switch key {
+	case "messages", "input", "contents", "operationPayload":
+		return TransformInput, true
+	case "prompt", "system":
+		return TransformPrompt, true
+	case "tools", "tool_choice", "parallel_tool_calls":
+		return TransformTools, true
+	case "thinking", "reasoning", "reasoning_effort", "output_config":
+		return TransformThinking, true
+	case "previous_response_id", "response_id", "encrypted_content":
+		return TransformContinuity, true
+	case "temperature", "top_p", "max_tokens", "max_completion_tokens", "max_output_tokens", "stop", "stop_sequences", "presence_penalty", "frequency_penalty", "seed", "n", "logprobs", "top_logprobs", "service_tier", "verbosity":
+		return TransformOptions, true
+	default:
+		return "", false
+	}
+}
+
+func contentOpaqueFacetsEqual(before, after any) bool {
+	switch left := before.(type) {
+	case normalize.ContentPart:
+		right, ok := after.(normalize.ContentPart)
+		return ok && left.Type == right.Type && left.MediaType == right.MediaType && reflect.DeepEqual(left.Metadata, right.Metadata)
+	case []normalize.ContentPart:
+		right, ok := after.([]normalize.ContentPart)
+		if !ok || len(left) != len(right) {
+			return false
+		}
+		for index := range left {
+			if !contentOpaqueFacetsEqual(left[index], right[index]) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		right, ok := after.([]any)
+		if !ok || len(left) != len(right) {
+			return false
+		}
+		for index := range left {
+			if !contentOpaqueFacetsEqual(left[index], right[index]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		right, ok := after.(map[string]any)
+		if !ok || len(left) != len(right) {
+			return false
+		}
+		for key, value := range left {
+			updated, exists := right[key]
+			if !exists {
+				return false
+			}
+			switch key {
+			case "text", "data", "url", "image_url", "content", "input_audio", "audio", "video":
+				if !contentOpaqueFacetsEqual(value, updated) {
+					return false
+				}
+			default:
+				if !reflect.DeepEqual(value, updated) {
+					return false
+				}
+			}
+		}
+		return true
+	default:
+		return true
+	}
 }
 
 func protectedRequestField(key string) bool {

@@ -113,6 +113,17 @@ func cloneJSONValue(value any) any {
 		return append([]byte(nil), item...)
 	case []string:
 		return append([]string(nil), item...)
+	case ContentPart:
+		item.Metadata = cloneMap(item.Metadata)
+		return item
+	case []ContentPart:
+		clone := make([]ContentPart, len(item))
+		for i := range item {
+			part := item[i]
+			part.Metadata = cloneMap(part.Metadata)
+			clone[i] = part
+		}
+		return clone
 	case map[string]string:
 		clone := make(map[string]string, len(item))
 		for key, value := range item {

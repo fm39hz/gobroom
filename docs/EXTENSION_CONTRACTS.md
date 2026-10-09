@@ -340,8 +340,11 @@ rebuild the runtime catalog themselves.
 Request effects cover prompt, operation input, tools, thinking, generation
 options and portable content. Response effects cover declared semantic event
 payloads. Identity, auth leases, issuer-private artifacts, event correlation,
-client contract and cancellation are immutable. Module options and effects
-are validated at configuration publish; undeclared mutations fail explicitly.
+client contract, ingress unsupported-facet evidence and opaque metadata are
+immutable. Unknown raw wire fields cannot be mutated through the broad options
+effect; tool choice is governed by the tools effect and normalized generation
+settings by options. Module options and effects are validated at configuration
+publish; undeclared mutations fail explicitly.
 Transform implementations are instantiated from the frozen extension
 catalog independently of binding options. The catalog validates each exact
 binding ref and its options schema; the same stateless implementation receives
