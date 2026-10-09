@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -915,6 +916,87 @@ func TestCredentialRefreshLocksAreScopedPerConnection(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("refresh for another connection was blocked by the first connection's lock")
 	}
+}
+
+func TestDaemonStopCancelsActiveHTTPRequestBeforeDraining(t *testing.T) {
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	handlerCancelled := make(chan struct{})
+	handlerDone := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	server := newDaemonHTTPServer("", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer close(handlerDone)
+		writer.WriteHeader(http.StatusOK)
+		_, _ = writer.Write([]byte("started\n"))
+		writer.(http.Flusher).Flush()
+		<-request.Context().Done()
+		close(handlerCancelled)
+	}), runCtx)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listener unavailable in test environment: %v", err)
+	}
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() { _ = server.Close() })
+
+	responseResult := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		response, err := http.Get("http://" + listener.Addr().String())
+		if err != nil {
+			requestErr <- err
+			return
+		}
+		responseResult <- response
+	}()
+	var response *http.Response
+	select {
+	case response = <-responseResult:
+	case err := <-requestErr:
+		t.Fatal(err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("HTTP request did not reach daemon test server")
+	}
+	line, err := bufio.NewReader(response.Body).ReadString('\n')
+	if err != nil || line != "started\n" {
+		response.Body.Close()
+		t.Fatalf("stream did not start: line=%q err=%v", line, err)
+	}
+	d := &Daemon{http: server, runCtx: runCtx, runCancel: cancelRun, stop: func() { close(cleanupDone) }}
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- d.Stop(context.Background()) }()
+	select {
+	case <-handlerCancelled:
+	case <-time.After(2 * time.Second):
+		_ = server.Close()
+		response.Body.Close()
+		t.Fatal("daemon Stop did not cancel the active request context")
+	}
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		_ = server.Close()
+		response.Body.Close()
+		t.Fatal("daemon Stop did not drain the cancelled HTTP handler")
+	}
+	select {
+	case <-handlerDone:
+	default:
+		t.Fatal("daemon cleanup completed before the active HTTP handler returned")
+	}
+	select {
+	case <-cleanupDone:
+	default:
+		t.Fatal("daemon cleanup hook was not invoked")
+	}
+	_ = response.Body.Close()
+	<-serveDone
 }
 
 func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T) {

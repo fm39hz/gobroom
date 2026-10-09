@@ -135,7 +135,10 @@ messages and content without a declared native mapping fail closed in
 request through the API, fallback kernel, and a blocked response transform;
 closing the client after the first flushed bytes cancels the transform, prevents
 fallback to the second route, and suppresses successful usage completion.
-Concurrent-disconnect and daemon-shutdown stress remain open.
+`TestDaemonStopCancelsActiveHTTPRequestBeforeDraining` verifies the daemon's
+HTTP server binds request contexts to its run context and cancels them before
+graceful drain, so active streams cannot prevent shutdown from reaching cleanup.
+Concurrent-disconnect stress remains open.
 
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`

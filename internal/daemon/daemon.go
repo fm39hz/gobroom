@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -70,6 +71,7 @@ type Daemon struct {
 	oauthCallbackMu     sync.Mutex
 	oauthCallbacks      map[string]*oauthCallbackListener
 	runCtx              context.Context
+	runCancel           context.CancelFunc
 	authWG              sync.WaitGroup
 	credentialRefreshMu sync.Mutex
 	credentialRefreshes map[string]*sync.Mutex
@@ -222,11 +224,13 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	d.runCtx = ctx
+	d.runCancel = cancel
 	started := false
 	var bodyStore *artifacts.Store
 	defer func() {
 		if !started {
 			cancel()
+			d.runCancel = nil
 			if bodyStore != nil {
 				_ = bodyStore.Close()
 			}
@@ -500,7 +504,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	if d.config.HTTPEnabled {
-		d.http = &http.Server{Addr: d.config.HTTPAddr, Handler: d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true})}
+		d.http = newDaemonHTTPServer(d.config.HTTPAddr, d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}), ctx)
 		go func() {
 			if err := d.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP: %v\n", err)
@@ -512,7 +516,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if controlAddr == "" {
 			controlAddr = "127.0.0.1:2713"
 		}
-		d.httpControl = &http.Server{Addr: controlAddr, Handler: d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true})}
+		d.httpControl = newDaemonHTTPServer(controlAddr, d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true}), ctx)
 		go func() {
 			if err := d.httpControl.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP control: %v\n", err)
@@ -576,23 +580,44 @@ func refreshedCredentialSecret(credential kernel.Credential) (string, error) {
 
 func (d *Daemon) Wait(ctx context.Context) error { <-ctx.Done(); return d.Stop(context.Background()) }
 
+func newDaemonHTTPServer(address string, handler http.Handler, base context.Context) *http.Server {
+	return &http.Server{
+		Addr:    address,
+		Handler: handler,
+		BaseContext: func(net.Listener) context.Context {
+			return base
+		},
+	}
+}
+
 func (d *Daemon) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop == nil {
 		return nil
 	}
+	// Cancel active request contexts before Shutdown waits for in-flight
+	// handlers. Otherwise an unbounded streaming request can prevent Stop (and
+	// Wait, which uses a background shutdown context) from ever reaching cleanup.
+	if d.runCancel != nil {
+		d.runCancel()
+	}
 	if d.http != nil {
-		_ = d.http.Shutdown(ctx)
+		if err := d.http.Shutdown(ctx); err != nil {
+			_ = d.http.Close()
+		}
 	}
 	if d.httpControl != nil {
-		_ = d.httpControl.Shutdown(ctx)
+		if err := d.httpControl.Shutdown(ctx); err != nil {
+			_ = d.httpControl.Close()
+		}
 	}
 	if d.ipc != nil {
 		_ = d.ipc.Close()
 	}
 	d.stop()
 	d.stop = nil
+	d.runCancel = nil
 	d.oauthMu.Lock()
 	d.oauth = nil
 	d.oauthMu.Unlock()
