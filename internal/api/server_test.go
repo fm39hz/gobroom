@@ -123,7 +123,8 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer state.Close()
-	transform := &disconnectResponseTransform{entered: make(chan struct{}), cancelled: make(chan error, 1)}
+	const concurrentRequests = 8
+	transform := &disconnectResponseTransform{entered: make(chan struct{}, concurrentRequests), cancelled: make(chan error, concurrentRequests)}
 	binding := kernel.TransformBinding{ID: "daemon.disconnect-response", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "disconnect-test", TargetRef: "role"}},
@@ -145,11 +146,11 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 	if err := engine.ResponseTransforms.Register(transform); err != nil {
 		t.Fatal(err)
 	}
-	attempts := make(chan string, 2)
-	completed := make(chan struct{}, 1)
+	attempts := make(chan string, concurrentRequests*2)
+	completed := make(chan struct{}, concurrentRequests)
 	engine.Adapters["disconnect-stream"] = disconnectStreamAdapter{attempts: attempts, completed: completed}
 	server := NewServerWithRuntimeBindings(state, nil)
-	executionResult := make(chan error, 1)
+	executionResult := make(chan error, concurrentRequests)
 	server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		err := engine.Execute(ctx, request, kernel.Credential{}, writer)
 		executionResult <- err
@@ -158,43 +159,79 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 	httpServer := httptest.NewServer(server.HandlerWithOptions(HandlerOptions{DataPlane: true}))
 	defer httpServer.Close()
 
-	requestBody := bytes.NewBufferString(`{"model":"disconnect-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
-	response, err := http.Post(httpServer.URL+"/v1/chat/completions", "application/json", requestBody)
-	if err != nil {
-		t.Fatal(err)
+	client := &http.Client{Transport: &http.Transport{MaxConnsPerHost: concurrentRequests}}
+	defer client.CloseIdleConnections()
+	type responseResult struct {
+		response *http.Response
+		err      error
 	}
-	line, err := bufio.NewReader(response.Body).ReadString('\n')
-	if err != nil || line != "started\n" {
-		response.Body.Close()
-		t.Fatalf("stream did not reach client before disconnect: line=%q err=%v", line, err)
+	responses := make(chan responseResult, concurrentRequests)
+	for range concurrentRequests {
+		go func() {
+			requestBody := bytes.NewBufferString(`{"model":"disconnect-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+			request, err := http.NewRequest(http.MethodPost, httpServer.URL+"/v1/chat/completions", requestBody)
+			if err != nil {
+				responses <- responseResult{err: err}
+				return
+			}
+			request.Header.Set("Content-Type", "application/json")
+			response, err := client.Do(request)
+			responses <- responseResult{response: response, err: err}
+		}()
 	}
-	select {
-	case <-transform.entered:
-	case <-time.After(2 * time.Second):
-		response.Body.Close()
-		t.Fatal("response transform did not start after the first committed chunk")
-	}
-	if err := response.Body.Close(); err != nil {
-		t.Fatalf("close client response: %v", err)
-	}
-	select {
-	case err := <-transform.cancelled:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("response transform context ended with %v, want context.Canceled", err)
+	activeResponses := make([]*http.Response, 0, concurrentRequests)
+	for range concurrentRequests {
+		select {
+		case result := <-responses:
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			line, err := bufio.NewReader(result.response.Body).ReadString('\n')
+			if err != nil || line != "started\n" {
+				result.response.Body.Close()
+				t.Fatalf("stream did not reach client before disconnect: line=%q err=%v", line, err)
+			}
+			activeResponses = append(activeResponses, result.response)
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent streams did not all reach their first committed chunk")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("client disconnect did not cancel the in-flight response transform")
 	}
-	select {
-	case err := <-executionResult:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("kernel execution ended with %v, want context.Canceled", err)
+	for range concurrentRequests {
+		select {
+		case <-transform.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("not all response transforms started behind committed streams")
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("kernel execution did not return after client disconnect")
 	}
-	if route := <-attempts; route != "route-a" {
-		t.Fatalf("first route attempt=%q want route-a", route)
+	for _, response := range activeResponses {
+		if err := response.Body.Close(); err != nil {
+			t.Fatalf("close client response: %v", err)
+		}
+	}
+	for range concurrentRequests {
+		select {
+		case err := <-transform.cancelled:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("response transform context ended with %v, want context.Canceled", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("client disconnect did not cancel all in-flight response transforms")
+		}
+	}
+	for range concurrentRequests {
+		select {
+		case err := <-executionResult:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("kernel execution ended with %v, want context.Canceled", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("kernel executions did not all return after client disconnect")
+		}
+	}
+	for range concurrentRequests {
+		if route := <-attempts; route != "route-a" {
+			t.Fatalf("attempted route=%q, want route-a only", route)
+		}
 	}
 	select {
 	case route := <-attempts:
@@ -222,11 +259,7 @@ func (transform *disconnectResponseTransform) Definition() kernel.ResponseTransf
 }
 
 func (transform *disconnectResponseTransform) ApplyResponse(ctx context.Context, event kernel.ResponseEvent, _ json.RawMessage) (kernel.ResponseEvent, error) {
-	select {
-	case <-transform.entered:
-	default:
-		close(transform.entered)
-	}
+	transform.entered <- struct{}{}
 	<-ctx.Done()
 	transform.cancelled <- ctx.Err()
 	return event, ctx.Err()

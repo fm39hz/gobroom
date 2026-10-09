@@ -134,7 +134,9 @@ messages and content without a declared native mapping fail closed in
 `TestClientDisconnectCancelsDataPlaneExecution` runs an actual streamed HTTP
 request through the API, fallback kernel, and a blocked response transform;
 closing the client after the first flushed bytes cancels the transform, prevents
-fallback to the second route, and suppresses successful usage completion.
+fallback to the second route, and suppresses successful usage completion across
+eight simultaneous requests. Higher-volume/repeated disconnect soak remains
+open.
 `TestDaemonStopCancelsActiveHTTPRequestBeforeDraining` verifies the daemon's
 HTTP server binds request contexts to its run context and cancels them before
 graceful drain, so active streams cannot prevent shutdown from reaching cleanup.
