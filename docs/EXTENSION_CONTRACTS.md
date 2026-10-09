@@ -331,6 +331,12 @@ TransformBinding {
 }
 ```
 
+The daemon's local IPC control plane owns transform-binding list/upsert/delete.
+Each mutation validates the complete candidate binding set against the frozen
+extension catalog before persistence, then publishes a new routing snapshot.
+Frontends use this typed boundary; they do not edit transform tables or
+rebuild the runtime catalog themselves.
+
 Request effects cover prompt, operation input, tools, thinking, generation
 options and portable content. Response effects cover declared semantic event
 payloads. Identity, auth leases, issuer-private artifacts, event correlation,

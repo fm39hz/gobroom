@@ -62,6 +62,7 @@ type Daemon struct {
 	providerAuthFlowIDs map[string]string
 	sessionCache        *sessionruntime.Cache
 	policy              *runtimehealth.PolicyGate
+	transformBindingsMu sync.Mutex
 	usageCancel         context.CancelFunc
 	mu                  sync.Mutex
 	oauthMu             sync.Mutex
@@ -743,6 +744,30 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, "extension catalog unavailable")
 		}
 		return success(request, d.extensionCatalog)
+	case "transform_bindings.list":
+		items, err := d.store.TransformBindings()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, items)
+	case "transform_bindings.upsert":
+		var binding kernel.TransformBinding
+		if err := decodeParams(request.Params, &binding); err != nil {
+			return fail(request, err.Error())
+		}
+		if err := d.upsertTransformBinding(binding); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, binding)
+	case "transform_bindings.delete":
+		id := stringParam(request.Params, "id")
+		if id == "" {
+			return fail(request, "id is required")
+		}
+		if err := d.deleteTransformBinding(id); err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, map[string]string{"deleted": id})
 	case "providers.refresh_models":
 		var input struct {
 			NodeID       string   `json:"nodeID"`
@@ -1236,6 +1261,76 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	default:
 		return IPCResponse{ID: request.ID, OK: false, Error: "unknown method: " + request.Method}
 	}
+}
+
+func (d *Daemon) upsertTransformBinding(binding kernel.TransformBinding) error {
+	if err := kernel.ValidateTransformBinding(binding); err != nil {
+		return err
+	}
+	if d.kernel == nil {
+		return fmt.Errorf("kernel is unavailable for transform binding validation")
+	}
+	d.transformBindingsMu.Lock()
+	defer d.transformBindingsMu.Unlock()
+	bindings, err := d.store.TransformBindings()
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for index := range bindings {
+		if bindings[index].ID == binding.ID {
+			bindings[index] = binding
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		bindings = append(bindings, binding)
+	}
+	if err := d.kernel.ValidateTransformBindings(bindings); err != nil {
+		return err
+	}
+	if err := d.store.UpsertTransformBinding(binding); err != nil {
+		return err
+	}
+	if d.server != nil {
+		return d.server.Reload()
+	}
+	return nil
+}
+
+func (d *Daemon) deleteTransformBinding(id string) error {
+	if d.kernel == nil {
+		return fmt.Errorf("kernel is unavailable for transform binding validation")
+	}
+	d.transformBindingsMu.Lock()
+	defer d.transformBindingsMu.Unlock()
+	bindings, err := d.store.TransformBindings()
+	if err != nil {
+		return err
+	}
+	remaining := make([]kernel.TransformBinding, 0, len(bindings))
+	found := false
+	for _, binding := range bindings {
+		if binding.ID == id {
+			found = true
+			continue
+		}
+		remaining = append(remaining, binding)
+	}
+	if !found {
+		return fmt.Errorf("transform binding %q not found", id)
+	}
+	if err := d.kernel.ValidateTransformBindings(remaining); err != nil {
+		return err
+	}
+	if err := d.store.DeleteTransformBinding(id); err != nil {
+		return err
+	}
+	if d.server != nil {
+		return d.server.Reload()
+	}
+	return nil
 }
 
 func (d *Daemon) runtimeForBundle(bundle controlplane.ConfigBundle) (*provider.RuntimeRegistry, *kernel.StrategyCatalog, error) {

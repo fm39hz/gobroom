@@ -41,6 +41,14 @@ func (f oauthRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response,
 type callbackOAuthFixture struct{ redirectURL string }
 
 type daemonExplainAdapter struct{ attempts *int }
+type daemonTransformFixture struct{}
+
+func (daemonTransformFixture) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.daemon-transform", ContractVersion: 1}, ImplementationVersion: "1", Label: "Daemon test transform", Description: "Fixture for control-plane binding CRUD.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformInput}}
+}
+func (daemonTransformFixture) Apply(context.Context, *kernel.NormalizedRequest, json.RawMessage) error {
+	return nil
+}
 
 func (daemonExplainAdapter) ID() string { return "daemon-explain-fixture" }
 func (daemonExplainAdapter) PlanCompatibility(input kernel.CompatibilityContext) kernel.CompatibilityPlan {
@@ -202,6 +210,39 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	view, ok := response.Result.(extensions.CatalogView)
 	if !response.OK || !ok || view.Fingerprint == "" || len(view.Schemas) < 4 {
 		t.Fatalf("extension catalog=%#v error=%q", response.Result, response.Error)
+	}
+	d.kernel = &kernel.Kernel{Transforms: kernel.NewRequestTransformRegistry(), ResponseTransforms: kernel.NewResponseTransformRegistry()}
+	transform := daemonTransformFixture{}
+	if err := d.kernel.Transforms.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	binding := kernel.TransformBinding{ID: "daemon.test", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}
+	invalidBinding := binding
+	invalidBinding.TransformRef.ID = "fixture.missing-transform"
+	response = d.handleIPC(nil, IPCRequest{ID: "transform-invalid", Method: "transform_bindings.upsert", Params: map[string]any{"id": invalidBinding.ID, "transformRef": invalidBinding.TransformRef, "enabled": invalidBinding.Enabled, "scope": invalidBinding.Scope}})
+	if response.OK {
+		t.Fatal("unknown transform binding unexpectedly succeeded")
+	}
+	bindings, err := s.TransformBindings()
+	if err != nil || len(bindings) != 0 {
+		t.Fatalf("invalid binding mutated storage: bindings=%#v err=%v", bindings, err)
+	}
+	response = d.handleIPC(nil, IPCRequest{ID: "transform-upsert", Method: "transform_bindings.upsert", Params: map[string]any{"id": binding.ID, "transformRef": binding.TransformRef, "enabled": binding.Enabled, "scope": binding.Scope}})
+	if !response.OK {
+		t.Fatalf("transform binding upsert failed: %s", response.Error)
+	}
+	response = d.handleIPC(nil, IPCRequest{ID: "transform-list", Method: "transform_bindings.list"})
+	bindings, ok = response.Result.([]kernel.TransformBinding)
+	if !response.OK || !ok || len(bindings) != 1 || bindings[0].ID != binding.ID {
+		t.Fatalf("transform bindings=%#v error=%q", response.Result, response.Error)
+	}
+	response = d.handleIPC(nil, IPCRequest{ID: "transform-delete", Method: "transform_bindings.delete", Params: map[string]any{"id": binding.ID}})
+	if !response.OK {
+		t.Fatalf("transform binding delete failed: %s", response.Error)
+	}
+	bindings, err = s.TransformBindings()
+	if err != nil || len(bindings) != 0 {
+		t.Fatalf("transform binding remained after delete: bindings=%#v err=%v", bindings, err)
 	}
 }
 
