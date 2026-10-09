@@ -32,11 +32,14 @@ type connection struct {
 type catalogModel struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
 	Profile                                   map[string]capability `json:"profile,omitempty"`
+	Limits                                    map[string]any        `json:"limits,omitempty"`
+	ConnectionIDs                             []string              `json:"connectionIds,omitempty"`
 }
 
 type discoveredRoute struct {
 	ID, ProviderNodeID, ProviderPrefix, Kind, ExternalID, DisplayName string
 	Profile                                                           map[string]capability
+	Limits                                                            map[string]any            `json:"limits,omitempty"`
 	ConnectionAvailability                                            []connectionModelEvidence `json:"connectionAvailability,omitempty"`
 	Enabled                                                           bool
 	LastSeenAt                                                        string
@@ -48,6 +51,7 @@ type connectionModelEvidence struct {
 	Status         string `json:"status"`
 	Source         string `json:"source,omitempty"`
 	ObservedAt     string `json:"observedAt,omitempty"`
+	Enabled        bool   `json:"enabled"`
 }
 
 type routeReference struct {
@@ -356,7 +360,7 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			}
 			nodeName := nameByNode[value.NodeID]
 			caps := capabilitySummary(value.Profile)
-			detail := fmt.Sprintf("Physical model\n\nModel       %s\nProvider    %s\nKind        %s\nCapabilities %s\n\nCatalog ID\n%s\n\nProvider node ID\n%s\n\nUpstream model ID\n%s", physical, nodeName, value.Kind, caps, value.ID, value.NodeID, value.ExternalID)
+			detail := fmt.Sprintf("Model catalog entry\n\nModel       %s\nProvider    %s\nKind        %s\nCapabilities %s\n\nCatalog ID\n%s\n\nProvider node ID\n%s\n\nUpstream model ID\n%s\n\nAssigned connections\n%s", physical, nodeName, value.Kind, caps, value.ID, value.NodeID, value.ExternalID, strings.Join(value.ConnectionIDs, "\n"))
 			entries = append(entries, entry{key: value.ID, title: physical, summary: fmt.Sprintf("%s  ·  %s  ·  %s", nodeName, value.Kind, caps), detail: detail, parentID: value.NodeID, routeRef: physical, payload: value})
 		}
 		return entries, nil
@@ -613,8 +617,9 @@ func makeDiscoveredEntries(raw json.RawMessage, knownProviders []providerNode) (
 		}
 		availability := "unknown (not yet checked per connection)"
 		if value.Kind == "custom" {
-			availability = "provider-wide user assertion"
-		} else if len(value.ConnectionAvailability) > 0 {
+			availability = "unassigned to connections"
+		}
+		if len(value.ConnectionAvailability) > 0 {
 			states := make([]string, 0, len(value.ConnectionAvailability))
 			for _, evidence := range value.ConnectionAvailability {
 				label := evidence.ConnectionName
@@ -622,6 +627,9 @@ func makeDiscoveredEntries(raw json.RawMessage, knownProviders []providerNode) (
 					label = evidence.ConnectionID
 				}
 				state := label + "=" + evidence.Status
+				if !evidence.Enabled {
+					state += " (disabled)"
+				}
 				if evidence.Source != "" {
 					state += " via " + evidence.Source
 				}

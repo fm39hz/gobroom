@@ -116,9 +116,13 @@ Providers: create provider + endpoint
 The selected-account flow keeps test, review and mutation separate. A complete
 catalog snapshot can establish both available and not-listed evidence for that
 connection; an incomplete snapshot can establish only positive availability.
-Unknown entitlement is not the same as absent. Custom IDs added at provider
-scope are explicit user assertions. Returned IDs start checked and existing
-catalog IDs are labeled; deselect unwanted route imports. Clearing all and
+Unknown entitlement is not the same as absent. Custom upstream IDs are assigned
+to explicit connection IDs; they are not provider-wide routes. Press `m` on a
+connection to create a custom ID for that account, then tab to Assigned
+connections and press `a` to review/select additional same-provider accounts.
+The custom route becomes executable only through assigned, enabled connections.
+Returned IDs start checked and existing catalog IDs are labeled; deselect
+unwanted route imports. Clearing all and
 applying records connection availability without importing route IDs. The
 existing development catalog is not backfilled to accounts automatically;
 review/refresh each connection to establish evidence. The provider-row `t`
@@ -131,6 +135,9 @@ CLI equivalents: `gobroom connections test --connection-id ID`,
 repeated `--model-id UPSTREAM_ID` flags to import a reviewed subset; omit
 `--model-id` to import all IDs returned by that connection, or use
 `--entitlements-only` to update evidence without adding IDs to the catalog.
+Custom IDs can be bound explicitly with repeated
+`gobroom models upsert --connection-id ID` flags; they never inherit access
+from every connection on the provider.
 Catalog review/import only adds Discovered routes; it does not create Physical
 models, Combos or expose models. The UI must identify the selected connection,
 show entitlement certainty and preserve model IDs exactly.

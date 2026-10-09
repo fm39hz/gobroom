@@ -22,7 +22,9 @@ INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix) VALUE
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:a','node-a','discovered','model-a','Model A');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority) VALUES('account-a','node-a','A1','api_key','secret-a',1);
 INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix) VALUES('node-media','Media','http://media','vendor.audio.v1','manifest-selected-provider','media');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority) VALUES('media-account','node-media','Media account','api_key','media-secret',1);
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:audio','node-media','custom','transcribe-v1','Transcribe V1');
+INSERT INTO custom_model_connections(model_id,connection_id) VALUES('route:audio','media-account');
 `); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,7 @@ INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VAL
 	if route.OperationBindings["chat.generate"].ContractVersion != 1 || len(route.OperationBindings["chat.generate"].AdapterIDs) != 1 || route.OperationBindings["chat.generate"].AdapterIDs[0] != "manifest-selected-provider:chat" || route.AuthFlowID != provider.AuthBindingKey("manifest-selected-provider", provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || route.SessionStoreRef != (extensions.Ref{Kind: string(provider.PrimitiveSessionStore), ID: "session", ContractVersion: 1}) || route.ErrorClassifierRef != provider.RuntimeErrorClassifierRef("manifest-selected-provider", provider.OperationChat, provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}) || route.UsageSourceRef != (extensions.Ref{Kind: string(provider.PrimitiveUsageSource), ID: "http-header-usage", ContractVersion: 1}) || route.UsageOptions.InputTokensHeader != "X-Input-Count" || route.QuotaSourceRef != (extensions.Ref{Kind: string(provider.PrimitiveQuotaSource), ID: "http-json-quota", ContractVersion: 1}) || route.QuotaEndpointRef != (extensions.Ref{Kind: string(provider.PrimitiveEndpoint), ID: "http-json", ContractVersion: 1}) || route.QuotaTransportRef != (extensions.Ref{Kind: string(provider.PrimitiveTransport), ID: "http", ContractVersion: 1}) || route.QuotaEndpointOptions.Path != "/account/quota" || route.QuotaWindowName != "account" {
 		t.Fatalf("route did not use provider runtime binding: %#v", route)
 	}
-	mediaRoute := snapshot.Routes["route:audio"]
+	mediaRoute := snapshot.Routes["route:audio@media-account"]
 	mediaBinding := mediaRoute.OperationBindings["audio.transcribe.v1"]
 	if mediaRoute.Protocol != "vendor.audio.v1" || len(mediaBinding.AdapterIDs) != 1 || mediaBinding.AdapterIDs[0] != "manifest-selected-provider:audio.transcribe.v1" || mediaBinding.IdempotencyHeaders["manifest-selected-provider:audio.transcribe.v1"] != "X-Idempotency-Key" {
 		t.Fatalf("namespaced operation binding did not reach the route snapshot: %#v", mediaRoute)

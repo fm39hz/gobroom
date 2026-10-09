@@ -355,7 +355,7 @@ func TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart(t *test
 		t.Fatal(err)
 	}
 	bundle := controlplane.ConfigBundle{
-		Version: 5, Dependencies: dependencies,
+		Version: 6, Dependencies: dependencies,
 		Providers:           []store.ProviderNode{{ID: "portable-node", Name: "Portable", Prefix: "portable", BaseURL: "https://provider.test/v1", Protocol: string(kernel.ProtocolOpenAIChat), DefinitionID: definition.ID, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}},
 		ProviderDefinitions: []provider.ProviderDefinition{definition},
 	}
@@ -1071,7 +1071,7 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "quota-route", ProviderNodeID: node.ID, Kind: "custom", ExternalID: "quota-model", DisplayName: "Quota model"}); err != nil {
+	if err := state.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "quota-route", ProviderNodeID: node.ID, Kind: "custom", ExternalID: "quota-model", DisplayName: "Quota model", ConnectionIDs: []string{connection.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.UpsertPhysicalModel(store.PhysicalModel{Name: "quota-physical", Sources: []store.RouteReference{{RouteID: "quota-route", Fidelity: kernel.FidelityExact}}, Enabled: true}); err != nil {

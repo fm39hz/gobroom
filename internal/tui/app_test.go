@@ -1218,3 +1218,51 @@ func TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview(t *testing
 		t.Fatalf("review merge payload did not preserve identity and deduplicated sources: %#v", params)
 	}
 }
+
+func TestConnectionCustomModelAssignmentPickerScopesAndSerializesConnections(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 140, 40
+	model.activePanel = int(dashboardConnections)
+	model.providers = []providerNode{{ID: "node-a", Name: "Provider A", Prefix: "provider-a"}}
+	connections := []connection{
+		{ID: "conn-a", ProviderNodeID: "node-a", Name: "Account A", CredentialType: "api_key", Enabled: true},
+		{ID: "conn-b", ProviderNodeID: "node-a", Name: "Account B", CredentialType: "api_key", Enabled: true},
+		{ID: "conn-other", ProviderNodeID: "node-b", Name: "Other provider account", CredentialType: "api_key", Enabled: true},
+	}
+	encodedConnections, err := json.Marshal(connections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.raw = map[sectionID]json.RawMessage{sectionConnections: encodedConnections}
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: "conn-a", title: "Account A", payload: connections[0]}})
+	_, _ = model.updateDashboardAction(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if model.form == nil || model.form.method != "custom_models.upsert" || !reflect.DeepEqual(model.form.typedConnectionIDs, []string{"conn-a"}) {
+		t.Fatalf("connection action did not scope custom model to selected account: %#v", model.form)
+	}
+	model.form.memberMode = true
+	if cmd := model.openCustomConnectionPicker(); cmd != nil {
+		t.Fatal("opening connection assignment picker should not issue a daemon request")
+	}
+	if len(model.sourceItems) != 2 || !model.pickerSelected["conn-a"] {
+		t.Fatalf("picker must show only same-provider connections and preselect caller account: items=%#v selected=%#v", model.sourceItems, model.pickerSelected)
+	}
+	model.picker.Select(1)
+	if selected, ok := model.picker.SelectedItem().(entry); !ok || selected.key != "conn-b" {
+		t.Fatalf("picker selection=%#v want conn-b (index=%d visible=%#v state=%v)", model.picker.SelectedItem(), model.picker.Index(), model.picker.VisibleItems(), model.picker.FilterState())
+	}
+	_, _ = model.updateSourcePickerKey(tea.KeyPressMsg{Code: tea.KeySpace})
+	_, _ = model.updateSourcePickerKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if model.mode != modeForm || !reflect.DeepEqual(model.form.typedConnectionIDs, []string{"conn-a", "conn-b"}) {
+		t.Fatalf("selected connection IDs did not return to the model editor: mode=%v ids=%v", model.mode, model.form.typedConnectionIDs)
+	}
+	model.form.inputs[0].SetValue("custom-qwen")
+	model.form.inputs[1].SetValue("vendor/qwen3.7-max")
+	model.form.inputs[2].SetValue("Qwen 3.7 Max")
+	params, err := model.form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["providerNodeID"] != "node-a" || !reflect.DeepEqual(params["connectionIds"], []string{"conn-a", "conn-b"}) {
+		t.Fatalf("custom assignment payload lost provider/account scope: %#v", params)
+	}
+}

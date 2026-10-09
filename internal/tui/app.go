@@ -180,9 +180,9 @@ func (h keyHelp) shortHelp() []key.Binding {
 		case "providers":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/c"), key.WithHelp("e/t/c", "edit/test/connect")))
 		case "connections":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/i/a/A/o/O/d"), key.WithHelp("e/t/i/a/A/o/O/d", "edit/test/import/code auth/cancel/device auth/cancel/delete")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/i/m/a/A/o/O/d"), key.WithHelp("e/t/i/m/a/A/o/O/d", "edit/test/import/assign custom ID/code auth/cancel/device auth/cancel/delete")))
 		case "discovered":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "create Physical")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 		case "physical", "combos":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/p/d"), key.WithHelp("e/p/d", "edit/expose/delete")))
 		case "transform-bindings":
@@ -201,9 +201,9 @@ func (h keyHelp) shortHelp() []key.Binding {
 	case "providers":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("n/t"), key.WithHelp("n/t", "new/test")))
 	case "connections":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/i/a/A/o/O"), key.WithHelp("t/i/a/A/o/O", "test/import/code auth/cancel/device auth/cancel")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/i/m/a/A/o/O"), key.WithHelp("t/i/m/a/A/o/O", "test/import/assign custom ID/code auth/cancel/device auth/cancel")))
 	case "discovered":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "create Physical")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 	case "physical", "combos":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("c/p"), key.WithHelp("c/p", "compose/expose")))
 	case "transform-bindings":
@@ -229,6 +229,7 @@ func (keyHelp) FullHelp() [][]key.Binding {
 		{key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "fuzzy search")), key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh pane"))},
 		{key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "assign discovered routes to Physical")), key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose selected models"))},
 		{key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "toggle model exposure")), key.NewBinding(key.WithKeys("t/i"), key.WithHelp("t/i", "test/preview · selectively import"))},
+		{key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "connection-scoped custom ID / edit model members")), key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select assigned connections in custom-model editor"))},
 		{key.NewBinding(key.WithKeys("o/O"), key.WithHelp("o/O", "start/cancel daemon OAuth device authorization"))},
 		{key.NewBinding(key.WithKeys("a/A"), key.WithHelp("a/A", "start/cancel OAuth authorization-code flow"))},
 	}
@@ -917,6 +918,9 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.mode = modeBrowse
 			return m, nil
 		}
+		if keyText == "a" && m.form.method == "custom_models.upsert" && m.form.memberMode {
+			return m, m.openCustomConnectionPicker()
+		}
 		if keyText == "enter" && m.form.active >= 0 && m.form.active < len(m.form.fields) {
 			key := m.form.fields[m.form.active].key
 			if key == "strategy" || key == "policy" {
@@ -1075,7 +1079,7 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.focus == focusInspector {
 		switch keyText {
-		case "e", "p", "d", "t", "c", "f", "a", "A", "r", "o", "O":
+		case "e", "p", "d", "t", "c", "f", "a", "A", "m", "r", "o", "O":
 			m.focus = focusDashboard
 			model, cmd := m.updateDashboardAction(msg)
 			if m.mode != modeBrowse {
@@ -1145,6 +1149,22 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		return m, m.refreshPane(m.activePanel)
 	case "m":
+		if current.definition.id == dashboardConnections {
+			selected := m.selectedEntry()
+			if selected == nil {
+				m.status = "select a connection to assign a custom model"
+				return m, nil
+			}
+			value, ok := selected.payload.(connection)
+			if !ok {
+				m.status = "select a connection, not a provider, to assign a custom model"
+				return m, nil
+			}
+			m.form = newCustomModelForm(value.ProviderNodeID, []string{value.ID}, nil)
+			m.mode = modeForm
+			m.resize()
+			return m, nil
+		}
 		return m, m.openTypedMemberPicker()
 	case "x":
 		selected := m.selectedEntry()
@@ -1189,6 +1209,19 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		switch value := selected.payload.(type) {
 		case physicalModel, comboModel:
 			m.form = newResourceForm(0, selected, "")
+		case discoveredRoute:
+			if value.Kind != "custom" {
+				m.status = "discovered upstream models are imported from a selected connection"
+				return m, nil
+			}
+			assigned := make([]string, 0)
+			for _, item := range value.ConnectionAvailability {
+				if item.Status == "assigned" {
+					assigned = append(assigned, item.ConnectionID)
+				}
+			}
+			existing := &catalogModel{ID: value.ID, NodeID: value.ProviderNodeID, Kind: value.Kind, ExternalID: value.ExternalID, DisplayName: value.DisplayName, Profile: value.Profile, Limits: value.Limits, ConnectionIDs: assigned}
+			m.form = newCustomModelForm(value.ProviderNodeID, assigned, existing)
 		case kernel.TransformBinding:
 			descriptor, found := findTransformDescriptor(m.raw[sectionExtensionCatalog], value.TransformRef)
 			if !found {
@@ -1253,10 +1286,8 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
-				if node, ok := selected.payload.(providerNode); ok {
-					m.form = newResourceForm(int(sectionModels), nil, node.ID)
-					m.mode = modeForm
-					m.resize()
+				if _, ok := selected.payload.(providerNode); ok {
+					m.status = "select a connection and press m to assign a custom upstream model ID"
 				} else if value, ok := selected.payload.(connection); ok {
 					m.loading = true
 					m.status = "starting OAuth authorization; callback stays in daemon…"
@@ -1264,11 +1295,17 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		} else if current.definition.view == "discovered" {
-			if m.providerContextID == "" {
-				m.status = "choose a provider in Providers, then return to add a custom upstream model"
+			selected := m.selectedEntry()
+			if selected == nil {
+				m.status = "select a discovered route before adding a custom upstream model"
 				return m, nil
 			}
-			m.form = newResourceForm(int(sectionModels), nil, m.providerContextID)
+			route, ok := selected.payload.(discoveredRoute)
+			if !ok || route.ProviderNodeID == "" {
+				m.status = "select a discovered route before adding a custom upstream model"
+				return m, nil
+			}
+			m.form = newCustomModelForm(route.ProviderNodeID, nil, nil)
 			m.mode = modeForm
 			m.resize()
 		} else if current.definition.view == "physical" {
@@ -1641,9 +1678,12 @@ func (m *app) mainPreview(selected entry) string {
 	case providerNode:
 		actions = append(actions, "e            edit provider", "t            test and discover", "c            add connection")
 	case connection:
-		actions = append(actions, "e            edit connection", "t            test selected account", "i            import models with this account", "a            OAuth authorization-code flow", "A            cancel authorization", "o            start OAuth device flow", "d            delete connection")
+		actions = append(actions, "e            edit connection", "t            test selected account", "i            import models with this account", "m            add a custom ID for this account", "a            OAuth authorization-code flow", "A            cancel authorization", "o            start OAuth device flow", "d            delete connection")
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
+		if value, ok := selected.payload.(discoveredRoute); ok && value.Kind == "custom" {
+			actions = append(actions, "e            edit this custom ID's connection assignments")
+		}
 	case physicalModel:
 		actions = append(actions, "e            edit policy", "m            edit source candidates", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose into Combo", "d            delete Physical")
 	case comboModel:
@@ -1713,6 +1753,45 @@ func (m *app) openSourcePicker() tea.Cmd {
 	m.syncPickerOrderPositions()
 	m.mode = modeSourcePicker
 	m.picker.GoToStart()
+	m.resize()
+	return nil
+}
+
+func (m *app) openCustomConnectionPicker() tea.Cmd {
+	if m.form == nil || m.form.method != "custom_models.upsert" {
+		m.status = "custom model editor is unavailable"
+		return nil
+	}
+	providerNodeID, _ := m.form.extra["providerNodeID"].(string)
+	if providerNodeID == "" {
+		m.status = "custom model must belong to a provider before connection assignment"
+		return nil
+	}
+	items, err := makeEntries("connections.list", m.raw[sectionConnections], m.providers)
+	if err != nil {
+		m.status = "load connection choices: " + err.Error()
+		return nil
+	}
+	filtered := make([]entry, 0, len(items))
+	for _, item := range items {
+		if value, ok := item.payload.(connection); ok && value.ProviderNodeID == providerNodeID {
+			filtered = append(filtered, item)
+		}
+	}
+	if len(filtered) == 0 {
+		m.status = "create a connection for this provider before assigning a custom model"
+		return nil
+	}
+	m.picker.ResetFilter()
+	clear(m.pickerSelected)
+	for _, id := range m.form.typedConnectionIDs {
+		m.pickerSelected[id] = true
+	}
+	m.pickerTarget = "custom-connections"
+	m.sourceItems = filtered
+	m.setPickerItems(filtered)
+	m.picker.GoToStart()
+	m.mode = modeSourcePicker
 	m.resize()
 	return nil
 }
@@ -1802,12 +1881,38 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch keyText {
 	case "esc", "q":
+		if m.pickerTarget == "custom-connections" {
+			m.mode = modeForm
+			m.pickerTarget = ""
+			m.resize()
+			return m, nil
+		}
 		m.mode = modeBrowse
 		m.pickerTarget = ""
 		return m, nil
 	case "ctrl+c":
 		return m, tea.Quit
 	case "enter":
+		if m.pickerTarget == "custom-connections" {
+			connectionIDs := make([]string, 0, len(m.pickerSelected))
+			for _, item := range m.sourceItems {
+				if selected := m.pickerSelected[item.key]; selected {
+					if value, ok := item.payload.(connection); ok {
+						connectionIDs = append(connectionIDs, value.ID)
+					}
+				}
+			}
+			if len(connectionIDs) == 0 {
+				m.status = "assign the custom model to at least one connection"
+				return m, nil
+			}
+			m.form.typedConnectionIDs = connectionIDs
+			m.pickerTarget = ""
+			m.mode = modeForm
+			m.status = fmt.Sprintf("custom model assigned to %d selected connection(s); review before save", len(connectionIDs))
+			m.resize()
+			return m, nil
+		}
 		if m.pickerTarget == "physical" {
 			value := m.pickerModel.(physicalModel)
 			sources := make([]routeReference, 0)
@@ -2317,7 +2422,7 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 	case "connections.create", "connections.update", "connections.delete":
 		resources = []sectionID{sectionConnections}
 	case "custom_models.upsert", "custom_models.delete":
-		resources = []sectionID{sectionModels}
+		resources = []sectionID{sectionModels, sectionDiscovered}
 	case "physical_models.upsert", "physical_models.delete":
 		resources = []sectionID{sectionPhysical}
 	case "combo_models.upsert", "combo_models.delete":
@@ -2629,6 +2734,14 @@ func (m *app) renderMainView() string {
 			}
 			return lipgloss.JoinVertical(lipgloss.Left, content...)
 		}
+		if m.pickerTarget == "custom-connections" {
+			return lipgloss.JoinVertical(lipgloss.Left,
+				lipgloss.NewStyle().Bold(true).Render("Assign custom model to connections"),
+				muted.Render("/ filter · Space toggle · Enter apply assignments · Esc return to editor"),
+				m.picker.View(),
+				muted.Render(fmt.Sprintf("%d connection(s) selected · only these accounts may route this custom upstream ID", len(m.pickerSelected))),
+			)
+		}
 		return lipgloss.JoinVertical(lipgloss.Left,
 			lipgloss.NewStyle().Bold(true).Render("Choose provider model variants"),
 			muted.Render("Search with / · Space toggles · K/J reorders selected Combo member · f cycles source fidelity · Enter saves"),
@@ -2675,7 +2788,11 @@ func (m *app) renderForm() string {
 		lines = append(lines, selectedStyle.Render(marker)+muted.Render(label), "   "+m.form.inputs[index].View())
 	}
 	if m.form.hasMembers() {
-		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Render("Ordered model members"))
+		memberTitle := "Ordered model members"
+		if m.form.method == "custom_models.upsert" {
+			memberTitle = "Assigned connections (required)"
+		}
+		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Render(memberTitle))
 		members := m.form.memberLabels()
 		if len(members) == 0 {
 			lines = append(lines, muted.Render("  no members yet — add a model or source route"))
@@ -2690,7 +2807,11 @@ func (m *app) renderForm() string {
 		if m.form.addingMember {
 			lines = append(lines, "", selectedStyle.Render("Add member  ")+m.form.memberInput.View())
 		}
-		lines = append(lines, "", muted.Render("tab to members · a add · d remove · K/J reorder"))
+		if m.form.method == "custom_models.upsert" {
+			lines = append(lines, "", muted.Render("tab to assignments · a choose connections · d remove · only assigned accounts receive routes"))
+		} else {
+			lines = append(lines, "", muted.Render("tab to members · a add · d remove · K/J reorder"))
+		}
 	}
 	if m.form.method == "providers.create" {
 		preset := m.form.providerPreset

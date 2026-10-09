@@ -41,7 +41,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 5
+	bundle.Version = 6
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 5 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+	if bundle.Version != 6 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
 		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
@@ -152,6 +152,51 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	}
 }
 
+func TestCustomModelConnectionAssignmentsRoundTripThroughConfigBundle(t *testing.T) {
+	catalog := bundleTestCatalog(t)
+	createStore := func(t *testing.T) *store.Store {
+		t.Helper()
+		db, err := store.Open(t.TempDir() + "/custom-assignments.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('node','Provider','https://provider.test/v1','openai_chat','p');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-a','node','A','api_key','secret-a'),('conn-b','node','B','api_key','secret-b');`); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		return db
+	}
+	source := createStore(t)
+	defer source.Close()
+	if err := source.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "custom-route", ProviderNodeID: "node", Kind: "custom", ExternalID: "custom/model-x", DisplayName: "Model X", ConnectionIDs: []string{"conn-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := ExportBundle(source, catalog.Extensions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Version != 6 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
+		t.Fatalf("custom connection assignment was not exported in bundle v6: %#v", bundle.Models)
+	}
+	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
+		t.Fatalf("custom assignment bundle validation: %v", err)
+	}
+	target := createStore(t)
+	defer target.Close()
+	if err := ApplyBundle(target, bundle, catalog); err != nil {
+		t.Fatal(err)
+	}
+	models, err := target.Models()
+	if err != nil || len(models) != 1 || !reflect.DeepEqual(models[0].ConnectionIDs, []string{"conn-b"}) {
+		t.Fatalf("custom connection assignment did not survive import: %#v err=%v", models, err)
+	}
+	routes, err := target.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-b" {
+		t.Fatalf("imported custom model routed through the wrong connection: %#v err=%v", routes, err)
+	}
+}
+
 func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	current := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
@@ -168,7 +213,7 @@ func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
 func TestConfigBundleRejectsPreviousContractVersion(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	bundle := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
-	bundle.Version = 4
+	bundle.Version = 5
 	if err := ValidateBundleWithStrategies(bundle, catalog); err == nil {
 		t.Fatal("previous config bundle contract version was accepted")
 	}
@@ -201,7 +246,7 @@ func TestBundleExportsUnusedUnresolvedProviderWithoutInventingBehavior(t *testin
 	if err != nil || !diff.UnresolvedProvidersChanged {
 		t.Fatalf("unresolved provider status missing from bundle diff: %#v err=%v", diff, err)
 	}
-	if err := s.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "commandcode-route", ProviderNodeID: "commandcode", Kind: "custom", ExternalID: "model-a", DisplayName: "Model A"}); err != nil {
+	if err := s.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "commandcode-route", ProviderNodeID: "commandcode", Kind: "custom", ExternalID: "model-a", DisplayName: "Model A", ConnectionIDs: []string{"commandcode-account"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB.Exec(`UPDATE model_catalog SET enabled=0 WHERE id='commandcode-route'`); err != nil {

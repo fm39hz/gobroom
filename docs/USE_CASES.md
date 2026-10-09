@@ -113,14 +113,16 @@ The provider-row `t` shortcut is distinct from the account-specific workflow:
 it refreshes/imports using the highest-priority enabled connection. For a
 chosen account, test that endpoint first, inspect the read-only preview, then
 import with the same connection. Discovery is inventory only; it does not
-auto-group routes into Physical models or expose them to clients.
+auto-group routes into Physical models or expose them to clients. Custom IDs
+are a separate user action bound to explicit connection IDs; the same provider
+node's other credentials do not inherit the custom route.
 
 ### C. Curate discovered routes into Physical models
 
 | ID | User intent | Successful outcome | Current status |
 |---|---|---|---|
 | UC-20 | See only model routes discovered for a provider/account | Rows retain opaque upstream model IDs and connection identity; provider prefix is available for search/source attribution | **Supported in the domain/control layer**; presentation and review flow are still partial |
-| UC-21 | Add a model that `/models` does not return | A custom route can be entered with exact upstream ID and appears in Discovered management | **Supported** — CLI/store path exists |
+| UC-21 | Add a model that `/models` does not return | A custom route can be entered with exact upstream ID, assigned to one or more selected connections, and appears in Discovered management | **Implemented in CLI/TUI/store/route expansion** — custom model assignment is explicit and only assigned enabled connections receive routes; assignments survive config bundle v6 |
 | UC-22 | Treat several provider routes as one actual model | Discovery suggests equivalent IDs, user confirms/corrects the grouping once, and one canonical Physical name such as `qwen-3.7-max` owns `xkiro/...`, `ocg/...`, `g4f/...` source routes | **Partial** — selecting multiple routes now suggests a conservative canonical name only when all selected IDs agree and opens a review editor; a matching existing Physical is merged without overwriting its policy. Broader equivalence suggestions across unselected routes and a split/review workflow remain |
 | UC-23 | Inspect Physical capabilities/limits before using it | See which sources support vision/tools/reasoning, context/input/output limits and reasoning controls; guaranteed versus merely available capabilities stay distinct and unknown values are not guessed | **Partial** — typed profile/projection and IPC data exist; broader provider evidence and ergonomic comparison remain |
 | UC-24 | Search/select sources by a known prefix while editing models | Typing `orca/`, `ocg/` or `g4f/` filters provider route candidates; filtered display never changes membership or order | **Partial** — local view filtering exists; the polished member/candidate workflow and its acceptance tests remain |

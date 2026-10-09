@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS model_catalog (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_model_catalog_node ON model_catalog(provider_node_id);
+CREATE TABLE IF NOT EXISTS custom_model_connections (
+  model_id TEXT NOT NULL REFERENCES model_catalog(id) ON DELETE CASCADE,
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  PRIMARY KEY(model_id,connection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_custom_model_connections_connection ON custom_model_connections(connection_id,model_id);
+CREATE INDEX IF NOT EXISTS idx_custom_model_identity ON model_catalog(provider_node_id,external_id) WHERE kind='custom' AND external_id<>'';
 CREATE TABLE IF NOT EXISTS usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
@@ -1058,6 +1065,7 @@ type Model struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
 	Profile                                   kernel.CapabilityProfile
 	Limits                                    kernel.TokenLimits
+	ConnectionIDs                             []string `json:"connectionIds,omitempty"`
 }
 
 func (s *Store) Models() ([]Model, error) {
@@ -1077,7 +1085,29 @@ func (s *Store) Models() ([]Model, error) {
 		_ = json.Unmarshal([]byte(limits), &m.Limits)
 		result = append(result, m)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	connectionRows, err := s.DB.Query(`SELECT model_id,connection_id FROM custom_model_connections ORDER BY model_id,connection_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer connectionRows.Close()
+	assignments := make(map[string][]string)
+	for connectionRows.Next() {
+		var modelID, connectionID string
+		if err := connectionRows.Scan(&modelID, &connectionID); err != nil {
+			return nil, err
+		}
+		assignments[modelID] = append(assignments[modelID], connectionID)
+	}
+	if err := connectionRows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range result {
+		result[index].ConnectionIDs = assignments[result[index].ID]
+	}
+	return result, nil
 }
 
 type RouteRecord struct {
@@ -1094,7 +1124,8 @@ func (s *Store) Routes() ([]RouteRecord, error) {
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
 LEFT JOIN connection_model_catalog e ON e.connection_id=c.id AND e.provider_node_id=m.provider_node_id AND e.external_model_id=m.external_id AND e.status='available'
-WHERE m.enabled=1 AND (m.kind='custom' OR e.connection_id IS NOT NULL) ORDER BY m.id,c.priority,c.id`)
+LEFT JOIN custom_model_connections assignment ON assignment.model_id=m.id AND assignment.connection_id=c.id
+WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL) OR (m.kind<>'custom' AND e.connection_id IS NOT NULL)) ORDER BY m.id,c.priority,c.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1125,6 +1156,7 @@ type UpsertCatalogModelInput struct {
 	Limits                                            kernel.TokenLimits
 	Overrides                                         map[string]any
 	Raw                                               map[string]any
+	ConnectionIDs                                     []string `json:"connectionIds,omitempty"`
 }
 
 func (s *Store) UpsertCatalogModel(input UpsertCatalogModelInput) error {
@@ -1134,16 +1166,66 @@ func (s *Store) UpsertCatalogModel(input UpsertCatalogModelInput) error {
 	if input.Kind == "" {
 		input.Kind = "custom"
 	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if input.Kind == "custom" {
+		if input.ProviderNodeID == "" || input.ExternalID == "" {
+			return fmt.Errorf("custom models require a provider and exact upstream model ID")
+		}
+		if len(input.ConnectionIDs) == 0 {
+			return fmt.Errorf("custom models must be assigned to at least one connection")
+		}
+		var existingCount int
+		var existingID string
+		if err := tx.QueryRow(`SELECT count(*),COALESCE(min(id),'') FROM model_catalog WHERE provider_node_id=? AND kind='custom' AND external_id=?`, input.ProviderNodeID, input.ExternalID).Scan(&existingCount, &existingID); err != nil {
+			return err
+		}
+		if existingCount > 1 {
+			return fmt.Errorf("custom upstream identity %q has duplicate catalog rows; resolve them before editing", input.ExternalID)
+		}
+		if existingCount == 1 && existingID != input.ID {
+			return fmt.Errorf("custom model %q already exists as catalog ID %q; edit its connection assignments instead of creating a duplicate", input.ExternalID, existingID)
+		}
+	} else if len(input.ConnectionIDs) > 0 {
+		return fmt.Errorf("connection assignments are supported only for custom models")
+	}
+	seenConnections := make(map[string]bool, len(input.ConnectionIDs))
+	for _, connectionID := range input.ConnectionIDs {
+		if connectionID == "" || seenConnections[connectionID] {
+			return fmt.Errorf("custom model connection IDs must be non-empty and unique")
+		}
+		seenConnections[connectionID] = true
+		var owner string
+		if err := tx.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&owner); err != nil {
+			return fmt.Errorf("custom model connection %q: %w", connectionID, err)
+		}
+		if owner != input.ProviderNodeID {
+			return fmt.Errorf("custom model connection %q belongs to provider %q, not %q", connectionID, owner, input.ProviderNodeID)
+		}
+	}
 	caps, _ := json.Marshal(input.Profile)
 	limits, _ := json.Marshal(input.Limits)
 	overrides, _ := json.Marshal(input.Overrides)
 	raw, _ := json.Marshal(input.Raw)
-	_, err := s.DB.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at)
+	if _, err = tx.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,kind=excluded.kind,external_id=excluded.external_id,
 display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,overrides_json=excluded.overrides_json,
-raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, input.ProviderNodeID, input.Kind, input.ExternalID, input.DisplayName, string(caps), string(limits), string(overrides), string(raw))
-	return err
+raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, input.ProviderNodeID, input.Kind, input.ExternalID, input.DisplayName, string(caps), string(limits), string(overrides), string(raw)); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM custom_model_connections WHERE model_id=?`, input.ID); err != nil {
+		return err
+	}
+	for _, connectionID := range input.ConnectionIDs {
+		if _, err = tx.Exec(`INSERT INTO custom_model_connections(model_id,connection_id) VALUES(?,?)`, input.ID, connectionID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteCatalogModel(id string) error {

@@ -23,21 +23,22 @@ type fieldSpec struct {
 }
 
 type formState struct {
-	title, method    string
-	fields           []fieldSpec
-	inputs           []textinput.Model
-	active           int
-	typedSources     []routeReference
-	typedMembers     []modelReference
-	memberInput      textinput.Model
-	memberMode       bool
-	addingMember     bool
-	memberCursor     int
-	extra            map[string]any
-	providerPreset   string
-	authSchema       []provider.SetupField
-	hasAuthSchema    bool
-	transformOptions map[string]transformOptionSpec
+	title, method      string
+	fields             []fieldSpec
+	inputs             []textinput.Model
+	active             int
+	typedSources       []routeReference
+	typedMembers       []modelReference
+	typedConnectionIDs []string
+	memberInput        textinput.Model
+	memberMode         bool
+	addingMember       bool
+	memberCursor       int
+	extra              map[string]any
+	providerPreset     string
+	authSchema         []provider.SetupField
+	hasAuthSchema      bool
+	transformOptions   map[string]transformOptionSpec
 }
 
 type transformOptionSpec struct {
@@ -204,11 +205,7 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 			if value.Kind != "custom" {
 				return nil
 			}
-			values = map[string]string{"providerNodeID": value.NodeID, "kind": value.Kind, "externalID": value.ExternalID, "displayName": value.DisplayName}
-			f := buildForm("Edit physical model", "custom_models.upsert", modelEditFields(), values)
-			f.extra["id"] = value.ID
-			f.extra["profile"] = value.Profile
-			return f
+			return newCustomModelForm(value.NodeID, value.ConnectionIDs, &value)
 		case physicalModel:
 			options, err := strategyOptionsJSON(value.Policy.Config)
 			if err != nil {
@@ -247,7 +244,7 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 		values = map[string]string{"providerNodeID": providerID, "priority": "100"}
 		return buildForm("Add connection", "connections.create", connectionFields(), values)
 	case sectionModels:
-		return buildForm("Add physical model", "custom_models.upsert", modelFields(), map[string]string{"kind": "custom", "providerNodeID": providerID})
+		return newCustomModelForm(providerID, nil, nil)
 	case sectionPhysical:
 		f := buildForm("Create physical model", "physical_models.upsert", physicalModelFields(), map[string]string{"policy": "ordered-fallback", "policyOptions": "{}", "discoverable": "false"})
 		f.extra["strategyRef"] = kernel.StrategyRef("ordered-fallback", 1)
@@ -370,12 +367,20 @@ func connectionEditFields() []fieldSpec {
 	return []fieldSpec{{key: "name", label: "Name", placeholder: "personal key"}, {key: "credentialType", label: "Credential type", placeholder: "api_key"}, {key: "secret", label: "Replace API key (blank keeps current)", secret: true}, {key: "priority", label: "Priority", placeholder: "100"}}
 }
 
-func modelFields() []fieldSpec {
-	return []fieldSpec{{key: "id", label: "Catalog ID (auto if blank)", placeholder: "generated on save"}, {key: "providerNodeID", label: "Provider node ID", placeholder: "choose provider first"}, {key: "kind", label: "Kind", placeholder: "custom"}, {key: "externalID", label: "Upstream model ID", placeholder: "model-name"}, {key: "displayName", label: "Display name", placeholder: "Model name"}}
-}
-
-func modelEditFields() []fieldSpec {
-	return []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "provider"}, {key: "kind", label: "Kind", placeholder: "custom"}, {key: "externalID", label: "Upstream model ID", placeholder: "model-name"}, {key: "displayName", label: "Display name", placeholder: "Model name"}}
+func newCustomModelForm(providerNodeID string, connectionIDs []string, existing *catalogModel) *formState {
+	form := buildForm("Add custom upstream model", "custom_models.upsert", []fieldSpec{{key: "id", label: "Catalog ID (auto if blank)", placeholder: "generated on save"}, {key: "externalID", label: "Exact upstream model ID", placeholder: "model-name"}, {key: "displayName", label: "Display name", placeholder: "Model name"}}, nil)
+	form.extra["providerNodeID"] = providerNodeID
+	form.extra["kind"] = "custom"
+	if existing != nil {
+		form = buildForm("Edit custom upstream model", "custom_models.upsert", []fieldSpec{{key: "externalID", label: "Exact upstream model ID", placeholder: "model-name"}, {key: "displayName", label: "Display name", placeholder: "Model name"}}, map[string]string{"externalID": existing.ExternalID, "displayName": existing.DisplayName})
+		form.extra["id"] = existing.ID
+		form.extra["providerNodeID"] = existing.NodeID
+		form.extra["kind"] = existing.Kind
+		form.extra["profile"] = existing.Profile
+		form.extra["limits"] = existing.Limits
+	}
+	form.typedConnectionIDs = append([]string(nil), connectionIDs...)
+	return form
 }
 
 func (f *formState) Update(msg tea.Msg) (*formState, tea.Cmd, bool, map[string]any, error) {
@@ -497,7 +502,7 @@ func (f *formState) moveMember(delta int) {
 }
 
 func (f *formState) hasMembers() bool {
-	return f.method == "physical_models.upsert" || f.method == "combo_models.upsert"
+	return f.method == "physical_models.upsert" || f.method == "combo_models.upsert" || f.method == "custom_models.upsert"
 }
 
 func (f *formState) memberCount() int {
@@ -506,6 +511,8 @@ func (f *formState) memberCount() int {
 		return len(f.typedSources)
 	case "combo_models.upsert":
 		return len(f.typedMembers)
+	case "custom_models.upsert":
+		return len(f.typedConnectionIDs)
 	default:
 		return 0
 	}
@@ -529,6 +536,12 @@ func (f *formState) memberLabels() []string {
 			result = append(result, label)
 		}
 		return result
+	case "custom_models.upsert":
+		result := make([]string, 0, len(f.typedConnectionIDs))
+		for _, connectionID := range f.typedConnectionIDs {
+			result = append(result, "connection:"+connectionID)
+		}
+		return result
 	default:
 		return nil
 	}
@@ -550,6 +563,8 @@ func (f *formState) addMember(raw string) error {
 			return fmt.Errorf("member kind must be physical or combo and id is required")
 		}
 		f.typedMembers = append(f.typedMembers, member)
+	case "custom_models.upsert":
+		f.typedConnectionIDs = append(f.typedConnectionIDs, raw)
 	default:
 		return fmt.Errorf("this editor does not accept members")
 	}
@@ -566,6 +581,8 @@ func (f *formState) removeMember() {
 		f.typedSources = append(f.typedSources[:f.memberCursor], f.typedSources[f.memberCursor+1:]...)
 	case "combo_models.upsert":
 		f.typedMembers = append(f.typedMembers[:f.memberCursor], f.typedMembers[f.memberCursor+1:]...)
+	case "custom_models.upsert":
+		f.typedConnectionIDs = append(f.typedConnectionIDs[:f.memberCursor], f.typedConnectionIDs[f.memberCursor+1:]...)
 	default:
 		return
 	}
@@ -665,9 +682,14 @@ func (f *formState) Params() (map[string]any, error) {
 		}
 	}
 	if f.method == "custom_models.upsert" {
-		if _, exists := params["providerNodeID"]; !exists {
-			return nil, fmt.Errorf("choose a provider before adding a physical model")
+		providerNodeID, _ := params["providerNodeID"].(string)
+		if providerNodeID == "" {
+			return nil, fmt.Errorf("choose a provider before adding a custom model")
 		}
+		if len(f.typedConnectionIDs) == 0 {
+			return nil, fmt.Errorf("assign this custom model to at least one connection")
+		}
+		params["connectionIds"] = append([]string(nil), f.typedConnectionIDs...)
 	}
 	if f.method == "physical_models.upsert" {
 		policyRef, ok := f.extra["strategyRef"].(extensions.Ref)

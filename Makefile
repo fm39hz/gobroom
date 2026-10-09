@@ -90,7 +90,9 @@ test-conformance-transform-boundaries:
 	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
 
 test-model-workflow: ## focused Discovered → Physical → Combo UI acceptance
-	go test ./internal/tui -run '^(TestSuggestPhysicalNameGroupsEquivalentProviderIDs|TestSuggestPhysicalNameDoesNotMergeDifferentRevisions|TestSuggestPhysicalNameHandlesSingleProviderRoute|TestSuggestPhysicalNameRemovesMixedCaseProviderNamespace|TestSourcePickerBuildsFamilyFromProviderVariants|TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview|TestComboPickerFiltersViaSourcePrefixButShowsOneCanonicalPhysicalRow|TestComboEditorSaveAndExposureReachOpenAIModelsProjection)$$' -count=1
+	go test ./internal/tui -run '^(TestSuggestPhysicalNameGroupsEquivalentProviderIDs|TestSuggestPhysicalNameDoesNotMergeDifferentRevisions|TestSuggestPhysicalNameHandlesSingleProviderRoute|TestSuggestPhysicalNameRemovesMixedCaseProviderNamespace|TestSourcePickerBuildsFamilyFromProviderVariants|TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview|TestConnectionCustomModelAssignmentPickerScopesAndSerializesConnections|TestComboPickerFiltersViaSourcePrefixButShowsOneCanonicalPhysicalRow|TestComboEditorSaveAndExposureReachOpenAIModelsProjection)$$' -count=1
+	go test ./internal/store -run '^TestCustomRouteExpandsOnlyToExplicitlyAssignedConnections$$' -count=1
+	go test ./internal/controlplane -run '^TestCustomModelConnectionAssignmentsRoundTripThroughConfigBundle$$' -count=1
 
 test-v: ## verbose tests
 	go test ./... -count=1 -v

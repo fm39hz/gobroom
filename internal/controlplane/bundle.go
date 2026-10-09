@@ -97,7 +97,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 5, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	bundle := ConfigBundle{Version: 6, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
 	if catalog != nil {
 		providerDefinitions := make(map[string]provider.ProviderDefinition)
 		for _, item := range providers {
@@ -159,7 +159,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 5 {
+	if bundle.Version != 6 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
 	if bundle.Dependencies.Version != 1 {
@@ -221,17 +221,45 @@ func ValidateBundle(bundle ConfigBundle) error {
 		}
 		providers[item.ID] = true
 	}
+	connections := map[string]string{}
 	for _, item := range bundle.Connections {
 		if item.ID == "" || !providers[item.ProviderNodeID] {
 			return fmt.Errorf("connection %q references unknown provider", item.ID)
 		}
+		if _, exists := connections[item.ID]; exists {
+			return fmt.Errorf("duplicate connection %q", item.ID)
+		}
+		connections[item.ID] = item.ProviderNodeID
 	}
 	models := map[string]bool{}
+	customIdentities := map[string]string{}
 	for _, item := range bundle.Models {
 		if item.ID == "" {
 			return fmt.Errorf("model ID is required")
 		}
+		if models[item.ID] {
+			return fmt.Errorf("duplicate model %q", item.ID)
+		}
 		models[item.ID] = true
+		if item.Kind == "custom" {
+			if item.NodeID == "" || !providers[item.NodeID] || item.ExternalID == "" || len(item.ConnectionIDs) == 0 {
+				return fmt.Errorf("custom model %q requires a provider, exact upstream ID and at least one connection assignment", item.ID)
+			}
+			identityKey := item.NodeID + "\x00" + item.ExternalID
+			if existingID, exists := customIdentities[identityKey]; exists {
+				return fmt.Errorf("custom model %q duplicates upstream identity already assigned to catalog ID %q", item.ID, existingID)
+			}
+			customIdentities[identityKey] = item.ID
+			seen := map[string]bool{}
+			for _, connectionID := range item.ConnectionIDs {
+				if seen[connectionID] || connections[connectionID] != item.NodeID {
+					return fmt.Errorf("custom model %q connection %q is duplicated or belongs to another provider", item.ID, connectionID)
+				}
+				seen[connectionID] = true
+			}
+		} else if len(item.ConnectionIDs) > 0 {
+			return fmt.Errorf("non-custom model %q cannot carry custom connection assignments", item.ID)
+		}
 	}
 	physical := map[string]bool{}
 	for _, item := range bundle.Physical {
@@ -654,6 +682,14 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 		limits, _ := json.Marshal(model.Limits)
 		if _, err = tx.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?, ?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,kind=excluded.kind,external_id=excluded.external_id,display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, model.ID, model.NodeID, model.Kind, model.ExternalID, model.DisplayName, string(profile), string(limits), `{}`, `{}`, boolInt(true)); err != nil {
 			return err
+		}
+		if _, err = tx.Exec(`DELETE FROM custom_model_connections WHERE model_id=?`, model.ID); err != nil {
+			return err
+		}
+		for _, connectionID := range model.ConnectionIDs {
+			if _, err = tx.Exec(`INSERT INTO custom_model_connections(model_id,connection_id) VALUES(?,?)`, model.ID, connectionID); err != nil {
+				return err
+			}
 		}
 	}
 	for _, item := range bundle.Physical {

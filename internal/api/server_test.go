@@ -643,6 +643,7 @@ func TestOpenAIChatVerticalSliceReachesUpstream(t *testing.T) {
 INSERT INTO provider_nodes(id,name,base_url,protocol,prefix,definition_id) VALUES('node-a','A',?,'openai_chat','a','openai-compatible-chat');
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:a','node-a','custom','upstream-model','Model A');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-a','node-a','primary','api_key','secret');
+INSERT INTO custom_model_connections(model_id,connection_id) VALUES('route:a','conn-a');
 		INSERT INTO physical_models(name,discoverable,enabled) VALUES('physical-a',0,1);
 		INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity) VALUES('physical-a',0,'route:a','exact');`, upstreamURL); err != nil {
 		t.Fatal(err)
@@ -723,6 +724,7 @@ func TestAnthropicMessagesAPIKeyVerticalSliceReachesUpstream(t *testing.T) {
 INSERT INTO provider_nodes(id,name,base_url,protocol,prefix,definition_id) VALUES('node-anthropic','Anthropic',?,'anthropic','anthropic','anthropic-messages');
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:anthropic','node-anthropic','custom','claude-sonnet','Claude Sonnet');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-anthropic','node-anthropic','primary','api_key','anthropic-secret');
+INSERT INTO custom_model_connections(model_id,connection_id) VALUES('route:anthropic','conn-anthropic');
 		INSERT INTO physical_models(name,discoverable,enabled) VALUES('claude-sonnet-physical',0,1);
 INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity) VALUES('claude-sonnet-physical',0,'route:anthropic','exact');`, upstreamURL); err != nil {
 		t.Fatal(err)

@@ -202,14 +202,19 @@ func resourceCommands() []*cobra.Command {
 	models := &cobra.Command{Use: "models", Short: "manage model catalog"}
 	models.AddCommand(listCommand("list", "models.list", nil))
 	var modelID, modelNodeID, modelKind, externalID, displayName string
+	var modelConnectionIDs []string
 	custom := &cobra.Command{Use: "upsert", Short: "upsert custom model", RunE: func(*cobra.Command, []string) error {
-		return invoke("custom_models.upsert", map[string]any{"id": modelID, "providerNodeID": modelNodeID, "kind": modelKind, "externalID": externalID, "displayName": displayName})
+		if modelKind == "custom" && len(modelConnectionIDs) == 0 {
+			return fmt.Errorf("--connection-id is required for custom models")
+		}
+		return invoke("custom_models.upsert", map[string]any{"id": modelID, "providerNodeID": modelNodeID, "kind": modelKind, "externalID": externalID, "displayName": displayName, "connectionIds": modelConnectionIDs})
 	}}
 	custom.Flags().StringVar(&modelID, "id", "", "catalog ID")
 	custom.Flags().StringVar(&modelNodeID, "node-id", "", "provider node ID")
 	custom.Flags().StringVar(&modelKind, "kind", "custom", "model kind")
 	custom.Flags().StringVar(&externalID, "external-id", "", "upstream model ID")
 	custom.Flags().StringVar(&displayName, "display-name", "", "display name")
+	custom.Flags().StringArrayVar(&modelConnectionIDs, "connection-id", nil, "connection ID assigned to this custom model (repeat to assign multiple accounts)")
 	models.AddCommand(custom, idCommand("delete", "delete catalog model", "custom_models.delete", "id", &modelID))
 
 	physical := &cobra.Command{Use: "physical-models", Short: "manage physical model identities"}

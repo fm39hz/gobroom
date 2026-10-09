@@ -21,9 +21,13 @@ func TestTypedModelLayersReuseCatalog(t *testing.T) {
 ('node-b','B','https://b.test','openai_chat','g4f')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.DB.Exec(`INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES
+('conn-a','node-a','A key','api_key','a'),('conn-b','node-b','B key','api_key','b')`); err != nil {
+		t.Fatal(err)
+	}
 	for _, route := range []UpsertCatalogModelInput{
 		{ID: "route-a", ProviderNodeID: "node-a", Kind: "discovered", ExternalID: "vendor/qwen:free", DisplayName: "Qwen", Profile: map[string]kernel.Capability{"input.image": {State: kernel.SupportNative}}},
-		{ID: "route-b", ProviderNodeID: "node-b", Kind: "custom", ExternalID: "Qwen/Qwen", DisplayName: "Qwen", Profile: map[string]kernel.Capability{"input.image": {State: kernel.SupportNative}}},
+		{ID: "route-b", ProviderNodeID: "node-b", Kind: "custom", ExternalID: "Qwen/Qwen", DisplayName: "Qwen", Profile: map[string]kernel.Capability{"input.image": {State: kernel.SupportNative}}, ConnectionIDs: []string{"conn-b"}},
 	} {
 		if err := s.UpsertCatalogModel(route); err != nil {
 			t.Fatal(err)
@@ -220,5 +224,67 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	routes, err = s.Routes()
 	if err != nil || len(routes) != 0 {
 		t.Fatalf("complete absent snapshot did not revoke route: routes=%#v err=%v", routes, err)
+	}
+}
+
+func TestCustomRouteExpandsOnlyToExplicitlyAssignedConnections(t *testing.T) {
+	s, err := Open(t.TempDir() + "/custom-connections.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES
+('node-a','A','https://a.test/v1','openai_chat','a'),('node-b','B','https://b.test/v1','openai_chat','b');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES
+('conn-a','node-a','A key','api_key','a'),('conn-a2','node-a','A2 key','api_key','a2'),('conn-b','node-b','B key','api_key','b');`); err != nil {
+		t.Fatal(err)
+	}
+	model := UpsertCatalogModelInput{ID: "custom-qwen", ProviderNodeID: "node-a", Kind: "custom", ExternalID: "vendor/qwen3.7-max", DisplayName: "Qwen 3.7 Max", ConnectionIDs: []string{"conn-a"}}
+	if err := s.UpsertCatalogModel(model); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-a" {
+		t.Fatalf("custom route expanded beyond its explicit assignment: routes=%#v err=%v", routes, err)
+	}
+	duplicate := UpsertCatalogModelInput{ID: "custom-qwen-duplicate", ProviderNodeID: "node-a", Kind: "custom", ExternalID: model.ExternalID, DisplayName: "Duplicate Qwen", ConnectionIDs: []string{"conn-a2"}}
+	if err := s.UpsertCatalogModel(duplicate); err == nil {
+		t.Fatal("duplicate custom upstream identity was accepted as another catalog route")
+	}
+	items, err := s.DiscoveredRoutes("node-a")
+	if err != nil || len(items) != 1 || len(items[0].ConnectionAvailability) != 2 {
+		t.Fatalf("custom route assignment projection=%#v err=%v", items, err)
+	}
+	availability := map[string]string{}
+	for _, evidence := range items[0].ConnectionAvailability {
+		availability[evidence.ConnectionID] = evidence.Status
+	}
+	if availability["conn-a"] != "assigned" || availability["conn-a2"] != "not_assigned" {
+		t.Fatalf("connection-specific custom assignment evidence=%#v", availability)
+	}
+	models, err := s.Models()
+	if err != nil || len(models) != 1 || len(models[0].ConnectionIDs) != 1 || models[0].ConnectionIDs[0] != "conn-a" {
+		t.Fatalf("custom model assignment did not round-trip through model listing: %#v err=%v", models, err)
+	}
+
+	model.ConnectionIDs = []string{"conn-a2"}
+	if err := s.UpsertCatalogModel(model); err != nil {
+		t.Fatal(err)
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-a2" {
+		t.Fatalf("custom assignment update did not replace prior account binding: routes=%#v err=%v", routes, err)
+	}
+	model.ConnectionIDs = []string{"conn-b"}
+	if err := s.UpsertCatalogModel(model); err == nil {
+		t.Fatal("custom model accepted an assignment to another provider's connection")
+	}
+	model.ConnectionIDs = nil
+	if err := s.UpsertCatalogModel(model); err == nil {
+		t.Fatal("custom model accepted an empty connection assignment")
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-a2" {
+		t.Fatalf("rejected assignment update changed active routing state: routes=%#v err=%v", routes, err)
 	}
 }
