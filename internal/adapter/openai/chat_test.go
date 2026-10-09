@@ -224,6 +224,26 @@ func TestNativeChatMessageRejectsUnmappedCanonicalContentParts(t *testing.T) {
 	}
 }
 
+func TestNativeChatMessageRejectsUnmappedAddedMessageFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		message normalize.Message
+	}{
+		{name: "tool ID on user", message: normalize.Message{Role: "user", ToolCallID: "call-1", Content: "text"}},
+		{name: "empty assistant", message: normalize.Message{Role: "assistant"}},
+		{name: "user tool call", message: normalize.Message{Role: "user", Content: "text", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "lookup"}}}},
+		{name: "tool missing ID", message: normalize.Message{Role: "tool", Content: "result"}},
+		{name: "unknown role", message: normalize.Message{Role: "function", Content: "result"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := nativeChatMessage(test.message); err == nil {
+				t.Fatal("unrepresentable added message was accepted")
+			}
+		})
+	}
+}
+
 func TestNativeChatEgressOverlaysOnlyTransformedTypedFacets(t *testing.T) {
 	maxTokens, temperature, topP := 12, 0.2, 0.3
 	request := normalize.Request{

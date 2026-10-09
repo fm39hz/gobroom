@@ -316,6 +316,9 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			}
 			newMessageSeen = true
 			if message.Role == "tool" {
+				if message.Name != "" || len(message.ToolCalls) > 0 {
+					return nil, fmt.Errorf("new Responses tool results cannot carry a name or nested tool calls")
+				}
 				output, err := nativeResponsesFunctionCallOutput(message.Content)
 				if err != nil || message.ToolCallID == "" {
 					return nil, fmt.Errorf("new Responses tool result cannot be serialized safely")
@@ -325,6 +328,15 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			}
 			if message.Role != "user" && message.Role != "assistant" {
 				return nil, fmt.Errorf("new Responses message role %q has no registered overlay", message.Role)
+			}
+			if message.Name != "" || message.ToolCallID != "" {
+				return nil, fmt.Errorf("new Responses %s messages cannot preserve name or tool-result call ID fields", message.Role)
+			}
+			if message.Role == "user" && len(message.ToolCalls) > 0 {
+				return nil, fmt.Errorf("new Responses user messages cannot contain tool calls")
+			}
+			if message.Content == nil && len(message.ToolCalls) == 0 {
+				return nil, fmt.Errorf("new Responses %s messages require content or an assistant tool call", message.Role)
 			}
 			if message.Content != nil {
 				content, err := responsesMessageContent(message.Content, message.Role)

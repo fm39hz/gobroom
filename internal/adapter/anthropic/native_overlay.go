@@ -361,8 +361,17 @@ func nativeAnthropicAddedMessage(message normalize.Message) (map[string]any, err
 	}
 	switch message.Role {
 	case "user", "assistant":
+		if message.ToolCallID != "" {
+			return nil, fmt.Errorf("new Anthropic %s messages cannot carry a tool-result call ID", message.Role)
+		}
 		if message.Role == "user" && len(message.ToolCalls) > 0 {
 			return nil, fmt.Errorf("new Anthropic user messages cannot contain tool calls")
+		}
+		if message.Role == "user" && message.Content == nil {
+			return nil, fmt.Errorf("new Anthropic user messages require content")
+		}
+		if message.Role == "assistant" && message.Content == nil && len(message.ToolCalls) == 0 {
+			return nil, fmt.Errorf("new Anthropic assistant messages require content or a tool call")
 		}
 		content, err := nativeAnthropicAddedContent(message.Content)
 		if err != nil {

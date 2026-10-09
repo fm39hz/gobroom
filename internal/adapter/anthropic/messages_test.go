@@ -311,6 +311,25 @@ func TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent(t *testing.T) 
 	}
 }
 
+func TestNativeAnthropicAddedMessageRejectsUnmappedFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		message normalize.Message
+	}{
+		{name: "tool ID on user", message: normalize.Message{Role: "user", ToolCallID: "call-1", Content: "text"}},
+		{name: "empty assistant", message: normalize.Message{Role: "assistant"}},
+		{name: "assistant tool ID", message: normalize.Message{Role: "assistant", ToolCallID: "call-1", Content: "text"}},
+		{name: "user tool call", message: normalize.Message{Role: "user", Content: "text", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "lookup"}}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := nativeAnthropicAddedMessage(test.message); err == nil {
+				t.Fatal("unrepresentable added message was accepted")
+			}
+		})
+	}
+}
+
 func TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"}]}`))
 	if err != nil {

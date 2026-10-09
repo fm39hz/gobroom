@@ -326,6 +326,27 @@ func TestNativeResponsesRejectsOpaqueNestedChatToolCallMetadata(t *testing.T) {
 	}
 }
 
+func TestNativeResponsesRejectsUnmappedAddedMessageFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		message normalize.Message
+	}{
+		{name: "message name", message: normalize.Message{Role: "user", Name: "speaker", Content: "text"}},
+		{name: "tool ID on user", message: normalize.Message{Role: "user", ToolCallID: "call-1", Content: "text"}},
+		{name: "empty assistant", message: normalize.Message{Role: "assistant"}},
+		{name: "user tool call", message: normalize.Message{Role: "user", Content: "text", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "lookup"}}}},
+		{name: "tool result name", message: normalize.Message{Role: "tool", Name: "lookup", ToolCallID: "call-1", Content: "result"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := kernel.NormalizedRequest{Messages: []normalize.Message{test.message}, Mutations: normalize.RequestMutationSet{Messages: true}}
+			if _, err := overlayResponsesInput(nil, request); err == nil {
+				t.Fatal("unrepresentable added message was accepted")
+			}
+		})
+	}
+}
+
 func TestAnthropicMessagesRequestMapsToOpenAIResponsesFromTypedIR(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{
 "model":"role","max_tokens":512,"temperature":0.2,"top_p":0.9,

@@ -131,6 +131,10 @@ parts fail closed instead of serializing Go IR fields as provider JSON.
 `TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix` composes the
 kernel transform registry's mutation marker with `Chat.Prepare` and proves the
 canonical append reaches wire JSON in the expected order and image shape.
+Added-message fields without an exact native mapping (such as unsupported role,
+name/correlation placement, invalid tool-call role, or an empty semantic item)
+are rejected by Chat, Anthropic and Responses codec boundary tests rather than
+silently omitted.
 
 `TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit`
 adds serving-boundary cancellation evidence: client cancellation during a

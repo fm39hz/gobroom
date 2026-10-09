@@ -350,6 +350,28 @@ func openAIChatToolChoice(choice normalize.ToolChoice) (any, error) {
 }
 
 func nativeChatMessage(message normalize.Message) (map[string]any, error) {
+	if message.Metadata == nil {
+		switch message.Role {
+		case "system", "developer", "user", "assistant", "tool":
+		default:
+			return nil, fmt.Errorf("new OpenAI Chat message role %q has no native mapping", message.Role)
+		}
+		if message.Role == "tool" {
+			if message.ToolCallID == "" || len(message.ToolCalls) > 0 {
+				return nil, fmt.Errorf("new OpenAI Chat tool messages require a call ID and cannot contain tool calls")
+			}
+		} else {
+			if message.ToolCallID != "" {
+				return nil, fmt.Errorf("new OpenAI Chat %s messages cannot carry a tool-result call ID", message.Role)
+			}
+			if len(message.ToolCalls) > 0 && message.Role != "assistant" {
+				return nil, fmt.Errorf("new OpenAI Chat tool calls require the assistant role")
+			}
+		}
+		if message.Content == nil && len(message.ToolCalls) == 0 {
+			return nil, fmt.Errorf("new OpenAI Chat %s messages require content or an assistant tool call", message.Role)
+		}
+	}
 	encoded := copyObject(message.Metadata)
 	encoded["role"] = message.Role
 	if message.Name != "" {
@@ -372,6 +394,12 @@ func nativeChatMessage(message normalize.Message) (map[string]any, error) {
 	} else {
 		calls := make([]map[string]any, 0, len(message.ToolCalls))
 		for _, call := range message.ToolCalls {
+			if call.ID == "" || call.Name == "" {
+				return nil, fmt.Errorf("OpenAI Chat tool calls require stable IDs and function names")
+			}
+			if call.Type != "" && call.Type != "function" {
+				return nil, fmt.Errorf("OpenAI Chat tool-call type %q has no native mapping", call.Type)
+			}
 			item := copyObject(call.Metadata)
 			function := copyObject(openAIObject(item["function"]))
 			if function == nil {
