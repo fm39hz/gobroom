@@ -174,18 +174,18 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 	}
 	for _, message := range messages {
 		if message.Metadata == nil {
-			return nil, fmt.Errorf("new Anthropic messages need a typed content-block insertion policy")
+			continue
 		}
 		if parts, ok := message.Content.([]normalize.ContentPart); ok {
 			for _, part := range parts {
 				if part.Metadata == nil {
-					return nil, fmt.Errorf("new Anthropic content parts need a typed block insertion policy")
+					return nil, fmt.Errorf("new Anthropic content parts inside source messages need a typed block insertion policy")
 				}
 			}
 		}
 		for _, call := range message.ToolCalls {
 			if call.Metadata == nil {
-				return nil, fmt.Errorf("new Anthropic tool calls need a typed tool-use insertion policy")
+				return nil, fmt.Errorf("new Anthropic tool calls inside source messages need a typed tool-use insertion policy")
 			}
 		}
 	}
@@ -322,7 +322,100 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 		patchedMessage["content"] = updatedBlocks
 		output[index] = patchedMessage
 	}
+	for _, message := range messages {
+		if message.Metadata != nil {
+			continue
+		}
+		added, err := nativeAnthropicAddedMessage(message)
+		if err != nil {
+			return nil, err
+		}
+		output = append(output, added)
+	}
 	return output, nil
+}
+
+func nativeAnthropicAddedMessage(message normalize.Message) (map[string]any, error) {
+	if message.Name != "" {
+		return nil, fmt.Errorf("new Anthropic messages cannot preserve a separate message name")
+	}
+	switch message.Role {
+	case "user", "assistant":
+		if message.Role == "user" && len(message.ToolCalls) > 0 {
+			return nil, fmt.Errorf("new Anthropic user messages cannot contain tool calls")
+		}
+		content, err := nativeAnthropicAddedContent(message.Content)
+		if err != nil {
+			return nil, err
+		}
+		if len(message.ToolCalls) == 0 {
+			return map[string]any{"role": message.Role, "content": content}, nil
+		}
+		blocks, ok := content.([]any)
+		if !ok {
+			blocks = []any{map[string]any{"type": "text", "text": content}}
+		}
+		for _, call := range message.ToolCalls {
+			if call.Metadata != nil {
+				return nil, fmt.Errorf("new Anthropic tool calls cannot include opaque provider metadata")
+			}
+			if call.ID == "" || call.Name == "" {
+				return nil, fmt.Errorf("new Anthropic tool calls require stable IDs and names")
+			}
+			arguments, ok := call.Arguments.(map[string]any)
+			if !ok || arguments == nil {
+				return nil, fmt.Errorf("new Anthropic tool call %q requires object arguments", call.ID)
+			}
+			blocks = append(blocks, map[string]any{"type": "tool_use", "id": call.ID, "name": call.Name, "input": arguments})
+		}
+		return map[string]any{"role": message.Role, "content": blocks}, nil
+	case "tool":
+		if len(message.ToolCalls) != 0 || message.ToolCallID == "" {
+			return nil, fmt.Errorf("new Anthropic tool results require a call ID and cannot contain tool calls")
+		}
+		content, err := nativeAnthropicAddedContent(message.Content)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": message.ToolCallID, "content": content}}}, nil
+	default:
+		return nil, fmt.Errorf("new Anthropic message role %q has no native insertion mapping", message.Role)
+	}
+}
+
+func nativeAnthropicAddedContent(content any) (any, error) {
+	switch value := content.(type) {
+	case nil:
+		return []any{}, nil
+	case string:
+		return value, nil
+	case []normalize.ContentPart:
+		blocks := make([]any, 0, len(value))
+		for _, part := range value {
+			if part.Metadata != nil {
+				return nil, fmt.Errorf("new Anthropic content parts cannot include opaque provider metadata")
+			}
+			switch part.Type {
+			case "text":
+				blocks = append(blocks, map[string]any{"type": "text", "text": part.Text})
+			case "image":
+				source := map[string]any{}
+				if part.URL != "" {
+					source["type"], source["url"] = "url", part.URL
+				} else if part.Data != "" && part.MediaType != "" {
+					source["type"], source["media_type"], source["data"] = "base64", part.MediaType, part.Data
+				} else {
+					return nil, fmt.Errorf("new Anthropic image part requires a URL or base64 data and media type")
+				}
+				blocks = append(blocks, map[string]any{"type": "image", "source": source})
+			default:
+				return nil, fmt.Errorf("new Anthropic content part %q has no native insertion mapping", part.Type)
+			}
+		}
+		return blocks, nil
+	default:
+		return nil, fmt.Errorf("new Anthropic message content %T has no native insertion mapping", content)
+	}
 }
 
 // Native overlay patches the original wire items in place to retain provider
@@ -347,9 +440,14 @@ func validateAnthropicMessageOrder(rawMessages []any, messages []normalize.Messa
 		sourceOrder[key] = index
 	}
 	lastSourceIndex := -1
+	sawAddition := false
 	for _, message := range messages {
 		if message.Metadata == nil {
+			sawAddition = true
 			continue
+		}
+		if sawAddition {
+			return fmt.Errorf("Anthropic message additions must form a suffix so opaque source blocks retain their order")
 		}
 		encoded, err := json.Marshal(message.Metadata)
 		if err != nil {

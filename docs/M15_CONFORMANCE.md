@@ -124,6 +124,13 @@ message order is rejected explicitly because the overlay preserves opaque
 provider blocks by patching their original wire positions. It does not silently
 send the original order as if the transform succeeded.
 
+`TestNativeAnthropicOverlayAppendsTypedMessagesAndToolResults` proves newly
+added canonical assistant/tool-result messages serialize as a suffix while
+opaque source blocks remain in place. Additions inserted between source
+messages and content without a declared native mapping fail closed in
+`TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages` and
+`TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent`.
+
 `TestClientDisconnectCancelsDataPlaneExecution` runs an actual streamed HTTP
 request through the API, fallback kernel, and a blocked response transform;
 closing the client after the first flushed bytes cancels the transform, prevents

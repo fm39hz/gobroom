@@ -264,3 +264,60 @@ func TestNativeAnthropicOverlayRejectsReorderedSourceMessages(t *testing.T) {
 		t.Fatalf("reordered Anthropic source messages were not rejected explicitly: %v", err)
 	}
 }
+
+func TestNativeAnthropicOverlayAppendsTypedMessagesAndToolResults(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"user","content":[{"type":"text","text":"keep"},{"type":"vendor_custom_block","payload":{"opaque":"keep"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := append([]normalize.Message(nil), parsed.Request.Messages...)
+	messages = append(messages,
+		normalize.Message{Role: "assistant", Content: "new assistant text", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{"q": "x"}}}},
+		normalize.Message{Role: "tool", ToolCallID: "call-new", Content: "new tool result"},
+	)
+	updated, err := overlayAnthropicMessages(parsed.Request.Raw["messages"], messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated) != 3 {
+		t.Fatalf("message count=%d want original plus two additions: %#v", len(updated), updated)
+	}
+	original := updated[0].(map[string]any)
+	blocks := original["content"].([]any)
+	if blocks[1].(map[string]any)["type"] != "vendor_custom_block" {
+		t.Fatalf("opaque source block moved or changed: %#v", original)
+	}
+	assistant := updated[1].(map[string]any)
+	assistantBlocks := assistant["content"].([]any)
+	if assistant["role"] != "assistant" || assistantBlocks[0].(map[string]any)["text"] != "new assistant text" || assistantBlocks[1].(map[string]any)["type"] != "tool_use" {
+		t.Fatalf("new assistant/tool-use message was not projected: %#v", assistant)
+	}
+	toolResult := updated[2].(map[string]any)
+	resultBlock := toolResult["content"].([]any)[0].(map[string]any)
+	if toolResult["role"] != "user" || resultBlock["type"] != "tool_result" || resultBlock["tool_use_id"] != "call-new" || resultBlock["content"] != "new tool result" {
+		t.Fatalf("new tool result was not projected into Anthropic user content: %#v", toolResult)
+	}
+}
+
+func TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"user","content":"original"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := append([]normalize.Message(nil), parsed.Request.Messages...)
+	messages = append(messages, normalize.Message{Role: "assistant", Content: []normalize.ContentPart{{Type: "thinking", Text: "unsigned"}}})
+	if _, err := overlayAnthropicMessages(parsed.Request.Raw["messages"], messages); err == nil || !strings.Contains(err.Error(), "no native insertion mapping") {
+		t.Fatalf("unrepresentable added thinking content was not rejected: %v", err)
+	}
+}
+
+func TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []normalize.Message{parsed.Request.Messages[0], {Role: "assistant", Content: "inserted"}, parsed.Request.Messages[1]}
+	if _, err := overlayAnthropicMessages(parsed.Request.Raw["messages"], messages); err == nil || !strings.Contains(err.Error(), "must form a suffix") {
+		t.Fatalf("middle insertion was not rejected explicitly: %v", err)
+	}
+}
