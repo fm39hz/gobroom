@@ -6,12 +6,52 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
+
+type nativeAnthropicRequestTransform struct{}
+
+func (nativeAnthropicRequestTransform) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.native-anthropic", ContractVersion: 1}, ImplementationVersion: "1", Label: "Native Anthropic fixture", Description: "Mutate typed native Anthropic facets.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformPrompt, kernel.TransformInput, kernel.TransformTools, kernel.TransformThinking, kernel.TransformOptions}}
+}
+
+func (nativeAnthropicRequestTransform) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	request.Prompt.Layers[0].Parts[0].Text = "new system policy"
+	for index := range request.Messages {
+		message := &request.Messages[index]
+		switch message.Role {
+		case "user":
+			if message.ToolCallID != "" {
+				message.Content = "new result"
+			} else if len(message.ToolCalls) > 0 {
+				message.Content = "new assistant text"
+				message.ToolCalls[0].Arguments.(map[string]any)["q"] = "updated"
+			} else {
+				message.Content = "new user text"
+			}
+		case "assistant":
+			message.Content = "new assistant text"
+			message.ToolCalls[0].Arguments.(map[string]any)["q"] = "updated"
+		case "tool":
+			message.Content = "new result"
+		}
+	}
+	request.Tools[0].Name = "lookup_v2"
+	request.Tools[0].Function["name"] = "lookup_v2"
+	request.Tools[0].Function["description"] = "updated tool"
+	request.ToolChoice.Name = "lookup_v2"
+	maxTokens, temperature, topP := 2048, 0.6, 0.9
+	request.Generation.MaxOutputTokens, request.Generation.Temperature, request.Generation.TopP = &maxTokens, &temperature, &topP
+	request.Generation.StopSequences = []string{"new stop"}
+	request.Thinking.BudgetTokens = 2048
+	return nil
+}
 
 func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	body := strings.NewReader("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12}}}\n\ndata: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"tool_use\",\"id\":\"call_1\",\"name\":\"search\"}}\n\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"partial_json\":\"{}\"}}\n\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"done\"}}\n\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":4}}\n\ndata: {\"type\":\"message_stop\"}\n\n")
@@ -140,5 +180,74 @@ func TestAnthropicRequestMapsPromptPlanToTopLevelSystem(t *testing.T) {
 	system, ok := body["system"].([]any)
 	if !ok || len(system) != 1 || system[0].(map[string]any)["text"] != "policy" {
 		t.Fatalf("system=%#v", body["system"])
+	}
+}
+
+func TestNativeAnthropicEgressOverlaysTypedFacetsAndPreservesBlocks(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{
+"model":"role","max_tokens":512,"temperature":0.2,"top_p":0.3,"stop_sequences":["old stop"],
+"thinking":{"type":"enabled","budget_tokens":1024},
+"system":[{"type":"text","text":"old system","cache_control":{"type":"ephemeral"}}],
+"tools":[{"name":"lookup","description":"old tool","input_schema":{"type":"object"},"vendor_tool":"keep"}],
+"tool_choice":{"type":"tool","name":"lookup","disable_parallel_tool_use":true,"vendor_choice":"keep"},
+"messages":[
+ {"role":"user","content":[{"type":"text","text":"old user","cache_control":{"type":"ephemeral"}}]},
+ {"role":"assistant","content":[{"type":"text","text":"old assistant"},{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"old"}}]},
+ {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"old result"}]},
+ {"role":"assistant","content":[{"type":"vendor_custom_block","payload":{"opaque":"keep"}}]}
+]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := kernel.NewRequestTransformRegistry()
+	transform := nativeAnthropicRequestTransform{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ApplyScopes(context.Background(), &parsed.Request, []kernel.TransformBinding{{ID: "native-anthropic", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}}, kernel.TransformScope{Kind: kernel.TransformScopeDaemon}); err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter().(kernel.ComposedAdapter)
+	policy := kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}
+	plan := adapter.PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: policy})
+	if !plan.Supported {
+		t.Fatalf("native Anthropic transform overlay was not admitted: %#v", plan)
+	}
+	prepared, err := (Messages{}).Prepare(context.Background(), parsed.Request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "claude"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["max_tokens"] != float64(2048) || body["temperature"] != float64(0.6) || body["top_p"] != float64(0.9) || !reflect.DeepEqual(body["stop_sequences"], []any{"new stop"}) {
+		t.Fatalf("Anthropic generation fields were stale: %#v", body)
+	}
+	if thinking, ok := body["thinking"].(map[string]any); !ok || thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(2048) {
+		t.Fatalf("Anthropic thinking was stale: %#v", body["thinking"])
+	}
+	system := body["system"].([]any)[0].(map[string]any)
+	if system["text"] != "new system policy" || system["cache_control"].(map[string]any)["type"] != "ephemeral" {
+		t.Fatalf("Anthropic system block lost transformed/opaque fields: %#v", system)
+	}
+	tools := body["tools"].([]any)
+	if tools[0].(map[string]any)["description"] != "updated tool" || tools[0].(map[string]any)["vendor_tool"] != "keep" {
+		t.Fatalf("Anthropic tool overlay lost metadata: %#v", tools)
+	}
+	choice := body["tool_choice"].(map[string]any)
+	if choice["name"] != "lookup_v2" || choice["vendor_choice"] != "keep" {
+		t.Fatalf("Anthropic tool-choice overlay lost metadata: %#v", choice)
+	}
+	messages := body["messages"].([]any)
+	if len(messages) != 4 || messages[3].(map[string]any)["content"].([]any)[0].(map[string]any)["type"] != "vendor_custom_block" {
+		t.Fatalf("opaque unsupported message block was not forwarded unchanged: %#v", messages)
+	}
+	userContent := messages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	assistantContent := messages[1].(map[string]any)["content"].([]any)
+	toolUse := assistantContent[1].(map[string]any)
+	toolResult := messages[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if userContent["text"] != "new user text" || userContent["cache_control"].(map[string]any)["type"] != "ephemeral" || assistantContent[0].(map[string]any)["text"] != "new assistant text" || toolUse["input"].(map[string]any)["q"] != "updated" || toolResult["content"] != "new result" {
+		t.Fatalf("Anthropic message block overlay lost content/order/provenance: %#v", messages)
 	}
 }

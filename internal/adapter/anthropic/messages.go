@@ -36,13 +36,21 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 		switch facet {
 		case kernel.FacetWireRequest:
 			if native {
-				mapping.Disposition = kernel.FacetPreserved
+				if input.Request.Mutations.OperationPayload || input.Request.Mutations.Modalities || input.Request.Mutations.Requirements {
+					mapping.Reason = "native Anthropic operation payload/modalities have no egress overlay"
+				} else {
+					mapping.Disposition = kernel.FacetPreserved
+				}
 			} else {
 				mapping.Disposition = kernel.FacetTranslated
 			}
 		case kernel.FacetPromptLayers:
 			if native {
-				mapping.Disposition = kernel.FacetPreserved
+				if input.Request.Mutations.Prompt && len(input.Request.Prompt.Layers) != 1 {
+					mapping.Reason = "native Anthropic system overlay requires one representable prompt layer"
+				} else {
+					mapping.Disposition = kernel.FacetPreserved
+				}
 			} else if anthropicPromptLayersRepresentable(input.Request) {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "text prompt layers are mapped to Anthropic's system field"
@@ -60,14 +68,22 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 			}
 		case kernel.FacetToolChoice:
 			if native {
-				mapping.Disposition = kernel.FacetPreserved
+				if input.Request.Mutations.ToolChoice && (!anthropicToolChoiceRepresentable(input.Request.ToolChoice) || !anthropicToolChoiceMatchesTools(input.Request)) {
+					mapping.Reason = "transformed native tool choice does not match the typed tool set"
+				} else {
+					mapping.Disposition = kernel.FacetPreserved
+				}
 			} else if anthropicToolChoiceRepresentable(input.Request.ToolChoice) && anthropicToolChoiceMatchesTools(input.Request) {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "canonical tool choice is mapped to Anthropic tool_choice"
 			}
 		case kernel.FacetReasoningIntent:
 			if native {
-				mapping.Disposition = kernel.FacetPreserved
+				if input.Request.Mutations.Thinking && anthropicHasUnsupportedFacet(input.Request, "reasoning.intent") {
+					mapping.Reason = "native thinking transform cannot rewrite an unsupported source reasoning envelope"
+				} else {
+					mapping.Disposition = kernel.FacetPreserved
+				}
 			} else {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "canonical thinking intent is mapped to Anthropic thinking fields"
@@ -438,6 +454,9 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 	if request.SourceFormat == normalize.FormatAnthropic {
 		for key, value := range request.Raw {
 			body[key] = value
+		}
+		if err := overlayNativeAnthropicMutations(body, request); err != nil {
+			return kernel.UpstreamRequest{}, err
 		}
 	} else {
 		if len(request.Prompt.Layers) > 0 {
