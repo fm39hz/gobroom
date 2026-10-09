@@ -44,10 +44,6 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 				mapping.Disposition = kernel.FacetUnsupported
 				mapping.Reason = "native Responses overlay for transformed operation payload/modalities is not yet registered"
 			}
-			if facet == kernel.FacetToolHistory && request.Mutations.ToolCalls {
-				mapping.Disposition = kernel.FacetUnsupported
-				mapping.Reason = "native Responses overlay for transformed tool-call history is not yet registered"
-			}
 			if facet == kernel.FacetGenerationOptions && request.Mutations.GenerationStopSequences && len(request.Generation.StopSequences) > 0 {
 				mapping.Disposition = kernel.FacetUnsupported
 				mapping.Reason = "OpenAI Responses has no declared stop-sequence mapping"

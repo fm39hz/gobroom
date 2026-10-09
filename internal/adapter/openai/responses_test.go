@@ -19,6 +19,7 @@ import (
 
 type nativeResponsesMutationFixture struct{}
 type responsesInputMutationFixture struct{}
+type responsesToolHistoryMutationFixture struct{}
 
 func (nativeResponsesMutationFixture) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-native-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses native options", Description: "Change typed facets for native Responses egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions, kernel.TransformThinking, kernel.TransformContinuity}}
@@ -44,6 +45,23 @@ func (responsesInputMutationFixture) Apply(_ context.Context, request *kernel.No
 	for index := range request.Messages {
 		if request.Messages[index].Role == "user" {
 			request.Messages[index].Content = "new user text"
+		}
+	}
+	return nil
+}
+
+func (responsesToolHistoryMutationFixture) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-tool-history", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses tool history", Description: "Change a canonical tool call and result.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformInput}}
+}
+
+func (responsesToolHistoryMutationFixture) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	for index := range request.Messages {
+		message := &request.Messages[index]
+		if len(message.ToolCalls) > 0 {
+			message.ToolCalls[0].Arguments = map[string]any{"q": "updated"}
+		}
+		if message.Role == "tool" {
+			message.Content = "updated result"
 		}
 	}
 	return nil
@@ -122,7 +140,6 @@ func TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation(t *test
 	}{
 		{name: "operation payload", mutations: normalize.RequestMutationSet{OperationPayload: true}, facet: kernel.FacetWireRequest},
 		{name: "modality payload", mutations: normalize.RequestMutationSet{Modalities: true}, facet: kernel.FacetWireRequest},
-		{name: "tool call history", mutations: normalize.RequestMutationSet{ToolCalls: true}, facet: kernel.FacetToolHistory},
 		{name: "unsupported stop sequence", mutations: normalize.RequestMutationSet{GenerationStopSequences: true}, facet: kernel.FacetGenerationOptions},
 	}
 	for _, test := range tests {
@@ -183,6 +200,53 @@ func TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems(t *test
 	functionCall := input[2].(map[string]any)
 	if system["content"] != "new system policy" || system["vendor_prompt"] != "keep" || user["content"] != "new user text" || user["vendor_message"] != "keep" || functionCall["vendor_call"] != "keep" || functionCall["arguments"] != "{}" {
 		t.Fatalf("Responses overlay lost transformed or opaque fields: %#v", input)
+	}
+}
+
+func TestNativeResponsesOverlaysTransformedToolCallAndResultItems(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role", "input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "call lookup"},
+			map[string]any{"type": "function_call", "id": "item_1", "call_id": "call_1", "name": "lookup", "arguments": `{"q":"old"}`, "vendor_call": "keep"},
+			map[string]any{"type": "function_call_output", "id": "item_2", "call_id": "call_1", "output": "old result", "vendor_result": "keep"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := kernel.NewRequestTransformRegistry()
+	transform := responsesToolHistoryMutationFixture{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ApplyScopes(context.Background(), &parsed.Request, []kernel.TransformBinding{{ID: "tool-history", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}}, kernel.TransformScope{Kind: kernel.TransformScopeDaemon}); err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Request.Mutations.ToolCalls || !parsed.Request.Mutations.Messages {
+		t.Fatalf("tool-call mutation markers=%#v", parsed.Request.Mutations)
+	}
+	adapter := NewResponsesAdapter().(kernel.ComposedAdapter)
+	policy := kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}
+	plan := adapter.PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: policy})
+	if !plan.Supported {
+		t.Fatalf("native Responses tool history mutation was not admitted: %#v", plan)
+	}
+	prepared, err := (Responses{}).Prepare(context.Background(), parsed.Request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "target"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	input := body["input"].([]any)
+	call := input[1].(map[string]any)
+	result := input[2].(map[string]any)
+	if call["id"] != "item_1" || call["call_id"] != "call_1" || call["vendor_call"] != "keep" || call["arguments"] != `{"q":"updated"}` {
+		t.Fatalf("Responses function_call overlay lost identity/metadata/arguments: %#v", call)
+	}
+	if result["id"] != "item_2" || result["call_id"] != "call_1" || result["vendor_result"] != "keep" || result["output"] != "updated result" {
+		t.Fatalf("Responses function_call_output overlay lost identity/metadata/output: %#v", result)
 	}
 }
 

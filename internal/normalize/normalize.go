@@ -135,6 +135,9 @@ func normalizeMessages(body map[string]any, format Format) []Message {
 		return messagesFromArray(raw)
 	}
 	if input, ok := body["input"].([]any); ok {
+		if format == FormatOpenAIResponses {
+			return responsesMessagesFromArray(input)
+		}
 		return messagesFromArray(input)
 	}
 	if text, ok := body["input"].(string); ok {
@@ -153,6 +156,32 @@ func normalizeMessages(body map[string]any, format Format) []Message {
 		return result
 	}
 	return nil
+}
+
+func responsesMessagesFromArray(raw []any) []Message {
+	result := make([]Message, 0, len(raw))
+	for _, value := range raw {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch stringValue(item["type"]) {
+		case "function_call":
+			callID := stringValue(item["call_id"])
+			if callID == "" {
+				callID = stringValue(item["id"])
+			}
+			result = append(result, Message{Role: "assistant", ToolCalls: []ToolCall{{
+				ID: callID, Type: "function", Name: stringValue(item["name"]), Arguments: item["arguments"],
+				State: ToolCallProposed, Metadata: item,
+			}}, Metadata: item})
+		case "function_call_output":
+			result = append(result, Message{Role: "tool", ToolCallID: stringValue(item["call_id"]), Content: item["output"], Metadata: item})
+		default:
+			result = append(result, messagesFromArray([]any{item})...)
+		}
+	}
+	return result
 }
 
 func normalizeAnthropicSystem(value any, unsupported []string) (PromptPlan, []string) {

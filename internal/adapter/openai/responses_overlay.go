@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 
@@ -13,8 +14,8 @@ import (
 // lossless; unsupported semantic rewrites fail closed rather than being lost.
 func overlayNativeResponsesMutations(body map[string]any, request kernel.NormalizedRequest) error {
 	mutations := request.Mutations
-	if mutations.OperationPayload || mutations.Modalities || mutations.ToolCalls {
-		return fmt.Errorf("OpenAI Responses egress cannot yet safely project transformed operation payload, modality or tool-call facets")
+	if mutations.OperationPayload || mutations.Modalities {
+		return fmt.Errorf("OpenAI Responses egress cannot yet safely project transformed operation payload or modality facets")
 	}
 	if mutations.Messages || mutations.Prompt {
 		input, err := overlayResponsesInput(body["input"], request)
@@ -133,6 +134,58 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			continue
 		}
 		role, _ := item["role"].(string)
+		switch item["type"] {
+		case "function_call":
+			if !request.Mutations.ToolCalls {
+				remaining = append(remaining, rawItem)
+				continue
+			}
+			messageIndex := findResponsesSourceMessage(request.Messages, item, usedMessages)
+			if messageIndex < 0 {
+				continue
+			}
+			message := request.Messages[messageIndex]
+			if len(message.ToolCalls) != 1 {
+				return nil, fmt.Errorf("native Responses function_call item lost its canonical call mapping")
+			}
+			callItem, err := nativeResponsesFunctionCallItem(message.ToolCalls[0])
+			if err != nil {
+				return nil, err
+			}
+			if messageIndex < lastMessageIndex {
+				return nil, fmt.Errorf("Responses tool-call reorder cannot be safely mapped to opaque input items")
+			}
+			lastMessageIndex = messageIndex
+			usedMessages[messageIndex] = true
+			remaining = append(remaining, callItem)
+			continue
+		case "function_call_output":
+			if !request.Mutations.Messages {
+				remaining = append(remaining, rawItem)
+				continue
+			}
+			messageIndex := findResponsesSourceMessage(request.Messages, item, usedMessages)
+			if messageIndex < 0 {
+				continue
+			}
+			message := request.Messages[messageIndex]
+			if message.Role != "tool" {
+				return nil, fmt.Errorf("native Responses function_call_output lost its tool-result mapping")
+			}
+			output, err := nativeResponsesFunctionCallOutput(message.Content)
+			if err != nil {
+				return nil, err
+			}
+			patched := copyObject(item)
+			patched["output"] = output
+			if messageIndex < lastMessageIndex {
+				return nil, fmt.Errorf("Responses tool-result reorder cannot be safely mapped to opaque input items")
+			}
+			lastMessageIndex = messageIndex
+			usedMessages[messageIndex] = true
+			remaining = append(remaining, patched)
+			continue
+		}
 		if role == "system" || role == "developer" {
 			if !request.Mutations.Prompt {
 				remaining = append(remaining, rawItem)
@@ -175,9 +228,6 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			message := request.Messages[messageIndex]
 			if message.Role == "tool" {
 				return nil, fmt.Errorf("OpenAI Responses egress cannot encode a chat tool-result role as native input")
-			}
-			if len(message.ToolCalls) > 0 && request.Mutations.ToolCalls {
-				return nil, fmt.Errorf("transformed nested Responses tool calls require the canonical function-call item overlay")
 			}
 			usedMessages[messageIndex] = true
 			patched := copyObject(item)
@@ -237,14 +287,31 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 				continue
 			}
 			newMessageSeen = true
-			if len(message.ToolCalls) > 0 || (message.Role != "user" && message.Role != "assistant") {
-				return nil, fmt.Errorf("new Responses message role/tool history cannot be safely serialized")
+			if message.Role == "tool" {
+				output, err := nativeResponsesFunctionCallOutput(message.Content)
+				if err != nil || message.ToolCallID == "" {
+					return nil, fmt.Errorf("new Responses tool result cannot be serialized safely")
+				}
+				newMessages = append(newMessages, map[string]any{"type": "function_call_output", "call_id": message.ToolCallID, "output": output})
+				continue
 			}
-			content, err := responsesMessageContent(message.Content, message.Role)
-			if err != nil {
-				return nil, err
+			if message.Role != "user" && message.Role != "assistant" {
+				return nil, fmt.Errorf("new Responses message role %q has no registered overlay", message.Role)
 			}
-			newMessages = append(newMessages, map[string]any{"type": "message", "role": message.Role, "content": content})
+			if message.Content != nil {
+				content, err := responsesMessageContent(message.Content, message.Role)
+				if err != nil {
+					return nil, err
+				}
+				newMessages = append(newMessages, map[string]any{"type": "message", "role": message.Role, "content": content})
+			}
+			for _, call := range message.ToolCalls {
+				callItem, err := nativeResponsesFunctionCallItem(call)
+				if err != nil {
+					return nil, err
+				}
+				newMessages = append(newMessages, callItem)
+			}
 		}
 	}
 	result := append(prefix, remaining...)
@@ -258,6 +325,36 @@ func findResponsesSourceMessage(messages []normalize.Message, item map[string]an
 		}
 	}
 	return -1
+}
+
+func nativeResponsesFunctionCallItem(call normalize.ToolCall) (map[string]any, error) {
+	if _, nestedFunction := call.Metadata["function"]; nestedFunction {
+		return nil, fmt.Errorf("nested Chat tool-call metadata cannot be emitted as native Responses function_call")
+	}
+	if call.ID == "" || call.Name == "" {
+		return nil, fmt.Errorf("Responses function_call requires stable call ID and function name")
+	}
+	arguments, err := openAIArguments(call.Arguments)
+	if err != nil {
+		return nil, fmt.Errorf("encode Responses function_call arguments: %w", err)
+	}
+	item := copyObject(call.Metadata)
+	item["type"], item["call_id"], item["name"], item["arguments"] = "function_call", call.ID, call.Name, arguments
+	return item, nil
+}
+
+func nativeResponsesFunctionCallOutput(content any) (any, error) {
+	if text, ok := content.(string); ok {
+		return text, nil
+	}
+	if parts, ok := content.([]normalize.ContentPart); ok {
+		return anthropicToolOutputText(parts)
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil, fmt.Errorf("encode Responses function_call_output: %w", err)
+	}
+	return string(encoded), nil
 }
 
 func responsesPromptContent(layer normalize.PromptLayer) (any, error) {
