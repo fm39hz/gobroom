@@ -250,6 +250,25 @@ func TestNativeResponsesOverlaysTransformedToolCallAndResultItems(t *testing.T) 
 	}
 }
 
+func TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role",
+		"input": []any{
+			map[string]any{"type": "function_call", "call_id": "call-1", "name": "first", "arguments": `{"n":1}`},
+			map[string]any{"type": "function_call", "call_id": "call-2", "name": "second", "arguments": `{"n":2}`},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Request.Mutations.Messages = true
+	parsed.Request.Messages[0], parsed.Request.Messages[1] = parsed.Request.Messages[1], parsed.Request.Messages[0]
+	_, err = overlayResponsesInput(parsed.Request.Raw["input"], parsed.Request)
+	if err == nil || !strings.Contains(err.Error(), "message reorder cannot be safely mapped") {
+		t.Fatalf("function_call reorder with a message mutation was silently ignored: %v", err)
+	}
+}
+
 func TestAnthropicMessagesRequestMapsToOpenAIResponsesFromTypedIR(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{
 "model":"role","max_tokens":512,"temperature":0.2,"top_p":0.9,

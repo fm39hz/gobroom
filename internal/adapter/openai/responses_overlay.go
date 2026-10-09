@@ -136,7 +136,7 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 		role, _ := item["role"].(string)
 		switch item["type"] {
 		case "function_call":
-			if !request.Mutations.ToolCalls {
+			if !request.Mutations.ToolCalls && !request.Mutations.Messages {
 				remaining = append(remaining, rawItem)
 				continue
 			}
@@ -145,6 +145,25 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 				continue
 			}
 			message := request.Messages[messageIndex]
+			if !request.Mutations.ToolCalls {
+				mappedCall := false
+				for _, call := range message.ToolCalls {
+					if reflect.DeepEqual(call.Metadata, item) {
+						mappedCall = true
+						break
+					}
+				}
+				if !mappedCall {
+					continue
+				}
+				if messageIndex < lastMessageIndex {
+					return nil, fmt.Errorf("Responses message reorder cannot be safely mapped to opaque input items")
+				}
+				lastMessageIndex = messageIndex
+				usedMessages[messageIndex] = true
+				remaining = append(remaining, rawItem)
+				continue
+			}
 			if len(message.ToolCalls) != 1 {
 				return nil, fmt.Errorf("native Responses function_call item lost its canonical call mapping")
 			}
