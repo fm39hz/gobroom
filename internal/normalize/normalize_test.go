@@ -69,7 +69,7 @@ func TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR(t *testing.T)
 	chat, err := Map("/v1/chat/completions", http.Header{}, map[string]any{
 		"model": "m", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
 		"max_completion_tokens": float64(88), "temperature": float64(0.4), "top_p": float64(0.8), "stop": []any{"done"},
-		"tool_choice": "required", "parallel_tool_calls": false,
+		"tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": "lookup", "vendor_function": "retain"}, "vendor_choice": "retain"}, "parallel_tool_calls": false,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR(t *testing.T)
 	if chat.Request.Generation.MaxOutputTokens == nil || *chat.Request.Generation.MaxOutputTokens != 88 || chat.Request.Generation.Temperature == nil || *chat.Request.Generation.Temperature != 0.4 || chat.Request.Generation.TopP == nil || *chat.Request.Generation.TopP != 0.8 || len(chat.Request.Generation.StopSequences) != 1 || chat.Request.Generation.StopSequences[0] != "done" {
 		t.Fatalf("OpenAI Chat generation options=%#v", chat.Request.Generation)
 	}
-	if chat.Request.ToolChoice.Mode != "any" || !chat.Request.ToolChoice.Set || !chat.Request.ToolChoice.DisableParallelTools {
+	if chat.Request.ToolChoice.Mode != "tool" || chat.Request.ToolChoice.Name != "lookup" || !chat.Request.ToolChoice.Set || !chat.Request.ToolChoice.DisableParallelTools || chat.Request.ToolChoice.Metadata["vendor_choice"] != "retain" || chat.Request.ToolChoice.Metadata["function"].(map[string]any)["vendor_function"] != "retain" {
 		t.Fatalf("OpenAI Chat tool choice=%#v", chat.Request.ToolChoice)
 	}
 

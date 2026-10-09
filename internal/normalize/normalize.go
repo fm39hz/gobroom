@@ -411,7 +411,12 @@ func normalizeToolChoice(value any, format Format) ToolChoice {
 		if mode == "function" {
 			mode = "tool"
 		}
-		return ToolChoice{Mode: mode, Name: stringValue(function["name"]), Set: true}
+		metadata := withoutKeys(choice, "type", "function")
+		functionMetadata := withoutKeys(function, "name")
+		if len(functionMetadata) > 0 {
+			metadata["function"] = functionMetadata
+		}
+		return ToolChoice{Mode: mode, Name: stringValue(function["name"]), Set: true, Metadata: metadata}
 	}
 	if format != FormatAnthropic {
 		return ToolChoice{}
@@ -420,7 +425,24 @@ func normalizeToolChoice(value any, format Format) ToolChoice {
 	if !ok {
 		return ToolChoice{}
 	}
-	return ToolChoice{Mode: stringValue(choice["type"]), Name: stringValue(choice["name"]), DisableParallelTools: boolValue(choice["disable_parallel_tool_use"], false), Set: true}
+	return ToolChoice{Mode: stringValue(choice["type"]), Name: stringValue(choice["name"]), DisableParallelTools: boolValue(choice["disable_parallel_tool_use"], false), Set: true, Metadata: withoutKeys(choice, "type", "name", "disable_parallel_tool_use")}
+}
+
+func withoutKeys(value map[string]any, excluded ...string) map[string]any {
+	result := make(map[string]any, len(value))
+	for key, item := range value {
+		keep := true
+		for _, omit := range excluded {
+			if key == omit {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			result[key] = item
+		}
+	}
+	return result
 }
 
 func normalizeGenerationOptions(body map[string]any, format Format) GenerationOptions {

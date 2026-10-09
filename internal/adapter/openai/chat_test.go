@@ -29,8 +29,10 @@ func (nativeChatRequestTransform) Apply(_ context.Context, request *kernel.Norma
 	request.Generation.Temperature = &temperature
 	request.Generation.TopP = &topP
 	request.Generation.StopSequences = []string{"done"}
-	request.Tools = []normalize.Tool{{Type: "function", Name: "lookup", Function: map[string]any{"name": "lookup", "parameters": map[string]any{"type": "object"}}}}
-	request.ToolChoice = normalize.ToolChoice{Mode: "tool", Name: "lookup", Set: true}
+	toolMetadata := request.Tools[0].Metadata
+	request.Tools = []normalize.Tool{{Type: "function", Name: "lookup", Function: map[string]any{"name": "lookup", "parameters": map[string]any{"type": "object"}}, Metadata: toolMetadata}}
+	choiceMetadata := request.ToolChoice.Metadata
+	request.ToolChoice = normalize.ToolChoice{Mode: "tool", Name: "lookup", Set: true, Metadata: choiceMetadata}
 	return nil
 }
 
@@ -120,13 +122,14 @@ func TestNativeChatEgressOverlaysOnlyTransformedTypedFacets(t *testing.T) {
 		Model: "public", SourceFormat: normalize.FormatOpenAIChat,
 		Raw: map[string]any{
 			"model": "public", "messages": []any{map[string]any{"role": "user", "content": "original"}},
-			"tools":       []any{map[string]any{"type": "function", "function": map[string]any{"name": "old"}}},
-			"tool_choice": "auto", "max_tokens": float64(12), "temperature": float64(0.2), "top_p": float64(0.3), "stop": "old-stop",
+			"tools":       []any{map[string]any{"type": "function", "function": map[string]any{"name": "old"}, "vendor_tool": "preserve"}},
+			"tool_choice": map[string]any{"type": "function", "function": map[string]any{"name": "old", "vendor_function": "preserve"}, "vendor_choice": "preserve"},
+			"max_tokens":  float64(12), "temperature": float64(0.2), "top_p": float64(0.3), "stop": "old-stop",
 			"vendor_extension": map[string]any{"preserve": true},
 		},
-		Messages:   []normalize.Message{{Role: "user", Content: "compressed"}},
-		Tools:      []normalize.Tool{{Type: "function", Name: "old", Function: map[string]any{"name": "old", "parameters": map[string]any{"type": "object"}}}},
-		ToolChoice: normalize.ToolChoice{Mode: "auto", Set: true},
+		Messages:   []normalize.Message{{Role: "user", Content: "compressed", Metadata: map[string]any{"role": "user", "content": "original", "vendor_message": "preserve"}}},
+		Tools:      []normalize.Tool{{Type: "function", Name: "old", Function: map[string]any{"name": "old", "parameters": map[string]any{"type": "object"}}, Metadata: map[string]any{"type": "function", "vendor_tool": "preserve", "function": map[string]any{"name": "old"}}}},
+		ToolChoice: normalize.ToolChoice{Mode: "tool", Name: "old", Set: true, Metadata: map[string]any{"vendor_choice": "preserve", "function": map[string]any{"vendor_function": "preserve"}}},
 		Generation: normalize.GenerationOptions{MaxOutputTokens: &maxTokens, Temperature: &temperature, TopP: &topP, StopSequences: []string{"old-stop"}},
 	}
 	registry := kernel.NewRequestTransformRegistry()
@@ -161,6 +164,16 @@ func TestNativeChatEgressOverlaysOnlyTransformedTypedFacets(t *testing.T) {
 	}
 	if body["vendor_extension"].(map[string]any)["preserve"] != true {
 		t.Fatalf("untouched opaque source extension was lost: %#v", body)
+	}
+	message := body["messages"].([]any)[0].(map[string]any)
+	if message["vendor_message"] != "preserve" {
+		t.Fatalf("untouched message metadata was lost: %#v", message)
+	}
+	if tools[0].(map[string]any)["vendor_tool"] != "preserve" {
+		t.Fatalf("untouched tool metadata was lost: %#v", tools[0])
+	}
+	if choice["vendor_choice"] != "preserve" || choice["function"].(map[string]any)["vendor_function"] != "preserve" {
+		t.Fatalf("untouched tool-choice metadata was lost: %#v", choice)
 	}
 }
 

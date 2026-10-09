@@ -815,7 +815,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 		request.Generation.Temperature = &value
 	}
 	setToolChoice := func(request *NormalizedRequest) {
-		request.ToolChoice = normalize.ToolChoice{Mode: "required", Set: true}
+		request.ToolChoice = normalize.ToolChoice{Mode: "required", Set: true, Metadata: request.ToolChoice.Metadata}
 	}
 	tests := []struct {
 		name      string
@@ -853,6 +853,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 			request.Prompt.Layers[0].Parts[0].Metadata["cache_control"] = "rewritten"
 		}, wantError: "opaque prompt metadata or content structure"},
 		{name: "tool metadata immutable", effects: []TransformEffect{TransformTools}, mutate: func(request *NormalizedRequest) { request.Tools[0].Metadata["vendor"] = "rewritten" }, wantError: "opaque tool metadata"},
+		{name: "tool choice metadata immutable", effects: []TransformEffect{TransformTools}, mutate: func(request *NormalizedRequest) { request.ToolChoice.Metadata["vendor"] = "rewritten" }, wantError: "opaque tool-choice metadata"},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -867,6 +868,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 				Messages:          []Message{{Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "original", Metadata: map[string]any{"cache_control": "ephemeral"}}}, ToolCalls: []normalize.ToolCall{{ID: "call-1", Type: "function", Name: "search", Arguments: map[string]any{"query": "before"}}}}},
 				Prompt:            normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptProvider, Role: "system", Parts: []normalize.ContentPart{{Type: "text", Text: "instruction", Metadata: map[string]any{"cache_control": "ephemeral"}}}}}},
 				Tools:             []normalize.Tool{{Name: "search", Metadata: map[string]any{"vendor": "original"}}},
+				ToolChoice:        normalize.ToolChoice{Metadata: map[string]any{"vendor": "original"}},
 				UnsupportedFacets: []string{"content.opaque"},
 				Generation:        normalize.GenerationOptions{Unsupported: []string{"vendor_option"}},
 				Thinking:          normalize.ThinkingIntent{Mode: "level", Effort: "medium", Source: "ingress"},

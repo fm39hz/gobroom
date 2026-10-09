@@ -50,6 +50,7 @@ func CloneRequest(request Request) Request {
 		tool.Metadata = cloneMap(tool.Metadata)
 		clone.Tools[i] = tool
 	}
+	clone.ToolChoice.Metadata = cloneMap(request.ToolChoice.Metadata)
 	clone.Continuity.EncryptedContent = cloneMap(request.Continuity.EncryptedContent)
 	clone.Session.ProviderState = append(json.RawMessage(nil), request.Session.ProviderState...)
 	clone.Requirements = make([]FeatureRequirement, len(request.Requirements))

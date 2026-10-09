@@ -176,6 +176,7 @@ type ToolChoice struct {
 	Name                 string
 	DisableParallelTools bool
 	Set                  bool
+	Metadata             map[string]any `json:"-"`
 }
 
 // GenerationOptions is the typed subset shared across request dialects.

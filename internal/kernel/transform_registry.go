@@ -749,6 +749,12 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	if err := require(!reflect.DeepEqual(before.ToolChoice, after.ToolChoice), TransformTools, "tool choice"); err != nil {
 		return err
 	}
+	if !reflect.DeepEqual(before.ToolChoice.Metadata, after.ToolChoice.Metadata) {
+		return fmt.Errorf("%w: changed opaque tool-choice metadata", ErrTransformSafetyViolation)
+	}
+	if !reflect.DeepEqual(before.ToolChoice.Metadata, after.ToolChoice.Metadata) {
+		return fmt.Errorf("%w: changed opaque tool-choice metadata", ErrTransformSafetyViolation)
+	}
 	if err := require(!reflect.DeepEqual(before.Generation, after.Generation), TransformOptions, "generation options"); err != nil {
 		return err
 	}

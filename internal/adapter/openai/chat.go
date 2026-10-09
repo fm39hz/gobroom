@@ -240,18 +240,28 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 		body["model"] = route.ExternalModel
 		body["stream"] = request.Stream
 		if len(request.Messages) > 0 || request.Mutations.Messages || request.Mutations.Prompt {
-			messages := make([]kernel.Message, 0, len(request.Messages)+len(request.Prompt.Layers))
+			messages := make([]any, 0, len(request.Messages)+len(request.Prompt.Layers))
 			for _, layer := range request.Prompt.Layers {
-				messages = append(messages, kernel.Message{Role: layer.Role, Content: layer.Text})
+				messages = append(messages, map[string]any{"role": layer.Role, "content": layer.Text})
 			}
-			messages = append(messages, request.Messages...)
+			for _, message := range request.Messages {
+				encoded, err := nativeChatMessage(message)
+				if err != nil {
+					return kernel.UpstreamRequest{}, err
+				}
+				messages = append(messages, encoded)
+			}
 			body["messages"] = messages
 		}
 		if request.Mutations.Tools {
 			if len(request.Tools) == 0 {
 				delete(body, "tools")
 			} else {
-				body["tools"] = request.Tools
+				tools := make([]map[string]any, 0, len(request.Tools))
+				for _, tool := range request.Tools {
+					tools = append(tools, nativeChatTool(tool))
+				}
+				body["tools"] = tools
 			}
 		}
 		if request.Mutations.ToolChoice {
@@ -309,19 +319,99 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 }
 
 func openAIChatToolChoice(choice normalize.ToolChoice) (any, error) {
+	metadata := copyObject(choice.Metadata)
+	functionMetadata := copyObject(openAIObject(metadata["function"]))
+	delete(metadata, "function")
 	switch choice.Mode {
 	case "none", "auto", "required":
+		if len(metadata) > 0 || len(functionMetadata) > 0 {
+			return nil, fmt.Errorf("OpenAI tool choice mode %q cannot preserve opaque object metadata", choice.Mode)
+		}
 		return choice.Mode, nil
 	case "any":
+		if len(metadata) > 0 || len(functionMetadata) > 0 {
+			return nil, fmt.Errorf("OpenAI tool choice mode %q cannot preserve opaque object metadata", choice.Mode)
+		}
 		return "required", nil
 	case "tool":
 		if strings.TrimSpace(choice.Name) == "" {
 			return nil, fmt.Errorf("OpenAI tool choice requires a function name")
 		}
-		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name}}, nil
+		if functionMetadata == nil {
+			functionMetadata = map[string]any{}
+		}
+		functionMetadata["name"] = choice.Name
+		metadata["type"] = "function"
+		metadata["function"] = functionMetadata
+		return metadata, nil
 	default:
 		return nil, fmt.Errorf("OpenAI Chat cannot encode tool choice %q", choice.Mode)
 	}
+}
+
+func nativeChatMessage(message normalize.Message) (map[string]any, error) {
+	encoded := copyObject(message.Metadata)
+	encoded["role"] = message.Role
+	if message.Name != "" {
+		encoded["name"] = message.Name
+	}
+	if message.ToolCallID != "" {
+		encoded["tool_call_id"] = message.ToolCallID
+	}
+	if message.Content == nil {
+		delete(encoded, "content")
+	} else {
+		encoded["content"] = message.Content
+	}
+	if len(message.ToolCalls) == 0 {
+		delete(encoded, "tool_calls")
+	} else {
+		calls := make([]map[string]any, 0, len(message.ToolCalls))
+		for _, call := range message.ToolCalls {
+			item := copyObject(call.Metadata)
+			function := copyObject(openAIObject(item["function"]))
+			if function == nil {
+				function = map[string]any{}
+			}
+			arguments, err := openAIArguments(call.Arguments)
+			if err != nil {
+				return nil, fmt.Errorf("encode tool call %q arguments: %w", call.Name, err)
+			}
+			function["name"], function["arguments"] = call.Name, arguments
+			item["id"], item["type"], item["function"] = call.ID, "function", function
+			calls = append(calls, item)
+		}
+		encoded["tool_calls"] = calls
+	}
+	return encoded, nil
+}
+
+func nativeChatTool(tool normalize.Tool) map[string]any {
+	encoded := copyObject(tool.Metadata)
+	if tool.Type != "" {
+		encoded["type"] = tool.Type
+	}
+	if tool.Function != nil {
+		function := copyObject(tool.Function)
+		if tool.Name != "" {
+			function["name"] = tool.Name
+		}
+		encoded["function"] = function
+	}
+	return encoded
+}
+
+func copyObject(source map[string]any) map[string]any {
+	result := make(map[string]any, len(source)+2)
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func openAIObject(value any) map[string]any {
+	object, _ := value.(map[string]any)
+	return object
 }
 
 func applyTransformedChatGeneration(body map[string]any, request kernel.NormalizedRequest) {
