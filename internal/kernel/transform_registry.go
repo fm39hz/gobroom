@@ -868,6 +868,7 @@ func requestMutationDelta(before, after NormalizedRequest) normalize.RequestMuta
 		Modalities:              !reflect.DeepEqual(before.Modalities, after.Modalities),
 		Requirements:            !reflect.DeepEqual(before.Requirements, after.Requirements),
 		Tools:                   !reflect.DeepEqual(before.Tools, after.Tools),
+		ToolCalls:               !requestToolCallsEqual(before.Messages, after.Messages),
 		ToolChoice:              !reflect.DeepEqual(before.ToolChoice, after.ToolChoice),
 		GenerationMaxOutput:     !reflect.DeepEqual(before.Generation.MaxOutputTokens, after.Generation.MaxOutputTokens),
 		GenerationTemperature:   !reflect.DeepEqual(before.Generation.Temperature, after.Generation.Temperature),
@@ -886,6 +887,7 @@ func mergeRequestMutationSet(current, delta normalize.RequestMutationSet) normal
 		Modalities:              current.Modalities || delta.Modalities,
 		Requirements:            current.Requirements || delta.Requirements,
 		Tools:                   current.Tools || delta.Tools,
+		ToolCalls:               current.ToolCalls || delta.ToolCalls,
 		ToolChoice:              current.ToolChoice || delta.ToolChoice,
 		GenerationMaxOutput:     current.GenerationMaxOutput || delta.GenerationMaxOutput,
 		GenerationTemperature:   current.GenerationTemperature || delta.GenerationTemperature,
@@ -894,6 +896,18 @@ func mergeRequestMutationSet(current, delta normalize.RequestMutationSet) normal
 		Thinking:                current.Thinking || delta.Thinking,
 		Continuity:              current.Continuity || delta.Continuity,
 	}
+}
+
+func requestToolCallsEqual(before, after []normalize.Message) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for index := range before {
+		if !reflect.DeepEqual(before[index].ToolCalls, after[index].ToolCalls) {
+			return false
+		}
+	}
+	return true
 }
 
 func contentOpaqueFacetsEqual(before, after any) bool {

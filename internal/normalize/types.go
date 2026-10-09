@@ -57,6 +57,7 @@ type RequestMutationSet struct {
 	Modalities              bool
 	Requirements            bool
 	Tools                   bool
+	ToolCalls               bool
 	ToolChoice              bool
 	GenerationMaxOutput     bool
 	GenerationTemperature   bool

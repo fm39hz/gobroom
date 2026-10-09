@@ -40,13 +40,13 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
 			}
-			if facet == kernel.FacetWireRequest && (request.Mutations.Messages || request.Mutations.OperationPayload || request.Mutations.Modalities) {
+			if facet == kernel.FacetWireRequest && (request.Mutations.OperationPayload || request.Mutations.Modalities) {
 				mapping.Disposition = kernel.FacetUnsupported
-				mapping.Reason = "native Responses input overlay for transformed messages/modalities is not yet registered"
+				mapping.Reason = "native Responses overlay for transformed operation payload/modalities is not yet registered"
 			}
-			if facet == kernel.FacetPromptLayers && request.Mutations.Prompt {
+			if facet == kernel.FacetToolHistory && request.Mutations.ToolCalls {
 				mapping.Disposition = kernel.FacetUnsupported
-				mapping.Reason = "native Responses prompt overlay for transformed layers is not yet registered"
+				mapping.Reason = "native Responses overlay for transformed tool-call history is not yet registered"
 			}
 			if facet == kernel.FacetGenerationOptions && request.Mutations.GenerationStopSequences && len(request.Generation.StopSequences) > 0 {
 				mapping.Disposition = kernel.FacetUnsupported

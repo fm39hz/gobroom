@@ -18,6 +18,7 @@ import (
 )
 
 type nativeResponsesMutationFixture struct{}
+type responsesInputMutationFixture struct{}
 
 func (nativeResponsesMutationFixture) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-native-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses native options", Description: "Change typed facets for native Responses egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions, kernel.TransformThinking, kernel.TransformContinuity}}
@@ -31,6 +32,20 @@ func (nativeResponsesMutationFixture) Apply(_ context.Context, request *kernel.N
 	request.Generation.MaxOutputTokens, request.Generation.Temperature, request.Generation.TopP = &maxTokens, &temperature, &topP
 	request.Thinking = normalize.ThinkingIntent{Mode: "level", Effort: "high", Source: request.Thinking.Source}
 	request.Continuity.PreviousResponse = "resp-new"
+	return nil
+}
+
+func (responsesInputMutationFixture) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-input", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses input transform", Description: "Update typed message and prompt text.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformInput, kernel.TransformPrompt}}
+}
+
+func (responsesInputMutationFixture) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	request.Prompt.Layers[0].Text = "new system policy"
+	for index := range request.Messages {
+		if request.Messages[index].Role == "user" {
+			request.Messages[index].Content = "new user text"
+		}
+	}
 	return nil
 }
 
@@ -99,24 +114,75 @@ func TestNativeResponsesEgressOverlaysTypedMutationsAndPreservesExtensions(t *te
 	}
 }
 
-func TestNativeResponsesCompatibilityRejectsUnimplementedInputMutation(t *testing.T) {
+func TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation(t *testing.T) {
 	tests := []struct {
 		name      string
 		mutations normalize.RequestMutationSet
 		facet     string
 	}{
-		{name: "messages", mutations: normalize.RequestMutationSet{Messages: true}, facet: kernel.FacetWireRequest},
-		{name: "prompt", mutations: normalize.RequestMutationSet{Prompt: true}, facet: kernel.FacetPromptLayers},
+		{name: "operation payload", mutations: normalize.RequestMutationSet{OperationPayload: true}, facet: kernel.FacetWireRequest},
+		{name: "modality payload", mutations: normalize.RequestMutationSet{Modalities: true}, facet: kernel.FacetWireRequest},
+		{name: "tool call history", mutations: normalize.RequestMutationSet{ToolCalls: true}, facet: kernel.FacetToolHistory},
+		{name: "unsupported stop sequence", mutations: normalize.RequestMutationSet{GenerationStopSequences: true}, facet: kernel.FacetGenerationOptions},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := normalize.Request{SourceFormat: normalize.FormatOpenAIResponses, Mutations: test.mutations}
+			request.Generation.StopSequences = []string{"stop"}
 			policy := kernel.CompatibilityPolicy{RequiredFacets: []string{test.facet}}
 			plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy})}, policy)
 			if plan.Supported {
 				t.Fatalf("native Responses route was admitted without a %s overlay: %#v", test.name, plan)
 			}
 		})
+	}
+}
+
+func TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role",
+		"input": []any{
+			map[string]any{"type": "message", "role": "system", "content": "old policy", "vendor_prompt": "keep"},
+			map[string]any{"type": "message", "role": "user", "content": "old user", "vendor_message": "keep"},
+			map[string]any{"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}", "vendor_call": "keep"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := kernel.NewRequestTransformRegistry()
+	transform := responsesInputMutationFixture{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ApplyScopes(context.Background(), &parsed.Request, []kernel.TransformBinding{{ID: "responses-input", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}}, kernel.TransformScope{Kind: kernel.TransformScopeDaemon}); err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.Request.Mutations.Messages || !parsed.Request.Mutations.Prompt {
+		t.Fatalf("kernel mutation markers=%#v", parsed.Request.Mutations)
+	}
+	policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetWireRequest, kernel.FacetPromptLayers}}
+	plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: parsed.Request, Policy: policy})}, policy)
+	if !plan.Supported {
+		t.Fatalf("native Responses input/prompt overlay was not admitted: %#v", plan)
+	}
+	prepared, err := (Responses{}).Prepare(context.Background(), parsed.Request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "target"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	input := body["input"].([]any)
+	if len(input) != 3 {
+		t.Fatalf("overlay changed Responses item count/order: %#v", input)
+	}
+	system := input[0].(map[string]any)
+	user := input[1].(map[string]any)
+	functionCall := input[2].(map[string]any)
+	if system["content"] != "new system policy" || system["vendor_prompt"] != "keep" || user["content"] != "new user text" || user["vendor_message"] != "keep" || functionCall["vendor_call"] != "keep" || functionCall["arguments"] != "{}" {
+		t.Fatalf("Responses overlay lost transformed or opaque fields: %#v", input)
 	}
 }
 
