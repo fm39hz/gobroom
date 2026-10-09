@@ -354,15 +354,38 @@ func findResponsesSourceMessage(messages []normalize.Message, item map[string]an
 }
 
 func nativeResponsesFunctionCallItem(call normalize.ToolCall) (map[string]any, error) {
-	if _, nestedFunction := call.Metadata["function"]; nestedFunction {
-		return nil, fmt.Errorf("nested Chat tool-call metadata cannot be emitted as native Responses function_call")
-	}
 	if call.ID == "" || call.Name == "" {
 		return nil, fmt.Errorf("Responses function_call requires stable call ID and function name")
 	}
 	arguments, err := openAIArguments(call.Arguments)
 	if err != nil {
 		return nil, fmt.Errorf("encode Responses function_call arguments: %w", err)
+	}
+	if _, nestedFunction := call.Metadata["function"]; nestedFunction {
+		if call.Type != "" && call.Type != "function" {
+			return nil, fmt.Errorf("Chat-style tool-call type %q cannot be mapped to Responses function_call", call.Type)
+		}
+		for key := range call.Metadata {
+			if key != "id" && key != "type" && key != "function" {
+				return nil, fmt.Errorf("opaque Chat-style tool-call field %q has no Responses item mapping", key)
+			}
+		}
+		if kind, _ := call.Metadata["type"].(string); kind != "" && kind != "function" {
+			return nil, fmt.Errorf("Chat-style tool-call type %q cannot be mapped to Responses function_call", kind)
+		}
+		function, ok := call.Metadata["function"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("Chat-style tool-call function metadata %T is not an object", call.Metadata["function"])
+		}
+		for key := range function {
+			if key != "name" && key != "arguments" {
+				return nil, fmt.Errorf("opaque Chat-style function field %q has no Responses item mapping", key)
+			}
+		}
+		// Chat's id/type/function wrapper contains only canonical call identity
+		// and payload. Rebuild it from the typed IR instead of nesting it into a
+		// Responses item; source and transformed values therefore stay aligned.
+		return map[string]any{"type": "function_call", "call_id": call.ID, "name": call.Name, "arguments": arguments}, nil
 	}
 	item := copyObject(call.Metadata)
 	item["type"], item["call_id"], item["name"], item["arguments"] = "function_call", call.ID, call.Name, arguments

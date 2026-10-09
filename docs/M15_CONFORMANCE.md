@@ -145,7 +145,7 @@ Concurrent-disconnect stress remains open.
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`
 proves the OpenAI Chat native-format codec replaces stale tools/tool-choice/
-generation fields while retaining unrelated raw extensions. `TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR` covers the typed source contract consumed by those overlays. `TestNativeResponsesEgressOverlaysTypedMutationsAndPreservesExtensions` proves native Responses overlays tools, choice, generation, reasoning and continuity while retaining extensions. `TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems` patches native system/user content using retained source metadata while preserving opaque function-call input; `TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation` proves unsupported operation/modalities and stop-sequence changes fail admission. `TestNativeResponsesOverlaysTransformedToolCallAndResultItems` covers function-call argument and output updates with stable correlation and opaque item metadata. `TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange` proves message-only transforms cannot silently leave native function-call items in stale order. `TestNativeAnthropicEgressOverlaysTypedFacetsAndPreservesBlocks` verifies transformed system/message/tool-use/tool-result blocks, tool-choice, generation and thinking are written back while cache-control/vendor metadata, block order and unsupported provider blocks remain intact. Remaining: additional Anthropic opaque-envelope fixtures, Responses nested Chat-style tool-call conversion and the full cancellation matrix.
+generation fields while retaining unrelated raw extensions. `TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR` covers the typed source contract consumed by those overlays. `TestNativeResponsesEgressOverlaysTypedMutationsAndPreservesExtensions` proves native Responses overlays tools, choice, generation, reasoning and continuity while retaining extensions. `TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems` patches native system/user content using retained source metadata while preserving opaque function-call input; `TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation` proves unsupported operation/modalities and stop-sequence changes fail admission. `TestNativeResponsesOverlaysTransformedToolCallAndResultItems` covers function-call argument and output updates with stable correlation and opaque item metadata. `TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange` proves message-only transforms cannot silently leave native function-call items in stale order. `TestNativeAnthropicEgressOverlaysTypedFacetsAndPreservesBlocks` verifies transformed system/message/tool-use/tool-result blocks, tool-choice, generation and thinking are written back while cache-control/vendor metadata, block order and unsupported provider blocks remain intact. Remaining: additional Anthropic opaque-envelope fixtures, opaque nested Chat-style tool-call metadata that has no Responses mapping, and the full cancellation matrix.
 
 `TestNativeAnthropicOverlayProjectsTransformedMessageRole` and
 `TestNativeResponsesOverlayProjectsTransformedMessageRole` verify canonical
@@ -153,6 +153,11 @@ message-role changes are written to native wire items. Role changes that would
 make Anthropic `tool_use` history invalid or turn a Responses `function_call`
 into a non-assistant item fail closed in the matching role-change rejection
 tests.
+
+`TestNativeResponsesConvertsCanonicalNestedChatToolCallMetadata` converts the
+standard nested Chat `id/type/function` wrapper into typed Responses call fields;
+`TestNativeResponsesRejectsOpaqueNestedChatToolCallMetadata` ensures unknown
+vendor extensions are not dropped when that wire shape has no lossless mapping.
 
 `TestNativeResponsesOverlaysTransformedToolCallAndResultItems` additionally
 proves tool-call arguments and tool results are updated in native Responses

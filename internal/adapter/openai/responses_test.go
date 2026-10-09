@@ -303,6 +303,33 @@ func TestNativeResponsesOverlayRejectsFunctionCallRoleChange(t *testing.T) {
 	}
 }
 
+func TestNativeResponsesConvertsCanonicalNestedChatToolCallMetadata(t *testing.T) {
+	call := normalize.ToolCall{
+		ID: "call-1", Type: "function", Name: "lookup", Arguments: map[string]any{"q": "x"},
+		Metadata: map[string]any{"id": "call-1", "type": "function", "function": map[string]any{"name": "lookup", "arguments": `{"q":"x"}`}},
+	}
+	item, err := nativeResponsesFunctionCallItem(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item["type"] != "function_call" || item["call_id"] != "call-1" || item["name"] != "lookup" || item["arguments"] != `{"q":"x"}` {
+		t.Fatalf("Chat-style call was not normalized into Responses shape: %#v", item)
+	}
+	if _, nested := item["function"]; nested {
+		t.Fatalf("Chat wrapper leaked into Responses item: %#v", item)
+	}
+}
+
+func TestNativeResponsesRejectsOpaqueNestedChatToolCallMetadata(t *testing.T) {
+	call := normalize.ToolCall{
+		ID: "call-1", Type: "function", Name: "lookup", Arguments: map[string]any{"q": "x"},
+		Metadata: map[string]any{"id": "call-1", "type": "function", "vendor_call": "opaque", "function": map[string]any{"name": "lookup", "arguments": `{"q":"x"}`}},
+	}
+	if _, err := nativeResponsesFunctionCallItem(call); err == nil || !strings.Contains(err.Error(), "opaque Chat-style tool-call field") {
+		t.Fatalf("opaque Chat-style metadata was silently discarded: %v", err)
+	}
+}
+
 func TestAnthropicMessagesRequestMapsToOpenAIResponsesFromTypedIR(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{
 "model":"role","max_tokens":512,"temperature":0.2,"top_p":0.9,
