@@ -116,6 +116,68 @@ func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	}
 }
 
+func TestNativeChatMessageEncodesCanonicalTextAndImageParts(t *testing.T) {
+	message := normalize.Message{Role: "user", Content: []normalize.ContentPart{
+		{Type: "text", Text: "describe this"},
+		{Type: "image", URL: "https://example.test/image.png"},
+		{Type: "image", MediaType: "image/png", Data: "aGVsbG8="},
+	}}
+	encoded, err := nativeChatMessage(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, ok := encoded["content"].([]any)
+	if !ok || len(parts) != 3 {
+		t.Fatalf("content=%#v", encoded["content"])
+	}
+	text := parts[0].(map[string]any)
+	urlImage := parts[1].(map[string]any)
+	dataImage := parts[2].(map[string]any)
+	if text["type"] != "text" || text["text"] != "describe this" {
+		t.Fatalf("text part=%#v", text)
+	}
+	if urlImage["type"] != "image_url" || urlImage["image_url"].(map[string]any)["url"] != "https://example.test/image.png" {
+		t.Fatalf("URL image part=%#v", urlImage)
+	}
+	if dataImage["type"] != "image_url" || dataImage["image_url"].(map[string]any)["url"] != "data:image/png;base64,aGVsbG8=" {
+		t.Fatalf("base64 image part=%#v", dataImage)
+	}
+}
+
+func TestChatPrepareEncodesAddedCanonicalTypedMessage(t *testing.T) {
+	source := map[string]any{"role": "user", "content": "original"}
+	request := normalize.Request{
+		Model: "public", SourceFormat: normalize.FormatOpenAIChat,
+		Raw:       map[string]any{"model": "public", "messages": []any{source}},
+		Messages:  []normalize.Message{{Role: "user", Content: "original", Metadata: source}, {Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "added"}, {Type: "image", URL: "https://example.test/new.png"}}}},
+		Mutations: normalize.RequestMutationSet{Messages: true},
+	}
+	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	messages := body["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("message count=%d want 2: %#v", len(messages), messages)
+	}
+	added := messages[1].(map[string]any)
+	content := added["content"].([]any)
+	if added["role"] != "user" || content[0].(map[string]any)["text"] != "added" || content[1].(map[string]any)["type"] != "image_url" {
+		t.Fatalf("added canonical message was not encoded as Chat content: %#v", messages)
+	}
+}
+
+func TestNativeChatMessageRejectsUnmappedCanonicalContentParts(t *testing.T) {
+	_, err := nativeChatMessage(normalize.Message{Role: "assistant", Content: []normalize.ContentPart{{Type: "thinking", Text: "private"}}})
+	if err == nil || !strings.Contains(err.Error(), "has no native message mapping") {
+		t.Fatalf("unmapped content part was accepted: %v", err)
+	}
+}
+
 func TestNativeChatEgressOverlaysOnlyTransformedTypedFacets(t *testing.T) {
 	maxTokens, temperature, topP := 12, 0.2, 0.3
 	request := normalize.Request{

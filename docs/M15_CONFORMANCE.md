@@ -117,6 +117,11 @@ messages, content parts and tool calls cannot smuggle opaque provenance/provider
 data past the immutable-prefix checks. Rejection is transactional: none of the
 partially added message reaches the invocation consumed by routing or egress.
 
+`TestChatPrepareEncodesAddedCanonicalTypedMessage` verifies the native Chat
+codec projects canonical text/image parts into the Chat wire content schema;
+`TestNativeChatMessageRejectsUnmappedCanonicalContentParts` proves unsupported
+parts fail closed instead of serializing Go IR fields as provider JSON.
+
 `TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit`
 adds serving-boundary cancellation evidence: client cancellation during a
 response transform fails closed both before the first write and after a

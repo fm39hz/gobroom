@@ -361,7 +361,11 @@ func nativeChatMessage(message normalize.Message) (map[string]any, error) {
 	if message.Content == nil {
 		delete(encoded, "content")
 	} else {
-		encoded["content"] = message.Content
+		content, err := nativeChatContent(message.Content, message.Role)
+		if err != nil {
+			return nil, err
+		}
+		encoded["content"] = content
 	}
 	if len(message.ToolCalls) == 0 {
 		delete(encoded, "tool_calls")
@@ -384,6 +388,39 @@ func nativeChatMessage(message normalize.Message) (map[string]any, error) {
 		encoded["tool_calls"] = calls
 	}
 	return encoded, nil
+}
+
+func nativeChatContent(content any, role string) (any, error) {
+	parts, ok := content.([]normalize.ContentPart)
+	if !ok {
+		return content, nil
+	}
+	blocks := make([]any, 0, len(parts))
+	for index, part := range parts {
+		block := copyObject(part.Metadata)
+		switch part.Type {
+		case "text":
+			block["type"], block["text"] = "text", part.Text
+		case "image":
+			if role != "user" {
+				return nil, fmt.Errorf("OpenAI Chat cannot encode image content for message role %q", role)
+			}
+			imageURL := part.URL
+			if imageURL == "" && part.Data != "" && part.MediaType != "" {
+				imageURL = "data:" + part.MediaType + ";base64," + part.Data
+			}
+			if imageURL == "" {
+				return nil, fmt.Errorf("OpenAI Chat image content part %d has no URL or typed data", index)
+			}
+			image := copyObject(openAIObject(block["image_url"]))
+			image["url"] = imageURL
+			block["type"], block["image_url"] = "image_url", image
+		default:
+			return nil, fmt.Errorf("OpenAI Chat content part %q has no native message mapping", part.Type)
+		}
+		blocks = append(blocks, block)
+	}
+	return blocks, nil
 }
 
 func nativeChatTool(tool normalize.Tool) map[string]any {
