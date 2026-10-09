@@ -1,14 +1,17 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
@@ -111,6 +114,54 @@ func TestDataPlaneAccessLogRecordsSafeRequestSummaryAndPreservesStreaming(t *tes
 		if bytes.Contains(encoded, []byte(secret)) {
 			t.Fatalf("access record contains sensitive request data %q: %s", secret, encoded)
 		}
+	}
+}
+
+func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
+	state, err := store.Open(t.TempDir() + "/disconnect.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	server := NewServerWithRuntimeBindings(state, nil)
+	started := make(chan struct{})
+	cancelled := make(chan error, 1)
+	server.SetExecutor(func(ctx context.Context, _ normalize.Request, writer http.ResponseWriter) error {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		if _, err := writer.Write([]byte("ready\n")); err != nil {
+			return err
+		}
+		writer.(http.Flusher).Flush()
+		close(started)
+		<-ctx.Done()
+		cancelled <- ctx.Err()
+		return ctx.Err()
+	})
+	httpServer := httptest.NewServer(server.HandlerWithOptions(HandlerOptions{DataPlane: true}))
+	defer httpServer.Close()
+
+	requestBody := bytes.NewBufferString(`{"model":"disconnect-test","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	response, err := http.Post(httpServer.URL+"/v1/chat/completions", "application/json", requestBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(response.Body).ReadString('\n')
+	if err != nil || line != "ready\n" {
+		response.Body.Close()
+		t.Fatalf("stream did not reach client before disconnect: line=%q err=%v", line, err)
+	}
+	<-started
+	if err := response.Body.Close(); err != nil {
+		t.Fatalf("close client response: %v", err)
+	}
+	select {
+	case err := <-cancelled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("executor context ended with %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client disconnect did not cancel the data-plane execution context")
 	}
 }
 

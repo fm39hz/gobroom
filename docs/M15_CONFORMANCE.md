@@ -124,6 +124,12 @@ message order is rejected explicitly because the overlay preserves opaque
 provider blocks by patching their original wire positions. It does not silently
 send the original order as if the transform succeeded.
 
+`TestClientDisconnectCancelsDataPlaneExecution` runs an actual streamed HTTP
+request, closes the client response after the first flushed bytes, and verifies
+the handler's executor context is cancelled. Together with the kernel response
+transform cancellation tests, this verifies both HTTP cancellation propagation
+and kernel fail-closed handling; daemon-shutdown stress remains open.
+
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`
 proves the OpenAI Chat native-format codec replaces stale tools/tool-choice/
