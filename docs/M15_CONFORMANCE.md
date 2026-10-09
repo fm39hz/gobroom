@@ -112,6 +112,11 @@ not appear in the selected route's usage compatibility plan. These tests
 complement SG5's existing scoped, persistence, bounds, fail-open and cancellation
 fixtures; the broader kernel cancellation matrix remains open.
 
+`TestRequestTransformCannotAppendOpaqueMessageMetadata` proves that appended
+messages, content parts and tool calls cannot smuggle opaque provenance/provider
+data past the immutable-prefix checks. Rejection is transactional: none of the
+partially added message reaches the invocation consumed by routing or egress.
+
 `TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit`
 adds serving-boundary cancellation evidence: client cancellation during a
 response transform fails closed both before the first write and after a

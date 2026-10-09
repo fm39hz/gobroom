@@ -1012,6 +1012,61 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 	}
 }
 
+func TestRequestTransformCannotAppendOpaqueMessageMetadata(t *testing.T) {
+	tests := []struct {
+		name    string
+		message Message
+	}{
+		{name: "source message", message: Message{Role: "user", Content: "added", Metadata: map[string]any{"vendor": "opaque"}}},
+		{name: "content part", message: Message{Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "added", Metadata: map[string]any{"cache_control": "ephemeral"}}}}},
+		{name: "tool call metadata", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, Metadata: map[string]any{"vendor": "opaque"}}}}},
+		{name: "tool call provider data", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, ProviderData: []byte(`{"opaque":true}`)}}}},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			transform := requestMutationFixture{
+				id: fmt.Sprintf("fixture.add-opaque-message-%d", index), effects: []TransformEffect{TransformInput},
+				mutate: func(request *NormalizedRequest) { request.Messages = append(request.Messages, test.message) },
+			}
+			registry := NewRequestTransformRegistry()
+			if err := registry.Register(transform); err != nil {
+				t.Fatal(err)
+			}
+			request := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "original"}}}
+			original := normalize.CloneRequest(request)
+			binding := TransformBinding{ID: "add-opaque", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}
+			err := registry.ApplyScopes(context.Background(), &request, []TransformBinding{binding}, daemonTransformScope())
+			if err == nil || !strings.Contains(err.Error(), "added message") {
+				t.Fatalf("opaque addition was accepted: %v", err)
+			}
+			if len(request.Messages) != 1 || !reflect.DeepEqual(request.Messages[0], original.Messages[0]) {
+				t.Fatalf("rejected message addition leaked into request: %#v", request.Messages)
+			}
+		})
+	}
+}
+
+func TestRequestTransformAcceptsCanonicalMessageSuffix(t *testing.T) {
+	transform := requestMutationFixture{
+		id: "fixture.add-canonical-message", effects: []TransformEffect{TransformInput},
+		mutate: func(request *NormalizedRequest) {
+			request.Messages = append(request.Messages, Message{Role: "assistant", Content: "added"})
+		},
+	}
+	registry := NewRequestTransformRegistry()
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	request := NormalizedRequest{Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "original"}}}
+	binding := TransformBinding{ID: "append-canonical", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}
+	if err := registry.ApplyScopes(context.Background(), &request, []TransformBinding{binding}, daemonTransformScope()); err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Messages) != 2 || request.Messages[1].Content != "added" || !request.Mutations.Messages {
+		t.Fatalf("canonical message suffix was not published: %#v", request)
+	}
+}
+
 func TestRequestTransformPublishesKernelOwnedTypedMutationMarkers(t *testing.T) {
 	transform := requestMutationFixture{
 		id: "fixture.track-mutations", effects: []TransformEffect{TransformTools, TransformOptions},

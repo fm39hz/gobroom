@@ -346,6 +346,10 @@ transforms; modules change canonical IR, then egress codecs overlay only typed
 facets recorded as modified. Tool choice is governed by the tools effect and
 normalized generation settings by options. Module options and effects are
 validated at configuration publish; undeclared mutations fail explicitly.
+New conversation messages may be appended only as canonical IR: message and
+content-part provenance metadata, tool-call metadata and provider-private call
+data must be absent. This prevents adapters from mistaking an added item for a
+source-backed wire item and silently retaining or dropping the wrong envelope.
 The kernel owns this mutation set; transforms cannot set it themselves. A
 codec preserves the source wire object, then replaces only marked facets using
 the canonical request contract. This keeps unrelated provider extensions

@@ -797,6 +797,24 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 			}
 		}
 	}
+	for index := len(before.Messages); index < len(after.Messages); index++ {
+		message := after.Messages[index]
+		if message.Metadata != nil {
+			return fmt.Errorf("%w: added message %d carries opaque source metadata", ErrTransformSafetyViolation, index)
+		}
+		if parts, ok := message.Content.([]normalize.ContentPart); ok {
+			for partIndex, part := range parts {
+				if part.Metadata != nil {
+					return fmt.Errorf("%w: added message %d content part %d carries opaque source metadata", ErrTransformSafetyViolation, index, partIndex)
+				}
+			}
+		}
+		for callIndex, call := range message.ToolCalls {
+			if call.Metadata != nil || len(call.ProviderData) > 0 {
+				return fmt.Errorf("%w: added message %d tool call %d carries opaque provider metadata", ErrTransformSafetyViolation, index, callIndex)
+			}
+		}
+	}
 	if err := require(!reflect.DeepEqual(before.Modalities, after.Modalities) || !bytes.Equal(before.OperationPayload, after.OperationPayload), TransformInput, "operation input or modalities"); err != nil {
 		return err
 	}
