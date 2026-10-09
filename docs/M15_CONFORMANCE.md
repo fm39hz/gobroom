@@ -13,6 +13,11 @@ The command currently exercises the following composition simulations. It
 must not be described as the complete semantic closure suite until the
 acceptance cases below are implemented.
 
+The target begins with a focused transform-boundary group: opaque metadata on
+appended IR is rejected transactionally, canonical message suffixes are
+accepted, and Chat/Anthropic/Responses egress mappings plus their fail-closed
+opaque/order cases are exercised before the broader M15 composition suite.
+
 | Change simulation | Executable evidence |
 |---|---|
 | API-key provider, `/models`, operation bindings and reusable primitives | `TestGenericProviderManifestBindsProtocolsAndSemanticTasks`; daemon manifest/discovery path in `TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart` |
