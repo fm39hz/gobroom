@@ -269,6 +269,40 @@ func TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange(t *testi
 	}
 }
 
+func TestNativeResponsesOverlayProjectsTransformedMessageRole(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role",
+		"input": []any{map[string]any{"type": "message", "role": "user", "content": "text"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Request.Mutations.Messages = true
+	parsed.Request.Messages[0].Role = "assistant"
+	updated, err := overlayResponsesInput(parsed.Request.Raw["input"], parsed.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if role := updated.([]any)[0].(map[string]any)["role"]; role != "assistant" {
+		t.Fatalf("transformed Responses message role was not projected: %v", role)
+	}
+}
+
+func TestNativeResponsesOverlayRejectsFunctionCallRoleChange(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role",
+		"input": []any{map[string]any{"type": "function_call", "call_id": "call-1", "name": "lookup", "arguments": "{}"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.Request.Mutations.Messages = true
+	parsed.Request.Messages[0].Role = "user"
+	if _, err := overlayResponsesInput(parsed.Request.Raw["input"], parsed.Request); err == nil || !strings.Contains(err.Error(), "function_call items require the assistant role") {
+		t.Fatalf("invalid function_call role was not rejected: %v", err)
+	}
+}
+
 func TestAnthropicMessagesRequestMapsToOpenAIResponsesFromTypedIR(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{
 "model":"role","max_tokens":512,"temperature":0.2,"top_p":0.9,

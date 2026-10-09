@@ -213,6 +213,24 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 			}
 		}
 		patchedMessage := copyAnthropicObject(source)
+		if len(segments) > 0 {
+			projectedRole := messages[segments[0]].Role
+			for _, messageIndex := range segments[1:] {
+				if messages[messageIndex].Role != projectedRole {
+					return nil, fmt.Errorf("Anthropic source message was split into incompatible transformed roles")
+				}
+			}
+			if projectedRole != "user" && projectedRole != "assistant" {
+				return nil, fmt.Errorf("transformed Anthropic source message role %q has no native message mapping", projectedRole)
+			}
+			if anthropicSourceHasBlockType(source, "tool_use") && projectedRole != "assistant" {
+				return nil, fmt.Errorf("Anthropic tool_use history requires the assistant role")
+			}
+			if anthropicSourceHasBlockType(source, "tool_result") && projectedRole != "user" {
+				return nil, fmt.Errorf("Anthropic tool_result history requires the user role")
+			}
+			patchedMessage["role"] = projectedRole
+		}
 		content, _ := source["content"].([]any)
 		if text, isText := source["content"].(string); isText {
 			segment := messages[segments[0]]
@@ -537,6 +555,16 @@ func anthropicSourceHasCanonicalBlock(message map[string]any) bool {
 	blocks, _ := message["content"].([]any)
 	for _, raw := range blocks {
 		if block, ok := raw.(map[string]any); ok && anthropicBlockHasCanonicalIR(block) {
+			return true
+		}
+	}
+	return false
+}
+
+func anthropicSourceHasBlockType(message map[string]any, wanted string) bool {
+	blocks, _ := message["content"].([]any)
+	for _, raw := range blocks {
+		if block, ok := raw.(map[string]any); ok && anthropicString(block["type"]) == wanted {
 			return true
 		}
 	}

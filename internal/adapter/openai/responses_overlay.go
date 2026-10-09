@@ -145,6 +145,9 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 				continue
 			}
 			message := request.Messages[messageIndex]
+			if message.Role != "assistant" {
+				return nil, fmt.Errorf("native Responses function_call items require the assistant role")
+			}
 			if !request.Mutations.ToolCalls {
 				mappedCall := false
 				for _, call := range message.ToolCalls {
@@ -248,8 +251,12 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			if message.Role == "tool" {
 				return nil, fmt.Errorf("OpenAI Responses egress cannot encode a chat tool-result role as native input")
 			}
+			if message.Role != "user" && message.Role != "assistant" {
+				return nil, fmt.Errorf("transformed Responses message role %q has no native input mapping", message.Role)
+			}
 			usedMessages[messageIndex] = true
 			patched := copyObject(item)
+			patched["role"] = message.Role
 			content, err := responsesMessageContent(message.Content, message.Role)
 			if err != nil {
 				return nil, err

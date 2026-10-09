@@ -321,3 +321,31 @@ func TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages(t *
 		t.Fatalf("middle insertion was not rejected explicitly: %v", err)
 	}
 }
+
+func TestNativeAnthropicOverlayProjectsTransformedMessageRole(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"user","content":"text"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := append([]normalize.Message(nil), parsed.Request.Messages...)
+	messages[0].Role = "assistant"
+	updated, err := overlayAnthropicMessages(parsed.Request.Raw["messages"], messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated[0].(map[string]any)["role"]; got != "assistant" {
+		t.Fatalf("transformed role was not projected to source message: %v", got)
+	}
+}
+
+func TestNativeAnthropicOverlayRejectsRoleChangesThatBreakToolHistory(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"call-1","name":"lookup","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"ok"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := append([]normalize.Message(nil), parsed.Request.Messages...)
+	messages[0].Role = "user"
+	if _, err := overlayAnthropicMessages(parsed.Request.Raw["messages"], messages); err == nil || !strings.Contains(err.Error(), "tool_use history requires the assistant role") {
+		t.Fatalf("role change that invalidates tool_use history was not rejected: %v", err)
+	}
+}
