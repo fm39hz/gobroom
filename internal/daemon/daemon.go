@@ -1060,6 +1060,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, result)
+	case "connections.test_inference":
+		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings}).TestInference(ctx, stringParam(request.Params, "connectionID"), stringParam(request.Params, "modelID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
 	case "connections.preview_models":
 		connectionID := stringParam(request.Params, "connectionID")
 		nodeID, err := d.providerNodeForConnection(connectionID)

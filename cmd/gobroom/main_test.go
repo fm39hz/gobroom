@@ -35,7 +35,7 @@ func TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary(t *testing.T) {
 	if called != 0 {
 		t.Fatal("--help unexpectedly launched TUI")
 	}
-	for _, path := range [][]string{{"status"}, {"logs"}, {"route-explain"}, {"providers", "list"}, {"providers", "catalog"}, {"extensions", "catalog"}, {"connections", "test"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"connections", "authorize-start"}, {"connections", "authorize-get"}, {"connections", "authorize-complete"}, {"connections", "authorize-cancel"}, {"connections", "device-start"}, {"connections", "device-get"}, {"connections", "device-cancel"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}, {"compatibility", "loss-ceiling", "get"}, {"compatibility", "loss-ceiling", "set"}} {
+	for _, path := range [][]string{{"status"}, {"logs"}, {"route-explain"}, {"providers", "list"}, {"providers", "catalog"}, {"extensions", "catalog"}, {"connections", "test"}, {"connections", "test-inference"}, {"connections", "preview-models"}, {"connections", "refresh-models"}, {"connections", "authorize-start"}, {"connections", "authorize-get"}, {"connections", "authorize-complete"}, {"connections", "authorize-cancel"}, {"connections", "device-start"}, {"connections", "device-get"}, {"connections", "device-cancel"}, {"physical-models", "list"}, {"combo-models", "list"}, {"combo-models", "strategies"}, {"compatibility", "loss-ceiling", "get"}, {"compatibility", "loss-ceiling", "set"}} {
 		command, _, err := root.Find(path)
 		if err != nil || command == root {
 			t.Fatalf("typed command %v missing: command=%v err=%v", path, command, err)

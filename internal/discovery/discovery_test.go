@@ -2,11 +2,16 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
+	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -275,6 +280,81 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	}
 	if _, err := (Service{Store: s, Bindings: bindings}).TestConnection(context.Background(), node.ID, connection.ID); err == nil || !strings.Contains(err.Error(), "does not provide an active endpoint test") {
 		t.Fatalf("static catalog produced a false-positive endpoint test: %v", err)
+	}
+}
+
+func TestInferenceProbeWorksWithoutModelListOperationAndDoesNotImport(t *testing.T) {
+	var upstreamCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamCalls++
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Errorf("inference path=%q", request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer selected-secret" {
+			t.Errorf("inference used credential %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode inference body: %v", err)
+		}
+		if body["model"] != "manual/model-x" || body["max_tokens"] != float64(1) {
+			t.Errorf("inference model/token bound=%#v", body)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"O"}}]}`))
+	}))
+	defer upstream.Close()
+
+	state, err := store.Open(t.TempDir() + "/inference-probe.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	node, err := state.CreateProviderNode(store.CreateProviderNodeInput{Name: "Inference only", Prefix: "probe", BaseURL: upstream.URL + "/v1", Protocol: "openai_chat", DefinitionID: "inference-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := state.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "selected-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := openai.NewAdapter()
+	task := *provider.OperationRef(normalize.OperationChatGenerate, 1)
+	binding := provider.RuntimeBinding{DefinitionID: "inference-only", Operation: provider.OperationChat, TaskRef: task, Protocol: kernel.ProtocolOpenAIChat, ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{}}
+	service := Service{Store: state, Bindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey("inference-only", provider.OperationChat): binding}}
+	result, err := service.TestInference(context.Background(), connection.ID, "manual/model-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ConnectionID != connection.ID || result.ModelID != "manual/model-x" || result.HTTPStatus != http.StatusOK || result.ResponseBytes == 0 || upstreamCalls != 1 {
+		t.Fatalf("inference probe result=%#v calls=%d", result, upstreamCalls)
+	}
+	models, err := state.Models()
+	if err != nil || len(models) != 0 {
+		t.Fatalf("inference probe mutated model inventory: models=%#v err=%v", models, err)
+	}
+	if routes, err := state.Routes(); err != nil || len(routes) != 0 {
+		t.Fatalf("inference probe created routable state: routes=%#v err=%v", routes, err)
+	}
+}
+
+func TestInferenceProbeRequiresAnInferenceOperation(t *testing.T) {
+	state, err := store.Open(t.TempDir() + "/inference-missing.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	node, err := state.CreateProviderNode(store.CreateProviderNodeInput{Name: "Catalog only", Prefix: "catalog", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "catalog-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := state.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := Service{Store: state, Bindings: map[string]provider.RuntimeBinding{}}
+	if _, err := service.TestInference(context.Background(), connection.ID, "manual/model-x"); err == nil || !strings.Contains(err.Error(), "no compatible inference operation") {
+		t.Fatalf("missing inference operation was accepted: %v", err)
 	}
 }
 

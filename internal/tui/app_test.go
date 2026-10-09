@@ -1266,3 +1266,28 @@ func TestConnectionCustomModelAssignmentPickerScopesAndSerializesConnections(t *
 		t.Fatalf("custom assignment payload lost provider/account scope: %#v", params)
 	}
 }
+
+func TestConnectionInferenceProbeFormPinsExactConnectionAndModel(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 120, 32
+	model.activePanel = int(dashboardConnections)
+	selected := connection{ID: "conn-probe", ProviderNodeID: "node", Name: "probe account", CredentialType: "api_key", Enabled: true}
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: selected.ID, title: selected.Name, payload: selected}})
+	_, _ = model.updateDashboardAction(tea.KeyPressMsg{Code: 'T', Text: "T"})
+	if model.form == nil || model.form.method != "connections.test_inference" {
+		t.Fatalf("T did not open the inference probe form: %#v", model.form)
+	}
+	model.form.inputs[0].SetValue("vendor/custom-model")
+	params, err := model.form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["connectionID"] != selected.ID || params["modelID"] != "vendor/custom-model" {
+		t.Fatalf("probe request lost exact account/model scope: %#v", params)
+	}
+	updated, _ := model.Update(actionMsg{method: "connections.test_inference", result: json.RawMessage(`{"connectionId":"conn-probe","modelId":"vendor/custom-model","operation":"chat","endpoint":"https://provider.test/v1/chat/completions","httpStatus":200,"responseBytes":128}`)})
+	model = updated.(*app)
+	if !strings.Contains(model.status, "vendor/custom-model") || !strings.Contains(model.previewTitle, "one output token") {
+		t.Fatalf("inference probe result was not surfaced safely: status=%q preview=%q", model.status, model.previewTitle)
+	}
+}

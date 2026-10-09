@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/auth"
 	"github.com/fm39hz/gobroom/internal/controlplane"
@@ -997,6 +998,53 @@ func TestDaemonStopCancelsActiveHTTPRequestBeforeDraining(t *testing.T) {
 	}
 	_ = response.Body.Close()
 	<-serveDone
+}
+
+func TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/chat/completions" {
+			t.Errorf("inference probe path=%q", request.URL.Path)
+		}
+		if request.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("inference probe used unexpected credentials")
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"O"}}]}`))
+	}))
+	defer upstream.Close()
+
+	state, err := store.Open(t.TempDir() + "/inference-probe.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	node, err := state.CreateProviderNode(store.CreateProviderNodeInput{Name: "Inference only", Prefix: "probe", BaseURL: upstream.URL + "/v1", Protocol: "openai_chat", DefinitionID: "inference-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := state.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := openai.NewAdapter()
+	binding := provider.RuntimeBinding{
+		DefinitionID: "inference-only", Operation: provider.OperationChat,
+		TaskRef: *provider.OperationRef(normalize.OperationChatGenerate, 1), Protocol: kernel.ProtocolOpenAIChat,
+		ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{},
+	}
+	d := &Daemon{store: state, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionID, binding.Operation): binding}}
+	response := d.handleIPC(context.Background(), IPCRequest{ID: "probe", Method: "connections.test_inference", Params: map[string]any{"connectionID": connection.ID, "modelID": "manual/model-x"}})
+	if !response.OK {
+		t.Fatalf("inference probe failed: %s", response.Error)
+	}
+	result, ok := response.Result.(discovery.InferenceTestResult)
+	if !ok || result.ConnectionID != connection.ID || result.ModelID != "manual/model-x" || result.HTTPStatus != http.StatusOK {
+		t.Fatalf("inference probe result=%#v", response.Result)
+	}
+	models, err := state.Models()
+	if err != nil || len(models) != 0 {
+		t.Fatalf("inference IPC probe changed model inventory: %#v err=%v", models, err)
+	}
 }
 
 func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T) {

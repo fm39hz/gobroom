@@ -180,7 +180,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 		case "providers":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/c"), key.WithHelp("e/t/c", "edit/test/connect")))
 		case "connections":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/i/m/a/A/o/O/d"), key.WithHelp("e/t/i/m/a/A/o/O/d", "edit/test/import/assign custom ID/code auth/cancel/device auth/cancel/delete")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/i/m/a/A/o/O/d"), key.WithHelp("e/t/T/i/m/a/A/o/O/d", "edit/list test/inference test/import/custom ID/auth/delete")))
 		case "discovered":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 		case "physical", "combos":
@@ -201,7 +201,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 	case "providers":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("n/t"), key.WithHelp("n/t", "new/test")))
 	case "connections":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/i/m/a/A/o/O"), key.WithHelp("t/i/m/a/A/o/O", "test/import/assign custom ID/code auth/cancel/device auth/cancel")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/i/m/a/A/o/O"), key.WithHelp("t/T/i/m/a/A/o/O", "list test/inference test/import/custom ID/auth")))
 	case "discovered":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 	case "physical", "combos":
@@ -877,6 +877,14 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		if message.method == "connections.test_inference" {
+			var result discovery.InferenceTestResult
+			if json.Unmarshal(message.result, &result) == nil {
+				m.previewExtra = pretty(message.result)
+				m.previewTitle = "Inference dry-run · one output token"
+				m.status = fmt.Sprintf("inference probe passed · %s · HTTP %d · %d response bytes", result.ModelID, result.HTTPStatus, result.ResponseBytes)
+			}
+		}
 		if message.method == "providers.refresh_models" {
 			var result struct {
 				Models    int    `json:"models"`
@@ -1079,7 +1087,7 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.focus == focusInspector {
 		switch keyText {
-		case "e", "p", "d", "t", "c", "f", "a", "A", "m", "r", "o", "O":
+		case "e", "p", "d", "t", "T", "c", "f", "a", "A", "m", "r", "o", "O":
 			m.focus = focusDashboard
 			model, cmd := m.updateDashboardAction(msg)
 			if m.mode != modeBrowse {
@@ -1166,6 +1174,24 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.openTypedMemberPicker()
+	case "T":
+		if current.definition.id != dashboardConnections {
+			return m, nil
+		}
+		selected := m.selectedEntry()
+		if selected == nil {
+			m.status = "focus an enabled connection to run an inference dry-run"
+			return m, nil
+		}
+		value, ok := selected.payload.(connection)
+		if !ok {
+			m.status = "focus a connection to run an inference dry-run"
+			return m, nil
+		}
+		m.form = newInferenceTestForm(value.ID)
+		m.mode = modeForm
+		m.resize()
+		return m, nil
 	case "x":
 		selected := m.selectedEntry()
 		if selected == nil || !selected.exposed || selected.publicName == "" {
@@ -1678,7 +1704,7 @@ func (m *app) mainPreview(selected entry) string {
 	case providerNode:
 		actions = append(actions, "e            edit provider", "t            test and discover", "c            add connection")
 	case connection:
-		actions = append(actions, "e            edit connection", "t            test selected account", "i            import models with this account", "m            add a custom ID for this account", "a            OAuth authorization-code flow", "A            cancel authorization", "o            start OAuth device flow", "d            delete connection")
+		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "a            OAuth authorization-code flow", "A            cancel authorization", "o            start OAuth device flow", "d            delete connection")
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 		if value, ok := selected.payload.(discoveredRoute); ok && value.Kind == "custom" {
@@ -2411,7 +2437,7 @@ func (m *app) refreshPane(index int) tea.Cmd {
 func (m *app) refreshAfter(method string) tea.Cmd {
 	resources := []sectionID{}
 	switch method {
-	case "connections.test":
+	case "connections.test", "connections.test_inference":
 		return nil
 	case "auth.device.start", "auth.device.get", "auth.device.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.cancel":
 		return nil

@@ -109,6 +109,7 @@ Providers: create provider + endpoint
   -> Connections: create account/credential
   -> select that connection, press t
   -> read-only /models test and bounded model preview
+  -> if no model-list operation exists, press T and enter an exact model ID for a one-output-token inference probe
   -> press i to review the connection catalog; select IDs and import a subset
   -> add a custom ID if the provider omitted it
 ```
@@ -130,6 +131,8 @@ shortcut remains a
 convenience operation using the highest-priority enabled connection and imports
 all returned IDs; it is not a substitute for reviewing a selected account.
 CLI equivalents: `gobroom connections test --connection-id ID`,
+`gobroom connections test-inference --connection-id ID --model-id UPSTREAM_ID`
+for an explicit, potentially billable one-token inference probe,
 `gobroom connections preview-models --connection-id ID`, and
 `gobroom connections refresh-models --node-id NODE --connection-id ID` with
 repeated `--model-id UPSTREAM_ID` flags to import a reviewed subset; omit

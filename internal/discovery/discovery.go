@@ -4,11 +4,15 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -49,6 +53,16 @@ type ConnectionModelsPreview struct {
 	Complete       bool           `json:"complete"`
 }
 
+type InferenceTestResult struct {
+	ProviderNodeID string `json:"providerNodeId"`
+	ConnectionID   string `json:"connectionId"`
+	ModelID        string `json:"modelId"`
+	Operation      string `json:"operation"`
+	Endpoint       string `json:"endpoint"`
+	HTTPStatus     int    `json:"httpStatus"`
+	ResponseBytes  int    `json:"responseBytes"`
+}
+
 type ModelPreview struct {
 	ID          string                   `json:"id"`
 	DisplayName string                   `json:"displayName"`
@@ -73,6 +87,130 @@ func (s Service) TestConnection(ctx context.Context, nodeID, connectionID string
 		preview = append(preview, ModelPreview{ID: model.ID, DisplayName: model.DisplayName, Profile: model.Profile})
 	}
 	return ConnectionTestResult{ProviderNodeID: nodeID, ConnectionID: connectionID, Endpoint: endpointSummary(endpoint), ModelsFound: len(models), Preview: preview, PreviewLimit: connectionTestPreviewLimit, Truncated: len(models) > previewLimit, Complete: catalog.Complete}, nil
+}
+
+const inferenceProbeResponseLimit = 64 << 10
+
+// TestInference probes one exact upstream model through the selected enabled
+// connection. It is independent of model-list discovery and does not mutate
+// the catalog, entitlement evidence, health state or usage history. The probe
+// is a real billable inference request with a one-token output budget.
+func (s Service) TestInference(ctx context.Context, connectionID, modelID string) (InferenceTestResult, error) {
+	if strings.TrimSpace(modelID) == "" {
+		return InferenceTestResult{}, fmt.Errorf("exact upstream model ID is required")
+	}
+	credential, found := s.Store.ConnectionCredentialByID(connectionID)
+	if !found {
+		return InferenceTestResult{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
+	}
+	node, err := s.Store.ProviderNodeByConnection(connectionID)
+	if err != nil {
+		return InferenceTestResult{}, fmt.Errorf("resolve provider for connection %q: %w", connectionID, err)
+	}
+	connections, err := s.Store.Connections(node.ID)
+	if err != nil {
+		return InferenceTestResult{}, err
+	}
+	var selected store.ConnectionRecord
+	for _, item := range connections {
+		if item.ID == connectionID && item.Enabled {
+			selected = item
+			break
+		}
+	}
+	if selected.ID == "" {
+		return InferenceTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
+	}
+	var binding provider.RuntimeBinding
+	for _, operation := range []provider.Operation{provider.OperationChat, provider.OperationResponses, provider.OperationMessages} {
+		candidate, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, operation)]
+		if ok && candidate.Adapter != nil && candidate.Auth != nil && candidate.Protocol == kernel.Protocol(node.Protocol) && candidate.TaskRef.ID == string(normalize.OperationChatGenerate) {
+			binding = candidate
+			break
+		}
+	}
+	if binding.Adapter == nil {
+		return InferenceTestResult{}, fmt.Errorf("provider definition %q has no compatible inference operation for a connection probe", node.DefinitionID)
+	}
+	resolvedCredential, err := binding.Auth.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	if err != nil {
+		return InferenceTestResult{}, fmt.Errorf("resolve inference credential: %w", err)
+	}
+	sourceFormat, path, body, err := inferenceProbePayload(binding.Operation, modelID)
+	if err != nil {
+		return InferenceTestResult{}, err
+	}
+	normalized, err := normalize.Map(path, http.Header{}, body)
+	if err != nil {
+		return InferenceTestResult{}, fmt.Errorf("build inference probe: %w", err)
+	}
+	request := normalized.Request
+	request.Model = modelID
+	request.Operation = normalize.Operation(binding.TaskRef.ID)
+	request.OperationContractVersion = binding.TaskRef.ContractVersion
+	request.SourceFormat = sourceFormat
+	request.Stream = false
+	route := kernel.Route{
+		ID: connectionID + ":inference-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
+		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
+		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
+		Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+			request.Operation: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
+		},
+	}
+	upstream, err := binding.Adapter.Prepare(ctx, request, route, resolvedCredential)
+	if err != nil {
+		return InferenceTestResult{}, fmt.Errorf("prepare inference probe for model %q: %w", modelID, err)
+	}
+	response, err := binding.Adapter.Execute(ctx, upstream)
+	if err != nil {
+		return InferenceTestResult{}, fmt.Errorf("send inference probe for model %q: %w", modelID, err)
+	}
+	if response.Body != nil {
+		defer response.Body.Close()
+	}
+	result := InferenceTestResult{ProviderNodeID: node.ID, ConnectionID: connectionID, ModelID: modelID, Operation: string(binding.Operation), Endpoint: endpointSummary(upstream.URL), HTTPStatus: response.Status}
+	if response.Body == nil {
+		return result, fmt.Errorf("inference probe returned an empty response body")
+	}
+	payload, err := io.ReadAll(io.LimitReader(response.Body, inferenceProbeResponseLimit+1))
+	if err != nil {
+		return result, fmt.Errorf("read inference probe response: %w", err)
+	}
+	if len(payload) > inferenceProbeResponseLimit {
+		return result, fmt.Errorf("inference probe response exceeded %d bytes", inferenceProbeResponseLimit)
+	}
+	result.ResponseBytes = len(payload)
+	if response.Status < http.StatusOK || response.Status >= http.StatusMultipleChoices {
+		class := binding.Adapter.ClassifyError(response.Status, payload)
+		return result, fmt.Errorf("inference probe returned HTTP %d (%s)", response.Status, class)
+	}
+	if len(payload) == 0 || !json.Valid(payload) {
+		return result, fmt.Errorf("inference probe returned a non-JSON or empty response")
+	}
+	return result, nil
+}
+
+func inferenceProbePayload(operation provider.Operation, modelID string) (normalize.Format, string, map[string]any, error) {
+	const prompt = "Reply with OK."
+	switch operation {
+	case provider.OperationChat:
+		return normalize.FormatOpenAIChat, "/v1/chat/completions", map[string]any{
+			"model": modelID, "max_tokens": 1,
+			"messages": []any{map[string]any{"role": "user", "content": prompt}},
+		}, nil
+	case provider.OperationResponses:
+		return normalize.FormatOpenAIResponses, "/v1/responses", map[string]any{
+			"model": modelID, "max_output_tokens": 1, "input": prompt,
+		}, nil
+	case provider.OperationMessages:
+		return normalize.FormatAnthropic, "/v1/messages", map[string]any{
+			"model": modelID, "max_tokens": 1,
+			"messages": []any{map[string]any{"role": "user", "content": prompt}},
+		}, nil
+	default:
+		return "", "", nil, fmt.Errorf("provider operation %q has no generic inference probe", operation)
+	}
 }
 
 // PreviewConnectionModels fetches the model list for review without writing

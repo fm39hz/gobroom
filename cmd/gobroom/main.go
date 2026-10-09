@@ -138,6 +138,16 @@ func resourceCommands() []*cobra.Command {
 	}}
 	testConn.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
 	connections.AddCommand(testConn)
+	var probeModelID string
+	testInference := &cobra.Command{Use: "test-inference", Short: "send a one-token inference probe to an exact upstream model", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		if probeModelID == "" {
+			return fmt.Errorf("--model-id is required for an inference probe")
+		}
+		return invoke("connections.test_inference", map[string]any{"connectionID": connID, "modelID": probeModelID})
+	}}
+	testInference.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
+	testInference.Flags().StringVar(&probeModelID, "model-id", "", "exact upstream model ID (probe may incur provider cost)")
+	connections.AddCommand(testInference)
 	authorizeStart := &cobra.Command{Use: "authorize-start", Short: "begin daemon-owned OAuth authorization", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("auth.authorization.start", map[string]any{"connectionID": connID})
 	}}

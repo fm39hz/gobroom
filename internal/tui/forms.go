@@ -383,6 +383,12 @@ func newCustomModelForm(providerNodeID string, connectionIDs []string, existing 
 	return form
 }
 
+func newInferenceTestForm(connectionID string) *formState {
+	form := buildForm("Inference dry-run · may incur provider cost", "connections.test_inference", []fieldSpec{{key: "modelID", label: "Exact upstream model ID", placeholder: "vendor/model-name"}}, nil)
+	form.extra["connectionID"] = connectionID
+	return form
+}
+
 func (f *formState) Update(msg tea.Msg) (*formState, tea.Cmd, bool, map[string]any, error) {
 	keyMsg, isKey := msg.(tea.KeyPressMsg)
 	if isKey {
@@ -651,6 +657,13 @@ func (f *formState) Params() (map[string]any, error) {
 	for _, required := range requiredFields(f.method) {
 		if value, ok := params[required]; !ok || value == "" {
 			return nil, fmt.Errorf("%s is required", required)
+		}
+	}
+	if f.method == "connections.test_inference" {
+		connectionID, _ := params["connectionID"].(string)
+		modelID, _ := params["modelID"].(string)
+		if connectionID == "" || modelID == "" {
+			return nil, fmt.Errorf("an enabled connection and exact upstream model ID are required")
 		}
 	}
 	if f.method == "connections.create" {
