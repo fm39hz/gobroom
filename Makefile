@@ -5,7 +5,7 @@ LDFLAGS  := -s -w $(if $(VERSION),-X main.version=$(VERSION))
 REMOTE   := origin
 BRANCH   := master
 
-.PHONY: help build build-daemon build-all run run-daemon tui test test-conformance test-conformance-transform-boundaries test-v race bench fmt vet install install-all clean reload status
+.PHONY: help build build-daemon build-all run run-daemon tui test test-conformance test-conformance-transform-boundaries test-model-workflow test-v race bench fmt vet install install-all clean reload status
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -88,6 +88,9 @@ test-conformance-transform-boundaries:
 	go test ./internal/adapter/anthropic -run '^(TestNativeAnthropicOverlayAppendsTypedMessagesAndToolResults|TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages|TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent|TestNativeAnthropicOverlayRejectsReorderedSourceMessages|TestNativeAnthropicOverlayRejectsSourceMessageRoleChange|TestNativeAnthropicAddedMessageRejectsUnmappedFields)$$' -count=1
 	go test ./internal/api -run '^TestClientDisconnectCancelsDataPlaneExecution$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
+
+test-model-workflow: ## focused Discovered → Physical → Combo UI acceptance
+	go test ./internal/tui -run '^(TestSuggestPhysicalNameGroupsEquivalentProviderIDs|TestSuggestPhysicalNameDoesNotMergeDifferentRevisions|TestSuggestPhysicalNameHandlesSingleProviderRoute|TestSuggestPhysicalNameRemovesMixedCaseProviderNamespace|TestSourcePickerBuildsFamilyFromProviderVariants|TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview|TestComboPickerFiltersViaSourcePrefixButShowsOneCanonicalPhysicalRow|TestComboEditorSaveAndExposureReachOpenAIModelsProjection)$$' -count=1
 
 test-v: ## verbose tests
 	go test ./... -count=1 -v

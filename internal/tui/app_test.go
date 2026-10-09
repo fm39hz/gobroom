@@ -1159,4 +1159,62 @@ func TestSourcePickerBuildsFamilyFromProviderVariants(t *testing.T) {
 	if len(model.form.typedSources) != 3 || model.form.typedSources[0].Fidelity != "alias" || len(model.form.typedSources[0].Evidence) == 0 {
 		t.Fatalf("typed source references=%#v", model.form.typedSources)
 	}
+	if got := model.form.inputs[0].Value(); got != "qwen-3.7-max" {
+		t.Fatalf("canonical physical name suggestion=%q want qwen-3.7-max", got)
+	}
+	if !strings.Contains(model.form.title, "Review suggested Physical") {
+		t.Fatalf("suggestion must remain reviewable, title=%q", model.form.title)
+	}
+	params, err := model.form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["name"] != "qwen-3.7-max" || len(params["sources"].([]routeReference)) != 3 {
+		t.Fatalf("suggested identity and bulk sources were not ready for save: %#v", params)
+	}
+}
+
+func TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 140, 40
+	model.activePanel = int(dashboardModels)
+	model.activeTabs[dashboardModels] = 0
+	model.raw = map[sectionID]json.RawMessage{
+		sectionPhysical: json.RawMessage(`[{"name":"qwen-3.7-max","sources":[{"routeId":"existing-route","fidelity":"exact"}],"policy":{"ref":{"kind":"strategy","id":"ordered-fallback","contractVersion":1}},"discoverable":true,"enabled":true}]`),
+	}
+	model.setPaneItems(model.activeContextIndex(), []entry{
+		{key: "existing-route", title: "existing/qwen3.7-max", payload: discoveredRoute{ID: "existing-route", ProviderPrefix: "existing", ExternalID: "qwen3.7-max"}},
+		{key: "xkiro-route", title: "xkiro/qwen/qwen3.7-max:free", payload: discoveredRoute{ID: "xkiro-route", ProviderPrefix: "xkiro", ExternalID: "qwen/qwen3.7-max:free"}},
+		{key: "ocg-route", title: "ocg/qwen3.7-max", payload: discoveredRoute{ID: "ocg-route", ProviderPrefix: "ocg", ExternalID: "qwen3.7-max"}},
+	})
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if model.mode != modeForm || model.form == nil {
+		t.Fatalf("bulk grouping did not open review form: mode=%v form=%#v status=%s", model.mode, model.form, model.status)
+	}
+	if got := model.form.memberLabels(); len(got) != 3 || got[0] != "existing-route" || got[1] != "xkiro-route" || got[2] != "ocg-route" {
+		t.Fatalf("review form did not preserve existing sources and append selected variants: %#v", got)
+	}
+	if model.form.typedSources[0].Fidelity != "exact" || model.form.extra["strategyRef"] != (extensions.Ref{Kind: "strategy", ID: "ordered-fallback", ContractVersion: 1}) {
+		t.Fatalf("merge did not preserve existing source evidence/policy: %#v", model.form)
+	}
+	for _, field := range model.form.fields {
+		if field.key == "name" {
+			t.Fatalf("editing an existing physical identity unexpectedly exposed a rename field: %#v", model.form.fields)
+		}
+	}
+	if !strings.Contains(model.form.title, "qwen-3.7-max") || !strings.Contains(model.status, "existing Physical") {
+		t.Fatalf("existing canonical group review was not explained: title=%q status=%q", model.form.title, model.status)
+	}
+	params, err := model.form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["name"] != "qwen-3.7-max" || len(params["sources"].([]routeReference)) != 3 {
+		t.Fatalf("review merge payload did not preserve identity and deduplicated sources: %#v", params)
+	}
 }

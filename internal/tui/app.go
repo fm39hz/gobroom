@@ -1296,7 +1296,7 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "f":
 		if current.definition.id == dashboardModels && current.definition.view == "discovered" {
 			sources := m.selectedRouteRefs()
-			m.form = newPhysicalModelForm(sources)
+			m.form = m.physicalGroupingForm(m.selectedDiscoveredRoutes(), sources)
 			m.mode = modeForm
 			m.resize()
 			return m, nil
@@ -1840,8 +1840,8 @@ func (m *app) updateSourcePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "select one or more provider variants with Space"
 			return m, nil
 		}
-		m.form = newPhysicalModelForm(selectedRouteRefsFromEntries(m.sourceItems, m.pickerSelected))
-		m.form.title = "Create physical model"
+		sources := selectedRouteRefsFromEntries(m.sourceItems, m.pickerSelected)
+		m.form = m.physicalGroupingForm(selectedDiscoveredRoutesFromEntries(m.sourceItems, m.pickerSelected), sources)
 		m.mode = modeForm
 		m.resize()
 		return m, nil
@@ -1883,6 +1883,80 @@ func (m *app) comboPickerPaneHeight() int {
 		return max(6, bodyHeight-11)
 	}
 	return max(7, bodyHeight-6)
+}
+
+func (m *app) selectedDiscoveredRoutes() []discoveredRoute {
+	panel := m.active()
+	routes := selectedDiscoveredRoutesFromEntries(panel.items, panel.selected)
+	if len(routes) == 0 {
+		if selected, ok := panel.list.SelectedItem().(entry); ok {
+			if route, ok := selected.payload.(discoveredRoute); ok {
+				routes = append(routes, route)
+			}
+		}
+	}
+	return routes
+}
+
+func selectedDiscoveredRoutesFromEntries(items []entry, selected map[string]bool) []discoveredRoute {
+	routes := make([]discoveredRoute, 0, len(selected))
+	for _, item := range items {
+		if !selected[item.key] {
+			continue
+		}
+		if route, ok := item.payload.(discoveredRoute); ok {
+			routes = append(routes, route)
+		}
+	}
+	return routes
+}
+
+func (m *app) physicalGroupingForm(routes []discoveredRoute, sources []routeReference) *formState {
+	suggestion := suggestPhysicalName(routes)
+	var physicals []physicalModel
+	_ = json.Unmarshal(m.raw[sectionPhysical], &physicals)
+	if suggestion != "" {
+		for _, existing := range physicals {
+			if existing.Name != suggestion {
+				continue
+			}
+			selected := entry{key: existing.Name, title: existing.Name, modelRef: existing.Name, modelKind: "physical", payload: existing}
+			form := newResourceForm(int(sectionPhysical), &selected, "")
+			if form == nil {
+				break
+			}
+			seen := make(map[string]bool, len(form.typedSources)+len(sources))
+			for _, source := range form.typedSources {
+				seen[source.RouteID] = true
+			}
+			added := 0
+			for _, source := range sources {
+				if source.RouteID == "" || seen[source.RouteID] {
+					continue
+				}
+				form.typedSources = append(form.typedSources, source)
+				seen[source.RouteID] = true
+				added++
+			}
+			form.title = fmt.Sprintf("Review %s · add %d provider source(s)", suggestion, added)
+			m.status = fmt.Sprintf("identity suggestion %q matched an existing Physical; review merged sources before saving", suggestion)
+			return form
+		}
+	}
+	form := newPhysicalModelForm(sources)
+	if suggestion != "" {
+		for index, field := range form.fields {
+			if field.key == "name" {
+				form.inputs[index].SetValue(suggestion)
+				break
+			}
+		}
+		form.title = "Review suggested Physical · " + suggestion
+		m.status = fmt.Sprintf("suggested %q from matching upstream IDs; verify identity before saving", suggestion)
+	} else if len(routes) > 1 {
+		m.status = "selected upstream IDs differ; choose a canonical Physical name manually"
+	}
+	return form
 }
 
 func selectedRouteRefsFromEntries(items []entry, selected map[string]bool) []routeReference {
