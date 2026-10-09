@@ -348,7 +348,11 @@ normalized generation settings by options. Module options and effects are
 validated at configuration publish; undeclared mutations fail explicitly.
 New conversation messages may be appended only as canonical IR: message and
 content-part provenance metadata, tool-call metadata and provider-private call
-data must be absent. This prevents adapters from mistaking an added item for a
+data must be absent. User/assistant/system/developer content must be text or
+typed content parts; decoded `[]any` wire blocks and untyped objects cannot be
+smuggled in as canonical content. Structured tool-result payloads remain a
+separate role-specific value and each egress codec must encode or reject them
+explicitly. This prevents adapters from mistaking an added item for a
 source-backed wire item and silently retaining or dropping the wrong envelope.
 The kernel owns this mutation set; transforms cannot set it themselves. A
 codec preserves the source wire object, then replaces only marked facets using

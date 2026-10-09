@@ -319,6 +319,9 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 				if message.Name != "" || len(message.ToolCalls) > 0 {
 					return nil, fmt.Errorf("new Responses tool results cannot carry a name or nested tool calls")
 				}
+				if _, rawWireBlocks := message.Content.([]any); rawWireBlocks {
+					return nil, fmt.Errorf("new Responses tool result content must use text, typed parts or structured result data")
+				}
 				output, err := nativeResponsesFunctionCallOutput(message.Content)
 				if err != nil || message.ToolCallID == "" {
 					return nil, fmt.Errorf("new Responses tool result cannot be serialized safely")
@@ -334,6 +337,13 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			}
 			if message.Role == "user" && len(message.ToolCalls) > 0 {
 				return nil, fmt.Errorf("new Responses user messages cannot contain tool calls")
+			}
+			if message.Content != nil {
+				switch message.Content.(type) {
+				case string, []normalize.ContentPart:
+				default:
+					return nil, fmt.Errorf("new Responses %s message content %T has no canonical input mapping", message.Role, message.Content)
+				}
 			}
 			if message.Content == nil && len(message.ToolCalls) == 0 {
 				return nil, fmt.Errorf("new Responses %s messages require content or an assistant tool call", message.Role)

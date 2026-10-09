@@ -351,6 +351,11 @@ func openAIChatToolChoice(choice normalize.ToolChoice) (any, error) {
 
 func nativeChatMessage(message normalize.Message) (map[string]any, error) {
 	if message.Metadata == nil {
+		switch message.Content.(type) {
+		case nil, string, []normalize.ContentPart:
+		default:
+			return nil, fmt.Errorf("new OpenAI Chat message content %T has no canonical wire mapping", message.Content)
+		}
 		switch message.Role {
 		case "system", "developer", "user", "assistant", "tool":
 		default:

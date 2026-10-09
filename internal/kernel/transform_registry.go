@@ -802,6 +802,15 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 		if message.Metadata != nil {
 			return fmt.Errorf("%w: added message %d carries opaque source metadata", ErrTransformSafetyViolation, index)
 		}
+		switch message.Content.(type) {
+		case nil, string, []normalize.ContentPart:
+		case []any:
+			return fmt.Errorf("%w: added message %d carries raw wire content blocks instead of typed IR parts", ErrTransformSafetyViolation, index)
+		default:
+			if message.Role != "tool" {
+				return fmt.Errorf("%w: added %s message %d content is not canonical text or typed content parts", ErrTransformSafetyViolation, message.Role, index)
+			}
+		}
 		if parts, ok := message.Content.([]normalize.ContentPart); ok {
 			for partIndex, part := range parts {
 				if part.Metadata != nil {

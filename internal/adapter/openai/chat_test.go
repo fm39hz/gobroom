@@ -230,6 +230,8 @@ func TestNativeChatMessageRejectsUnmappedAddedMessageFields(t *testing.T) {
 		message normalize.Message
 	}{
 		{name: "tool ID on user", message: normalize.Message{Role: "user", ToolCallID: "call-1", Content: "text"}},
+		{name: "raw wire content", message: normalize.Message{Role: "user", Content: []any{map[string]any{"type": "vendor_block"}}}},
+		{name: "untyped conversation object", message: normalize.Message{Role: "user", Content: map[string]any{"vendor": "opaque"}}},
 		{name: "empty assistant", message: normalize.Message{Role: "assistant"}},
 		{name: "user tool call", message: normalize.Message{Role: "user", Content: "text", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "lookup"}}}},
 		{name: "tool missing ID", message: normalize.Message{Role: "tool", Content: "result"}},

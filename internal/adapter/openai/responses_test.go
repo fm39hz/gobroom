@@ -333,9 +333,12 @@ func TestNativeResponsesRejectsUnmappedAddedMessageFields(t *testing.T) {
 	}{
 		{name: "message name", message: normalize.Message{Role: "user", Name: "speaker", Content: "text"}},
 		{name: "tool ID on user", message: normalize.Message{Role: "user", ToolCallID: "call-1", Content: "text"}},
+		{name: "raw wire content", message: normalize.Message{Role: "user", Content: []any{map[string]any{"type": "vendor_block"}}}},
+		{name: "untyped conversation object", message: normalize.Message{Role: "assistant", Content: map[string]any{"vendor": "opaque"}}},
 		{name: "empty assistant", message: normalize.Message{Role: "assistant"}},
 		{name: "user tool call", message: normalize.Message{Role: "user", Content: "text", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "lookup"}}}},
 		{name: "tool result name", message: normalize.Message{Role: "tool", Name: "lookup", ToolCallID: "call-1", Content: "result"}},
+		{name: "tool result raw wire content", message: normalize.Message{Role: "tool", ToolCallID: "call-1", Content: []any{map[string]any{"type": "vendor_block"}}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

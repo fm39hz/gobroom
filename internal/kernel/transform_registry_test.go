@@ -1021,6 +1021,8 @@ func TestRequestTransformCannotAppendOpaqueMessageMetadata(t *testing.T) {
 		message Message
 	}{
 		{name: "source message", message: Message{Role: "user", Content: "added", Metadata: map[string]any{"vendor": "opaque"}}},
+		{name: "raw wire block array", message: Message{Role: "user", Content: []any{map[string]any{"type": "vendor_block", "payload": "opaque"}}}},
+		{name: "untyped conversation object", message: Message{Role: "assistant", Content: map[string]any{"vendor": "opaque"}}},
 		{name: "content part", message: Message{Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "added", Metadata: map[string]any{"cache_control": "ephemeral"}}}}},
 		{name: "tool call metadata", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, Metadata: map[string]any{"vendor": "opaque"}}}}},
 		{name: "tool call provider data", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, ProviderData: []byte(`{"opaque":true}`)}}}},
@@ -1039,7 +1041,7 @@ func TestRequestTransformCannotAppendOpaqueMessageMetadata(t *testing.T) {
 			original := normalize.CloneRequest(request)
 			binding := TransformBinding{ID: "add-opaque", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}
 			err := registry.ApplyScopes(context.Background(), &request, []TransformBinding{binding}, daemonTransformScope())
-			if err == nil || !strings.Contains(err.Error(), "added message") {
+			if err == nil || !strings.Contains(err.Error(), "added ") {
 				t.Fatalf("opaque addition was accepted: %v", err)
 			}
 			if len(request.Messages) != 1 || !reflect.DeepEqual(request.Messages[0], original.Messages[0]) {
