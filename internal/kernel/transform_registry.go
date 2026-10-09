@@ -358,6 +358,9 @@ func (r *ResponseTransformRegistry) ApplyScopesWithReport(ctx context.Context, e
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, binding := range orderedBindings(bindings, scopes, ResponseTransformKind) {
+		if err := ctx.Err(); err != nil {
+			return ResponseEvent{}, report, err
+		}
 		transform := r.transforms[binding.TransformRef]
 		if transform == nil {
 			return ResponseEvent{}, report, fmt.Errorf("response transform binding %q references missing transform %q", binding.ID, binding.TransformRef.Key())
@@ -380,6 +383,9 @@ func (r *ResponseTransformRegistry) ApplyScopesWithReport(ctx context.Context, e
 		updated, err := transform.ApplyResponse(transformCtx, cloneResponseEvent(event), append(json.RawMessage(nil), binding.Options...))
 		deadlineExceeded := errors.Is(transformCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		cancel()
+		if contextErr := ctx.Err(); contextErr != nil {
+			return ResponseEvent{}, report, contextErr
+		}
 		if err == nil && deadlineExceeded {
 			err = context.DeadlineExceeded
 		}
@@ -422,7 +428,13 @@ func (r *ResponseTransformRegistry) ApplyScopesWithReport(ctx context.Context, e
 			}
 			return ResponseEvent{}, report, fmt.Errorf("response transform %q changed undeclared event content", definition.Ref.Key())
 		}
+		if err := ctx.Err(); err != nil {
+			return ResponseEvent{}, report, err
+		}
 		event = updated
+	}
+	if err := ctx.Err(); err != nil {
+		return ResponseEvent{}, report, err
 	}
 	return event, report, nil
 }
@@ -594,11 +606,15 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 		}{binding, transform})
 	}
 	r.mu.RUnlock()
+	working := normalize.CloneRequest(*request)
 	for _, item := range transforms {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		transform := item.impl
 		definition := transform.Definition()
 		bounds := effectiveTransformBounds(definition.ResourceBounds)
-		input, marshalErr := json.Marshal(request)
+		input, marshalErr := json.Marshal(&working)
 		if marshalErr != nil {
 			return report, fmt.Errorf("request transform %q: encode input: %w", definition.Ref.Key(), marshalErr)
 		}
@@ -609,12 +625,15 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 			}
 			return report, fmt.Errorf("request transform %q input exceeds declared resource bounds", definition.Ref.Key())
 		}
-		before := normalize.CloneRequest(*request)
-		updated := normalize.CloneRequest(*request)
+		before := normalize.CloneRequest(working)
+		updated := normalize.CloneRequest(working)
 		transformCtx, cancel := transformContext(ctx, bounds)
 		applyErr := transform.Apply(transformCtx, &updated, append(json.RawMessage(nil), item.binding.Options...))
 		deadlineExceeded := errors.Is(transformCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 		cancel()
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		if applyErr == nil && deadlineExceeded {
 			applyErr = context.DeadlineExceeded
 		}
@@ -647,8 +666,12 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 			}
 			return report, fmt.Errorf("request transform %q output exceeds declared resource bounds", definition.Ref.Key())
 		}
-		*request = updated
+		working = updated
 	}
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
+	*request = working
 	return report, nil
 }
 

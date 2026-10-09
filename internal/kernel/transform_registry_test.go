@@ -41,6 +41,8 @@ type boundedSlowResponseTransform struct{}
 type boundedRequestTransform struct{}
 type oversizedRequestOutputTransform struct{}
 type oversizedResponseOutputTransform struct{}
+type cancelRequestTransform struct{ cancel context.CancelFunc }
+type cancelResponseTransform struct{ cancel context.CancelFunc }
 
 type scopedProbeAdapter struct{ attempts *[]string }
 
@@ -151,6 +153,26 @@ func (oversizedResponseOutputTransform) ApplyResponse(_ context.Context, event R
 	return event, nil
 }
 
+func (transform cancelRequestTransform) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.cancel-request", ContractVersion: 1}, ImplementationVersion: "1", Label: "Cancel request chain", Description: "Fixture for atomic cancellation.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}}
+}
+
+func (transform cancelRequestTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	request.Messages[0].Content = "partial mutation"
+	transform.cancel()
+	return nil
+}
+
+func (transform cancelResponseTransform) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.cancel-response", ContractVersion: 1}, ImplementationVersion: "1", Label: "Cancel response transform", Description: "Fixture for cancellation fail-closed behavior.", Effects: []ResponseTransformEffect{ResponseEffectText}}
+}
+
+func (transform cancelResponseTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	event.Text = "partial mutation"
+	transform.cancel()
+	return event, nil
+}
+
 func TestTransformsEnforcePayloadAndDeadlineBounds(t *testing.T) {
 	scope := daemonTransformScope()
 	requestTransform := boundedRequestTransform{}
@@ -202,6 +224,71 @@ func TestTransformsRejectOversizedOutputsTransactionally(t *testing.T) {
 	updated, report, err := responseRegistry.ApplyScopesWithReport(context.Background(), event, responseBindings, scope)
 	if err != nil || updated.Text != event.Text || len(report.Failures) != 1 || report.Failures[0].Reason != TransformFailureBudget {
 		t.Fatalf("oversized response output was published: updated=%#v report=%#v err=%v", updated, report, err)
+	}
+}
+
+func TestTransformCancellationIsFailClosedAndAtomicAcrossChains(t *testing.T) {
+	scope := daemonTransformScope()
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	requestTransform := cancelRequestTransform{cancel: cancelRequest}
+	requestRegistry := NewRequestTransformRegistry()
+	for _, transform := range []RequestTransform{promptCompressionFixture{}, requestTransform} {
+		if err := requestRegistry.Register(transform); err != nil {
+			t.Fatal(err)
+		}
+	}
+	request := NormalizedRequest{Model: "m", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "original"}}}
+	requestBindings := []TransformBinding{
+		{ID: "first-success", TransformRef: promptCompressionFixture{}.Definition().Ref, Enabled: true, Scope: scope},
+		{ID: "cancel-request", TransformRef: requestTransform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen, Order: 1},
+	}
+	if report, err := requestRegistry.ApplyScopesWithReport(requestCtx, &request, requestBindings, scope); !errors.Is(err, context.Canceled) || len(report.Failures) != 0 || request.Messages[0].Content != "original" {
+		t.Fatalf("request cancellation published a partial result or failed open: request=%#v report=%#v err=%v", request, report, err)
+	}
+
+	responseCtx, cancelResponse := context.WithCancel(context.Background())
+	responseTransform := cancelResponseTransform{cancel: cancelResponse}
+	responseRegistry := NewResponseTransformRegistry()
+	if err := responseRegistry.Register(responseTransform); err != nil {
+		t.Fatal(err)
+	}
+	event := ResponseEvent{Kind: EventTextDelta, Text: "original"}
+	responseBindings := []TransformBinding{{ID: "cancel-response", TransformRef: responseTransform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	if updated, report, err := responseRegistry.ApplyScopesWithReport(responseCtx, event, responseBindings, scope); !errors.Is(err, context.Canceled) || len(report.Failures) != 0 || updated.Text != "" {
+		t.Fatalf("response cancellation was published or failed open: updated=%#v report=%#v err=%v", updated, report, err)
+	}
+}
+
+func TestKernelDoesNotDispatchWhenRequestTransformCancels(t *testing.T) {
+	transformCtx, cancel := context.WithCancel(context.Background())
+	transform := cancelRequestTransform{cancel: cancel}
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "physical", TargetRef: "physical"}},
+		Nodes:        []ModelNode{{ID: "physical", Kind: ModelPhysical, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
+		Routes: []Route{{ID: "route", Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"scoped-probe"}},
+		}}},
+		TransformBindings: []TransformBinding{{ID: "daemon.cancel", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope(), FailureMode: TransformSafeFailOpen}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := New(snapshot, nil, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	if err := k.Transforms.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	var attempts []string
+	k.Adapters["scoped-probe"] = scopedProbeAdapter{attempts: &attempts}
+	request := NormalizedRequest{Model: "physical", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat, Messages: []Message{{Role: "user", Content: "hello"}}}
+	if err := k.Execute(transformCtx, request, Credential{}, httptest.NewRecorder()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled request transform returned %v", err)
+	}
+	if len(attempts) != 0 {
+		t.Fatalf("kernel dispatched after transform cancellation: %v", attempts)
 	}
 }
 

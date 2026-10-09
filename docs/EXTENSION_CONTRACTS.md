@@ -370,8 +370,10 @@ produces original provider events for accounting/outcome evidence; transforms
 then produce client-visible events. A client usage projection cannot rewrite
 measured provider usage, quota evidence or billed accounting.
 
-Transforms are transactional: apply to an isolated working copy and publish
-only after validation. `safe_fail_open` is legal only when the descriptor
+Transform chains are transactional: request transforms compose on a private
+working copy and the chain publishes only after every enabled step validates;
+response transforms likewise return no partial chain result on failure.
+`safe_fail_open` is legal only when the descriptor
 allows it, the binding enables it, the original input remains intact and
 skipping preserves all hard requirements. Fail-open is observable. A response
 transform may fail open only before any output for its affected atomic unit;
