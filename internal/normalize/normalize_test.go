@@ -65,6 +65,31 @@ func TestThinkingToolsAndModalitiesAreCaptured(t *testing.T) {
 	}
 }
 
+func TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR(t *testing.T) {
+	chat, err := Map("/v1/chat/completions", http.Header{}, map[string]any{
+		"model": "m", "messages": []any{map[string]any{"role": "user", "content": "hi"}},
+		"max_completion_tokens": float64(88), "temperature": float64(0.4), "top_p": float64(0.8), "stop": []any{"done"},
+		"tool_choice": "required", "parallel_tool_calls": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat.Request.Generation.MaxOutputTokens == nil || *chat.Request.Generation.MaxOutputTokens != 88 || chat.Request.Generation.Temperature == nil || *chat.Request.Generation.Temperature != 0.4 || chat.Request.Generation.TopP == nil || *chat.Request.Generation.TopP != 0.8 || len(chat.Request.Generation.StopSequences) != 1 || chat.Request.Generation.StopSequences[0] != "done" {
+		t.Fatalf("OpenAI Chat generation options=%#v", chat.Request.Generation)
+	}
+	if chat.Request.ToolChoice.Mode != "any" || !chat.Request.ToolChoice.Set || !chat.Request.ToolChoice.DisableParallelTools {
+		t.Fatalf("OpenAI Chat tool choice=%#v", chat.Request.ToolChoice)
+	}
+
+	responses, err := Map("/v1/responses", http.Header{}, map[string]any{"model": "m", "input": "hi", "max_output_tokens": float64(33), "temperature": float64(0.2)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if responses.Request.Generation.MaxOutputTokens == nil || *responses.Request.Generation.MaxOutputTokens != 33 || responses.Request.Generation.Temperature == nil || *responses.Request.Generation.Temperature != 0.2 {
+		t.Fatalf("OpenAI Responses generation options=%#v", responses.Request.Generation)
+	}
+}
+
 func TestEndpointWinsOverBodyHeuristic(t *testing.T) {
 	result, err := Map("/v1/messages", http.Header{}, map[string]any{"model": "claude", "messages": []any{}})
 	if err != nil {

@@ -651,6 +651,9 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 		if updated.Model != before.Model || updated.Operation != before.Operation || updated.SourceFormat != before.SourceFormat || updated.Stream != before.Stream || updated.Session.ID != before.Session.ID || updated.Session.Client != before.Session.Client || updated.Session.Conversation != before.Session.Conversation || !reflect.DeepEqual(updated.Transport, before.Transport) {
 			return report, fmt.Errorf("request transform %q: %w: changed immutable request identity or client contract", definition.Ref.Key(), ErrTransformSafetyViolation)
 		}
+		if updated.Mutations != before.Mutations {
+			return report, fmt.Errorf("request transform %q: %w: changed kernel-owned mutation markers", definition.Ref.Key(), ErrTransformSafetyViolation)
+		}
 		if err := validateRequestTransformEffects(definition, before, updated); err != nil {
 			if failOpenTransform(ctx, item.binding, definition.FailureModes, false) && !errors.Is(err, ErrTransformSafetyViolation) {
 				report.Failures = append(report.Failures, transformFailure(item.binding, definition.Ref, TransformFailureEffect))
@@ -658,6 +661,7 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 			}
 			return report, fmt.Errorf("request transform %q: %w", definition.Ref.Key(), err)
 		}
+		updated.Mutations = mergeRequestMutationSet(before.Mutations, requestMutationDelta(before, updated))
 		output, marshalErr := json.Marshal(updated)
 		if marshalErr != nil || int64(len(output)) > bounds.MaxOutputBytes || int64(len(output)) > bounds.MaxBufferedBytes {
 			if failOpenTransform(ctx, item.binding, definition.FailureModes, false) {
@@ -806,30 +810,10 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 		return err
 	}
 	if !reflect.DeepEqual(before.Extensions, after.Extensions) {
-		if err := require(true, TransformOptions, "namespaced request extensions"); err != nil {
-			return err
-		}
+		return fmt.Errorf("%w: changed opaque source request extensions", ErrTransformSafetyViolation)
 	}
 	if !reflect.DeepEqual(before.Raw, after.Raw) {
-		beforeRaw, afterRaw := before.Raw, after.Raw
-		for _, key := range []string{"model", "stream", "conversation_id"} {
-			if !reflect.DeepEqual(beforeRaw[key], afterRaw[key]) {
-				return fmt.Errorf("%w: changed immutable raw request field %q", ErrTransformSafetyViolation, key)
-			}
-		}
-		for key := range beforeRaw {
-			if protectedRequestField(key) && !reflect.DeepEqual(beforeRaw[key], afterRaw[key]) {
-				return fmt.Errorf("%w: changed protected raw request field %q", ErrTransformSafetyViolation, key)
-			}
-		}
-		for key := range afterRaw {
-			if protectedRequestField(key) && !reflect.DeepEqual(beforeRaw[key], afterRaw[key]) {
-				return fmt.Errorf("%w: changed protected raw request field %q", ErrTransformSafetyViolation, key)
-			}
-		}
-		if err := validateRawChangesHaveDeclaredEffects(definition, beforeRaw, afterRaw); err != nil {
-			return err
-		}
+		return fmt.Errorf("%w: raw client request is immutable; transform canonical request facets instead", ErrTransformSafetyViolation)
 	}
 	return nil
 }
@@ -867,45 +851,39 @@ func promptLayerOpaqueFacetsEqual(before, after normalize.PromptPlan) bool {
 	return true
 }
 
-func validateRawChangesHaveDeclaredEffects(definition TransformDefinition, before, after map[string]any) error {
-	keys := make(map[string]bool, len(before)+len(after))
-	for key := range before {
-		keys[key] = true
+func requestMutationDelta(before, after NormalizedRequest) normalize.RequestMutationSet {
+	return normalize.RequestMutationSet{
+		Prompt:                  !reflect.DeepEqual(before.Prompt, after.Prompt),
+		Messages:                !reflect.DeepEqual(before.Messages, after.Messages),
+		OperationPayload:        !bytes.Equal(before.OperationPayload, after.OperationPayload),
+		Modalities:              !reflect.DeepEqual(before.Modalities, after.Modalities),
+		Requirements:            !reflect.DeepEqual(before.Requirements, after.Requirements),
+		Tools:                   !reflect.DeepEqual(before.Tools, after.Tools),
+		ToolChoice:              !reflect.DeepEqual(before.ToolChoice, after.ToolChoice),
+		GenerationMaxOutput:     !reflect.DeepEqual(before.Generation.MaxOutputTokens, after.Generation.MaxOutputTokens),
+		GenerationTemperature:   !reflect.DeepEqual(before.Generation.Temperature, after.Generation.Temperature),
+		GenerationTopP:          !reflect.DeepEqual(before.Generation.TopP, after.Generation.TopP),
+		GenerationStopSequences: !reflect.DeepEqual(before.Generation.StopSequences, after.Generation.StopSequences),
+		Thinking:                !reflect.DeepEqual(before.Thinking, after.Thinking),
+		Continuity:              !reflect.DeepEqual(before.Continuity, after.Continuity),
 	}
-	for key := range after {
-		keys[key] = true
-	}
-	for key := range keys {
-		if reflect.DeepEqual(before[key], after[key]) {
-			continue
-		}
-		effect, known := rawFieldEffect(key)
-		if !known {
-			return fmt.Errorf("%w: changed opaque raw request field %q", ErrTransformSafetyViolation, key)
-		}
-		if !requestTransformHasEffect(definition, effect) {
-			return fmt.Errorf("changed raw request field %q without declaring effect %q", key, effect)
-		}
-	}
-	return nil
 }
 
-func rawFieldEffect(key string) (TransformEffect, bool) {
-	switch key {
-	case "messages", "input", "contents", "operationPayload":
-		return TransformInput, true
-	case "prompt", "system":
-		return TransformPrompt, true
-	case "tools", "tool_choice", "parallel_tool_calls":
-		return TransformTools, true
-	case "thinking", "reasoning", "reasoning_effort", "output_config":
-		return TransformThinking, true
-	case "previous_response_id", "response_id", "encrypted_content":
-		return TransformContinuity, true
-	case "temperature", "top_p", "max_tokens", "max_completion_tokens", "max_output_tokens", "stop", "stop_sequences", "presence_penalty", "frequency_penalty", "seed", "n", "logprobs", "top_logprobs", "service_tier", "verbosity":
-		return TransformOptions, true
-	default:
-		return "", false
+func mergeRequestMutationSet(current, delta normalize.RequestMutationSet) normalize.RequestMutationSet {
+	return normalize.RequestMutationSet{
+		Prompt:                  current.Prompt || delta.Prompt,
+		Messages:                current.Messages || delta.Messages,
+		OperationPayload:        current.OperationPayload || delta.OperationPayload,
+		Modalities:              current.Modalities || delta.Modalities,
+		Requirements:            current.Requirements || delta.Requirements,
+		Tools:                   current.Tools || delta.Tools,
+		ToolChoice:              current.ToolChoice || delta.ToolChoice,
+		GenerationMaxOutput:     current.GenerationMaxOutput || delta.GenerationMaxOutput,
+		GenerationTemperature:   current.GenerationTemperature || delta.GenerationTemperature,
+		GenerationTopP:          current.GenerationTopP || delta.GenerationTopP,
+		GenerationStopSequences: current.GenerationStopSequences || delta.GenerationStopSequences,
+		Thinking:                current.Thinking || delta.Thinking,
+		Continuity:              current.Continuity || delta.Continuity,
 	}
 }
 
@@ -913,7 +891,13 @@ func contentOpaqueFacetsEqual(before, after any) bool {
 	switch left := before.(type) {
 	case normalize.ContentPart:
 		right, ok := after.(normalize.ContentPart)
-		return ok && left.Type == right.Type && left.MediaType == right.MediaType && reflect.DeepEqual(left.Metadata, right.Metadata)
+		if !ok || left.Type != right.Type || left.MediaType != right.MediaType || !reflect.DeepEqual(left.Metadata, right.Metadata) {
+			return false
+		}
+		if left.Type == "thinking" || left.Type == "redacted_thinking" {
+			return left.Text == right.Text && left.URL == right.URL && left.Data == right.Data
+		}
+		return true
 	case []normalize.ContentPart:
 		right, ok := after.([]normalize.ContentPart)
 		if !ok || len(left) != len(right) {
@@ -960,16 +944,6 @@ func contentOpaqueFacetsEqual(before, after any) bool {
 		return true
 	default:
 		return true
-	}
-}
-
-func protectedRequestField(key string) bool {
-	key = strings.NewReplacer("-", "_", ".", "_").Replace(strings.ToLower(key))
-	switch key {
-	case "authorization", "api_key", "x_api_key", "api_token", "x_auth_token", "x_access_token", "access_token", "refresh_token", "token", "secret", "password", "client_secret":
-		return true
-	default:
-		return false
 	}
 }
 

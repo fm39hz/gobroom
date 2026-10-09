@@ -341,10 +341,16 @@ Request effects cover prompt, operation input, tools, thinking, generation
 options and portable content. Response effects cover declared semantic event
 payloads. Identity, auth leases, issuer-private artifacts, event correlation,
 client contract, ingress unsupported-facet evidence and opaque metadata are
-immutable. Unknown raw wire fields cannot be mutated through the broad options
-effect; tool choice is governed by the tools effect and normalized generation
-settings by options. Module options and effects are validated at configuration
-publish; undeclared mutations fail explicitly.
+immutable. Raw client request and source-extension maps cannot be mutated by
+transforms; modules change canonical IR, then egress codecs overlay only typed
+facets recorded as modified. Tool choice is governed by the tools effect and
+normalized generation settings by options. Module options and effects are
+validated at configuration publish; undeclared mutations fail explicitly.
+The kernel owns this mutation set; transforms cannot set it themselves. A
+codec preserves the source wire object, then replaces only marked facets using
+the canonical request contract. This keeps unrelated provider extensions
+untouched while preventing an active typed transform from being silently
+ignored by a native-format adapter.
 Transform implementations are instantiated from the frozen extension
 catalog independently of binding options. The catalog validates each exact
 binding ref and its options schema; the same stateless implementation receives

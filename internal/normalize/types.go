@@ -44,6 +44,26 @@ type Request struct {
 	Transport                TransportHints           `json:"-"`
 	Extensions               map[string]any           `json:"-"`
 	Raw                      map[string]any           `json:"-"`
+	Mutations                RequestMutationSet       `json:"-"`
+}
+
+// RequestMutationSet records only semantic facets changed by request
+// transforms. Provider codecs use it to overlay canonical IR onto an otherwise
+// lossless source-wire copy without rewriting untouched or opaque fields.
+type RequestMutationSet struct {
+	Prompt                  bool
+	Messages                bool
+	OperationPayload        bool
+	Modalities              bool
+	Requirements            bool
+	Tools                   bool
+	ToolChoice              bool
+	GenerationMaxOutput     bool
+	GenerationTemperature   bool
+	GenerationTopP          bool
+	GenerationStopSequences bool
+	Thinking                bool
+	Continuity              bool
 }
 
 // FeatureRequirement is an extensible hard requirement derived by ingress or

@@ -6,14 +6,33 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
+
+type nativeChatRequestTransform struct{}
+
+func (nativeChatRequestTransform) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.native-chat-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Native Chat options", Description: "Change typed options and tools for native egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions}}
+}
+
+func (nativeChatRequestTransform) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	maxTokens, temperature, topP := 64, 0.7, 0.8
+	request.Generation.MaxOutputTokens = &maxTokens
+	request.Generation.Temperature = &temperature
+	request.Generation.TopP = &topP
+	request.Generation.StopSequences = []string{"done"}
+	request.Tools = []normalize.Tool{{Type: "function", Name: "lookup", Function: map[string]any{"name": "lookup", "parameters": map[string]any{"type": "object"}}}}
+	request.ToolChoice = normalize.ToolChoice{Mode: "tool", Name: "lookup", Set: true}
+	return nil
+}
 
 func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	adapter := NewAdapter()
@@ -92,6 +111,56 @@ func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	messages, _ := body["messages"].([]any)
 	if len(messages) != 2 || messages[0].(map[string]any)["role"] != "system" || messages[1].(map[string]any)["role"] != "user" {
 		t.Fatalf("wire messages=%#v", messages)
+	}
+}
+
+func TestNativeChatEgressOverlaysOnlyTransformedTypedFacets(t *testing.T) {
+	maxTokens, temperature, topP := 12, 0.2, 0.3
+	request := normalize.Request{
+		Model: "public", SourceFormat: normalize.FormatOpenAIChat,
+		Raw: map[string]any{
+			"model": "public", "messages": []any{map[string]any{"role": "user", "content": "original"}},
+			"tools":       []any{map[string]any{"type": "function", "function": map[string]any{"name": "old"}}},
+			"tool_choice": "auto", "max_tokens": float64(12), "temperature": float64(0.2), "top_p": float64(0.3), "stop": "old-stop",
+			"vendor_extension": map[string]any{"preserve": true},
+		},
+		Messages:   []normalize.Message{{Role: "user", Content: "compressed"}},
+		Tools:      []normalize.Tool{{Type: "function", Name: "old", Function: map[string]any{"name": "old", "parameters": map[string]any{"type": "object"}}}},
+		ToolChoice: normalize.ToolChoice{Mode: "auto", Set: true},
+		Generation: normalize.GenerationOptions{MaxOutputTokens: &maxTokens, Temperature: &temperature, TopP: &topP, StopSequences: []string{"old-stop"}},
+	}
+	registry := kernel.NewRequestTransformRegistry()
+	transform := nativeChatRequestTransform{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ApplyScopes(context.Background(), &request, []kernel.TransformBinding{{ID: "native-options", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}}, kernel.TransformScope{Kind: kernel.TransformScopeDaemon}); err != nil {
+		t.Fatal(err)
+	}
+	if !request.Mutations.ToolChoice || !request.Mutations.Tools || !request.Mutations.GenerationMaxOutput || !request.Mutations.GenerationTemperature || !request.Mutations.GenerationTopP || !request.Mutations.GenerationStopSequences {
+		t.Fatalf("kernel did not mark transformed facets: %#v", request.Mutations)
+	}
+	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "upstream"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["max_tokens"] != float64(64) || body["temperature"] != float64(0.7) || body["top_p"] != float64(0.8) || !reflect.DeepEqual(body["stop"], []any{"done"}) {
+		t.Fatalf("generation options used stale raw values: %#v", body)
+	}
+	choice, ok := body["tool_choice"].(map[string]any)
+	if !ok || choice["type"] != "function" || choice["function"].(map[string]any)["name"] != "lookup" {
+		t.Fatalf("tool choice used stale raw value: %#v", body["tool_choice"])
+	}
+	tools, _ := body["tools"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["function"].(map[string]any)["name"] != "lookup" {
+		t.Fatalf("tool definitions used stale raw values: %#v", body["tools"])
+	}
+	if body["vendor_extension"].(map[string]any)["preserve"] != true {
+		t.Fatalf("untouched opaque source extension was lost: %#v", body)
 	}
 }
 

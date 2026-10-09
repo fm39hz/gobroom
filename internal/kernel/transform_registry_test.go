@@ -110,7 +110,8 @@ func (safeFailOpenEffectTransform) Definition() TransformDefinition {
 	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.fail-open.effect", ContractVersion: 1}, ImplementationVersion: "1", Label: "Best effort effect", Description: "Fixture undeclared effect.", Stage: TransformBeforeRequirements, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
 }
 func (safeFailOpenEffectTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
-	request.Raw["temperature"] = 0.5
+	value := 0.5
+	request.Generation.Temperature = &value
 	return nil
 }
 
@@ -349,7 +350,7 @@ func TestRequestTransformSafeFailOpenRollsBackAndReportsWithoutErrorText(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Messages[0].Content != "original" || request.Raw["temperature"] != nil {
+	if request.Messages[0].Content != "original" || request.Generation.Temperature != nil {
 		t.Fatalf("safe fail-open published partial mutations: %#v", request)
 	}
 	if len(report.Failures) != 2 || report.Failures[0].Reason != TransformFailureApply || report.Failures[1].Reason != TransformFailureEffect {
@@ -809,7 +810,6 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 	setExtension := func(request *NormalizedRequest) {
 		request.Extensions = map[string]any{"vendor.example/options": map[string]any{"mode": "fast"}}
 	}
-	setRawTemperature := func(request *NormalizedRequest) { request.Raw["temperature"] = 0.5 }
 	setTemperature := func(request *NormalizedRequest) {
 		value := 0.4
 		request.Generation.Temperature = &value
@@ -836,8 +836,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 		{name: "operation payload declared", effects: []TransformEffect{TransformInput}, mutate: setOperationInput},
 		{name: "modality declared", effects: []TransformEffect{TransformInput}, mutate: setModality},
 		{name: "derived requirement declared", effects: []TransformEffect{TransformInput}, mutate: setRequirement},
-		{name: "namespaced extension declared", effects: []TransformEffect{TransformOptions}, mutate: setExtension},
-		{name: "known raw generation option declared", effects: []TransformEffect{TransformOptions}, mutate: setRawTemperature},
+		{name: "opaque extension immutable", effects: []TransformEffect{TransformOptions}, mutate: setExtension, wantError: "opaque source request extensions"},
 		{name: "unsupported evidence immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) { request.UnsupportedFacets = nil }, wantError: "unsupported-facet evidence"},
 		{name: "unsupported generation evidence immutable", effects: []TransformEffect{TransformOptions}, mutate: func(request *NormalizedRequest) { request.Generation.Unsupported = nil }, wantError: "unsupported generation-option evidence"},
 		{name: "thinking source immutable", effects: []TransformEffect{TransformThinking}, mutate: func(request *NormalizedRequest) { request.Thinking.Source = "rewritten" }, wantError: "thinking provenance"},
@@ -846,7 +845,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 		}, wantError: "opaque provider session state"},
 		{name: "opaque raw extension immutable", effects: []TransformEffect{TransformOptions}, mutate: func(request *NormalizedRequest) {
 			request.Raw["vendor_extension"].(map[string]any)["opaque"] = "rewritten"
-		}, wantError: "opaque raw request field"},
+		}, wantError: "raw client request is immutable"},
 		{name: "content metadata immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) {
 			request.Messages[0].Content.([]normalize.ContentPart)[0].Metadata["cache_control"] = "rewritten"
 		}, wantError: "opaque content structure or metadata"},
@@ -888,6 +887,29 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 				t.Fatalf("rejected transform leaked a mutation: %#v", request)
 			}
 		})
+	}
+}
+
+func TestRequestTransformPublishesKernelOwnedTypedMutationMarkers(t *testing.T) {
+	transform := requestMutationFixture{
+		id: "fixture.track-mutations", effects: []TransformEffect{TransformTools, TransformOptions},
+		mutate: func(request *NormalizedRequest) {
+			request.ToolChoice = normalize.ToolChoice{Mode: "required", Set: true}
+			value := 0.6
+			request.Generation.Temperature = &value
+		},
+	}
+	registry := NewRequestTransformRegistry()
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	request := NormalizedRequest{Model: "m", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Raw: map[string]any{"model": "m"}}
+	err := registry.ApplyScopes(context.Background(), &request, []TransformBinding{{ID: "track", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}}, daemonTransformScope())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !request.Mutations.ToolChoice || !request.Mutations.GenerationTemperature || request.Mutations.Messages || request.Mutations.Tools {
+		t.Fatalf("kernel published incorrect typed mutation set: %#v", request.Mutations)
 	}
 }
 

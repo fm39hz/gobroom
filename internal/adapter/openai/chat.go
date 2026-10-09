@@ -239,13 +239,46 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 		}
 		body["model"] = route.ExternalModel
 		body["stream"] = request.Stream
-		if len(request.Messages) > 0 {
+		if len(request.Messages) > 0 || request.Mutations.Messages || request.Mutations.Prompt {
 			messages := make([]kernel.Message, 0, len(request.Messages)+len(request.Prompt.Layers))
 			for _, layer := range request.Prompt.Layers {
 				messages = append(messages, kernel.Message{Role: layer.Role, Content: layer.Text})
 			}
 			messages = append(messages, request.Messages...)
 			body["messages"] = messages
+		}
+		if request.Mutations.Tools {
+			if len(request.Tools) == 0 {
+				delete(body, "tools")
+			} else {
+				body["tools"] = request.Tools
+			}
+		}
+		if request.Mutations.ToolChoice {
+			if request.ToolChoice.Set {
+				choice, err := openAIChatToolChoice(request.ToolChoice)
+				if err != nil {
+					return kernel.UpstreamRequest{}, err
+				}
+				body["tool_choice"] = choice
+			} else {
+				delete(body, "tool_choice")
+			}
+			if request.ToolChoice.DisableParallelTools {
+				body["parallel_tool_calls"] = false
+			} else {
+				body["parallel_tool_calls"] = true
+			}
+		}
+		applyTransformedChatGeneration(body, request)
+		if request.Mutations.Thinking {
+			delete(body, "thinking")
+			delete(body, "reasoning")
+			if request.Thinking.Effort == "" {
+				delete(body, "reasoning_effort")
+			} else {
+				body["reasoning_effort"] = request.Thinking.Effort
+			}
 		}
 	} else if request.SourceFormat == normalize.FormatAnthropic {
 		if len(request.UnsupportedFacets) > 0 {
@@ -273,6 +306,63 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 		headers.Set("Authorization", "Bearer "+secret)
 	}
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+}
+
+func openAIChatToolChoice(choice normalize.ToolChoice) (any, error) {
+	switch choice.Mode {
+	case "none", "auto", "required":
+		return choice.Mode, nil
+	case "any":
+		return "required", nil
+	case "tool":
+		if strings.TrimSpace(choice.Name) == "" {
+			return nil, fmt.Errorf("OpenAI tool choice requires a function name")
+		}
+		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name}}, nil
+	default:
+		return nil, fmt.Errorf("OpenAI Chat cannot encode tool choice %q", choice.Mode)
+	}
+}
+
+func applyTransformedChatGeneration(body map[string]any, request kernel.NormalizedRequest) {
+	mutations := request.Mutations
+	if mutations.GenerationMaxOutput {
+		keys := []string{"max_completion_tokens", "max_tokens"}
+		preferred := "max_tokens"
+		for _, key := range keys {
+			if _, exists := request.Raw[key]; exists {
+				preferred = key
+				break
+			}
+		}
+		for _, key := range keys {
+			delete(body, key)
+		}
+		if request.Generation.MaxOutputTokens != nil {
+			body[preferred] = *request.Generation.MaxOutputTokens
+		}
+	}
+	if mutations.GenerationTemperature {
+		if request.Generation.Temperature == nil {
+			delete(body, "temperature")
+		} else {
+			body["temperature"] = *request.Generation.Temperature
+		}
+	}
+	if mutations.GenerationTopP {
+		if request.Generation.TopP == nil {
+			delete(body, "top_p")
+		} else {
+			body["top_p"] = *request.Generation.TopP
+		}
+	}
+	if mutations.GenerationStopSequences {
+		if len(request.Generation.StopSequences) == 0 {
+			delete(body, "stop")
+		} else {
+			body["stop"] = append([]string(nil), request.Generation.StopSequences...)
+		}
+	}
 }
 
 func (a Chat) Execute(ctx context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {

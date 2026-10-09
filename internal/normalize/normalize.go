@@ -31,9 +31,13 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 		return Result{}, err
 	}
 
+	toolChoice := normalizeToolChoice(body["tool_choice"], format)
+	if parallel, exists := body["parallel_tool_calls"].(bool); exists && (format == FormatOpenAIChat || format == FormatOpenAIResponses) {
+		toolChoice.DisableParallelTools = !parallel
+	}
 	r := Request{
 		Model: model, Operation: OperationChatGenerate, OperationContractVersion: 1, SourceFormat: format, Stream: boolValue(body["stream"], false),
-		Tools: normalizeTools(body["tools"], format), ToolChoice: normalizeToolChoice(body["tool_choice"], format),
+		Tools: normalizeTools(body["tools"], format), ToolChoice: toolChoice,
 		Generation: normalizeGenerationOptions(body, format), Extensions: map[string]any{}, Raw: body,
 		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id"), IdempotencyKey: idempotencyKey},
 	}
@@ -421,43 +425,67 @@ func normalizeToolChoice(value any, format Format) ToolChoice {
 
 func normalizeGenerationOptions(body map[string]any, format Format) GenerationOptions {
 	var options GenerationOptions
-	if format != FormatAnthropic {
-		return options
+	maxKeys := []string{"max_tokens"}
+	switch format {
+	case FormatOpenAIChat:
+		maxKeys = []string{"max_completion_tokens", "max_tokens"}
+	case FormatOpenAIResponses:
+		maxKeys = []string{"max_output_tokens", "max_completion_tokens", "max_tokens"}
 	}
-	if raw, exists := body["max_tokens"]; exists {
+	for _, key := range maxKeys {
+		raw, exists := body[key]
+		if !exists {
+			continue
+		}
 		if value, ok := integerPointer(raw); ok && *value > 0 {
 			options.MaxOutputTokens = value
 		} else {
-			options.Unsupported = append(options.Unsupported, "max_tokens")
+			options.Unsupported = append(options.Unsupported, key)
 		}
+		break
 	}
 	if raw, exists := body["temperature"]; exists {
-		if value, ok := floatPointer(raw); ok && *value >= 0 && *value <= 1 {
+		value, ok := floatPointer(raw)
+		validRange := format != FormatAnthropic || ok && *value >= 0 && *value <= 1
+		if ok && validRange {
 			options.Temperature = value
 		} else {
 			options.Unsupported = append(options.Unsupported, "temperature")
 		}
 	}
 	if raw, exists := body["top_p"]; exists {
-		if value, ok := floatPointer(raw); ok && *value >= 0 && *value <= 1 {
+		value, ok := floatPointer(raw)
+		validRange := format != FormatAnthropic || ok && *value >= 0 && *value <= 1
+		if ok && validRange {
 			options.TopP = value
 		} else {
 			options.Unsupported = append(options.Unsupported, "top_p")
 		}
 	}
-	if raw, exists := body["stop_sequences"]; exists {
-		values, ok := raw.([]any)
-		if !ok {
-			options.Unsupported = append(options.Unsupported, "stop_sequences")
+	stopKey := "stop"
+	if format == FormatAnthropic {
+		stopKey = "stop_sequences"
+	}
+	if raw, exists := body[stopKey]; exists {
+		if value, ok := raw.(string); ok && format != FormatAnthropic {
+			options.StopSequences = []string{value}
 		} else {
-			for _, item := range values {
-				if value, ok := item.(string); ok {
-					options.StopSequences = append(options.StopSequences, value)
-				} else {
-					options.Unsupported = append(options.Unsupported, "stop_sequences")
+			values, ok := raw.([]any)
+			if !ok {
+				options.Unsupported = append(options.Unsupported, stopKey)
+			} else {
+				for _, item := range values {
+					if value, ok := item.(string); ok {
+						options.StopSequences = append(options.StopSequences, value)
+					} else {
+						options.Unsupported = append(options.Unsupported, stopKey)
+					}
 				}
 			}
 		}
+	}
+	if format != FormatAnthropic {
+		return options
 	}
 	known := map[string]bool{
 		"model": true, "messages": true, "system": true, "stream": true, "tools": true,
