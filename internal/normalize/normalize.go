@@ -411,12 +411,16 @@ func normalizeToolChoice(value any, format Format) ToolChoice {
 		if mode == "function" {
 			mode = "tool"
 		}
-		metadata := withoutKeys(choice, "type", "function")
+		name := stringValue(function["name"])
+		if name == "" {
+			name = stringValue(choice["name"])
+		}
+		metadata := withoutKeys(choice, "type", "function", "name")
 		functionMetadata := withoutKeys(function, "name")
 		if len(functionMetadata) > 0 {
 			metadata["function"] = functionMetadata
 		}
-		return ToolChoice{Mode: mode, Name: stringValue(function["name"]), Set: true, Metadata: metadata}
+		return ToolChoice{Mode: mode, Name: name, Set: true, Metadata: metadata}
 	}
 	if format != FormatAnthropic {
 		return ToolChoice{}

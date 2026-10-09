@@ -40,6 +40,18 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
 			}
+			if facet == kernel.FacetWireRequest && (request.Mutations.Messages || request.Mutations.OperationPayload || request.Mutations.Modalities) {
+				mapping.Disposition = kernel.FacetUnsupported
+				mapping.Reason = "native Responses input overlay for transformed messages/modalities is not yet registered"
+			}
+			if facet == kernel.FacetPromptLayers && request.Mutations.Prompt {
+				mapping.Disposition = kernel.FacetUnsupported
+				mapping.Reason = "native Responses prompt overlay for transformed layers is not yet registered"
+			}
+			if facet == kernel.FacetGenerationOptions && request.Mutations.GenerationStopSequences && len(request.Generation.StopSequences) > 0 {
+				mapping.Disposition = kernel.FacetUnsupported
+				mapping.Reason = "OpenAI Responses has no declared stop-sequence mapping"
+			}
 		} else if anthropic {
 			mapping.Reason = "Anthropic Messages semantics have no declared Responses mapping"
 			if responsesAnthropicFacetRepresentable(request, facet) {
@@ -138,6 +150,11 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 	} else {
 		for key, value := range request.Raw {
 			body[key] = value
+		}
+	}
+	if request.SourceFormat == normalize.FormatOpenAIResponses {
+		if err := overlayNativeResponsesMutations(body, request); err != nil {
+			return kernel.UpstreamRequest{}, err
 		}
 	}
 	if request.SourceFormat != normalize.FormatOpenAIResponses && request.SourceFormat != normalize.FormatAnthropic {

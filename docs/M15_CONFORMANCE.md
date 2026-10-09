@@ -115,8 +115,7 @@ fixtures; the broader kernel cancellation matrix remains open.
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`
 proves the OpenAI Chat native-format codec replaces stale tools/tool-choice/
-generation fields while retaining unrelated raw extensions. `TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR` covers the typed source contract consumed by those overlays. Equivalent
-native-format overlay fixtures for OpenAI Responses and Anthropic remain open.
+generation fields while retaining unrelated raw extensions. `TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR` covers the typed source contract consumed by those overlays. `TestNativeResponsesEgressOverlaysTypedMutationsAndPreservesExtensions` proves native Responses overlays tools, choice, generation, reasoning and continuity while retaining extensions; `TestNativeResponsesCompatibilityRejectsUnimplementedInputMutation` proves the planner rejects input/prompt mutations without a registered overlay. Responses message/prompt serialization and Anthropic native overlays remain open.
 
 After the generic contracts are implemented, the synthetic/captured provider
 used by these cases must be introduced using module implementations, static

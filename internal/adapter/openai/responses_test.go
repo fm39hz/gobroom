@@ -12,9 +12,27 @@ import (
 	"testing"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
+
+type nativeResponsesMutationFixture struct{}
+
+func (nativeResponsesMutationFixture) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-native-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses native options", Description: "Change typed facets for native Responses egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions, kernel.TransformThinking, kernel.TransformContinuity}}
+}
+
+func (nativeResponsesMutationFixture) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	request.Tools[0].Name = "new_tool"
+	request.Tools[0].Function = map[string]any{"description": "updated"}
+	request.ToolChoice.Mode, request.ToolChoice.Name = "tool", "new_tool"
+	maxTokens, temperature, topP := 77, 0.6, 0.9
+	request.Generation.MaxOutputTokens, request.Generation.Temperature, request.Generation.TopP = &maxTokens, &temperature, &topP
+	request.Thinking = normalize.ThinkingIntent{Mode: "level", Effort: "high", Source: request.Thinking.Source}
+	request.Continuity.PreviousResponse = "resp-new"
+	return nil
+}
 
 func TestResponsesPrepareTranslatesChatReasoningIntent(t *testing.T) {
 	request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"messages": []any{}}, Thinking: normalize.ThinkingIntent{Mode: "level", Effort: "high"}}
@@ -31,6 +49,74 @@ func TestResponsesPrepareTranslatesChatReasoningIntent(t *testing.T) {
 	}
 	if reasoning, ok := body["reasoning"].(map[string]any); !ok || reasoning["effort"] != "high" {
 		t.Fatalf("reasoning=%#v", body["reasoning"])
+	}
+}
+
+func TestNativeResponsesEgressOverlaysTypedMutationsAndPreservesExtensions(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role", "input": []any{map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": "hello"}}}},
+		"tools":             []any{map[string]any{"type": "function", "name": "old_tool", "description": "old", "parameters": map[string]any{"type": "object"}, "vendor_tool": "keep"}},
+		"tool_choice":       map[string]any{"type": "function", "name": "old_tool", "vendor_choice": "keep"},
+		"max_output_tokens": float64(16), "temperature": float64(0.2), "top_p": float64(0.3),
+		"reasoning_effort": "low", "previous_response_id": "resp-old", "vendor_extension": map[string]any{"preserve": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := kernel.NewRequestTransformRegistry()
+	transform := nativeResponsesMutationFixture{}
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ApplyScopes(context.Background(), &parsed.Request, []kernel.TransformBinding{{ID: "native-responses", TransformRef: transform.Definition().Ref, Enabled: true, Scope: kernel.TransformScope{Kind: kernel.TransformScopeDaemon}}}, kernel.TransformScope{Kind: kernel.TransformScopeDaemon}); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := (Responses{}).Prepare(context.Background(), parsed.Request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "target"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["max_output_tokens"] != float64(77) || body["temperature"] != float64(0.6) || body["top_p"] != float64(0.9) || body["previous_response_id"] != "resp-new" {
+		t.Fatalf("Responses body retained stale typed fields: %#v", body)
+	}
+	if reasoning, ok := body["reasoning"].(map[string]any); !ok || reasoning["effort"] != "high" {
+		t.Fatalf("Responses reasoning was not overlaid: %#v", body["reasoning"])
+	}
+	tools := body["tools"].([]any)
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "new_tool" || tool["description"] != "updated" || tool["vendor_tool"] != "keep" {
+		t.Fatalf("Responses tool overlay lost changed or opaque fields: %#v", tool)
+	}
+	choice := body["tool_choice"].(map[string]any)
+	if choice["name"] != "new_tool" || choice["vendor_choice"] != "keep" {
+		t.Fatalf("Responses tool choice overlay lost changed or opaque fields: %#v", choice)
+	}
+	if body["vendor_extension"].(map[string]any)["preserve"] != true {
+		t.Fatalf("unrelated raw extension changed: %#v", body["vendor_extension"])
+	}
+}
+
+func TestNativeResponsesCompatibilityRejectsUnimplementedInputMutation(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutations normalize.RequestMutationSet
+		facet     string
+	}{
+		{name: "messages", mutations: normalize.RequestMutationSet{Messages: true}, facet: kernel.FacetWireRequest},
+		{name: "prompt", mutations: normalize.RequestMutationSet{Prompt: true}, facet: kernel.FacetPromptLayers},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := normalize.Request{SourceFormat: normalize.FormatOpenAIResponses, Mutations: test.mutations}
+			policy := kernel.CompatibilityPolicy{RequiredFacets: []string{test.facet}}
+			plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy})}, policy)
+			if plan.Supported {
+				t.Fatalf("native Responses route was admitted without a %s overlay: %#v", test.name, plan)
+			}
+		})
 	}
 }
 

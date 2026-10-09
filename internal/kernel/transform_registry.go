@@ -812,6 +812,9 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	if err := require(!reflect.DeepEqual(before.Continuity, after.Continuity), TransformContinuity, "continuity state"); err != nil {
 		return err
 	}
+	if !reflect.DeepEqual(before.Continuity.EncryptedContent, after.Continuity.EncryptedContent) {
+		return fmt.Errorf("%w: changed opaque encrypted continuity content", ErrTransformSafetyViolation)
+	}
 	if err := require(!reflect.DeepEqual(before.Requirements, after.Requirements), TransformInput, "compiled request requirements"); err != nil {
 		return err
 	}
