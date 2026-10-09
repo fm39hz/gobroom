@@ -54,6 +54,12 @@ type responseMutationFixture struct {
 	effects []ResponseTransformEffect
 	mutate  func(ResponseEvent) ResponseEvent
 }
+type cancellingKernelResponseTransform struct {
+	cancel       context.CancelFunc
+	cancelOnCall int
+	calls        int
+}
+type kernelResponseTransformAdapter struct{ attempts *[]string }
 
 type scopedProbeAdapter struct{ attempts *[]string }
 
@@ -211,6 +217,64 @@ func (transform responseMutationFixture) ApplyResponse(_ context.Context, event 
 	return transform.mutate(event), nil
 }
 
+func (kernelResponseTransformAdapter) ID() string { return "kernel-response-transform-cancel" }
+func (kernelResponseTransformAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
+}
+func (kernelResponseTransformAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
+	return UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
+}
+func (adapter kernelResponseTransformAdapter) Execute(_ context.Context, request UpstreamRequest) (UpstreamResponse, error) {
+	*adapter.attempts = append(*adapter.attempts, request.URL)
+	return UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader("response"))}, nil
+}
+func (kernelResponseTransformAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
+func (kernelResponseTransformAdapter) RenderResponse(ctx context.Context, _ UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+	for index, text := range []string{"first", "second"} {
+		transformCtx := ctx
+		if index > 0 {
+			transformCtx = withResponseOutputStarted(ctx)
+		}
+		event := ResponseEvent{At: time.Now(), Kind: EventTextDelta, Text: text}
+		if hooks.TransformResponse != nil {
+			updated, err := hooks.TransformResponse(transformCtx, event)
+			if err != nil {
+				if hooks.OnError != nil {
+					hooks.OnError(err)
+				}
+				return err
+			}
+			event = updated
+		}
+		if index == 0 && hooks.OnFirstByte != nil {
+			hooks.OnFirstByte(event.At)
+		}
+		if hooks.OnEvent != nil {
+			hooks.OnEvent(event)
+		}
+		if _, err := io.WriteString(writer, event.Text); err != nil {
+			return err
+		}
+	}
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(UsageEvent{Status: "ok"})
+	}
+	return nil
+}
+
+func (transform *cancellingKernelResponseTransform) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.kernel-response-cancel", ContractVersion: 1}, ImplementationVersion: "1", Label: "Kernel response cancellation", Description: "Cancel at a selected semantic event.", Effects: []ResponseTransformEffect{ResponseEffectText}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+
+func (transform *cancellingKernelResponseTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	transform.calls++
+	event.Text += "!"
+	if transform.calls == transform.cancelOnCall {
+		transform.cancel()
+	}
+	return event, nil
+}
+
 func TestTransformsEnforcePayloadAndDeadlineBounds(t *testing.T) {
 	scope := daemonTransformScope()
 	requestTransform := boundedRequestTransform{}
@@ -327,6 +391,62 @@ func TestKernelDoesNotDispatchWhenRequestTransformCancels(t *testing.T) {
 	}
 	if len(attempts) != 0 {
 		t.Fatalf("kernel dispatched after transform cancellation: %v", attempts)
+	}
+}
+
+func TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		cancelOnCall int
+		wantBody     string
+	}{
+		{name: "before commit", cancelOnCall: 1, wantBody: ""},
+		{name: "after first event commit", cancelOnCall: 2, wantBody: "first!"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			transform := &cancellingKernelResponseTransform{cancel: cancel, cancelOnCall: test.cancelOnCall}
+			binding := TransformBinding{ID: "daemon.cancel-response", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope(), FailureMode: TransformSafeFailOpen}
+			snapshot, err := BuildSnapshot(SnapshotInput{
+				PublicModels: []PublicModel{{Name: "role", TargetRef: "role"}},
+				Nodes:        []ModelNode{{ID: "role", Kind: ModelCombo, Strategy: StrategyFallback, Members: []MemberRef{{Kind: MemberRoute, ID: "route-a"}, {Kind: MemberRoute, ID: "route-b"}}}},
+				Routes: []Route{
+					{ID: "route-a", Enabled: true, Protocol: ProtocolOpenAIChat, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"kernel-response-transform-cancel"}}}},
+					{ID: "route-b", Enabled: true, Protocol: ProtocolOpenAIChat, OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"kernel-response-transform-cancel"}}}},
+				},
+				TransformBindings: []TransformBinding{binding},
+			}, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, err := New(snapshot, nil, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Close()
+			if err := engine.ResponseTransforms.Register(transform); err != nil {
+				t.Fatal(err)
+			}
+			var attempts []string
+			engine.Adapters["kernel-response-transform-cancel"] = kernelResponseTransformAdapter{attempts: &attempts}
+			writer := httptest.NewRecorder()
+			err = engine.Execute(ctx, NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}, Credential{}, writer)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("response transform cancellation returned %v", err)
+			}
+			if !reflect.DeepEqual(attempts, []string{"route-a"}) {
+				t.Fatalf("kernel switched fallback after cancellation: %v", attempts)
+			}
+			if writer.Body.String() != test.wantBody {
+				t.Fatalf("response bytes=%q want %q", writer.Body.String(), test.wantBody)
+			}
+			select {
+			case usage := <-engine.Events:
+				t.Fatalf("cancelled response emitted a usage completion: %#v", usage)
+			default:
+			}
+		})
 	}
 }
 

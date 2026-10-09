@@ -112,6 +112,12 @@ not appear in the selected route's usage compatibility plan. These tests
 complement SG5's existing scoped, persistence, bounds, fail-open and cancellation
 fixtures; the broader kernel cancellation matrix remains open.
 
+`TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit`
+adds serving-boundary cancellation evidence: client cancellation during a
+response transform fails closed both before the first write and after a
+committed event, never switches to another route, and never emits successful
+usage for the cancelled request.
+
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`
 proves the OpenAI Chat native-format codec replaces stale tools/tool-choice/
