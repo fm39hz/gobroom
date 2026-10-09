@@ -269,7 +269,7 @@ func TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange(t *testi
 	}
 }
 
-func TestNativeResponsesOverlayProjectsTransformedMessageRole(t *testing.T) {
+func TestNativeResponsesOverlayRejectsSourceMessageRoleChange(t *testing.T) {
 	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
 		"model": "role",
 		"input": []any{map[string]any{"type": "message", "role": "user", "content": "text"}},
@@ -279,12 +279,8 @@ func TestNativeResponsesOverlayProjectsTransformedMessageRole(t *testing.T) {
 	}
 	parsed.Request.Mutations.Messages = true
 	parsed.Request.Messages[0].Role = "assistant"
-	updated, err := overlayResponsesInput(parsed.Request.Raw["input"], parsed.Request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if role := updated.([]any)[0].(map[string]any)["role"]; role != "assistant" {
-		t.Fatalf("transformed Responses message role was not projected: %v", role)
+	if _, err := overlayResponsesInput(parsed.Request.Raw["input"], parsed.Request); err == nil || !strings.Contains(err.Error(), "source message role is immutable") {
+		t.Fatalf("source role change was not rejected: %v", err)
 	}
 }
 

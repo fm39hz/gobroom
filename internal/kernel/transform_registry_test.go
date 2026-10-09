@@ -969,6 +969,9 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 		{name: "content metadata immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) {
 			request.Messages[0].Content.([]normalize.ContentPart)[0].Metadata["cache_control"] = "rewritten"
 		}, wantError: "opaque content structure or metadata"},
+		{name: "message role immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) {
+			request.Messages[0].Role = "assistant"
+		}, wantError: "immutable message role"},
 		{name: "prompt metadata immutable", effects: []TransformEffect{TransformPrompt}, mutate: func(request *NormalizedRequest) {
 			request.Prompt.Layers[0].Parts[0].Metadata["cache_control"] = "rewritten"
 		}, wantError: "opaque prompt metadata or content structure"},

@@ -157,12 +157,11 @@ kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransform
 proves the OpenAI Chat native-format codec replaces stale tools/tool-choice/
 generation fields while retaining unrelated raw extensions. `TestOpenAIGenerationAndParallelToolChoiceNormalizeIntoTypedIR` covers the typed source contract consumed by those overlays. `TestNativeResponsesEgressOverlaysTypedMutationsAndPreservesExtensions` proves native Responses overlays tools, choice, generation, reasoning and continuity while retaining extensions. `TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems` patches native system/user content using retained source metadata while preserving opaque function-call input; `TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation` proves unsupported operation/modalities and stop-sequence changes fail admission. `TestNativeResponsesOverlaysTransformedToolCallAndResultItems` covers function-call argument and output updates with stable correlation and opaque item metadata. `TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange` proves message-only transforms cannot silently leave native function-call items in stale order. `TestNativeAnthropicEgressOverlaysTypedFacetsAndPreservesBlocks` verifies transformed system/message/tool-use/tool-result blocks, tool-choice, generation and thinking are written back while cache-control/vendor metadata, block order and unsupported provider blocks remain intact. Remaining: additional Anthropic opaque-envelope fixtures, opaque nested Chat-style tool-call metadata that has no Responses mapping, and the full cancellation matrix.
 
-`TestNativeAnthropicOverlayProjectsTransformedMessageRole` and
-`TestNativeResponsesOverlayProjectsTransformedMessageRole` verify canonical
-message-role changes are written to native wire items. Role changes that would
-make Anthropic `tool_use` history invalid or turn a Responses `function_call`
-into a non-assistant item fail closed in the matching role-change rejection
-tests.
+`TestNativeAnthropicOverlayRejectsSourceMessageRoleChange` and
+`TestNativeResponsesOverlayRejectsSourceMessageRoleChange` verify native
+overlays fail closed if a direct caller bypasses the kernel's immutable
+message-role identity contract. Tool-use and function-call role checks remain
+additional structural guards.
 
 `TestNativeResponsesConvertsCanonicalNestedChatToolCallMetadata` converts the
 standard nested Chat `id/type/function` wrapper into typed Responses call fields;

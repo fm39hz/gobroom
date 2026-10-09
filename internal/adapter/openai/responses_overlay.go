@@ -254,9 +254,11 @@ func overlayResponsesInput(rawInput any, request kernel.NormalizedRequest) (any,
 			if message.Role != "user" && message.Role != "assistant" {
 				return nil, fmt.Errorf("transformed Responses message role %q has no native input mapping", message.Role)
 			}
+			if message.Role != role {
+				return nil, fmt.Errorf("Responses source message role is immutable")
+			}
 			usedMessages[messageIndex] = true
 			patched := copyObject(item)
-			patched["role"] = message.Role
 			content, err := responsesMessageContent(message.Content, message.Role)
 			if err != nil {
 				return nil, err

@@ -223,13 +223,15 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 			if projectedRole != "user" && projectedRole != "assistant" {
 				return nil, fmt.Errorf("transformed Anthropic source message role %q has no native message mapping", projectedRole)
 			}
+			if sourceRole, _ := source["role"].(string); projectedRole != sourceRole {
+				return nil, fmt.Errorf("Anthropic source message role is immutable")
+			}
 			if anthropicSourceHasBlockType(source, "tool_use") && projectedRole != "assistant" {
 				return nil, fmt.Errorf("Anthropic tool_use history requires the assistant role")
 			}
 			if anthropicSourceHasBlockType(source, "tool_result") && projectedRole != "user" {
 				return nil, fmt.Errorf("Anthropic tool_result history requires the user role")
 			}
-			patchedMessage["role"] = projectedRole
 		}
 		content, _ := source["content"].([]any)
 		if text, isText := source["content"].(string); isText {
