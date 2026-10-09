@@ -86,6 +86,8 @@ test-conformance-transform-boundaries:
 	go test ./internal/kernel -run '^(TestRequestTransformCannotAppendOpaqueMessageMetadata|TestRequestTransformAcceptsCanonicalMessageSuffix|TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded)$$' -count=1
 	go test ./internal/adapter/openai -run '^(TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix|TestNativeChatMessageRejectsUnmappedCanonicalContentParts|TestNativeResponsesConvertsCanonicalNestedChatToolCallMetadata|TestNativeResponsesRejectsOpaqueNestedChatToolCallMetadata|TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange|TestNativeResponsesOverlayRejectsSourceMessageRoleChange)$$' -count=1
 	go test ./internal/adapter/anthropic -run '^(TestNativeAnthropicOverlayAppendsTypedMessagesAndToolResults|TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages|TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent|TestNativeAnthropicOverlayRejectsReorderedSourceMessages|TestNativeAnthropicOverlayRejectsSourceMessageRoleChange)$$' -count=1
+	go test ./internal/api -run '^TestClientDisconnectCancelsDataPlaneExecution$$' -count=1
+	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
 
 test-v: ## verbose tests
 	go test ./... -count=1 -v
