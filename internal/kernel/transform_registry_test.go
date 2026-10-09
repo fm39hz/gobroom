@@ -37,6 +37,10 @@ type artifactMutationTransform struct{}
 type safeFailOpenRequestTransform struct{}
 type safeFailOpenEffectTransform struct{}
 type safeFailOpenResponseTransform struct{}
+type boundedSlowResponseTransform struct{}
+type boundedRequestTransform struct{}
+type oversizedRequestOutputTransform struct{}
+type oversizedResponseOutputTransform struct{}
 
 type scopedProbeAdapter struct{ attempts *[]string }
 
@@ -103,6 +107,102 @@ func (safeFailOpenResponseTransform) Definition() ResponseTransformDefinition {
 func (safeFailOpenResponseTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
 	event.Text = "partially rewritten"
 	return event, errors.New("rendering failed")
+}
+
+func (boundedSlowResponseTransform) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.bounded-slow-response", ContractVersion: 1}, ImplementationVersion: "1", Label: "Bounded slow response", Description: "Fixture for transform deadlines.", ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 1024, MaxOutputBytes: 1024, MaxBufferedBytes: 1024, DeadlineMillis: 1}, Effects: []ResponseTransformEffect{ResponseEffectText}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+
+func (boundedSlowResponseTransform) ApplyResponse(ctx context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	timer := time.NewTimer(5 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return event, ctx.Err()
+	case <-timer.C:
+		return event, nil
+	}
+}
+
+func (boundedRequestTransform) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.bounded-request", ContractVersion: 1}, ImplementationVersion: "1", Label: "Bounded request", Description: "Fixture for transform input bounds.", Stage: TransformBeforeRequirements, ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 1, MaxOutputBytes: 1024, MaxBufferedBytes: 1024, DeadlineMillis: 50}, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+
+func (boundedRequestTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	request.Messages[0].Content = "must not be applied"
+	return nil
+}
+
+func (oversizedRequestOutputTransform) Definition() TransformDefinition {
+	return TransformDefinition{Ref: extensions.Ref{Kind: RequestTransformKind, ID: "fixture.oversized-request-output", ContractVersion: 1}, ImplementationVersion: "1", Label: "Oversized request output", Description: "Fixture for transform output bounds.", Stage: TransformBeforeRequirements, ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 1024, MaxOutputBytes: 80, MaxBufferedBytes: 1024, DeadlineMillis: 50}, Effects: []TransformEffect{TransformInput}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+
+func (oversizedRequestOutputTransform) Apply(_ context.Context, request *NormalizedRequest, _ json.RawMessage) error {
+	request.Messages[0].Content = strings.Repeat("x", 256)
+	return nil
+}
+
+func (oversizedResponseOutputTransform) Definition() ResponseTransformDefinition {
+	return ResponseTransformDefinition{Ref: extensions.Ref{Kind: ResponseTransformKind, ID: "fixture.oversized-response-output", ContractVersion: 1}, ImplementationVersion: "1", Label: "Oversized response output", Description: "Fixture for transform output bounds.", ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 1024, MaxOutputBytes: 80, MaxBufferedBytes: 1024, DeadlineMillis: 50}, Effects: []ResponseTransformEffect{ResponseEffectText}, FailureModes: []TransformFailureMode{TransformSafeFailOpen}}
+}
+
+func (oversizedResponseOutputTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
+	event.Text = strings.Repeat("x", 256)
+	return event, nil
+}
+
+func TestTransformsEnforcePayloadAndDeadlineBounds(t *testing.T) {
+	scope := daemonTransformScope()
+	requestTransform := boundedRequestTransform{}
+	requestRegistry := NewRequestTransformRegistry()
+	if err := requestRegistry.Register(requestTransform); err != nil {
+		t.Fatal(err)
+	}
+	request := NormalizedRequest{Model: "m", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "x"}}}
+	requestBindings := []TransformBinding{{ID: "bounded-request", TransformRef: requestTransform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	report, err := requestRegistry.ApplyScopesWithReport(context.Background(), &request, requestBindings, scope)
+	if err != nil || request.Messages[0].Content != "x" || len(report.Failures) != 1 || report.Failures[0].Reason != TransformFailureBudget {
+		t.Fatalf("request input bound not applied transactionally: request=%#v report=%#v err=%v", request, report, err)
+	}
+
+	responseTransform := boundedSlowResponseTransform{}
+	responseRegistry := NewResponseTransformRegistry()
+	if err := responseRegistry.Register(responseTransform); err != nil {
+		t.Fatal(err)
+	}
+	event := ResponseEvent{Kind: EventTextDelta, Text: "original"}
+	responseBindings := []TransformBinding{{ID: "bounded-response", TransformRef: responseTransform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	updated, report, err := responseRegistry.ApplyScopesWithReport(context.Background(), event, responseBindings, scope)
+	if err != nil || updated.Text != event.Text || len(report.Failures) != 1 || report.Failures[0].Reason != TransformFailureDeadline {
+		t.Fatalf("response deadline not handled as safe fail-open: updated=%#v report=%#v err=%v", updated, report, err)
+	}
+}
+
+func TestTransformsRejectOversizedOutputsTransactionally(t *testing.T) {
+	scope := daemonTransformScope()
+	requestTransform := oversizedRequestOutputTransform{}
+	requestRegistry := NewRequestTransformRegistry()
+	if err := requestRegistry.Register(requestTransform); err != nil {
+		t.Fatal(err)
+	}
+	request := NormalizedRequest{Model: "m", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Messages: []Message{{Role: "user", Content: "original"}}}
+	requestBindings := []TransformBinding{{ID: "large-request-output", TransformRef: requestTransform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	report, err := requestRegistry.ApplyScopesWithReport(context.Background(), &request, requestBindings, scope)
+	if err != nil || request.Messages[0].Content != "original" || len(report.Failures) != 1 || report.Failures[0].Reason != TransformFailureBudget {
+		t.Fatalf("oversized request output was published: request=%#v report=%#v err=%v", request, report, err)
+	}
+
+	responseTransform := oversizedResponseOutputTransform{}
+	responseRegistry := NewResponseTransformRegistry()
+	if err := responseRegistry.Register(responseTransform); err != nil {
+		t.Fatal(err)
+	}
+	event := ResponseEvent{Kind: EventTextDelta, Text: "original"}
+	responseBindings := []TransformBinding{{ID: "large-response-output", TransformRef: responseTransform.Definition().Ref, Enabled: true, Scope: scope, FailureMode: TransformSafeFailOpen}}
+	updated, report, err := responseRegistry.ApplyScopesWithReport(context.Background(), event, responseBindings, scope)
+	if err != nil || updated.Text != event.Text || len(report.Failures) != 1 || report.Failures[0].Reason != TransformFailureBudget {
+		t.Fatalf("oversized response output was published: updated=%#v report=%#v err=%v", updated, report, err)
+	}
 }
 
 func TestRequestTransformSafeFailOpenRollsBackAndReportsWithoutErrorText(t *testing.T) {

@@ -378,11 +378,18 @@ transform may fail open only before any output for its affected atomic unit;
 it cannot retract streamed deltas. Cancellation, secret-scope violations and
 identity violations always fail closed.
 
-Execution rejects invalid pipeline bounds at configuration time. A request
-budget caps CPU work, buffering and extension deadlines. Implementations must
-cooperate with cancellation; arbitrary in-process Go code is not a sandbox
-and cannot be forcibly made safe by a timer. Blocking external work belongs
-in bounded workers/processes with cancellable I/O. Observer queues remain
+Each transform descriptor carries input/output byte bounds, a maximum buffered
+payload size and a deadline. The registry checks serialized input before
+copying it, executes with a deadline context, and checks serialized output
+before publishing it. Unset transform bounds use a 1 MiB buffer/input/output
+ceiling and a 250 ms deadline. Resource-limit and deadline skips are distinct
+safe-fail-open evidence; client cancellation always remains fail-closed.
+These are payload and cooperative-time bounds, not a security sandbox: an
+in-process Go transform that ignores context can still occupy its caller, and
+an implementation can allocate temporary memory before returning an output
+that is rejected. Untrusted or hard-CPU/memory-bounded extensions require an
+isolated process/runtime with bounded I/O. Blocking external work belongs in
+bounded workers/processes with cancellable I/O. Observer queues remain
 bounded and independent of the rendering path.
 
 The serving sequence is:

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -112,8 +113,15 @@ const (
 type TransformFailureReason string
 
 const (
-	TransformFailureApply  TransformFailureReason = "apply_failed"
-	TransformFailureEffect TransformFailureReason = "effect_violation"
+	TransformFailureApply    TransformFailureReason = "apply_failed"
+	TransformFailureEffect   TransformFailureReason = "effect_violation"
+	TransformFailureBudget   TransformFailureReason = "resource_limit"
+	TransformFailureDeadline TransformFailureReason = "deadline_exceeded"
+)
+
+const (
+	defaultTransformBufferBytes int64 = 1 << 20
+	defaultTransformDeadline          = 250 * time.Millisecond
 )
 
 type TransformFailure struct {
@@ -355,11 +363,33 @@ func (r *ResponseTransformRegistry) ApplyScopesWithReport(ctx context.Context, e
 			return ResponseEvent{}, report, fmt.Errorf("response transform binding %q references missing transform %q", binding.ID, binding.TransformRef.Key())
 		}
 		definition := transform.Definition()
+		bounds := effectiveTransformBounds(definition.ResourceBounds)
+		input, marshalErr := json.Marshal(event)
+		if marshalErr != nil {
+			return ResponseEvent{}, report, fmt.Errorf("response transform %q: encode input: %w", definition.Ref.Key(), marshalErr)
+		}
+		if int64(len(input)) > bounds.MaxInputBytes || int64(len(input)) > bounds.MaxBufferedBytes {
+			if failOpenTransform(ctx, binding, definition.FailureModes, true) {
+				report.Failures = append(report.Failures, transformFailure(binding, definition.Ref, TransformFailureBudget))
+				continue
+			}
+			return ResponseEvent{}, report, fmt.Errorf("response transform %q input exceeds declared resource bounds", definition.Ref.Key())
+		}
 		before := cloneResponseEvent(event)
-		updated, err := transform.ApplyResponse(ctx, cloneResponseEvent(event), append(json.RawMessage(nil), binding.Options...))
+		transformCtx, cancel := transformContext(ctx, bounds)
+		updated, err := transform.ApplyResponse(transformCtx, cloneResponseEvent(event), append(json.RawMessage(nil), binding.Options...))
+		deadlineExceeded := errors.Is(transformCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		cancel()
+		if err == nil && deadlineExceeded {
+			err = context.DeadlineExceeded
+		}
 		if err != nil {
+			reason := TransformFailureApply
+			if deadlineExceeded {
+				reason = TransformFailureDeadline
+			}
 			if failOpenTransform(ctx, binding, definition.FailureModes, true) && !errors.Is(err, ErrTransformSafetyViolation) {
-				report.Failures = append(report.Failures, transformFailure(binding, definition.Ref, TransformFailureApply))
+				report.Failures = append(report.Failures, transformFailure(binding, definition.Ref, reason))
 				continue
 			}
 			return ResponseEvent{}, report, fmt.Errorf("response transform %q: %w", definition.Ref.Key(), err)
@@ -369,6 +399,14 @@ func (r *ResponseTransformRegistry) ApplyScopesWithReport(ctx context.Context, e
 		}
 		if !reflect.DeepEqual(updated.Artifacts, before.Artifacts) {
 			return ResponseEvent{}, report, fmt.Errorf("response transform %q: %w: changed immutable artifact references", definition.Ref.Key(), ErrTransformSafetyViolation)
+		}
+		output, marshalErr := json.Marshal(updated)
+		if marshalErr != nil || int64(len(output)) > bounds.MaxOutputBytes || int64(len(output)) > bounds.MaxBufferedBytes {
+			if failOpenTransform(ctx, binding, definition.FailureModes, true) {
+				report.Failures = append(report.Failures, transformFailure(binding, definition.Ref, TransformFailureBudget))
+				continue
+			}
+			return ResponseEvent{}, report, fmt.Errorf("response transform %q output exceeds declared resource bounds", definition.Ref.Key())
 		}
 		changedText := updated.Text != before.Text
 		changedArguments := updated.ToolArguments != before.ToolArguments
@@ -559,14 +597,37 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 	for _, item := range transforms {
 		transform := item.impl
 		definition := transform.Definition()
-		before := normalize.CloneRequest(*request)
-		updated := normalize.CloneRequest(*request)
-		if err := transform.Apply(ctx, &updated, append(json.RawMessage(nil), item.binding.Options...)); err != nil {
-			if failOpenTransform(ctx, item.binding, definition.FailureModes, false) && !errors.Is(err, ErrTransformSafetyViolation) {
-				report.Failures = append(report.Failures, transformFailure(item.binding, definition.Ref, TransformFailureApply))
+		bounds := effectiveTransformBounds(definition.ResourceBounds)
+		input, marshalErr := json.Marshal(request)
+		if marshalErr != nil {
+			return report, fmt.Errorf("request transform %q: encode input: %w", definition.Ref.Key(), marshalErr)
+		}
+		if int64(len(input)) > bounds.MaxInputBytes || int64(len(input)) > bounds.MaxBufferedBytes {
+			if failOpenTransform(ctx, item.binding, definition.FailureModes, false) {
+				report.Failures = append(report.Failures, transformFailure(item.binding, definition.Ref, TransformFailureBudget))
 				continue
 			}
-			return report, fmt.Errorf("request transform %q: %w", definition.Ref.Key(), err)
+			return report, fmt.Errorf("request transform %q input exceeds declared resource bounds", definition.Ref.Key())
+		}
+		before := normalize.CloneRequest(*request)
+		updated := normalize.CloneRequest(*request)
+		transformCtx, cancel := transformContext(ctx, bounds)
+		applyErr := transform.Apply(transformCtx, &updated, append(json.RawMessage(nil), item.binding.Options...))
+		deadlineExceeded := errors.Is(transformCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
+		cancel()
+		if applyErr == nil && deadlineExceeded {
+			applyErr = context.DeadlineExceeded
+		}
+		if applyErr != nil {
+			reason := TransformFailureApply
+			if deadlineExceeded {
+				reason = TransformFailureDeadline
+			}
+			if failOpenTransform(ctx, item.binding, definition.FailureModes, false) && !errors.Is(applyErr, ErrTransformSafetyViolation) {
+				report.Failures = append(report.Failures, transformFailure(item.binding, definition.Ref, reason))
+				continue
+			}
+			return report, fmt.Errorf("request transform %q: %w", definition.Ref.Key(), applyErr)
 		}
 		if updated.Model != before.Model || updated.Operation != before.Operation || updated.SourceFormat != before.SourceFormat || updated.Stream != before.Stream || updated.Session.ID != before.Session.ID || updated.Session.Client != before.Session.Client || updated.Session.Conversation != before.Session.Conversation || !reflect.DeepEqual(updated.Transport, before.Transport) {
 			return report, fmt.Errorf("request transform %q: %w: changed immutable request identity or client contract", definition.Ref.Key(), ErrTransformSafetyViolation)
@@ -578,9 +639,37 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 			}
 			return report, fmt.Errorf("request transform %q: %w", definition.Ref.Key(), err)
 		}
+		output, marshalErr := json.Marshal(updated)
+		if marshalErr != nil || int64(len(output)) > bounds.MaxOutputBytes || int64(len(output)) > bounds.MaxBufferedBytes {
+			if failOpenTransform(ctx, item.binding, definition.FailureModes, false) {
+				report.Failures = append(report.Failures, transformFailure(item.binding, definition.Ref, TransformFailureBudget))
+				continue
+			}
+			return report, fmt.Errorf("request transform %q output exceeds declared resource bounds", definition.Ref.Key())
+		}
 		*request = updated
 	}
 	return report, nil
+}
+
+func effectiveTransformBounds(bounds extensions.ResourceBounds) extensions.ResourceBounds {
+	if bounds.MaxBufferedBytes <= 0 {
+		bounds.MaxBufferedBytes = defaultTransformBufferBytes
+	}
+	if bounds.MaxInputBytes <= 0 || bounds.MaxInputBytes > bounds.MaxBufferedBytes {
+		bounds.MaxInputBytes = bounds.MaxBufferedBytes
+	}
+	if bounds.MaxOutputBytes <= 0 || bounds.MaxOutputBytes > bounds.MaxBufferedBytes {
+		bounds.MaxOutputBytes = bounds.MaxBufferedBytes
+	}
+	if bounds.DeadlineMillis <= 0 {
+		bounds.DeadlineMillis = defaultTransformDeadline.Milliseconds()
+	}
+	return bounds
+}
+
+func transformContext(parent context.Context, bounds extensions.ResourceBounds) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(parent, time.Duration(bounds.DeadlineMillis)*time.Millisecond)
 }
 
 func transformFailure(binding TransformBinding, ref extensions.Ref, reason TransformFailureReason) TransformFailure {
