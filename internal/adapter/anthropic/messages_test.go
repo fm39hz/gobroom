@@ -251,3 +251,16 @@ func TestNativeAnthropicEgressOverlaysTypedFacetsAndPreservesBlocks(t *testing.T
 		t.Fatalf("Anthropic message block overlay lost content/order/provenance: %#v", messages)
 	}
 }
+
+func TestNativeAnthropicOverlayRejectsReorderedSourceMessages(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"role","max_tokens":32,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"second"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := parsed.Request.Messages
+	messages[0], messages[1] = messages[1], messages[0]
+	_, err = overlayAnthropicMessages(parsed.Request.Raw["messages"], messages)
+	if err == nil || !strings.Contains(err.Error(), "message reorder cannot be safely overlaid") {
+		t.Fatalf("reordered Anthropic source messages were not rejected explicitly: %v", err)
+	}
+}

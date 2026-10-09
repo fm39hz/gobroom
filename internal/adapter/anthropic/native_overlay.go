@@ -169,15 +169,8 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 	if !ok {
 		return nil, fmt.Errorf("Anthropic messages envelope %T cannot be safely overlaid", raw)
 	}
-	sourceCounts := make(map[string]int, len(rawMessages))
-	for _, rawMessage := range rawMessages {
-		if source, ok := rawMessage.(map[string]any); ok {
-			encoded, err := json.Marshal(source)
-			if err != nil {
-				return nil, fmt.Errorf("fingerprint Anthropic source message: %w", err)
-			}
-			sourceCounts[string(encoded)]++
-		}
+	if err := validateAnthropicMessageOrder(rawMessages, messages); err != nil {
+		return nil, err
 	}
 	for _, message := range messages {
 		if message.Metadata == nil {
@@ -202,13 +195,6 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 		if !ok {
 			output[index] = rawMessage
 			continue
-		}
-		encodedSource, err := json.Marshal(source)
-		if err != nil {
-			return nil, fmt.Errorf("fingerprint Anthropic source message: %w", err)
-		}
-		if sourceCounts[string(encodedSource)] > 1 {
-			return nil, fmt.Errorf("duplicate Anthropic source messages have ambiguous canonical provenance")
 		}
 		segments := make([]int, 0)
 		for messageIndex, message := range messages {
@@ -337,6 +323,48 @@ func overlayAnthropicMessages(raw any, messages []normalize.Message) ([]any, err
 		output[index] = patchedMessage
 	}
 	return output, nil
+}
+
+// Native overlay patches the original wire items in place to retain provider
+// metadata and unsupported blocks. Until it can rebuild that envelope while
+// preserving those opaque items, a transform that reorders source messages
+// must fail closed instead of silently sending the original order.
+func validateAnthropicMessageOrder(rawMessages []any, messages []normalize.Message) error {
+	sourceOrder := make(map[string]int, len(rawMessages))
+	for index, rawMessage := range rawMessages {
+		source, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		encoded, err := json.Marshal(source)
+		if err != nil {
+			return fmt.Errorf("fingerprint Anthropic source message: %w", err)
+		}
+		key := string(encoded)
+		if _, exists := sourceOrder[key]; exists {
+			return fmt.Errorf("duplicate Anthropic source messages have ambiguous canonical provenance")
+		}
+		sourceOrder[key] = index
+	}
+	lastSourceIndex := -1
+	for _, message := range messages {
+		if message.Metadata == nil {
+			continue
+		}
+		encoded, err := json.Marshal(message.Metadata)
+		if err != nil {
+			return fmt.Errorf("fingerprint transformed Anthropic message: %w", err)
+		}
+		sourceIndex, found := sourceOrder[string(encoded)]
+		if !found {
+			continue
+		}
+		if sourceIndex < lastSourceIndex {
+			return fmt.Errorf("Anthropic message reorder cannot be safely overlaid with opaque source blocks")
+		}
+		lastSourceIndex = sourceIndex
+	}
+	return nil
 }
 
 type anthropicPartIndex struct{ message, part int }

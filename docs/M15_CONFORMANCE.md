@@ -118,6 +118,12 @@ response transform fails closed both before the first write and after a
 committed event, never switches to another route, and never emits successful
 usage for the cancelled request.
 
+`TestNativeAnthropicOverlayRejectsReorderedSourceMessages` records the current
+safe boundary for Anthropic native overlays: a transform that changes source
+message order is rejected explicitly because the overlay preserves opaque
+provider blocks by patching their original wire positions. It does not silently
+send the original order as if the transform succeeded.
+
 The typed-mutation follow-up records which canonical request facets changed in
 kernel-owned, non-serialized markers. `TestNativeChatEgressOverlaysOnlyTransformedTypedFacets`
 proves the OpenAI Chat native-format codec replaces stale tools/tool-choice/
