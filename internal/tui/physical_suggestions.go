@@ -24,6 +24,16 @@ func suggestPhysicalName(routes []discoveredRoute) string {
 	return name
 }
 
+func suggestedPhysicalSource(route discoveredRoute, canonicalName string) routeReference {
+	if strings.EqualFold(strings.TrimSpace(route.ExternalID), canonicalName) {
+		return routeReference{RouteID: route.ID, Fidelity: "exact"}
+	}
+	return routeReference{RouteID: route.ID, Fidelity: "alias", Evidence: []map[string]any{{
+		"source": "user_assertion", "confidence": 0.5,
+		"note":  "selected after reviewing the canonical-name suggestion " + canonicalName,
+	}}}
+}
+
 func canonicalPhysicalCandidate(externalID string) string {
 	value := strings.TrimSpace(externalID)
 	if value == "" {

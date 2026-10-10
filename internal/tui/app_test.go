@@ -1159,6 +1159,9 @@ func TestSourcePickerBuildsFamilyFromProviderVariants(t *testing.T) {
 	if len(model.form.typedSources) != 3 || model.form.typedSources[0].Fidelity != "alias" || len(model.form.typedSources[0].Evidence) == 0 {
 		t.Fatalf("typed source references=%#v", model.form.typedSources)
 	}
+	if note, _ := model.form.typedSources[0].Evidence[0]["note"].(string); !strings.Contains(note, "qwen-3.7-max") {
+		t.Fatalf("suggested alias evidence should retain the reviewed canonical identity, got %#v", model.form.typedSources[0].Evidence)
+	}
 	if got := model.form.inputs[0].Value(); got != "qwen-3.7-max" {
 		t.Fatalf("canonical physical name suggestion=%q want qwen-3.7-max", got)
 	}

@@ -2044,6 +2044,17 @@ func selectedDiscoveredRoutesFromEntries(items []entry, selected map[string]bool
 
 func (m *app) physicalGroupingForm(routes []discoveredRoute, sources []routeReference) *formState {
 	suggestion := suggestPhysicalName(routes)
+	if suggestion != "" {
+		routesByID := make(map[string]discoveredRoute, len(routes))
+		for _, route := range routes {
+			routesByID[route.ID] = route
+		}
+		for index, source := range sources {
+			if route, ok := routesByID[source.RouteID]; ok {
+				sources[index] = suggestedPhysicalSource(route, suggestion)
+			}
+		}
+	}
 	var physicals []physicalModel
 	_ = json.Unmarshal(m.raw[sectionPhysical], &physicals)
 	if suggestion != "" {
