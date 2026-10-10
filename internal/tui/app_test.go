@@ -1020,7 +1020,7 @@ func TestSelectedConnectionModelImportReviewsAndSubmitsOnlyCheckedIDs(t *testing
 	model.activePanel = int(dashboardConnections)
 	model.activeTabs[dashboardConnections] = 1
 	model.setPaneItems(model.activeContextIndex(), []entry{{key: "conn-a", title: "account A", payload: connection{ID: "conn-a", ProviderNodeID: "node-a", Name: "account A", Enabled: true}}})
-	requests := make(chan daemon.IPCRequest, 2)
+	requests := make(chan daemon.IPCRequest, 8)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	socket := t.TempDir() + "/control.sock"
@@ -1060,7 +1060,7 @@ func TestSelectedConnectionModelImportReviewsAndSubmitsOnlyCheckedIDs(t *testing
 	if importCommand == nil {
 		t.Fatal("Enter did not import the reviewed selection")
 	}
-	_ = importCommand()
+	importResult := importCommand()
 	previewRequest := <-requests
 	importRequest := <-requests
 	if previewRequest.Method != "connections.preview_models" || importRequest.Method != "providers.refresh_models" {
@@ -1072,6 +1072,32 @@ func TestSelectedConnectionModelImportReviewsAndSubmitsOnlyCheckedIDs(t *testing
 	selectedIDs, ok := importRequest.Params["modelIDs"].([]any)
 	if !ok || len(selectedIDs) != 2 || selectedIDs[0] != "model-a" || selectedIDs[1] != "model-c" {
 		t.Fatalf("import did not submit exact checked upstream IDs: %#v", importRequest.Params["modelIDs"])
+	}
+	updated, refresh := model.Update(importResult)
+	model = updated.(*app)
+	if refresh == nil {
+		t.Fatal("successful model import did not refresh management panes")
+	}
+	refreshResult := refresh()
+	refreshMessage, ok := refreshResult.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("model import refresh should batch pane queries, got %T", refreshResult)
+	}
+	refreshedDiscovered := false
+	for _, command := range refreshMessage {
+		result, ok := command().(fetchMsg)
+		if !ok {
+			t.Fatalf("refresh pane command returned %T, want fetchMsg", result)
+		}
+		if result.section == sectionDiscovered {
+			refreshedDiscovered = true
+		}
+	}
+	if !refreshedDiscovered {
+		t.Fatal("successful import must refresh Discovered so imported routes immediately enter the Physical workflow")
+	}
+	for range len(refreshMessage) {
+		<-requests
 	}
 	updated, previewCommand = model.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	model = updated.(*app)

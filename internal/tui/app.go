@@ -2476,7 +2476,7 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 	case "auth.device.start", "auth.device.get", "auth.device.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.cancel":
 		return nil
 	case "providers.refresh_models":
-		resources = []sectionID{sectionProviders, sectionModels}
+		resources = []sectionID{sectionProviders, sectionModels, sectionDiscovered}
 	case "providers.create", "providers.update", "providers.delete":
 		resources = []sectionID{sectionProviders, sectionConnections, sectionModels}
 	case "connections.create", "connections.update", "connections.delete":

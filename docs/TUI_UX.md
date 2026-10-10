@@ -142,8 +142,10 @@ Custom IDs can be bound explicitly with repeated
 `gobroom models upsert --connection-id ID` flags; they never inherit access
 from every connection on the provider.
 Catalog review/import only adds Discovered routes; it does not create Physical
-models, Combos or expose models. The UI must identify the selected connection,
-show entitlement certainty and preserve model IDs exactly.
+models, Combos or expose models. After apply, the Discovered, Physical and
+Combo views refresh so the imported routes are immediately available for the
+next curation step. The UI must identify the selected connection, show
+entitlement certainty and preserve model IDs exactly.
 
 For direct OpenAI and Anthropic API-key setup, the provider form starts with
 the OpenAI preset; press `Ctrl+P` to cycle OpenAI → Anthropic → Custom. The
