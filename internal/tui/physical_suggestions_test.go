@@ -40,3 +40,19 @@ func TestSuggestPhysicalNameRemovesMixedCaseProviderNamespace(t *testing.T) {
 		t.Fatalf("suggestion=%q want glm-5.2", got)
 	}
 }
+
+func TestMatchingDiscoveredRoutesUsesCanonicalIdentityAndStableOrder(t *testing.T) {
+	routes := []discoveredRoute{
+		{ID: "z", ProviderPrefix: "z-provider", ExternalID: "qwen3.7-max"},
+		{ID: "other", ProviderPrefix: "other", ExternalID: "qwen3.7-max-2025"},
+		{ID: "x", ProviderPrefix: "x-provider", ExternalID: "qwen/qwen3.7-max:free"},
+		{ID: "x", ProviderPrefix: "x-provider", ExternalID: "qwen3.7-max"},
+	}
+	got := matchingDiscoveredRoutes(routes, "qwen-3.7-max")
+	if len(got) != 2 || got[0].ID != "x" || got[1].ID != "z" {
+		t.Fatalf("matching discovered routes=%#v; want only equivalent routes in stable provider order", got)
+	}
+	if got := matchingDiscoveredRoutes(routes, ""); got != nil {
+		t.Fatalf("empty canonical name matched routes: %#v", got)
+	}
+}

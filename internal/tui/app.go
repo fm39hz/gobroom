@@ -2044,7 +2044,24 @@ func selectedDiscoveredRoutesFromEntries(items []entry, selected map[string]bool
 
 func (m *app) physicalGroupingForm(routes []discoveredRoute, sources []routeReference) *formState {
 	suggestion := suggestPhysicalName(routes)
+	catalogMatches := 0
 	if suggestion != "" {
+		var catalog []discoveredRoute
+		_ = json.Unmarshal(m.raw[sectionDiscovered], &catalog)
+		matching := matchingDiscoveredRoutes(catalog, suggestion)
+		catalogMatches = len(matching)
+		seenRoutes := make(map[string]bool, len(routes))
+		for _, route := range routes {
+			seenRoutes[route.ID] = true
+		}
+		for _, route := range matching {
+			if seenRoutes[route.ID] {
+				continue
+			}
+			routes = append(routes, route)
+			sources = append(sources, suggestedPhysicalSource(route, suggestion))
+			seenRoutes[route.ID] = true
+		}
 		routesByID := make(map[string]discoveredRoute, len(routes))
 		for _, route := range routes {
 			routesByID[route.ID] = route
@@ -2082,6 +2099,9 @@ func (m *app) physicalGroupingForm(routes []discoveredRoute, sources []routeRefe
 			}
 			form.title = fmt.Sprintf("Review %s · add %d provider source(s)", suggestion, added)
 			m.status = fmt.Sprintf("identity suggestion %q matched an existing Physical; review merged sources before saving", suggestion)
+			if catalogMatches > 0 {
+				m.status = fmt.Sprintf("catalog matched %d route(s) for %q; review additions to the existing Physical before saving", catalogMatches, suggestion)
+			}
 			return form
 		}
 	}
@@ -2095,6 +2115,9 @@ func (m *app) physicalGroupingForm(routes []discoveredRoute, sources []routeRefe
 		}
 		form.title = "Review suggested Physical · " + suggestion
 		m.status = fmt.Sprintf("suggested %q from matching upstream IDs; verify identity before saving", suggestion)
+		if catalogMatches > 0 {
+			m.status = fmt.Sprintf("suggested %q; catalog matched %d equivalent route(s), review before saving", suggestion, catalogMatches)
+		}
 	} else if len(routes) > 1 {
 		m.status = "selected upstream IDs differ; choose a canonical Physical name manually"
 	}

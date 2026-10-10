@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -24,13 +25,41 @@ func suggestPhysicalName(routes []discoveredRoute) string {
 	return name
 }
 
+// matchingDiscoveredRoutes returns catalog routes whose conservative upstream
+// identity matches a reviewed Physical suggestion. The caller still presents
+// every route for user review; this only removes repetitive manual selection.
+func matchingDiscoveredRoutes(routes []discoveredRoute, canonicalName string) []discoveredRoute {
+	if canonicalName == "" {
+		return nil
+	}
+	matches := make([]discoveredRoute, 0)
+	seen := make(map[string]bool)
+	for _, route := range routes {
+		if route.ID == "" || seen[route.ID] || canonicalPhysicalCandidate(route.ExternalID) != canonicalName {
+			continue
+		}
+		seen[route.ID] = true
+		matches = append(matches, route)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].ProviderPrefix != matches[j].ProviderPrefix {
+			return matches[i].ProviderPrefix < matches[j].ProviderPrefix
+		}
+		if matches[i].ExternalID != matches[j].ExternalID {
+			return matches[i].ExternalID < matches[j].ExternalID
+		}
+		return matches[i].ID < matches[j].ID
+	})
+	return matches
+}
+
 func suggestedPhysicalSource(route discoveredRoute, canonicalName string) routeReference {
 	if strings.EqualFold(strings.TrimSpace(route.ExternalID), canonicalName) {
 		return routeReference{RouteID: route.ID, Fidelity: "exact"}
 	}
 	return routeReference{RouteID: route.ID, Fidelity: "alias", Evidence: []map[string]any{{
 		"source": "user_assertion", "confidence": 0.5,
-		"note":  "selected after reviewing the canonical-name suggestion " + canonicalName,
+		"note": "selected after reviewing the canonical-name suggestion " + canonicalName,
 	}}}
 }
 

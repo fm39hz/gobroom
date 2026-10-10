@@ -178,14 +178,16 @@ Shows physical model identities independently from combos. Selecting
 `deepseek-v4-flash` opens its ordered provider routes, capabilities, source
 policy, reverse references and exposure state. Adding a source opens a filtered
 Discovered picker; it does not turn the top-level view into raw provider rows.
-When creating a Physical from selected Discovered routes, the editor proposes a
-canonical name only if every selected upstream ID yields the same conservative
-token (for example `qwen/qwen3.7-max:free`, `qwen3.7-max` and
-`Qwen:qwen3.7-max` suggest `qwen-3.7-max`). The suggestion remains editable and
-is never saved automatically. If that name already exists, the review editor
-preloads its current policy and routes, then appends only newly selected source
-routes so equivalence grouping does not overwrite existing configuration.
-Different normalized IDs receive no merge suggestion.
+Pressing `f` on a selected Discovered route proposes a canonical name only if
+the conservative normalizer finds a stable identity. For example,
+`qwen/qwen3.7-max:free`, `qwen3.7-max` and `Qwen:qwen3.7-max` suggest
+`qwen-3.7-max`. The review draft preloads every currently discovered route with
+that same normalized identity, even when it was not selected in the list; the
+matching rows are deterministic and remain visible/editable before save. The
+suggestion is never persisted automatically. If that name already exists, the
+editor preloads its current policy and routes, then adds only missing matches,
+preserving existing configuration. Different normalized IDs receive no
+automatic grouping suggestion.
 The focused route-grouping and Combo exposure key-event scenarios run with
 `make test-model-workflow`.
 The profile, evidence, source-fidelity and aggregate views follow the

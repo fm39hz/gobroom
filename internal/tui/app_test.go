@@ -1177,6 +1177,38 @@ func TestSourcePickerBuildsFamilyFromProviderVariants(t *testing.T) {
 	}
 }
 
+func TestDiscoveredGroupingSuggestsEquivalentRoutesFromWholeCatalog(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 140, 40
+	model.activePanel = int(dashboardModels)
+	model.activeTabs[dashboardModels] = 0
+	routes := []discoveredRoute{
+		{ID: "xkiro-route", ProviderPrefix: "xkiro", ExternalID: "qwen/qwen3.7-max:free"},
+		{ID: "ocg-route", ProviderPrefix: "ocg", ExternalID: "qwen3.7-max"},
+		{ID: "g4f-route", ProviderPrefix: "g4f", ExternalID: "Qwen:qwen3.7-max"},
+		{ID: "other-revision", ProviderPrefix: "other", ExternalID: "qwen3.7-max-2025"},
+	}
+	rawRoutes, err := json.Marshal(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.raw = map[sectionID]json.RawMessage{sectionDiscovered: rawRoutes}
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: routes[0].ID, title: "xkiro/qwen/qwen3.7-max:free", payload: routes[0]}})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if model.mode != modeForm || model.form == nil {
+		t.Fatalf("f should open a reviewed Physical draft, mode=%v form=%#v", model.mode, model.form)
+	}
+	if got := model.form.memberLabels(); len(got) != 3 {
+		t.Fatalf("draft should include all equivalent catalog routes but not other revisions: %#v", got)
+	}
+	if !strings.Contains(model.status, "catalog matched 3 equivalent route(s)") {
+		t.Fatalf("auto-matched routes should be explicitly disclosed for review, status=%q", model.status)
+	}
+	if got := model.form.inputs[0].Value(); got != "qwen-3.7-max" {
+		t.Fatalf("canonical Physical suggestion=%q", got)
+	}
+}
+
 func TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview(t *testing.T) {
 	model := newApp("/tmp/gobroom.sock")
 	model.width, model.height = 140, 40
