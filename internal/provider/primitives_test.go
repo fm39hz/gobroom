@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -296,6 +298,77 @@ func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 	}
 	if _, ok := runtime.Primitives.Definition("external-chat"); !ok {
 		t.Fatal("external definition was not loaded")
+	}
+}
+
+func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *testing.T) {
+	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
+	module := RuntimeModuleFunc{Name: "fixture.audio", Init: func(runtime *RuntimeRegistry) error {
+		return runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio transcription", "Transcribe a declared audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1},"language":{"type":"string"}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever)
+	}}
+	runtime, err := NewRuntimeRegistryWithModules(module)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := ProviderDefinition{
+		ContractVersion: 1, ID: "fixture-audio-provider", Version: "1", DisplayName: "Fixture Audio Provider",
+		Auth:         PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Capabilities: CapabilitySet{AudioInput: true},
+		Operations: map[Operation]OperationBinding{OperationAudio: {
+			Protocol: "fixture_audio", TaskRef: &operationRef, ProviderFormat: "multipart-json",
+			Endpoint:            PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:           PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:        PrimitiveRef{Kind: PrimitiveRequestCodec, ID: MultipartRequestCodecID, ContractVersion: 1},
+			RequestCodecOptions: json.RawMessage(`{"modelField":"model","payloadField":"request"}`),
+			ResponseDecoder:     PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	manifest, err := EncodeManifest(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(t.TempDir(), "fixture-audio.json")
+	if err := os.WriteFile(manifestPath, manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadDefinitionFile(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := runtime.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, ok := bindings[RuntimeBindingKey(definition.ID, OperationAudio)]
+	if !ok || binding.Adapter == nil || binding.TaskRef != operationRef || binding.RequestCodecID != MultipartRequestCodecID {
+		t.Fatalf("static module + manifest did not resolve exact shared operation primitives: %#v", binding)
+	}
+	operationCatalog, err := runtime.OperationSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := normalize.Request{Model: "asr-v4", Operation: normalize.Operation(operationRef.ID), OperationContractVersion: operationRef.ContractVersion, OperationPayload: json.RawMessage(`{"audio_url":"https://assets.test/clip.wav","language":"vi"}`), SourceFormat: normalize.Format("multipart-json")}
+	prepared, err := operationCatalog.Prepare(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.OperationPayload = prepared.InputPayload
+	upstream, err := binding.Adapter.Prepare(context.Background(), request, kernel.Route{BaseURL: "https://audio.test/v1"}, kernel.Credential{Secret: "module-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(upstream.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(upstream.Headers.Get("Content-Type"), "multipart/form-data;") || !strings.Contains(string(body), "asr-v4") || !strings.Contains(string(body), "audio_url") || !strings.Contains(string(body), "https://assets.test/clip.wav") {
+		t.Fatalf("manifest-selected shared multipart primitive produced wrong request: content-type=%q body=%q", upstream.Headers.Get("Content-Type"), body)
+	}
+	metadata, err := runtime.DefinitionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metadata) == 0 {
+		t.Fatal("provider catalog omitted manifest-bound module definition")
 	}
 }
 

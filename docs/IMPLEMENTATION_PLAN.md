@@ -163,9 +163,13 @@ pending.
    secret-free and persists them for daemon-restart activation. Opaque or
    sensitive definitions remain exact external module dependencies; an
    unresolved definition is retained as inert setup only when no model route or
-   Physical source uses it. Remaining: external primitive module distribution
-   and resolution, side-by-side contract versions for provider definitions, and
-   the integrated extension proof below.
+   Physical source uses it. The runtime registry and daemon now accept
+   statically linked provider modules at the composition root; a conformance
+   fixture registers a new operation in a module and binds it from a separate
+   JSON manifest using shared multipart/HTTP primitives, with no kernel or
+   storage-schema change. Remaining: a supported external module
+   distribution/resolution contract and side-by-side contract versions for
+   provider definitions; C6 must still prove the integrated extension path.
 2. **C2 — full compatibility planning (in progress):** the kernel now asks
    adapters for a request/route/operation-scoped `CompatibilityPlan` and
    recomputes admission from immutable facet declarations rather than trusting
@@ -239,11 +243,14 @@ pending.
    idempotency semantics/expiry, async job effects, and a real non-chat
    payload/result through the shared graph executor while preserving the
    pre/post-client-commit boundary.
-6. **C6 — integrated extension proof:** implement SG1–SG7 with a provider module
-   that uses the completed contracts without changing kernel graph types,
-   core schema or generic request/frontend workflow. Add all cases to
-   `make test-conformance`; run ordinary integration checks, install delivered
-   binaries and exercise the matching CLI/control operations.
+6. **C6 — integrated extension proof (in progress):** the runtime registry and
+   daemon now accept statically linked provider modules; a module-added audio
+   task binds from a separate provider manifest using the shared multipart
+   codec, and provider metadata is visible through IPC. This leaves kernel
+   graph types, core schema and generic frontend workflow unchanged. Remaining:
+   exercise the full SG1–SG7 extension through serving, reload and bundles, then
+   run ordinary integration checks, install delivered binaries and exercise
+   matching CLI/control operations.
 
 Completion of C1–C6 proves runtime architecture closure for the declared
 scope. It does not change M2/M6/M7/M8/M9 feature completeness automatically;

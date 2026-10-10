@@ -45,6 +45,7 @@ type Config struct {
 
 type Daemon struct {
 	config              Config
+	providerModules     []provider.RuntimeModule
 	store               *store.Store
 	artifactStore       *artifacts.Store
 	server              *api.Server
@@ -144,7 +145,14 @@ type healthEvent struct {
 	state runtimehealth.RouteHealth
 }
 
-func New(config Config) *Daemon { return &Daemon{config: config} }
+func New(config Config) *Daemon { return NewWithProviderModules(config) }
+
+// NewWithProviderModules lets a statically linked daemon build add reusable
+// provider implementations at the composition root. Provider manifests and
+// ordinary TUI/CLI workflows remain data-driven and unchanged.
+func NewWithProviderModules(config Config, modules ...provider.RuntimeModule) *Daemon {
+	return &Daemon{config: config, providerModules: append([]provider.RuntimeModule(nil), modules...)}
+}
 
 func (d *Daemon) Start(ctx context.Context) error {
 	s, err := store.Open(d.config.DBPath)
@@ -153,7 +161,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.store = s
 	d.appendLog("info", "daemon starting")
-	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	runtimeRegistry, err := provider.NewRuntimeRegistryWithModules(d.providerModules...)
 	if err != nil {
 		_ = s.Close()
 		return err

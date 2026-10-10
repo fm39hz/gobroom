@@ -279,6 +279,28 @@ type RuntimeRegistry struct {
 	quotaSources      map[extensions.Ref]QuotaSource
 }
 
+// RuntimeModule adds reusable provider operations and primitive
+// implementations to a runtime registry. Modules are linked by the
+// composition root; manifests bind their exact contracts without adding
+// provider-specific branches to the kernel or daemon request path.
+type RuntimeModule interface {
+	ID() string
+	Register(*RuntimeRegistry) error
+}
+
+type RuntimeModuleFunc struct {
+	Name string
+	Init func(*RuntimeRegistry) error
+}
+
+func (m RuntimeModuleFunc) ID() string { return m.Name }
+func (m RuntimeModuleFunc) Register(registry *RuntimeRegistry) error {
+	if m.Init == nil {
+		return fmt.Errorf("runtime module %q has no registration function", m.Name)
+	}
+	return m.Init(registry)
+}
+
 // RegisterFeatureEvaluator contributes a versioned feature evaluator and its
 // request-constraint schema to the shared extension catalog. Model profiles
 // retain the semantic feature ID; each invocation pins one evaluator version.
@@ -306,6 +328,13 @@ func (r *RuntimeRegistry) RegisterFeatureEvaluator(ref extensions.Ref, implement
 }
 
 func NewRuntimeRegistry() (*RuntimeRegistry, error) {
+	return NewRuntimeRegistryWithModules()
+}
+
+// NewRuntimeRegistryWithModules composes statically linked extension modules
+// after the shared primitive catalog is initialized and before any provider
+// manifest is loaded or the catalog is frozen.
+func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, error) {
 	primitives, err := NewBuiltinPrimitiveRegistry()
 	if err != nil {
 		return nil, err
@@ -348,6 +377,23 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 	for _, registrationErr := range registrations {
 		if registrationErr != nil {
 			return nil, registrationErr
+		}
+	}
+	seenModules := make(map[string]bool, len(modules))
+	for _, module := range modules {
+		if module == nil {
+			return nil, fmt.Errorf("runtime module must not be nil")
+		}
+		id := strings.TrimSpace(module.ID())
+		if id == "" || id != module.ID() {
+			return nil, fmt.Errorf("runtime module ID must be non-empty and trimmed")
+		}
+		if seenModules[id] {
+			return nil, fmt.Errorf("runtime module %q is registered more than once", id)
+		}
+		seenModules[id] = true
+		if err := module.Register(runtime); err != nil {
+			return nil, fmt.Errorf("register runtime module %q: %w", id, err)
 		}
 	}
 	return runtime, nil

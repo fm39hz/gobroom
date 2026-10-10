@@ -1086,6 +1086,57 @@ func TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch(t *testing.T
 	}
 }
 
+func TestDaemonCompositionRootRegistersStaticProviderModule(t *testing.T) {
+	operationRef := extensions.Ref{Kind: "operation", ID: "fixture.audio.inspect", ContractVersion: 1}
+	module := provider.RuntimeModuleFunc{Name: "fixture.audio", Init: func(runtime *provider.RuntimeRegistry) error {
+		if err := runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio inspection", "Inspect an audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+			return err
+		}
+		return runtime.Primitives.RegisterDefinition(provider.ProviderDefinition{
+			ContractVersion: 1, ID: "fixture-audio-provider", Version: "1", DisplayName: "Fixture Audio Provider",
+			Capabilities: provider.CapabilitySet{AudioInput: true},
+			Auth:         provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+			Operations: map[provider.Operation]provider.OperationBinding{provider.OperationAudio: {
+				Protocol: "fixture_audio", TaskRef: &operationRef, ProviderFormat: "multipart-json",
+				Endpoint:            provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:           provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+				RequestCodec:        provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: provider.MultipartRequestCodecID, ContractVersion: 1},
+				RequestCodecOptions: json.RawMessage(`{"modelField":"model","payloadField":"request"}`),
+				ResponseDecoder:     provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+			}},
+		})
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := NewWithProviderModules(Config{DBPath: filepath.Join(t.TempDir(), "module.db"), IPCPath: filepath.Join(t.TempDir(), "module.sock"), ArtifactStoreDir: t.TempDir()}, module)
+	if err := d.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer d.Stop(context.Background())
+	response := d.handleIPC(ctx, IPCRequest{ID: "catalog", Method: "providers.catalog"})
+	if !response.OK {
+		t.Fatalf("provider catalog IPC failed: %s", response.Error)
+	}
+	var definitions []provider.DefinitionMetadata
+	encoded, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &definitions); err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range definitions {
+		if definition.ID != "fixture-audio-provider" {
+			continue
+		}
+		if len(definition.Operations) != 1 || definition.Operations[0].TaskRef == nil || *definition.Operations[0].TaskRef != operationRef {
+			t.Fatalf("module operation was not exposed as its exact task contract: %#v", definition.Operations)
+		}
+		return
+	}
+	t.Fatal("static provider module did not participate in daemon runtime composition")
+}
+
 func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
