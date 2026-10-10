@@ -867,6 +867,153 @@ func TestComboEditorSaveAndExposureReachOpenAIModelsProjection(t *testing.T) {
 	}
 }
 
+func TestDiscoveredPhysicalComboOnboardingPublishesThroughModelsAPI(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/onboarding.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	node, err := db.CreateProviderNode(store.CreateProviderNodeInput{Name: "XKiro", Prefix: "xkiro", BaseURL: "https://provider.test/v1", Protocol: "openai_chat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := []discoveredRoute{
+		{ID: "route-xkiro", ProviderNodeID: node.ID, ProviderPrefix: node.Prefix, Kind: "discovered", ExternalID: "qwen/qwen3.7-max:free", DisplayName: "Qwen"},
+		{ID: "route-ocg", ProviderNodeID: node.ID, ProviderPrefix: node.Prefix, Kind: "discovered", ExternalID: "qwen3.7-max", DisplayName: "Qwen"},
+	}
+	for _, route := range routes {
+		if err := db.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: route.ID, ProviderNodeID: node.ID, Kind: route.Kind, ExternalID: route.ExternalID, DisplayName: route.DisplayName}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apiServer := api.NewServer(db)
+	requests := make(chan daemon.IPCRequest, 6)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socket := t.TempDir() + "/control.sock"
+	ipc := daemon.NewIPCServer(socket, func(_ context.Context, request daemon.IPCRequest) daemon.IPCResponse {
+		requests <- request
+		data, err := json.Marshal(request.Params)
+		if err != nil {
+			return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+		}
+		switch request.Method {
+		case "physical_models.upsert":
+			var value store.PhysicalModel
+			if err := json.Unmarshal(data, &value); err != nil {
+				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+			}
+			if err := db.UpsertPhysicalModel(value); err != nil {
+				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+			}
+			if err := apiServer.Control().Reload(); err != nil {
+				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+			}
+			return daemon.IPCResponse{ID: request.ID, OK: true, Result: value}
+		case "combo_models.upsert":
+			var value store.ComboModel
+			if err := json.Unmarshal(data, &value); err != nil {
+				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+			}
+			if err := db.UpsertComboModel(value); err != nil {
+				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+			}
+			if err := apiServer.Control().Reload(); err != nil {
+				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+			}
+			return daemon.IPCResponse{ID: request.ID, OK: true, Result: value}
+		default:
+			return daemon.IPCResponse{ID: request.ID, OK: false, Error: "unexpected method " + request.Method}
+		}
+	})
+	if err := ipc.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer ipc.Close()
+
+	model := newApp(socket)
+	model.width, model.height = 120, 40
+	model.activePanel = int(dashboardModels)
+	model.activeTabs[dashboardModels] = 0
+	rawRoutes, err := json.Marshal(routes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.raw = map[sectionID]json.RawMessage{sectionDiscovered: rawRoutes, sectionPhysical: json.RawMessage(`[]`), sectionComboModels: json.RawMessage(`[]`)}
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: routes[0].ID, title: "xkiro/" + routes[0].ExternalID, payload: routes[0]}})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if model.form == nil || model.form.method != "physical_models.upsert" || len(model.form.typedSources) != 2 {
+		t.Fatalf("Discovered→Physical review did not preload equivalent routes: %#v", model.form)
+	}
+	model.form.inputs[0].SetValue("qwen-3.7-max")
+	_, savePhysical := model.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if savePhysical == nil {
+		t.Fatal("Physical review did not submit")
+	}
+	updated, _ := model.Update(savePhysical())
+	model = updated.(*app)
+	if request := <-requests; request.Method != "physical_models.upsert" {
+		t.Fatalf("first onboarding request=%q, want Physical save", request.Method)
+	}
+	physical, err := db.PhysicalModel("qwen-3.7-max")
+	if err != nil || !physical.Enabled || len(physical.Sources) != 2 {
+		t.Fatalf("saved Physical=%#v err=%v", physical, err)
+	}
+
+	model.activeTabs[dashboardModels] = 1
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: physical.Name, title: physical.Name, modelRef: physical.Name, modelKind: "physical", payload: physicalModel{Name: physical.Name, Policy: strategySpec{Ref: physical.Policy.Ref, Config: physical.Policy.Config}, Sources: []routeReference{{RouteID: routes[0].ID}, {RouteID: routes[1].ID}}, Enabled: true}}})
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	if model.form == nil || model.form.method != "combo_models.upsert" || len(model.form.typedMembers) != 1 || model.form.typedMembers[0].ID != physical.Name {
+		t.Fatalf("Physical→Combo did not preselect the model: %#v", model.form)
+	}
+	model.form.inputs[0].SetValue("junior")
+	_, saveCombo := model.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if saveCombo == nil {
+		t.Fatal("Combo editor did not submit")
+	}
+	updated, _ = model.Update(saveCombo())
+	model = updated.(*app)
+	if request := <-requests; request.Method != "combo_models.upsert" || request.Params["discoverable"] != false {
+		t.Fatalf("Combo creation should remain private until explicit exposure: %#v", request)
+	}
+	combo, err := db.ComboModel("junior")
+	if err != nil || !combo.Enabled || combo.Discoverable || len(combo.Members) != 1 || combo.Members[0].ID != physical.Name {
+		t.Fatalf("saved private Combo=%#v err=%v", combo, err)
+	}
+
+	model.activeTabs[dashboardModels] = 2
+	var comboTUI comboModel
+	comboData, _ := json.Marshal(combo)
+	if err := json.Unmarshal(comboData, &comboTUI); err != nil {
+		t.Fatal(err)
+	}
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: combo.Name, title: combo.Name, modelRef: combo.Name, modelKind: "combo", payload: comboTUI}})
+	_, expose := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if expose == nil {
+		t.Fatal("Combo exposure key did not submit")
+	}
+	updated, _ = model.Update(expose())
+	model = updated.(*app)
+	if request := <-requests; request.Method != "combo_models.upsert" || request.Params["discoverable"] != true {
+		t.Fatalf("explicit exposure request=%#v", request)
+	}
+	recorder := httptest.NewRecorder()
+	apiServer.HandlerWithOptions(api.HandlerOptions{DataPlane: true}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /v1/models status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var published struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Data) != 1 || published.Data[0]["id"] != "junior" {
+		t.Fatalf("joined onboarding published=%#v, want only junior", published.Data)
+	}
+}
+
 func TestSelectedConnectionModelImportReviewsAndSubmitsOnlyCheckedIDs(t *testing.T) {
 	model := newApp("/tmp/gobroom.sock")
 	model.width, model.height = 120, 40
