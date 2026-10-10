@@ -1871,3 +1871,54 @@ func TestConnectionInferenceProbeFormPinsExactConnectionAndModel(t *testing.T) {
 		t.Fatalf("inference probe result was not surfaced safely: status=%q preview=%q", model.status, model.previewTitle)
 	}
 }
+
+func TestOperationProbeFormBindsOnlyDeclaredNonChatOperations(t *testing.T) {
+	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 2}
+	definition := provider.DefinitionMetadata{ID: "audio-provider", Operations: []provider.OperationMetadata{
+		{ID: provider.OperationChat, TaskRef: &extensions.Ref{Kind: "operation", ID: "chat.generate", ContractVersion: 1}, Primitives: map[string]provider.PrimitiveRef{
+			"endpoint": {ID: "http-json"}, "transport": {ID: "http"}, "requestCodec": {ID: "chat"}, "responseDecoder": {ID: "chat"},
+		}},
+		{ID: provider.OperationAudio, TaskRef: &operationRef, Primitives: map[string]provider.PrimitiveRef{
+			"endpoint": {ID: "http-json"}, "transport": {ID: "http"}, "requestCodec": {ID: "multipart"}, "responseDecoder": {ID: "json"},
+		}},
+		{ID: "incomplete", TaskRef: &operationRef, Primitives: map[string]provider.PrimitiveRef{"endpoint": {ID: "http-json"}}},
+	}}
+	model := newApp("/tmp/gobroom.sock")
+	model.providers = []providerNode{{ID: "node-a", DefinitionID: definition.ID}}
+	model.providerCatalog = []provider.DefinitionMetadata{definition}
+	model.activePanel = int(dashboardConnections)
+	model.activeTabs[dashboardConnections] = 1
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: "conn-a", title: "account", payload: connection{ID: "conn-a", ProviderNodeID: "node-a", Enabled: true}}})
+	updated, command := model.Update(tea.KeyPressMsg{Code: 'P', Text: "P"})
+	model = updated.(*app)
+	if command != nil || model.form == nil || model.form.method != "connections.test_operation" {
+		t.Fatalf("P did not open operation probe form: command=%v form=%#v", command, model.form)
+	}
+	if !strings.Contains(model.form.title, "audio") || len(model.form.operationChoices) != 1 || model.form.operationChoices[0].ID != provider.OperationAudio {
+		t.Fatalf("operation probe choices included non-executable/chat bindings: title=%q choices=%#v", model.form.title, model.form.operationChoices)
+	}
+	setFormValue(model.form, "operation", string(provider.OperationAudio))
+	setFormValue(model.form, "modelID", "vendor/asr-v4")
+	setFormValue(model.form, "payload", `{"audio_url":"https://assets.test/sample.wav"}`)
+	params, err := model.form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["connectionID"] != "conn-a" || params["operationID"] != string(provider.OperationAudio) || params["modelID"] != "vendor/asr-v4" || string(params["payload"].(json.RawMessage)) != `{"audio_url":"https://assets.test/sample.wav"}` {
+		t.Fatalf("typed operation probe params=%#v", params)
+	}
+	setFormValue(model.form, "operation", "chat")
+	if _, err := model.form.Params(); err == nil || !strings.Contains(err.Error(), "not an available non-chat probe") {
+		t.Fatalf("operation outside declared non-chat choices was accepted: %v", err)
+	}
+	setFormValue(model.form, "operation", string(provider.OperationAudio))
+	setFormValue(model.form, "payload", "not-json")
+	if _, err := model.form.Params(); err == nil || !strings.Contains(err.Error(), "valid JSON") {
+		t.Fatalf("malformed operation payload was accepted: %v", err)
+	}
+	updated, _ = model.Update(actionMsg{method: "connections.test_operation", result: json.RawMessage(`{"connectionId":"conn-a","operation":"audio","task":"audio.transcribe","modelId":"vendor/asr-v4","httpStatus":200,"responseBytes":32,"responseJSON":true}`)})
+	model = updated.(*app)
+	if !strings.Contains(model.status, "audio / vendor/asr-v4") || !strings.Contains(model.previewTitle, "payload not retained") {
+		t.Fatalf("operation probe response summary exposed wrong fields: status=%q preview=%q", model.status, model.previewTitle)
+	}
+}

@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -19,6 +21,44 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type operationProbeAdapterFixture struct{ client *http.Client }
+
+func (a operationProbeAdapterFixture) ID() string { return "fixture-operation-probe" }
+func (a operationProbeAdapterFixture) PlanCompatibility(kernel.CompatibilityContext) kernel.CompatibilityPlan {
+	return kernel.CompatibilityPlan{Supported: true}
+}
+func (a operationProbeAdapterFixture) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	endpoint, err := (kernel.HTTPJSONEndpoint{}).Resolve(route.BaseURL, "/audio/transcriptions", kernel.EndpointOptions{})
+	if err != nil {
+		return kernel.UpstreamRequest{}, err
+	}
+	headers := make(http.Header)
+	headers.Set("Authorization", "Bearer "+credential.Secret)
+	headers.Set("Content-Type", "application/json")
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: strings.NewReader(string(request.OperationPayload))}, nil
+}
+func (a operationProbeAdapterFixture) Execute(ctx context.Context, upstream kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	request, err := http.NewRequestWithContext(ctx, upstream.Method, upstream.URL, upstream.Body)
+	if err != nil {
+		return kernel.UpstreamResponse{}, err
+	}
+	request.Header = upstream.Headers.Clone()
+	response, err := a.client.Do(request)
+	if err != nil {
+		return kernel.UpstreamResponse{}, err
+	}
+	return kernel.UpstreamResponse{Status: response.StatusCode, Headers: response.Header, Body: response.Body}, nil
+}
+func (operationProbeAdapterFixture) ClassifyError(status int, _ []byte) kernel.ErrorClass {
+	if status >= http.StatusBadRequest {
+		return kernel.ErrorTerminal
+	}
+	return kernel.ErrorRetryable
+}
+func (operationProbeAdapterFixture) RenderResponse(context.Context, kernel.UpstreamResponse, http.ResponseWriter, normalize.Format, kernel.StreamHooks) error {
+	return nil
+}
 
 func TestRefreshNodeNormalizesModelsCatalog(t *testing.T) {
 	s, err := store.Open(t.TempDir() + "/test.db")
@@ -355,6 +395,97 @@ func TestInferenceProbeRequiresAnInferenceOperation(t *testing.T) {
 	service := Service{Store: state, Bindings: map[string]provider.RuntimeBinding{}}
 	if _, err := service.TestInference(context.Background(), connection.ID, "manual/model-x"); err == nil || !strings.Contains(err.Error(), "no compatible inference operation") {
 		t.Fatalf("missing inference operation was accepted: %v", err)
+	}
+}
+
+func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *testing.T) {
+	var upstreamCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		upstreamCalls++
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/audio/transcriptions" {
+			t.Errorf("operation probe request=%s %s", request.Method, request.URL.Path)
+		}
+		if got := request.Header.Get("Authorization"); got != "Bearer operation-secret" {
+			t.Errorf("operation probe used credential %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Errorf("decode operation payload: %v", err)
+		}
+		if payload["audio_url"] != "https://assets.example/audio.wav" || payload["language"] != "vi" {
+			t.Errorf("operation payload changed: %#v", payload)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, `{"text":"transcribed output"}`)
+	}))
+	defer upstream.Close()
+
+	state, err := store.Open(t.TempDir() + "/operation-probe.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	node, err := state.CreateProviderNode(store.CreateProviderNodeInput{Name: "Audio provider", Prefix: "audio", BaseURL: upstream.URL + "/v1", Protocol: "vendor_audio", DefinitionID: "audio-provider"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := state.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "operation-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
+	if err := registry.Primitives.Operations.RegisterRawPayload(operationRef, "Audio transcription", "Transcribe an audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1},"language":{"type":"string"}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	operationSnapshot, err := registry.OperationSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := operationProbeAdapterFixture{client: upstream.Client()}
+	binding := provider.RuntimeBinding{
+		DefinitionID: node.DefinitionID, Operation: provider.OperationAudio, TaskRef: operationRef,
+		Protocol: kernel.Protocol(node.Protocol), ProviderFormat: normalize.Format("vendor-audio"),
+		AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{},
+	}
+	service := Service{
+		Store: state, Bindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(node.DefinitionID, provider.OperationAudio): binding},
+		Operations: operationSnapshot,
+	}
+	payload := json.RawMessage(`{"audio_url":"https://assets.example/audio.wav","language":"vi"}`)
+	result, err := service.TestOperation(context.Background(), connection.ID, string(provider.OperationAudio), "asr-v4", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Operation != string(provider.OperationAudio) || result.Task != operationRef.ID || result.ModelID != "asr-v4" || result.HTTPStatus != http.StatusOK || !result.ResponseJSON || upstreamCalls != 1 {
+		t.Fatalf("operation probe result=%#v calls=%d", result, upstreamCalls)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || strings.Contains(string(encoded), "transcribed output") || strings.Contains(string(encoded), "audio_url") {
+		t.Fatalf("operation probe result retained input/output content: %s err=%v", encoded, err)
+	}
+	if _, err := service.TestOperation(context.Background(), connection.ID, string(provider.OperationAudio), "asr-v4", json.RawMessage(`{"language":"vi"}`)); err == nil || !strings.Contains(err.Error(), "audio_url") {
+		t.Fatalf("schema-invalid payload was not rejected before dispatch: %v", err)
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("invalid operation payload dispatched to provider: calls=%d", upstreamCalls)
+	}
+	chatBinding := binding
+	chatBinding.Operation = provider.OperationChat
+	chatBinding.TaskRef = *provider.OperationRef(normalize.OperationChatGenerate, 1)
+	service.Bindings[provider.RuntimeBindingKey(node.DefinitionID, provider.OperationChat)] = chatBinding
+	if _, err := service.TestOperation(context.Background(), connection.ID, string(provider.OperationChat), "asr-v4", json.RawMessage(`{"model":"asr-v4"}`)); err == nil || !strings.Contains(err.Error(), "bounded test-inference") {
+		t.Fatalf("generic operation probe bypassed the one-token chat contract: %v", err)
+	}
+	if upstreamCalls != 1 {
+		t.Fatalf("chat payload reached generic probe adapter: calls=%d", upstreamCalls)
+	}
+	events, err := state.UsageEvents(10)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("smoke test polluted usage history: events=%#v err=%v", events, err)
 	}
 }
 

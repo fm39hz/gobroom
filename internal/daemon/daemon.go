@@ -1066,6 +1066,28 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, result)
+	case "connections.test_operation":
+		var input struct {
+			ConnectionID string          `json:"connectionID"`
+			OperationID  string          `json:"operationID"`
+			ModelID      string          `json:"modelID"`
+			Payload      json.RawMessage `json:"payload"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		if d.providerRegistry == nil {
+			return fail(request, "provider runtime registry is unavailable")
+		}
+		operationSnapshot, err := d.providerRegistry.OperationSnapshot()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings, Operations: operationSnapshot}).TestOperation(ctx, input.ConnectionID, input.OperationID, input.ModelID, input.Payload)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, result)
 	case "connections.preview_models":
 		connectionID := stringParam(request.Params, "connectionID")
 		nodeID, err := d.providerNodeForConnection(connectionID)

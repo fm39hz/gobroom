@@ -27,6 +27,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/quota"
 	runtimehealth "github.com/fm39hz/gobroom/internal/runtime"
@@ -1044,6 +1045,44 @@ func TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation(t *testing.T) {
 	models, err := state.Models()
 	if err != nil || len(models) != 0 {
 		t.Fatalf("inference IPC probe changed model inventory: %#v err=%v", models, err)
+	}
+}
+
+func TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch(t *testing.T) {
+	state, err := store.Open(t.TempDir() + "/operation-probe.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	node, err := state.CreateProviderNode(store.CreateProviderNodeInput{Name: "Audio provider", Prefix: "audio", BaseURL: "https://provider.test/v1", Protocol: "vendor_audio", DefinitionID: "audio-provider"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := state.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
+	if err := runtimeRegistry.Primitives.Operations.RegisterRawPayload(operationRef, "Audio transcription", "Transcribe an audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	adapterCalls := 0
+	adapter := daemonExplainAdapter{attempts: &adapterCalls}
+	binding := provider.RuntimeBinding{
+		DefinitionID: node.DefinitionID, Operation: provider.OperationAudio, TaskRef: operationRef,
+		Protocol: kernel.Protocol(node.Protocol), AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{},
+	}
+	d := &Daemon{store: state, providerRegistry: runtimeRegistry, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(node.DefinitionID, provider.OperationAudio): binding}}
+	response := d.handleIPC(context.Background(), IPCRequest{
+		ID: "operation-probe", Method: "connections.test_operation",
+		Params: map[string]any{"connectionID": connection.ID, "operationID": string(provider.OperationAudio), "modelID": "asr-v4", "payload": map[string]any{"language": "vi"}},
+	})
+	if response.OK || !strings.Contains(response.Error, "audio_url") || adapterCalls != 0 {
+		t.Fatalf("schema-invalid operation payload was not stopped before adapter dispatch: response=%#v adapterCalls=%d", response, adapterCalls)
 	}
 }
 

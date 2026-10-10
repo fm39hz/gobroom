@@ -93,9 +93,10 @@ test-model-workflow: ## focused connection → Discovered → Physical → Combo
 	go test ./internal/tui -run '^(TestSuggestPhysicalNameGroupsEquivalentProviderIDs|TestSuggestPhysicalNameDoesNotMergeDifferentRevisions|TestSuggestPhysicalNameHandlesSingleProviderRoute|TestSuggestPhysicalNameRemovesMixedCaseProviderNamespace|TestMatchingDiscoveredRoutesUsesCanonicalIdentityAndStableOrder|TestSourcePickerBuildsFamilyFromProviderVariants|TestDiscoveredGroupingSuggestsEquivalentRoutesFromWholeCatalog|TestDiscoveredBulkGroupingMergesMatchingPhysicalSourcesForReview|TestConnectionCustomModelAssignmentPickerScopesAndSerializesConnections|TestSelectedConnectionModelImportReviewsAndSubmitsOnlyCheckedIDs|TestDiscoveredPhysicalComboOnboardingPublishesThroughModelsAPI|TestConnectionModelListToPublicComboOnboardingEndToEnd|TestComboPickerFiltersViaSourcePrefixButShowsOneCanonicalPhysicalRow|TestComboEditorSaveAndExposureReachOpenAIModelsProjection)$$' -count=1
 	go test ./internal/store -run '^TestCustomRouteExpandsOnlyToExplicitlyAssignedConnections$$' -count=1
 	go test ./internal/controlplane -run '^TestCustomModelConnectionAssignmentsRoundTripThroughConfigBundle$$' -count=1
-	go test ./internal/discovery -run '^(TestInferenceProbeWorksWithoutModelListOperationAndDoesNotImport|TestInferenceProbeRequiresAnInferenceOperation)$$' -count=1
+	go test ./internal/discovery -run '^(TestInferenceProbeWorksWithoutModelListOperationAndDoesNotImport|TestInferenceProbeRequiresAnInferenceOperation|TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage)$$' -count=1
+	go test ./internal/daemon -run '^TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch$$' -count=1
 	go test ./internal/daemon -run '^TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation$$' -count=1
-	go test ./internal/tui ./cmd/gobroom -run '^(TestConnectionInferenceProbeFormPinsExactConnectionAndModel|TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary)$$' -count=1
+	go test ./internal/tui ./cmd/gobroom -run '^(TestConnectionInferenceProbeFormPinsExactConnectionAndModel|TestOperationProbeFormBindsOnlyDeclaredNonChatOperations|TestRootHelpAndTypedCommandsDoNotRequireSeparateTUIBinary)$$' -count=1
 
 test-v: ## verbose tests
 	go test ./... -count=1 -v

@@ -148,6 +148,33 @@ func resourceCommands() []*cobra.Command {
 	testInference.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
 	testInference.Flags().StringVar(&probeModelID, "model-id", "", "exact upstream model ID (probe may incur provider cost)")
 	connections.AddCommand(testInference)
+	var probeOperationID, probeOperationModelID, probePayloadFile string
+	testOperation := &cobra.Command{Use: "test-operation", Short: "send a schema-validated payload through one provider operation (may incur cost or create resources)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		if probeOperationID == "" || probeOperationModelID == "" || probePayloadFile == "" {
+			return fmt.Errorf("--operation, --model-id and --payload-file are required")
+		}
+		var payload json.RawMessage
+		if probePayloadFile == "-" {
+			if err := json.NewDecoder(cmd.InOrStdin()).Decode(&payload); err != nil {
+				return fmt.Errorf("read operation payload from stdin: %w", err)
+			}
+		} else {
+			raw, err := os.ReadFile(probePayloadFile)
+			if err != nil {
+				return fmt.Errorf("read operation payload: %w", err)
+			}
+			payload = append(json.RawMessage(nil), raw...)
+		}
+		if !json.Valid(payload) {
+			return fmt.Errorf("operation payload must be valid JSON")
+		}
+		return invoke("connections.test_operation", map[string]any{"connectionID": connID, "operationID": probeOperationID, "modelID": probeOperationModelID, "payload": payload})
+	}}
+	testOperation.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
+	testOperation.Flags().StringVar(&probeOperationID, "operation", "", "exact provider operation binding ID")
+	testOperation.Flags().StringVar(&probeOperationModelID, "model-id", "", "exact upstream model ID")
+	testOperation.Flags().StringVar(&probePayloadFile, "payload-file", "", "operation input JSON file or - for stdin; request may incur provider cost")
+	connections.AddCommand(testOperation)
 	authorizeStart := &cobra.Command{Use: "authorize-start", Short: "begin daemon-owned OAuth authorization", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("auth.authorization.start", map[string]any{"connectionID": connID})
 	}}

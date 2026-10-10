@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/provider"
 )
 
@@ -39,6 +40,7 @@ type formState struct {
 	authSchema         []provider.SetupField
 	hasAuthSchema      bool
 	transformOptions   map[string]transformOptionSpec
+	operationChoices   []provider.OperationMetadata
 }
 
 type transformOptionSpec struct {
@@ -389,6 +391,44 @@ func newInferenceTestForm(connectionID string) *formState {
 	return form
 }
 
+func newOperationTestForm(connectionID string, definition *provider.DefinitionMetadata) *formState {
+	if definition == nil {
+		return nil
+	}
+	choices := make([]provider.OperationMetadata, 0, len(definition.Operations))
+	for _, operation := range definition.Operations {
+		if operation.TaskRef == nil || operation.TaskRef.ID == string(normalize.OperationChatGenerate) {
+			continue
+		}
+		usable := true
+		for _, primitive := range []string{"endpoint", "transport", "requestCodec", "responseDecoder"} {
+			if operation.Primitives[primitive].ID == "" {
+				usable = false
+				break
+			}
+		}
+		if usable {
+			choices = append(choices, operation)
+		}
+	}
+	if len(choices) == 0 {
+		return nil
+	}
+	labels := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		labels = append(labels, string(choice.ID))
+	}
+	form := buildForm("Operation probe · may incur cost or create resources · available: "+strings.Join(labels, ", "), "connections.test_operation", []fieldSpec{
+		{key: "operation", label: "Provider operation ID", placeholder: "exact ID from available operations"},
+		{key: "modelID", label: "Exact upstream model ID", placeholder: "vendor/model-name"},
+		{key: "payload", label: "Operation payload JSON (one line)", placeholder: `{"input":"..."}`},
+	}, nil)
+	form.extra["connectionID"] = connectionID
+	form.operationChoices = choices
+	form.inputs[2].CharLimit = 64 << 10
+	return form
+}
+
 func (f *formState) Update(msg tea.Msg) (*formState, tea.Cmd, bool, map[string]any, error) {
 	keyMsg, isKey := msg.(tea.KeyPressMsg)
 	if isKey {
@@ -665,6 +705,31 @@ func (f *formState) Params() (map[string]any, error) {
 		if connectionID == "" || modelID == "" {
 			return nil, fmt.Errorf("an enabled connection and exact upstream model ID are required")
 		}
+	}
+	if f.method == "connections.test_operation" {
+		operationID, _ := params["operation"].(string)
+		modelID, _ := params["modelID"].(string)
+		payloadText, _ := params["payload"].(string)
+		if operationID == "" || modelID == "" || payloadText == "" {
+			return nil, fmt.Errorf("operation, exact upstream model ID and JSON payload are required")
+		}
+		allowed := false
+		for _, choice := range f.operationChoices {
+			if string(choice.ID) == operationID && choice.TaskRef != nil && choice.TaskRef.ID != string(normalize.OperationChatGenerate) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, fmt.Errorf("provider operation %q is not an available non-chat probe", operationID)
+		}
+		payload := json.RawMessage(payloadText)
+		if !json.Valid(payload) {
+			return nil, fmt.Errorf("operation payload must be valid JSON")
+		}
+		params["operationID"] = operationID
+		params["payload"] = payload
+		params["connectionID"] = f.extra["connectionID"]
 	}
 	if f.method == "connections.create" {
 		credentialType, _ := params["credentialType"].(string)

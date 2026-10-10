@@ -109,7 +109,7 @@ Providers: create provider + endpoint
   -> Connections: create account/credential
   -> select that connection, press t
   -> read-only /models test and bounded model preview
-  -> if no model-list operation exists, press T and enter an exact model ID for a one-output-token inference probe
+  -> if no model-list operation exists, press T for a one-output-token chat probe, or P to choose a registered non-chat operation and provide its JSON payload
   -> press i to review the connection catalog; select IDs and import a subset
   -> add a custom ID if the provider omitted it
 ```
@@ -133,11 +133,20 @@ all returned IDs; it is not a substitute for reviewing a selected account.
 CLI equivalents: `gobroom connections test --connection-id ID`,
 `gobroom connections test-inference --connection-id ID --model-id UPSTREAM_ID`
 for an explicit, potentially billable one-token inference probe,
+`gobroom connections test-operation --connection-id ID --operation OP --model-id MODEL --payload-file FILE`
+for a registered non-chat JSON operation (payload schema is checked before
+dispatch; the call may be billable or create a provider-side resource),
 `gobroom connections preview-models --connection-id ID`, and
 `gobroom connections refresh-models --node-id NODE --connection-id ID` with
 repeated `--model-id UPSTREAM_ID` flags to import a reviewed subset; omit
 `--model-id` to import all IDs returned by that connection, or use
 `--entitlements-only` to update evidence without adding IDs to the catalog.
+In the Connections pane, `P` offers only registered non-chat operation bindings
+that have endpoint, transport, request-codec and response-decoder primitives.
+The probe sends the exact model ID and schema-validated JSON payload; it does
+not retain the response body or mutate catalog, health or usage. Operations
+requiring file/artifact inputs still need their declared artifact workflow and
+are rejected if required inputs are absent.
 Custom IDs can be bound explicitly with repeated
 `gobroom models upsert --connection-id ID` flags; they never inherit access
 from every connection on the provider.

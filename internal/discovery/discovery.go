@@ -10,17 +10,20 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
+	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
 type Service struct {
-	Store    *store.Store
-	Client   *http.Client
-	Bindings map[string]provider.RuntimeBinding
+	Store      *store.Store
+	Client     *http.Client
+	Bindings   map[string]provider.RuntimeBinding
+	Operations *operations.Snapshot
 }
 type Result struct {
 	NodeID       string `json:"nodeId"`
@@ -63,6 +66,20 @@ type InferenceTestResult struct {
 	ResponseBytes  int    `json:"responseBytes"`
 }
 
+type OperationTestResult struct {
+	ProviderNodeID    string `json:"providerNodeId"`
+	ConnectionID      string `json:"connectionId"`
+	Operation         string `json:"operation"`
+	Task              string `json:"task"`
+	ModelID           string `json:"modelId"`
+	Endpoint          string `json:"endpoint"`
+	HTTPStatus        int    `json:"httpStatus"`
+	ResponseBytes     int    `json:"responseBytes"`
+	ResponseTruncated bool   `json:"responseTruncated,omitempty"`
+	ResponseMediaType string `json:"responseMediaType,omitempty"`
+	ResponseJSON      bool   `json:"responseJSON"`
+}
+
 type ModelPreview struct {
 	ID          string                   `json:"id"`
 	DisplayName string                   `json:"displayName"`
@@ -90,6 +107,122 @@ func (s Service) TestConnection(ctx context.Context, nodeID, connectionID string
 }
 
 const inferenceProbeResponseLimit = 64 << 10
+const operationProbeResponseLimit = 64 << 10
+
+// TestOperation sends a user-supplied, schema-validated payload through one
+// exact provider operation binding. It is a connection smoke test, not a
+// serving request: it does not route, record usage, or mutate health/catalog
+// state. The request may be billable or create a provider-side resource.
+func (s Service) TestOperation(ctx context.Context, connectionID, operationID, modelID string, payload json.RawMessage) (OperationTestResult, error) {
+	if strings.TrimSpace(operationID) == "" || strings.TrimSpace(modelID) == "" {
+		return OperationTestResult{}, fmt.Errorf("exact provider operation and upstream model ID are required")
+	}
+	if len(payload) == 0 {
+		return OperationTestResult{}, fmt.Errorf("operation probe payload is required")
+	}
+	if s.Operations == nil {
+		return OperationTestResult{}, fmt.Errorf("operation catalog is unavailable")
+	}
+	credential, found := s.Store.ConnectionCredentialByID(connectionID)
+	if !found {
+		return OperationTestResult{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
+	}
+	node, err := s.Store.ProviderNodeByConnection(connectionID)
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("resolve provider for connection %q: %w", connectionID, err)
+	}
+	connections, err := s.Store.Connections(node.ID)
+	if err != nil {
+		return OperationTestResult{}, err
+	}
+	var selected store.ConnectionRecord
+	for _, item := range connections {
+		if item.ID == connectionID && item.Enabled {
+			selected = item
+			break
+		}
+	}
+	if selected.ID == "" {
+		return OperationTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
+	}
+	operation := provider.Operation(operationID)
+	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, operation)]
+	if !ok || binding.Adapter == nil || binding.Auth == nil || binding.TaskRef.Kind != "operation" || binding.TaskRef.ContractVersion == 0 {
+		return OperationTestResult{}, fmt.Errorf("provider definition %q has no executable binding for operation %q", node.DefinitionID, operationID)
+	}
+	if binding.TaskRef.ID == string(normalize.OperationChatGenerate) {
+		return OperationTestResult{}, fmt.Errorf("chat generation probes must use the bounded test-inference operation")
+	}
+	request := normalize.Request{
+		Model: modelID, Operation: normalize.Operation(binding.TaskRef.ID),
+		OperationContractVersion: binding.TaskRef.ContractVersion,
+		OperationPayload:         append(json.RawMessage(nil), payload...),
+		SourceFormat:             binding.ProviderFormat,
+	}
+	prepared, err := s.Operations.Prepare(request)
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("validate payload for operation %q: %w", operationID, err)
+	}
+	request.OperationPayload = prepared.InputPayload
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(prepared.ResourceBounds.DeadlineMillis)*time.Millisecond)
+	defer cancel()
+	resolvedCredential, err := binding.Auth.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("resolve operation-probe credential: %w", err)
+	}
+	task := normalize.Operation(binding.TaskRef.ID)
+	route := kernel.Route{
+		ID: connectionID + ":operation-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
+		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
+		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
+		Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+			task: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
+		},
+	}
+	upstream, err := binding.Adapter.Prepare(ctx, request, route, resolvedCredential)
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("prepare operation probe %q: %w", operationID, err)
+	}
+	response, err := binding.Adapter.Execute(ctx, upstream)
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("send operation probe %q: %w", operationID, err)
+	}
+	if response.Body != nil {
+		defer response.Body.Close()
+	}
+	limit := min(int64(operationProbeResponseLimit), prepared.ResourceBounds.MaxOutputBytes)
+	if limit <= 0 {
+		return OperationTestResult{}, fmt.Errorf("operation %q has no response capture budget", operationID)
+	}
+	result := OperationTestResult{
+		ProviderNodeID: node.ID, ConnectionID: connectionID, Operation: operationID,
+		Task: binding.TaskRef.ID, ModelID: modelID, Endpoint: endpointSummary(upstream.URL),
+		HTTPStatus: response.Status,
+	}
+	if response.Headers != nil {
+		result.ResponseMediaType = response.Headers.Get("Content-Type")
+	}
+	var capturedBody []byte
+	if response.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+		if err != nil {
+			return result, fmt.Errorf("read operation-probe response: %w", err)
+		}
+		result.ResponseTruncated = int64(len(body)) > limit
+		result.ResponseBytes = len(body)
+		if int64(len(body)) > limit {
+			result.ResponseBytes = int(limit)
+			body = body[:limit]
+		}
+		capturedBody = body
+		result.ResponseJSON = len(body) > 0 && json.Valid(body)
+	}
+	if response.Status < http.StatusOK || response.Status >= http.StatusMultipleChoices {
+		class := binding.Adapter.ClassifyError(response.Status, capturedBody)
+		return result, fmt.Errorf("operation probe returned HTTP %d (%s)", response.Status, class)
+	}
+	return result, nil
+}
 
 // TestInference probes one exact upstream model through the selected enabled
 // connection. It is independent of model-list discovery and does not mutate

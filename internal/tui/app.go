@@ -180,7 +180,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 		case "providers":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/c"), key.WithHelp("e/t/c", "edit/test/connect")))
 		case "connections":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/i/m/a/A/o/O/d"), key.WithHelp("e/t/T/i/m/a/A/o/O/d", "edit/list test/inference test/import/custom ID/auth/delete")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/P/i/m/a/A/o/O/d"), key.WithHelp("e/t/T/P/i/m/a/A/o/O/d", "edit/list test/inference/operation probe/import/custom ID/auth/delete")))
 		case "discovered":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 		case "physical", "combos":
@@ -201,7 +201,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 	case "providers":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("n/t"), key.WithHelp("n/t", "new/test")))
 	case "connections":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/i/m/a/A/o/O"), key.WithHelp("t/T/i/m/a/A/o/O", "list test/inference test/import/custom ID/auth")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/P/i/m/a/A/o/O"), key.WithHelp("t/T/P/i/m/a/A/o/O", "list test/inference/operation probe/import/custom ID/auth")))
 	case "discovered":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 	case "physical", "combos":
@@ -885,6 +885,17 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = fmt.Sprintf("inference probe passed · %s · HTTP %d · %d response bytes", result.ModelID, result.HTTPStatus, result.ResponseBytes)
 			}
 		}
+		if message.method == "connections.test_operation" {
+			var result discovery.OperationTestResult
+			if json.Unmarshal(message.result, &result) == nil {
+				m.previewExtra = pretty(message.result)
+				m.previewTitle = "Provider operation probe · payload not retained"
+				m.status = fmt.Sprintf("operation probe passed · %s / %s · HTTP %d · %d response bytes", result.Operation, result.ModelID, result.HTTPStatus, result.ResponseBytes)
+				if result.ResponseTruncated {
+					m.status += " · response capture truncated"
+				}
+			}
+		}
 		if message.method == "providers.refresh_models" {
 			var result struct {
 				Models    int    `json:"models"`
@@ -1087,7 +1098,7 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.focus == focusInspector {
 		switch keyText {
-		case "e", "p", "d", "t", "T", "c", "f", "a", "A", "m", "r", "o", "O":
+		case "e", "p", "d", "t", "T", "P", "c", "f", "a", "A", "m", "r", "o", "O":
 			m.focus = focusDashboard
 			model, cmd := m.updateDashboardAction(msg)
 			if m.mode != modeBrowse {
@@ -1189,6 +1200,41 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.form = newInferenceTestForm(value.ID)
+		m.mode = modeForm
+		m.resize()
+		return m, nil
+	case "P":
+		if current.definition.id != dashboardConnections {
+			return m, nil
+		}
+		selected := m.selectedEntry()
+		if selected == nil {
+			m.status = "focus a connection with a registered non-chat operation"
+			return m, nil
+		}
+		value, ok := selected.payload.(connection)
+		if !ok {
+			m.status = "select a connection to probe a provider operation"
+			return m, nil
+		}
+		var definition *provider.DefinitionMetadata
+		for index := range m.providers {
+			if m.providers[index].ID != value.ProviderNodeID {
+				continue
+			}
+			for catalogIndex := range m.providerCatalog {
+				if m.providerCatalog[catalogIndex].ID == m.providers[index].DefinitionID {
+					definition = &m.providerCatalog[catalogIndex]
+					break
+				}
+			}
+			break
+		}
+		m.form = newOperationTestForm(value.ID, definition)
+		if m.form == nil {
+			m.status = "selected provider has no registered non-chat operation probe"
+			return m, nil
+		}
 		m.mode = modeForm
 		m.resize()
 		return m, nil
@@ -2471,7 +2517,7 @@ func (m *app) refreshPane(index int) tea.Cmd {
 func (m *app) refreshAfter(method string) tea.Cmd {
 	resources := []sectionID{}
 	switch method {
-	case "connections.test", "connections.test_inference":
+	case "connections.test", "connections.test_inference", "connections.test_operation":
 		return nil
 	case "auth.device.start", "auth.device.get", "auth.device.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.cancel":
 		return nil
