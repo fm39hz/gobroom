@@ -1045,23 +1045,8 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	nodes := make([]store.ProviderNode, 0, 2)
-	connections := make([]store.ConnectionRecord, 0, 2)
-	for _, item := range []struct{ name, prefix, key string }{
-		{"XKiro", "xkiro", "xkiro-test-key"},
-		{"OCG", "ocg", "ocg-test-key"},
-	} {
-		node, err := db.CreateProviderNode(store.CreateProviderNodeInput{Name: item.name, Prefix: item.prefix, BaseURL: upstream.URL + "/" + item.prefix + "/v1", Protocol: "openai_chat"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		connection, err := db.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "primary", CredentialType: "api_key", Secret: item.key})
-		if err != nil {
-			t.Fatal(err)
-		}
-		nodes = append(nodes, node)
-		connections = append(connections, connection)
-	}
+	var nodes []store.ProviderNode
+	var connections []store.ConnectionRecord
 	runtimeRegistry, err := provider.NewRuntimeRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -1103,6 +1088,34 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			return fail(err)
 		}
 		switch request.Method {
+		case "providers.create":
+			var input store.CreateProviderNodeInput
+			if err := json.Unmarshal(encoded, &input); err != nil {
+				return fail(err)
+			}
+			item, err := db.CreateProviderNode(input)
+			if err != nil {
+				return fail(err)
+			}
+			nodes = append(nodes, item)
+			if err := apiServer.Control().Reload(); err != nil {
+				return fail(err)
+			}
+			return success(item)
+		case "connections.create":
+			var input store.CreateConnectionInput
+			if err := json.Unmarshal(encoded, &input); err != nil {
+				return fail(err)
+			}
+			item, err := db.CreateConnection(input)
+			if err != nil {
+				return fail(err)
+			}
+			connections = append(connections, item)
+			if err := apiServer.Control().Reload(); err != nil {
+				return fail(err)
+			}
+			return success(item)
 		case "connections.test":
 			var result discovery.ConnectionTestResult
 			var err error
@@ -1209,30 +1222,9 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 	model := newApp(socket)
 	model.width, model.height = 120, 40
 	model.activePanel = int(dashboardConnections)
-	model.activeTabs[dashboardConnections] = 1
-	providerViews := make([]providerNode, 0, len(nodes))
-	for _, node := range nodes {
-		providerViews = append(providerViews, providerNode{ID: node.ID, Name: node.Name, Prefix: node.Prefix, BaseURL: node.BaseURL, Protocol: node.Protocol, DefinitionID: node.DefinitionID, ModelsPath: node.ModelsPath, AuthMode: node.AuthMode, Enabled: node.Enabled})
-	}
-	model.providers = providerViews
-	connectionViews := make([]connection, 0, len(connections))
-	connectionEntries := make([]entry, 0, len(connections))
-	for _, value := range connections {
-		view := connection{ID: value.ID, ProviderNodeID: value.ProviderNodeID, Name: value.Name, CredentialType: value.CredentialType, Priority: value.Priority, Enabled: value.Enabled}
-		connectionViews = append(connectionViews, view)
-		connectionEntries = append(connectionEntries, entry{key: view.ID, title: view.Name, parentID: view.ProviderNodeID, kind: "connection", payload: view})
-	}
 	empty := json.RawMessage(`[]`)
-	providersJSON, err := json.Marshal(nodes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	connectionsJSON, err := json.Marshal(connections)
-	if err != nil {
-		t.Fatal(err)
-	}
-	model.raw = map[sectionID]json.RawMessage{sectionProviders: providersJSON, sectionConnections: connectionsJSON, sectionModels: empty, sectionDiscovered: empty, sectionPhysical: empty, sectionComboModels: empty}
-	model.setPaneItems(model.activeContextIndex(), connectionEntries)
+	model.raw = map[sectionID]json.RawMessage{sectionProviders: empty, sectionConnections: empty, sectionModels: empty, sectionDiscovered: empty, sectionPhysical: empty, sectionComboModels: empty}
+	model.setPaneItems(model.activeContextIndex(), nil)
 	run := func(stage string, command tea.Cmd) {
 		t.Helper()
 		if command == nil {
@@ -1264,29 +1256,71 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			t.Fatalf("refresh command returned %T, want batch or fetchMsg", batch)
 		}
 	}
-	connectionByPrefix := map[string]connection{}
-	for _, value := range connectionViews {
-		for _, node := range providerViews {
-			if value.ProviderNodeID == node.ID {
-				connectionByPrefix[node.Prefix] = value
+	for _, item := range []struct{ name, prefix, key string }{
+		{"XKiro", "xkiro", "xkiro-test-key"},
+		{"OCG", "ocg", "ocg-test-key"},
+	} {
+		model.activeTabs[dashboardConnections] = 0
+		_, createProvider := model.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+		if createProvider != nil || model.form == nil || model.form.method != "providers.create" {
+			t.Fatalf("new-provider action did not open editor: mode=%v form=%#v", model.mode, model.form)
+		}
+		setFormValue(model.form, "name", item.name)
+		setFormValue(model.form, "prefix", item.prefix)
+		setFormValue(model.form, "baseURL", upstream.URL+"/"+item.prefix+"/v1")
+		setFormValue(model.form, "protocol", "openai_chat")
+		setFormValue(model.form, "modelsPath", "/models")
+		setFormValue(model.form, "authMode", "api_key")
+		_, saveProvider := model.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		run(item.prefix+" provider creation", saveProvider)
+		providerIndex := -1
+		for index, row := range model.active().items {
+			if value, ok := row.payload.(providerNode); ok && value.Prefix == item.prefix {
+				providerIndex = index
+				break
 			}
 		}
+		if providerIndex < 0 {
+			t.Fatalf("created provider %q missing from Providers pane: %#v", item.prefix, model.active().items)
+		}
+		model.active().list.Select(providerIndex)
+		_, createConnection := model.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+		if createConnection != nil || model.form == nil || model.form.method != "connections.create" {
+			t.Fatalf("selected provider did not open connection form: mode=%v form=%#v", model.mode, model.form)
+		}
+		setFormValue(model.form, "name", "primary")
+		setFormValue(model.form, "credentialType", "api_key")
+		setFormValue(model.form, "secret", item.key)
+		_, saveConnection := model.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+		run(item.prefix+" connection creation", saveConnection)
+	}
+	model.activeTabs[dashboardConnections] = 1
+	selectConnection := func(prefix string) connection {
+		t.Helper()
+		var nodeID string
+		for _, node := range nodes {
+			if node.Prefix == prefix {
+				nodeID = node.ID
+				break
+			}
+		}
+		for index, row := range model.active().items {
+			if value, ok := row.payload.(connection); ok && value.ProviderNodeID == nodeID {
+				model.active().list.Select(index)
+				return value
+			}
+		}
+		t.Fatalf("connection for provider %q missing from Connections pane: %#v", prefix, model.active().items)
+		return connection{}
 	}
 	for _, prefix := range []string{"xkiro", "ocg"} {
-		current := connectionByPrefix[prefix]
-		model.active().list.Select(0)
-		if prefix == "ocg" {
-			model.active().list.Select(1)
-		}
+		selectConnection(prefix)
 		_, testCommand := model.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
 		run(prefix+" connection test", testCommand)
 		if !strings.Contains(model.status, "1 models") {
 			t.Fatalf("%s connection test was not surfaced: %s", prefix, model.status)
 		}
-		model.active().list.Select(0)
-		if current.ID != connections[0].ID {
-			model.active().list.Select(1)
-		}
+		selectConnection(prefix)
 		_, previewCommand := model.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 		run(prefix+" model preview", previewCommand)
 		if model.mode != modeModelImport || len(model.importPreview.Models) != 1 || !model.importSelected[model.importPreview.Models[0].ID] {

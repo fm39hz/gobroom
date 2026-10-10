@@ -190,10 +190,11 @@ suggestion is never persisted automatically. If that name already exists, the
 editor preloads its current policy and routes, then adds only missing matches,
 preserving existing configuration. Different normalized IDs receive no
 automatic grouping suggestion.
-`make test-model-workflow` includes a fake-provider acceptance from two
-configured connections through endpoint test, preview/import, Discovered
-equivalence review, Physical and Combo curation, exposure and `/v1/models`.
-It exercises the TUI, IPC, SQLite and API boundaries without provider charges.
+`make test-model-workflow` includes a fake-provider acceptance that creates two
+providers and API-key connections through TUI forms, then tests each endpoint,
+previews/imports routes, reviews their Discovered equivalence, creates Physical
+and Combo models, exposes the Combo and verifies `/v1/models`. It exercises the
+TUI, IPC, SQLite and API boundaries without provider charges.
 The profile, evidence, source-fidelity and aggregate views follow the
 [Physical model contract](PHYSICAL_MODELS.md).
 
