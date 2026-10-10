@@ -29,6 +29,16 @@ may register implementations and descriptors; adding one must not edit the
 kernel's model types, provider dispatch, storage columns or generic frontend
 workflow. Built-in and user definitions resolve through the same catalog.
 
+The public Go authoring surface is `github.com/fm39hz/gobroom/pkg/provider`;
+custom binaries host statically linked modules with
+`github.com/fm39hz/gobroom/pkg/daemon.NewWithProviderModules`. Modules register
+implementation code once, while ordinary provider definitions remain separate
+JSON manifests that reference exact primitive/task versions. This is a
+compile-time extension model, not runtime `plugin.so` loading or a remote code
+execution mechanism. The external-module example and its daemon-hosting test
+are tracked in M15 conformance; a published module distribution/versioning
+policy remains open.
+
 Catalog compilation happens off the serving path. Schemas, factories,
 dependency resolution and plan templates are prepared once per snapshot.
 Per-request negotiation uses local declarations/evidence and performs no
