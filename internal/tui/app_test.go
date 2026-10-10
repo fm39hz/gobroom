@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/daemon"
+	"github.com/fm39hz/gobroom/internal/discovery"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
@@ -1011,6 +1013,342 @@ func TestDiscoveredPhysicalComboOnboardingPublishesThroughModelsAPI(t *testing.T
 	}
 	if len(published.Data) != 1 || published.Data[0]["id"] != "junior" {
 		t.Fatalf("joined onboarding published=%#v, want only junior", published.Data)
+	}
+}
+
+func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var models string
+		switch request.URL.Path {
+		case "/xkiro/v1/models":
+			if request.Header.Get("Authorization") != "Bearer xkiro-test-key" {
+				t.Errorf("xkiro model-list credential=%q", request.Header.Get("Authorization"))
+			}
+			models = `{"data":[{"id":"qwen/qwen3.7-max:free"}]}`
+		case "/ocg/v1/models":
+			if request.Header.Get("Authorization") != "Bearer ocg-test-key" {
+				t.Errorf("ocg model-list credential=%q", request.Header.Get("Authorization"))
+			}
+			models = `{"data":[{"id":"qwen3.7-max"}]}`
+		default:
+			t.Errorf("unexpected model-list path %q", request.URL.Path)
+			http.NotFound(writer, request)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, models)
+	}))
+	defer upstream.Close()
+
+	db, err := store.Open(t.TempDir() + "/complete-onboarding.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	nodes := make([]store.ProviderNode, 0, 2)
+	connections := make([]store.ConnectionRecord, 0, 2)
+	for _, item := range []struct{ name, prefix, key string }{
+		{"XKiro", "xkiro", "xkiro-test-key"},
+		{"OCG", "ocg", "ocg-test-key"},
+	} {
+		node, err := db.CreateProviderNode(store.CreateProviderNodeInput{Name: item.name, Prefix: item.prefix, BaseURL: upstream.URL + "/" + item.prefix + "/v1", Protocol: "openai_chat"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		connection, err := db.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "primary", CredentialType: "api_key", Secret: item.key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		nodes = append(nodes, node)
+		connections = append(connections, connection)
+	}
+	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := runtimeRegistry.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoveryService := discovery.Service{Store: db, Client: upstream.Client(), Bindings: bindings}
+	extensionSnapshot, err := runtimeRegistry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategyCatalog, err := kernel.NewStrategyCatalog(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiServer := api.NewServerWithRuntimeBindings(db, bindings, strategyCatalog)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socket := t.TempDir() + "/complete-onboarding.sock"
+	ipc := daemon.NewIPCServer(socket, func(ctx context.Context, request daemon.IPCRequest) daemon.IPCResponse {
+		fail := func(err error) daemon.IPCResponse {
+			return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
+		}
+		success := func(value any) daemon.IPCResponse {
+			return daemon.IPCResponse{ID: request.ID, OK: true, Result: value}
+		}
+		var input struct {
+			NodeID       string   `json:"nodeID"`
+			ConnectionID string   `json:"connectionID"`
+			ModelIDs     []string `json:"modelIDs"`
+		}
+		encoded, marshalErr := json.Marshal(request.Params)
+		if marshalErr != nil {
+			return fail(marshalErr)
+		}
+		if err := json.Unmarshal(encoded, &input); err != nil {
+			return fail(err)
+		}
+		switch request.Method {
+		case "connections.test":
+			var result discovery.ConnectionTestResult
+			var err error
+			if input.NodeID == "" {
+				node, resolveErr := db.ProviderNodeByConnection(input.ConnectionID)
+				if resolveErr != nil {
+					return fail(resolveErr)
+				}
+				input.NodeID = node.ID
+			}
+			result, err = discoveryService.TestConnection(ctx, input.NodeID, input.ConnectionID)
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "connections.preview_models":
+			node, err := db.ProviderNodeByConnection(input.ConnectionID)
+			if err != nil {
+				return fail(err)
+			}
+			result, err := discoveryService.PreviewConnectionModels(ctx, node.ID, input.ConnectionID)
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "providers.refresh_models":
+			result, err := discoveryService.ImportConnectionModels(ctx, input.NodeID, input.ConnectionID, input.ModelIDs)
+			if err != nil {
+				return fail(err)
+			}
+			if err := apiServer.Control().Reload(); err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "providers.list":
+			result, err := db.ProviderNodes()
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "connections.list":
+			result, err := db.Connections("")
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "models.list":
+			result, err := db.Models()
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "discovered_models.list":
+			result, err := db.DiscoveredRoutes("")
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "physical_models.list":
+			result, err := db.PhysicalModels()
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "physical_models.upsert":
+			var value store.PhysicalModel
+			if err := json.Unmarshal(encoded, &value); err != nil {
+				return fail(err)
+			}
+			if err := db.UpsertPhysicalModel(value); err != nil {
+				return fail(err)
+			}
+			if err := apiServer.Control().Reload(); err != nil {
+				return fail(err)
+			}
+			return success(value)
+		case "combo_models.list":
+			result, err := db.ComboModels()
+			if err != nil {
+				return fail(err)
+			}
+			return success(result)
+		case "combo_models.upsert":
+			var value store.ComboModel
+			if err := json.Unmarshal(encoded, &value); err != nil {
+				return fail(err)
+			}
+			if err := db.UpsertComboModel(value); err != nil {
+				return fail(err)
+			}
+			if err := apiServer.Control().Reload(); err != nil {
+				return fail(err)
+			}
+			return success(value)
+		default:
+			return daemon.IPCResponse{ID: request.ID, OK: false, Error: "unexpected method " + request.Method}
+		}
+	})
+	if err := ipc.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer ipc.Close()
+
+	model := newApp(socket)
+	model.width, model.height = 120, 40
+	model.activePanel = int(dashboardConnections)
+	model.activeTabs[dashboardConnections] = 1
+	providerViews := make([]providerNode, 0, len(nodes))
+	for _, node := range nodes {
+		providerViews = append(providerViews, providerNode{ID: node.ID, Name: node.Name, Prefix: node.Prefix, BaseURL: node.BaseURL, Protocol: node.Protocol, DefinitionID: node.DefinitionID, ModelsPath: node.ModelsPath, AuthMode: node.AuthMode, Enabled: node.Enabled})
+	}
+	model.providers = providerViews
+	connectionViews := make([]connection, 0, len(connections))
+	connectionEntries := make([]entry, 0, len(connections))
+	for _, value := range connections {
+		view := connection{ID: value.ID, ProviderNodeID: value.ProviderNodeID, Name: value.Name, CredentialType: value.CredentialType, Priority: value.Priority, Enabled: value.Enabled}
+		connectionViews = append(connectionViews, view)
+		connectionEntries = append(connectionEntries, entry{key: view.ID, title: view.Name, parentID: view.ProviderNodeID, kind: "connection", payload: view})
+	}
+	empty := json.RawMessage(`[]`)
+	providersJSON, err := json.Marshal(nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionsJSON, err := json.Marshal(connections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.raw = map[sectionID]json.RawMessage{sectionProviders: providersJSON, sectionConnections: connectionsJSON, sectionModels: empty, sectionDiscovered: empty, sectionPhysical: empty, sectionComboModels: empty}
+	model.setPaneItems(model.activeContextIndex(), connectionEntries)
+	run := func(stage string, command tea.Cmd) {
+		t.Helper()
+		if command == nil {
+			t.Fatalf("%s: expected TUI command", stage)
+		}
+		result := command()
+		if action, ok := result.(actionMsg); ok && action.err != nil {
+			t.Fatalf("IPC action %s failed: %v", action.method, action.err)
+		}
+		updated, refresh := model.Update(result)
+		model = updated.(*app)
+		if refresh == nil {
+			return
+		}
+		switch batch := refresh().(type) {
+		case tea.BatchMsg:
+			for _, child := range batch {
+				message, ok := child().(fetchMsg)
+				if !ok {
+					t.Fatalf("refresh command returned %T, want fetchMsg", message)
+				}
+				updated, _ := model.Update(message)
+				model = updated.(*app)
+			}
+		case fetchMsg:
+			updated, _ := model.Update(batch)
+			model = updated.(*app)
+		default:
+			t.Fatalf("refresh command returned %T, want batch or fetchMsg", batch)
+		}
+	}
+	connectionByPrefix := map[string]connection{}
+	for _, value := range connectionViews {
+		for _, node := range providerViews {
+			if value.ProviderNodeID == node.ID {
+				connectionByPrefix[node.Prefix] = value
+			}
+		}
+	}
+	for _, prefix := range []string{"xkiro", "ocg"} {
+		current := connectionByPrefix[prefix]
+		model.active().list.Select(0)
+		if prefix == "ocg" {
+			model.active().list.Select(1)
+		}
+		_, testCommand := model.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+		run(prefix+" connection test", testCommand)
+		if !strings.Contains(model.status, "1 models") {
+			t.Fatalf("%s connection test was not surfaced: %s", prefix, model.status)
+		}
+		model.active().list.Select(0)
+		if current.ID != connections[0].ID {
+			model.active().list.Select(1)
+		}
+		_, previewCommand := model.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+		run(prefix+" model preview", previewCommand)
+		if model.mode != modeModelImport || len(model.importPreview.Models) != 1 || !model.importSelected[model.importPreview.Models[0].ID] {
+			t.Fatalf("%s model preview did not open with its exact ID selected: %#v", prefix, model.importPreview)
+		}
+		_, importCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		run(prefix+" model import", importCommand)
+		if model.mode != modeBrowse {
+			t.Fatalf("%s import did not return to browse mode: %v", prefix, model.mode)
+		}
+	}
+
+	model.activePanel = int(dashboardModels)
+	model.activeTabs[dashboardModels] = 0
+	model.active().list.Select(0)
+	_, group := model.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if group != nil || model.form == nil || model.form.method != "physical_models.upsert" || len(model.form.typedSources) != 2 {
+		method, sourceCount := "", 0
+		if model.form != nil {
+			method, sourceCount = model.form.method, len(model.form.typedSources)
+		}
+		t.Fatalf("imported provider variants did not become one Physical review: method=%q sources=%d status=%q", method, sourceCount, model.status)
+	}
+	model.form.inputs[0].SetValue("qwen-3.7-max")
+	_, savePhysical := model.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	run("Physical save", savePhysical)
+	physical, err := db.PhysicalModel("qwen-3.7-max")
+	if err != nil || len(physical.Sources) != 2 {
+		t.Fatalf("persisted imported Physical=%#v err=%v", physical, err)
+	}
+
+	model.activeTabs[dashboardModels] = 1
+	if len(model.active().items) != 1 || model.active().items[0].modelRef != physical.Name {
+		t.Fatalf("saved Physical was not present in its pane: %#v", model.active().items)
+	}
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'c', Text: "c"})
+	if model.form == nil || len(model.form.typedMembers) != 1 || model.form.typedMembers[0].ID != physical.Name {
+		t.Fatalf("Combo form did not preselect imported Physical: %#v", model.form)
+	}
+	model.form.inputs[0].SetValue("junior")
+	_, saveCombo := model.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	run("Combo save", saveCombo)
+	model.activeTabs[dashboardModels] = 2
+	if len(model.active().items) != 1 || model.active().items[0].modelRef != "junior" {
+		t.Fatalf("saved Combo was not present in its pane: %#v", model.active().items)
+	}
+	_, expose := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	run("Combo exposure", expose)
+	recorder := httptest.NewRecorder()
+	apiServer.HandlerWithOptions(api.HandlerOptions{DataPlane: true}).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /v1/models status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var published struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &published); err != nil {
+		t.Fatal(err)
+	}
+	if len(published.Data) != 1 || published.Data[0]["id"] != "junior" {
+		t.Fatalf("full connection onboarding published=%#v, want only junior", published.Data)
 	}
 }
 
