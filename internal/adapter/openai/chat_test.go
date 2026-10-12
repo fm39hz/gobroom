@@ -150,6 +150,84 @@ func TestOpenAIChatDecoderRendersAnthropicMessagesFromSemanticEvents(t *testing.
 	}
 }
 
+func TestKernelRunsAnthropicMessagesThroughOpenAIChatAndBack(t *testing.T) {
+	upstreamBody := `{"id":"chatcmpl_roundtrip","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"Checking now.","tool_calls":[{"id":"call_roundtrip","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"weather\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}`
+	var dispatched atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		dispatched.Add(1)
+		if request.URL.String() != "https://provider.test/v1/chat/completions" {
+			t.Errorf("upstream URL=%q", request.URL.String())
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode upstream request: %v", err)
+		} else {
+			messages, _ := body["messages"].([]any)
+			if body["model"] != "physical-model" || len(messages) != 1 || messages[0].(map[string]any)["content"] != "Find the weather" {
+				t.Errorf("OpenAI Chat request body=%#v", body)
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(upstreamBody)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "physical-model",
+			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	parsed, err := normalize.JSON("/v1/messages", http.Header{"Anthropic-Version": []string{"2023-06-01"}}, []byte(`{"model":"junior","max_tokens":128,"messages":[{"role":"user","content":"Find the weather"}],"tools":[{"name":"lookup","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanations, explainErr := engine.ExplainCompatibility(context.Background(), "junior", parsed.Request)
+	if explainErr != nil {
+		t.Fatal(explainErr)
+	}
+	if len(explanations) != 1 || !explanations[0].Compatible {
+		t.Fatalf("route compatibility explanations=%#v", explanations)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched.Load() != 1 || writer.Code != http.StatusOK || !strings.Contains(writer.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("dispatches=%d status=%d content-type=%q body=%s", dispatched.Load(), writer.Code, writer.Header().Get("Content-Type"), writer.Body.String())
+	}
+	var message struct {
+		ID      string           `json:"id"`
+		Type    string           `json:"type"`
+		Model   string           `json:"model"`
+		Stop    string           `json:"stop_reason"`
+		Usage   map[string]int64 `json:"usage"`
+		Content []map[string]any `json:"content"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &message); err != nil {
+		t.Fatalf("decode Anthropic response %q: %v", writer.Body.String(), err)
+	}
+	if message.ID != "chatcmpl_roundtrip" || message.Type != "message" || message.Model != "junior" || message.Stop != "tool_use" || len(message.Content) != 2 {
+		t.Fatalf("Anthropic response envelope=%#v", message)
+	}
+	if message.Content[0]["text"] != "Checking now." || message.Content[1]["type"] != "tool_use" || message.Content[1]["id"] != "call_roundtrip" || message.Content[1]["name"] != "lookup" {
+		t.Fatalf("Anthropic semantic content=%#v", message.Content)
+	}
+	if input, ok := message.Content[1]["input"].(map[string]any); !ok || input["q"] != "weather" || message.Usage["input_tokens"] != 7 || message.Usage["output_tokens"] != 5 {
+		t.Fatalf("Anthropic tool/usage projection=%#v usage=%#v", message.Content[1], message.Usage)
+	}
+}
+
 func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
 	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
