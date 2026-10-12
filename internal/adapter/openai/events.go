@@ -71,7 +71,9 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) er
 	}
 	switch {
 	case objectType == "response" && typ == "":
-		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, ResponseID: responseID})
+		if err := emitOpenAIResponsesJSON(payload, emit, now, responseID); err != nil {
+			return err
+		}
 	case strings.Contains(typ, "output_item.added"):
 		item, _ := payload["item"].(map[string]any)
 		itemType := stringValue(payload["item_type"])
@@ -99,11 +101,15 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) er
 	case strings.Contains(typ, "function_call_arguments.delta"):
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, ResponseID: responseID, ItemID: itemID, ContentType: "function_call", ToolArguments: stringValue(payload["delta"])})
 	case typ == "response.completed":
-		response, _ := payload["response"].(map[string]any)
-		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, ResponseID: responseID, StopReason: stringValue(response["status"])})
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, ResponseID: responseID})
 	}
-	if usage, ok := payload["usage"].(map[string]any); ok {
+	usage, ok := payload["usage"].(map[string]any)
+	if !ok {
+		if response, responseOK := payload["response"].(map[string]any); responseOK {
+			usage, ok = response["usage"].(map[string]any)
+		}
+	}
+	if ok {
 		inputTokens := usage["input_tokens"]
 		if inputTokens == nil {
 			inputTokens = usage["prompt_tokens"]
@@ -115,6 +121,70 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) er
 		event := kernel.UsageEvent{InputTokens: int64(numberValue(inputTokens)), OutputTokens: int64(numberValue(outputTokens))}
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &event})
 	}
+	return nil
+}
+
+func emitOpenAIResponsesJSON(payload map[string]any, emit func(kernel.ResponseEvent), at time.Time, responseID string) error {
+	if status := stringValue(payload["status"]); status != "completed" {
+		return fmt.Errorf("OpenAI Responses JSON has non-completed status %q", status)
+	}
+	output, _ := payload["output"].([]any)
+	toolIndex := 0
+	for _, rawItem := range output {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			return fmt.Errorf("OpenAI Responses output contains a non-object item")
+		}
+		itemType := stringValue(item["type"])
+		itemID := stringValue(item["id"])
+		switch itemType {
+		case "message":
+			content, _ := item["content"].([]any)
+			for _, rawPart := range content {
+				part, ok := rawPart.(map[string]any)
+				if !ok {
+					return fmt.Errorf("OpenAI Responses message contains a non-object content part")
+				}
+				switch stringValue(part["type"]) {
+				case "output_text":
+					if text := stringValue(part["text"]); text != "" {
+						emit(kernel.ResponseEvent{At: at, Kind: kernel.EventTextDelta, ResponseID: responseID, ItemID: itemID, ContentType: "output_text", Text: text})
+					}
+				case "refusal":
+					return fmt.Errorf("OpenAI Responses refusal output has no declared canonical mapping")
+				default:
+					return fmt.Errorf("unsupported OpenAI Responses message content type %q", stringValue(part["type"]))
+				}
+			}
+		case "function_call":
+			callID := stringValue(item["call_id"])
+			if callID == "" {
+				callID = itemID
+			}
+			emit(kernel.ResponseEvent{At: at, Kind: kernel.EventToolCallDelta, ResponseID: responseID, ItemID: itemID, ContentType: "function_call", Index: toolIndex, ToolCallID: callID, ToolName: stringValue(item["name"]), ToolArguments: stringValue(item["arguments"])})
+			toolIndex++
+		case "reasoning":
+			summary, _ := item["summary"].([]any)
+			for _, rawPart := range summary {
+				part, ok := rawPart.(map[string]any)
+				if !ok || stringValue(part["type"]) != "summary_text" {
+					return fmt.Errorf("unsupported OpenAI Responses reasoning summary part")
+				}
+				if text := stringValue(part["text"]); text != "" {
+					emit(kernel.ResponseEvent{At: at, Kind: kernel.EventThinkingDelta, ResponseID: responseID, ItemID: itemID, ContentType: "reasoning", Text: text})
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported OpenAI Responses output item type %q", itemType)
+		}
+	}
+	if usage, ok := payload["usage"].(map[string]any); ok {
+		input := usage["input_tokens"]
+		output := usage["output_tokens"]
+		event := kernel.UsageEvent{InputTokens: int64(numberValue(input)), OutputTokens: int64(numberValue(output))}
+		emit(kernel.ResponseEvent{At: at, Kind: kernel.EventUsage, ResponseID: responseID, Usage: &event})
+	}
+	emit(kernel.ResponseEvent{At: at, Kind: kernel.EventResponseComplete, ResponseID: responseID})
 	return nil
 }
 

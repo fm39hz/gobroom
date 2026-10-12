@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,7 +45,11 @@ func (OpenAIChat) Begin(_ context.Context, options kernel.ResponseRenderContext,
 	} else {
 		writer.Header().Set("Content-Type", "application/json")
 	}
-	return &openAIChatSession{writer: writer, status: options.Status, passthrough: passthrough, streaming: options.Streaming, model: options.Model, id: fmt.Sprintf("chatcmpl-gobroom-%d", time.Now().UnixNano()), created: time.Now().Unix(), tools: map[int]*toolAccumulator{}}, nil
+	return &openAIChatSession{
+		writer: writer, status: options.Status, passthrough: passthrough, streaming: options.Streaming, model: options.Model,
+		id: fmt.Sprintf("chatcmpl-gobroom-%d", time.Now().UnixNano()), created: time.Now().Unix(), tools: map[int]*toolAccumulator{},
+		toolIndexesByItemID: map[string]int{}, toolIndexesByCallID: map[string]int{},
+	}, nil
 }
 
 type toolAccumulator struct {
@@ -52,18 +57,21 @@ type toolAccumulator struct {
 	signature           string
 }
 type openAIChatSession struct {
-	writer         http.ResponseWriter
-	status         int
-	committed      bool
-	passthrough    bool
-	streaming      bool
-	model, id      string
-	created        int64
-	text, thinking strings.Builder
-	tools          map[int]*toolAccumulator
-	usage          *kernel.UsageEvent
-	finish         string
-	finished       bool
+	writer              http.ResponseWriter
+	status              int
+	committed           bool
+	passthrough         bool
+	streaming           bool
+	model, id           string
+	created             int64
+	text, thinking      strings.Builder
+	tools               map[int]*toolAccumulator
+	toolIndexesByItemID map[string]int
+	toolIndexesByCallID map[string]int
+	nextToolIndex       int
+	usage               *kernel.UsageEvent
+	finish              string
+	finishSent          bool
 }
 
 func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) error {
@@ -92,12 +100,22 @@ func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) 
 			return s.chunk(map[string]any{"reasoning_content": event.Text}, "")
 		}
 	case kernel.EventToolCallDelta:
-		tool := s.tools[event.Index]
+		index := s.toolIndex(event)
+		if event.ToolCallID != "" {
+			if existing, found := s.toolIndexesByCallID[event.ToolCallID]; found && existing != index {
+				return fmt.Errorf("OpenAI Chat tool call ID %q is assigned to multiple response items", event.ToolCallID)
+			}
+			s.toolIndexesByCallID[event.ToolCallID] = index
+		}
+		tool := s.tools[index]
 		if tool == nil {
 			tool = &toolAccumulator{}
-			s.tools[event.Index] = tool
+			s.tools[index] = tool
 		}
 		if event.ToolCallID != "" {
+			if tool.id != "" && tool.id != event.ToolCallID {
+				return fmt.Errorf("OpenAI Chat tool call at index %d changed ID across response items", index)
+			}
 			tool.id = event.ToolCallID
 		}
 		if event.ToolName != "" {
@@ -114,7 +132,7 @@ func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) 
 		tool.arguments += event.ToolArguments
 		if s.streaming {
 			s.commit()
-			call := map[string]any{"index": event.Index, "function": map[string]any{"arguments": event.ToolArguments}}
+			call := map[string]any{"index": index, "function": map[string]any{"arguments": event.ToolArguments}}
 			if event.ToolCallID != "" {
 				call["id"] = event.ToolCallID
 				call["type"] = "function"
@@ -128,10 +146,16 @@ func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) 
 			return s.chunk(map[string]any{"tool_calls": []any{call}}, "")
 		}
 	case kernel.EventContentBlockEnd:
+		if event.ItemID != "" {
+			return nil
+		}
 		s.finish = openAIFinishReason(event.StopReason)
 		if s.streaming && s.finish != "" {
 			s.commit()
-			return s.chunk(map[string]any{}, s.finish)
+			if err := s.chunk(map[string]any{}, s.finish); err != nil {
+				return err
+			}
+			s.finishSent = true
 		}
 	case kernel.EventUsage:
 		if event.Usage != nil {
@@ -139,7 +163,7 @@ func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) 
 			s.usage = &usage
 		}
 	case kernel.EventResponseComplete:
-		s.finished = true
+		// Final protocol framing is emitted once in Finish, after item validation.
 	}
 	return nil
 }
@@ -151,12 +175,23 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 	if s.passthrough {
 		return nil
 	}
+	if err := s.validateToolCalls(); err != nil {
+		return err
+	}
+	if s.finish == "" {
+		if len(s.tools) > 0 {
+			s.finish = "tool_calls"
+		} else {
+			s.finish = "stop"
+		}
+	}
 	if s.streaming {
 		s.commit()
-		if !s.finished {
+		if !s.finishSent {
 			if err := s.chunk(map[string]any{}, s.finish); err != nil {
 				return err
 			}
+			s.finishSent = true
 		}
 		_, err := io.WriteString(s.writer, "data: [DONE]\n\n")
 		if flusher, ok := s.writer.(http.Flusher); ok {
@@ -171,11 +206,13 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 	}
 	if len(s.tools) > 0 {
 		calls := make([]any, 0, len(s.tools))
-		for index := 0; index < len(s.tools); index++ {
+		indexes := make([]int, 0, len(s.tools))
+		for index := range s.tools {
+			indexes = append(indexes, index)
+		}
+		sort.Ints(indexes)
+		for _, index := range indexes {
 			tool := s.tools[index]
-			if tool == nil {
-				continue
-			}
 			arguments := tool.arguments
 			if arguments == "" {
 				arguments = "{}"
@@ -187,7 +224,7 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 			calls = append(calls, call)
 		}
 		message["tool_calls"] = calls
-		if s.finish == "" || s.finish == "stop" {
+		if s.finish == "stop" {
 			s.finish = "tool_calls"
 		}
 	}
@@ -197,6 +234,44 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 		body["usage"] = map[string]any{"prompt_tokens": s.usage.InputTokens, "completion_tokens": s.usage.OutputTokens, "total_tokens": s.usage.InputTokens + s.usage.OutputTokens}
 	}
 	return json.NewEncoder(s.writer).Encode(body)
+}
+
+func (s *openAIChatSession) toolIndex(event kernel.ResponseEvent) int {
+	if event.ItemID == "" {
+		return event.Index
+	}
+	if index, found := s.toolIndexesByItemID[event.ItemID]; found {
+		return index
+	}
+	index := event.Index
+	if _, occupied := s.tools[index]; occupied {
+		index = s.nextToolIndex
+		for s.tools[index] != nil {
+			index++
+		}
+	}
+	s.toolIndexesByItemID[event.ItemID] = index
+	if index >= s.nextToolIndex {
+		s.nextToolIndex = index + 1
+	}
+	return index
+}
+
+func (s *openAIChatSession) validateToolCalls() error {
+	for index, tool := range s.tools {
+		if tool.id == "" || tool.name == "" {
+			return fmt.Errorf("OpenAI Chat tool call at index %d ended before its ID and name were complete", index)
+		}
+		arguments := strings.TrimSpace(tool.arguments)
+		if arguments == "" {
+			continue
+		}
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(arguments), &object); err != nil || object == nil {
+			return fmt.Errorf("OpenAI Chat tool call %q has invalid object arguments", tool.id)
+		}
+	}
+	return nil
 }
 
 func (s *openAIChatSession) commit() {

@@ -915,9 +915,13 @@ func openAIResponse(payload geminiGenerateContentResponse, issuer extensions.Ref
 				if arguments == "" || arguments == "null" {
 					arguments = "{}"
 				}
-				toolCalls = append(toolCalls, openAIChatToolCall{ID: call.ID, Type: "function", ThoughtSignature: part.ThoughtSignature, Function: openAIChatToolFunction{Name: call.Name, Arguments: arguments}})
+				callID := call.ID
+				if callID == "" {
+					callID = fmt.Sprintf("call_gemini_%d_%d", time.Now().UnixNano(), len(toolCalls))
+				}
+				toolCalls = append(toolCalls, openAIChatToolCall{ID: callID, Type: "function", ThoughtSignature: part.ThoughtSignature, Function: openAIChatToolFunction{Name: call.Name, Arguments: arguments}})
 				providerData, _ := json.Marshal(map[string]string{"thoughtSignature": part.ThoughtSignature})
-				event := kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments, Signature: part.ThoughtSignature, Opaque: providerData}
+				event := kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: callID, ToolName: call.Name, ToolArguments: arguments, Signature: part.ThoughtSignature, Opaque: providerData}
 				if part.ThoughtSignature != "" {
 					event.SignatureIssuer = issuer
 				}

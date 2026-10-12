@@ -381,6 +381,22 @@ func TestTranslateGeminiSSEEmitsIncrementalOpenAIChunks(t *testing.T) {
 	}
 }
 
+func TestGeminiToolCallWithoutProviderIDGetsStableResponseIdentity(t *testing.T) {
+	issuer := extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}
+	payload := geminiGenerateContentResponse{Candidates: []geminiCandidate{{Content: geminiContent{Parts: []geminiPart{{FunctionCall: &geminiFunctionCall{Name: "lookup", Args: json.RawMessage(`{"q":"x"}`)}}}}}}}
+	response, events, _ := openAIResponse(payload, issuer)
+	if len(response.Choices) != 1 || len(response.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("translated Gemini response=%#v", response)
+	}
+	id := response.Choices[0].Message.ToolCalls[0].ID
+	if id == "" || !strings.HasPrefix(id, "call_gemini_") {
+		t.Fatalf("Gemini tool call lacks synthesized OpenAI correlation ID: %q", id)
+	}
+	if len(events) != 1 || events[0].Kind != kernel.EventToolCallDelta || events[0].ToolCallID != id || events[0].ToolName != "lookup" {
+		t.Fatalf("canonical tool event diverges from rendered call identity: %#v", events)
+	}
+}
+
 func TestTranslateGeminiSSERejectsMalformedAndTruncatedStreams(t *testing.T) {
 	tests := []struct {
 		name string

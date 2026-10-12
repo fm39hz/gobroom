@@ -156,6 +156,9 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 			if existing := s.toolBlocksByID[event.ToolCallID]; existing != nil && existing != block {
 				return fmt.Errorf("Anthropic tool call ID %q is assigned to multiple response items", event.ToolCallID)
 			}
+			if block.toolID != "" && block.toolID != event.ToolCallID {
+				return fmt.Errorf("Anthropic tool call response item changed ID across deltas")
+			}
 			s.toolBlocksByID[event.ToolCallID] = block
 			block.toolID = event.ToolCallID
 		}

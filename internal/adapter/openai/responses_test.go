@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -237,6 +238,84 @@ func TestKernelPreservesNativeResponsesJSONWithoutTransforms(t *testing.T) {
 	}
 	if dispatches != 1 || writer.Body.String() != wire || writer.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("native Responses JSON was not preserved exactly: dispatches=%d content-type=%q body=%q", dispatches, writer.Header().Get("Content-Type"), writer.Body.String())
+	}
+}
+
+func TestKernelRendersResponsesJSONItemsAsAnthropicToolUseBlocks(t *testing.T) {
+	responseBody := `{"id":"resp_crosswire","object":"response","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"I found two results."}]},{"id":"fc_item_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"alpha\"}"},{"id":"fc_item_2","type":"function_call","call_id":"call_2","name":"lookup","arguments":"{\"q\":\"beta\"}"}],"usage":{"input_tokens":10,"output_tokens":5}}`
+	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
+			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-responses"] = composed
+	parsed, err := normalize.JSON("/v1/messages", http.Header{"Anthropic-Version": []string{"2023-06-01"}}, []byte(`{"model":"junior","max_tokens":128,"messages":[{"role":"user","content":"look up alpha and beta"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanations, explainErr := engine.ExplainCompatibility(context.Background(), "junior", parsed.Request)
+	if explainErr != nil {
+		t.Fatal(explainErr)
+	}
+	if len(explanations) != 1 || !explanations[0].Compatible {
+		plan := composed.PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}})
+		t.Fatalf("route compatibility=%#v direct plan=%#v", explanations, plan)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ID      string           `json:"id"`
+		Type    string           `json:"type"`
+		Stop    string           `json:"stop_reason"`
+		Content []map[string]any `json:"content"`
+		Usage   map[string]int64 `json:"usage"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode Anthropic projection %q: %v", writer.Body.String(), err)
+	}
+	if result.ID != "resp_crosswire" || result.Type != "message" || result.Stop != "tool_use" || len(result.Content) != 3 || result.Content[0]["text"] != "I found two results." {
+		t.Fatalf("Responses→Anthropic projection=%#v", result)
+	}
+	first, second := result.Content[1], result.Content[2]
+	if first["type"] != "tool_use" || first["id"] != "call_1" || first["name"] != "lookup" || !reflect.DeepEqual(first["input"], map[string]any{"q": "alpha"}) || second["type"] != "tool_use" || second["id"] != "call_2" || second["name"] != "lookup" || !reflect.DeepEqual(second["input"], map[string]any{"q": "beta"}) {
+		t.Fatalf("Responses tool items were not independently projected: %#v", result.Content)
+	}
+	if result.Usage["input_tokens"] != 10 || result.Usage["output_tokens"] != 5 {
+		t.Fatalf("Responses usage projection=%#v", result.Usage)
+	}
+}
+
+func TestResponsesJSONSemanticDecoderRejectsIncompleteStatus(t *testing.T) {
+	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
+	response := kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"id":"resp_incomplete","object":"response","status":"incomplete","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}]}`)),
+	}
+	writer := httptest.NewRecorder()
+	err := composed.RenderResponse(context.Background(), response, writer, normalize.FormatAnthropic, kernel.StreamHooks{})
+	if err == nil || !strings.Contains(err.Error(), `non-completed status "incomplete"`) {
+		t.Fatalf("incomplete Responses JSON was treated as a completed semantic result: err=%v body=%s", err, writer.Body.String())
+	}
+	if writer.Body.Len() != 0 {
+		t.Fatalf("incomplete Responses JSON leaked a successful client result: %s", writer.Body.String())
 	}
 }
 
@@ -650,13 +729,17 @@ func TestOpenAIResponsesDecoderPreservesToolIdentityForAnthropicEgress(t *testin
 	body := "data: {\"type\":\"response.output_item.added\",\"response_id\":\"resp_tool\",\"item_id\":\"item_1\",\"item_type\":\"function_call\",\"item\":{\"id\":\"call_1\",\"call_id\":\"call_1\",\"name\":\"lookup\",\"arguments\":\"\"}}\n\n" +
 		"data: {\"type\":\"response.function_call_arguments.delta\",\"response_id\":\"resp_tool\",\"item_id\":\"item_1\",\"delta\":\"{\\\"q\\\":\\\"weather\\\"}\"}\n\n" +
 		"data: {\"type\":\"response.output_item.done\",\"response_id\":\"resp_tool\",\"item_id\":\"item_1\",\"status\":\"completed\"}\n\n" +
-		"data: {\"type\":\"response.completed\",\"response_id\":\"resp_tool\",\"response\":{\"id\":\"resp_tool\",\"status\":\"completed\"}}\n\n"
+		"data: {\"type\":\"response.completed\",\"response_id\":\"resp_tool\",\"response\":{\"id\":\"resp_tool\",\"status\":\"completed\",\"usage\":{\"input_tokens\":9,\"output_tokens\":4}}}\n\n"
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}
 	writer := httptest.NewRecorder()
 	var semantic bytes.Buffer
+	var usage kernel.UsageEvent
 	err := composed.RenderResponse(context.Background(), response, writer, normalize.FormatAnthropic, kernel.StreamHooks{Streaming: true, OnEvent: func(event kernel.ResponseEvent) {
 		if event.Kind == kernel.EventToolCallDelta {
 			_, _ = fmt.Fprintf(&semantic, "%s|%s|%s", event.ToolCallID, event.ToolName, event.ToolArguments)
+		}
+		if event.Kind == kernel.EventUsage && event.Usage != nil {
+			usage = *event.Usage
 		}
 	}})
 	if err != nil {
@@ -670,6 +753,9 @@ func TestOpenAIResponsesDecoderPreservesToolIdentityForAnthropicEgress(t *testin
 	}
 	if !strings.Contains(semantic.String(), "call_1|lookup|") {
 		t.Fatalf("Responses decoder did not preserve tool identity in IR: %q", semantic.String())
+	}
+	if usage.InputTokens != 9 || usage.OutputTokens != 4 {
+		t.Fatalf("Responses nested usage was lost: %#v", usage)
 	}
 }
 
