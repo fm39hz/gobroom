@@ -36,9 +36,17 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Responses request codec cannot safely translate this facet from the client contract"}
 		if native {
 			switch facet {
-			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetReasoningBudget, kernel.FacetContinuity, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetContinuity, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
+			}
+			if facet == kernel.FacetReasoningBudget {
+				if openAINativeBudgetPassthrough(request) {
+					mapping.Disposition = kernel.FacetPreserved
+					mapping.Reason = "the exact native reasoning budget is forwarded without mutation"
+				} else {
+					mapping.Reason = "OpenAI Responses has no declared mapping for a synthesized or transformed reasoning budget"
+				}
 			}
 			if facet == kernel.FacetWireRequest && (request.Mutations.OperationPayload || request.Mutations.Modalities) {
 				mapping.Disposition = kernel.FacetUnsupported

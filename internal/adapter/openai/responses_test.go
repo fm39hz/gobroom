@@ -155,6 +155,30 @@ func TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation(t *test
 	}
 }
 
+func TestNativeResponsesBudgetRequiresExactUnmodifiedSourceEvidence(t *testing.T) {
+	request := normalize.Request{
+		SourceFormat: normalize.FormatOpenAIResponses,
+		Raw:          map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 2048}},
+		Thinking:     normalize.ThinkingIntent{Mode: "enabled", BudgetTokens: 2048, Source: "thinking"},
+	}
+	policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetReasoningBudget}}
+	plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy})}, policy)
+	if !plan.Supported {
+		t.Fatalf("exact native reasoning budget should pass through: %#v", plan)
+	}
+
+	request.Mutations.Thinking = true
+	plan = kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy})}, policy)
+	if plan.Supported {
+		t.Fatalf("transformed native budget was admitted without a Responses mapping: %#v", plan)
+	}
+	for _, mapping := range plan.Mappings {
+		if mapping.Facet == kernel.FacetReasoningBudget && mapping.Disposition != kernel.FacetUnsupported {
+			t.Fatalf("transformed reasoning-budget disposition=%s, want unsupported: %#v", mapping.Disposition, mapping)
+		}
+	}
+}
+
 func TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems(t *testing.T) {
 	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
 		"model": "role",

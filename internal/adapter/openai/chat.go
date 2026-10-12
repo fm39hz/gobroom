@@ -45,7 +45,7 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Chat request is forwarded in its native wire contract"
 			case kernel.FacetReasoningBudget:
-				if openAIChatBudgetPassthrough(input.Request) {
+				if openAINativeBudgetPassthrough(input.Request) {
 					mapping.Disposition = kernel.FacetPreserved
 					mapping.Reason = "the exact native reasoning budget is forwarded without mutation"
 				} else {
@@ -91,7 +91,7 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 	return result
 }
 
-func openAIChatBudgetPassthrough(request kernel.NormalizedRequest) bool {
+func openAINativeBudgetPassthrough(request kernel.NormalizedRequest) bool {
 	if request.Mutations.Thinking || hasUnsupportedFacet(request, kernel.FacetReasoningBudget) || request.Thinking.BudgetTokens <= 0 {
 		return false
 	}
