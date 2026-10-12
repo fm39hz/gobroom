@@ -441,5 +441,5 @@ func copyHeaders(dst, src http.Header, openAI bool) {
 }
 
 func Builtins() []kernel.ResponseRenderer {
-	return []kernel.ResponseRenderer{OpenAIChat{}, WirePassthrough{Format: normalize.FormatOpenAIResponses}, AnthropicMessages{}}
+	return []kernel.ResponseRenderer{OpenAIChat{}, OpenAIResponses{}, AnthropicMessages{}}
 }
