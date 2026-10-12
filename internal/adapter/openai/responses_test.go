@@ -22,6 +22,18 @@ type nativeResponsesMutationFixture struct{}
 type responsesInputMutationFixture struct{}
 type responsesToolHistoryMutationFixture struct{}
 type responsesUnsupportedReasoningMutationFixture struct{}
+type rewriteToolArgumentResponseTransform struct{}
+
+func (rewriteToolArgumentResponseTransform) Definition() kernel.ResponseTransformDefinition {
+	return kernel.ResponseTransformDefinition{Ref: extensions.Ref{Kind: kernel.ResponseTransformKind, ID: "fixture.rewrite-tool-arguments", ContractVersion: 1}, ImplementationVersion: "1", Label: "Rewrite tool arguments", Description: "Test semantic re-encoding while preserving call correlation.", Effects: []kernel.ResponseTransformEffect{kernel.ResponseEffectToolArguments}}
+}
+
+func (rewriteToolArgumentResponseTransform) ApplyResponse(_ context.Context, event kernel.ResponseEvent, _ json.RawMessage) (kernel.ResponseEvent, error) {
+	if event.Kind == kernel.EventToolCallDelta {
+		event.ToolArguments = `{"q":"transformed"}`
+	}
+	return event, nil
+}
 
 func (nativeResponsesMutationFixture) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-native-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses native options", Description: "Change typed facets for native Responses egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions, kernel.TransformThinking, kernel.TransformContinuity}}
@@ -187,6 +199,77 @@ func TestNativeResponsesBudgetRequiresExactUnmodifiedSourceEvidence(t *testing.T
 		if mapping.Facet == kernel.FacetReasoningBudget && mapping.Disposition != kernel.FacetUnsupported {
 			t.Fatalf("transformed reasoning-budget disposition=%s, want unsupported: %#v", mapping.Disposition, mapping)
 		}
+	}
+}
+
+func TestKernelPreservesNativeResponsesJSONWithoutTransforms(t *testing.T) {
+	wire := `{"id":"resp_native_1","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"exact"}]}]}`
+	dispatches := 0
+	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		dispatches++
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(wire)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, BaseURL: "https://provider.test/v1", ExternalModel: "upstream-physical-model",
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-responses"] = composed
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{"model": "junior", "input": "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	if dispatches != 1 || writer.Body.String() != wire || writer.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("native Responses JSON was not preserved exactly: dispatches=%d content-type=%q body=%q", dispatches, writer.Header().Get("Content-Type"), writer.Body.String())
+	}
+}
+
+func TestOpenAIChatRendererReencodesTransformedToolCallWithStableCorrelation(t *testing.T) {
+	transform := rewriteToolArgumentResponseTransform{}
+	registry := kernel.NewResponseTransformRegistry()
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	scope := kernel.TransformScope{Kind: kernel.TransformScopeDaemon}
+	binding := kernel.TransformBinding{ID: "rewrite-tool-arguments", TransformRef: transform.Definition().Ref, Enabled: true, Scope: scope}
+	if err := registry.ValidateBindings([]kernel.TransformBinding{binding}); err != nil {
+		t.Fatal(err)
+	}
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	body := `{"id":"chatcmpl_tool","object":"chat.completion","model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-stable-1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"original\"}"}}]},"finish_reason":"tool_calls"}]}`
+	writer := httptest.NewRecorder()
+	err := composed.RenderResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, writer, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, TransformResponse: func(ctx context.Context, event kernel.ResponseEvent) (kernel.ResponseEvent, error) {
+		return registry.ApplyScopes(ctx, event, []kernel.TransformBinding{binding}, scope)
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := writer.Body.String()
+	for _, expected := range []string{`"id":"call-stable-1"`, `"name":"lookup"`, `\"q\":\"transformed\"`, "data: [DONE]"} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("transformed tool-call response missing %q: %s", expected, output)
+		}
+	}
+	if strings.Contains(output, `\"q\":\"original\"`) {
+		t.Fatalf("native upstream wire bypassed semantic tool transform: %s", output)
 	}
 }
 
