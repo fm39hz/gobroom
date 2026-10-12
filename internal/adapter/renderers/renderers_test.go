@@ -114,6 +114,47 @@ func TestAnthropicMessagesRendererBuildsNonStreamingMessage(t *testing.T) {
 	}
 }
 
+func TestAnthropicMessagesRendererRejectsIncompleteOrDuplicateToolIdentity(t *testing.T) {
+	renderer := AnthropicMessages{}
+	options := kernel.ResponseRenderContext{
+		Status: 200, ClientFormat: normalize.FormatAnthropic, ProviderFormat: normalize.FormatOpenAIChat,
+		Streaming: true, ProviderStreaming: true,
+		ProviderEvents: []kernel.ResponseEventKind{kernel.EventToolCallDelta, kernel.EventResponseComplete},
+		RequiredEvents: []kernel.ResponseEventKind{kernel.EventToolCallDelta, kernel.EventResponseComplete},
+	}
+	t.Run("incomplete identity", func(t *testing.T) {
+		writer := httptest.NewRecorder()
+		session, err := renderer.Begin(context.Background(), options, writer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventToolCallDelta, Index: 0, ToolCallID: "call-incomplete"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventResponseComplete}); err == nil || !strings.Contains(err.Error(), "ID and name") {
+			t.Fatalf("incomplete tool identity was accepted: err=%v output=%s", err, writer.Body.String())
+		}
+		if strings.Contains(writer.Body.String(), "event: message_stop") {
+			t.Fatalf("malformed tool lifecycle emitted a successful terminal event: %s", writer.Body.String())
+		}
+	})
+	t.Run("duplicate ID across blocks", func(t *testing.T) {
+		writer := httptest.NewRecorder()
+		session, err := renderer.Begin(context.Background(), options, writer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := kernel.ResponseEvent{Kind: kernel.EventToolCallDelta, Index: 0, ToolCallID: "call-duplicate", ToolName: "first"}
+		if err := session.Emit(context.Background(), first); err != nil {
+			t.Fatal(err)
+		}
+		second := kernel.ResponseEvent{Kind: kernel.EventToolCallDelta, Index: 1, ToolCallID: "call-duplicate", ToolName: "second"}
+		if err := session.Emit(context.Background(), second); err == nil || !strings.Contains(err.Error(), "multiple response items") {
+			t.Fatalf("duplicate tool identity was accepted: err=%v output=%s", err, writer.Body.String())
+		}
+	})
+}
+
 func TestAnthropicSemanticThinkingRequiresAndPreservesIssuerSignature(t *testing.T) {
 	renderer := AnthropicMessages{}
 	options := kernel.ResponseRenderContext{

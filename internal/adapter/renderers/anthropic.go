@@ -68,7 +68,7 @@ func (AnthropicMessages) Begin(_ context.Context, options kernel.ResponseRenderC
 		writer: writer, status: options.Status, passthrough: passthrough, streaming: options.Streaming,
 		renderThinking: !passthrough && !options.SemanticTransformActive && containsEvent(options.ProviderEvents, kernel.EventThinkingSignature),
 		model:          options.Model, messageID: fmt.Sprintf("msg_gobroom_%d", time.Now().UnixNano()),
-		blocksByKey: map[string]*anthropicBlock{}, blockOrder: []*anthropicBlock{},
+		blocksByKey: map[string]*anthropicBlock{}, toolBlocksByID: map[string]*anthropicBlock{}, blockOrder: []*anthropicBlock{},
 	}, nil
 }
 
@@ -95,6 +95,7 @@ type anthropicSession struct {
 	stopReason     string
 	usage          kernel.UsageEvent
 	blocksByKey    map[string]*anthropicBlock
+	toolBlocksByID map[string]*anthropicBlock
 	blockOrder     []*anthropicBlock
 }
 
@@ -152,6 +153,10 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 		block := s.getBlock(event, "tool_use")
 		wasOpened := block.opened
 		if event.ToolCallID != "" {
+			if existing := s.toolBlocksByID[event.ToolCallID]; existing != nil && existing != block {
+				return fmt.Errorf("Anthropic tool call ID %q is assigned to multiple response items", event.ToolCallID)
+			}
+			s.toolBlocksByID[event.ToolCallID] = block
 			block.toolID = event.ToolCallID
 		}
 		if event.ToolName != "" {
@@ -390,6 +395,9 @@ func (s *anthropicSession) openBlockWithContent(block *anthropicBlock, content m
 func (s *anthropicSession) closeBlock(block *anthropicBlock) error {
 	if block.closed {
 		return nil
+	}
+	if block.kind == "tool_use" && (block.toolID == "" || block.toolName == "") {
+		return fmt.Errorf("Anthropic tool response ended before its ID and name were complete")
 	}
 	if block.kind == "thinking" && block.signature == "" {
 		return fmt.Errorf("Anthropic thinking block ended without its issuer signature")

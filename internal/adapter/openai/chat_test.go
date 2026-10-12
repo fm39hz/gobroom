@@ -331,6 +331,48 @@ func TestKernelStreamsInterleavedToolLifecycleToAnthropicClient(t *testing.T) {
 	}
 }
 
+func TestKernelRejectsIncompleteToolIdentityWithoutSuccessfulStreamEnd(t *testing.T) {
+	upstreamWire := strings.Join([]string{
+		`data: {"id":"chatcmpl_incomplete","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_without_name","type":"function"}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_incomplete","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstreamWire)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "model",
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	parsed, err := normalize.JSON("/v1/messages", http.Header{"Anthropic-Version": []string{"2023-06-01"}}, []byte(`{"model":"role","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	err = engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer)
+	if err == nil || !strings.Contains(err.Error(), "ID and name") {
+		t.Fatalf("malformed upstream tool identity was not rejected: err=%v output=%s", err, writer.Body.String())
+	}
+	if strings.Contains(writer.Body.String(), "event: message_stop") {
+		t.Fatalf("malformed tool call received a successful terminal event: %s", writer.Body.String())
+	}
+}
+
 func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
 	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
