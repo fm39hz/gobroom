@@ -79,7 +79,7 @@ func TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient(t *testing.T)
 	}
 	artifactRef := extensions.Ref{Kind: extensions.ArtifactKind, ID: "fixture.document", ContractVersion: 1}
 	policy := extensions.ArtifactPolicy{
-		OwnerDomains: []string{"client"}, ReplayScopes: []extensions.ArtifactReplayScope{extensions.ArtifactReplayRequest},
+		OwnerDomains: []string{"client"}, ReplayScopes: []extensions.ArtifactReplayScope{extensions.ArtifactReplayRequest, extensions.ArtifactReplayPortable},
 		SensitivityLimit: extensions.ArtifactPrivate, AllowedMediaTypes: []string{"application/octet-stream"}, RecipientContracts: []extensions.Ref{providerRef},
 	}
 	if err := catalog.Register(extensions.Descriptor{
@@ -156,6 +156,18 @@ func TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient(t *testing.T)
 	if transfer.TypeRef != artifactRef || transfer.Role != "source-document" || transfer.OperationRef != operationRef || transfer.SourceDomain != "client" || transfer.TargetProvider != providerRef || transfer.Sensitivity != extensions.ArtifactPrivate || transfer.ReplayScope != extensions.ArtifactReplayRequest || transfer.MediaType != "application/octet-stream" || transfer.SizeBytes != int64(len("private-document")) || !transfer.BodyLease {
 		t.Fatalf("artifact transfer plan=%#v", transfer)
 	}
+	portableRequest := request
+	portableRequest.Artifacts = append([]extensions.ArtifactRef(nil), request.Artifacts...)
+	portableRequest.Artifacts[0].ReplayScope = extensions.ArtifactReplayPortable
+	if err := gateway.Execute(context.Background(), portableRequest, Credential{}, httptest.NewRecorder()); err != nil {
+		t.Fatalf("authorized portable artifact transfer failed: %v", err)
+	}
+	if adapter.received != "private-document" || adapter.plans != 2 || adapter.executions != 2 {
+		t.Fatalf("portable body was not consumed by the declared provider: body=%q plans=%d executions=%d", adapter.received, adapter.plans, adapter.executions)
+	}
+	if len(planned.ArtifactTransfers) != 1 || planned.ArtifactTransfers[0].ReplayScope != extensions.ArtifactReplayPortable || planned.ArtifactTransfers[0].TargetProvider != providerRef {
+		t.Fatalf("portable transfer authorization was not represented in the plan: %#v", planned.ArtifactTransfers)
+	}
 	expiredRequest := request
 	expiredRequest.Artifacts = append([]extensions.ArtifactRef(nil), request.Artifacts...)
 	expiredAt := time.Now().Add(-time.Second)
@@ -166,7 +178,7 @@ func TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient(t *testing.T)
 	if err := gateway.Execute(context.Background(), expiredRequest, Credential{}, httptest.NewRecorder()); err == nil {
 		t.Fatal("expired artifact was accepted")
 	}
-	if adapter.plans != 1 || adapter.executions != 1 {
+	if adapter.plans != 2 || adapter.executions != 2 {
 		t.Fatalf("expired artifact reached compatibility/dispatch: plans=%d executions=%d", adapter.plans, adapter.executions)
 	}
 	if err := spool.Release(owner, bodyRef); err != nil {

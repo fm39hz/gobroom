@@ -2,8 +2,10 @@ package operations
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -75,6 +77,85 @@ func TestRegisteredNonChatOperationValidatesItsOwnPayload(t *testing.T) {
 	}
 	if _, err := snapshot.Prepare(normalize.Request{Model: "asr", Operation: normalize.Operation("audio.transcribe.v1"), OperationContractVersion: 1, OperationPayload: json.RawMessage(`{"audio":"AAAA"}`)}); err == nil {
 		t.Fatal("audio payload that violates the operation schema was accepted")
+	}
+}
+
+func TestOperationCompilesRequirementsFromTypedArtifactMetadata(t *testing.T) {
+	catalog := extensions.NewCatalog()
+	registry, err := NewRegistry(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputSchemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "fixture.document-analysis.input", ContractVersion: 1}
+	inputSchema, err := extensions.BindSchemaDocument(inputSchemaRef, json.RawMessage(`{"type":"object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RegisterSchema(inputSchemaRef, inputSchema); err != nil {
+		t.Fatal(err)
+	}
+	operationRef := extensions.Ref{Kind: "operation", ID: "document.analyze", ContractVersion: 1}
+	artifactRef := extensions.Ref{Kind: extensions.ArtifactKind, ID: "fixture.document", ContractVersion: 1}
+	artifactPolicy := extensions.ArtifactPolicy{
+		OwnerDomains: []string{"client"}, ReplayScopes: []extensions.ArtifactReplayScope{extensions.ArtifactReplayRequest},
+		SensitivityLimit: extensions.ArtifactPrivate, AllowedMediaTypes: []string{"application/pdf"},
+	}
+	if err := catalog.Register(extensions.Descriptor{
+		Ref: artifactRef, ImplementationVersion: "1", DisplayName: "Document", Description: "Bounded PDF input.",
+		ArtifactPolicy: &artifactPolicy, ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 1024},
+	}, func(json.RawMessage) (any, error) { return struct{}{}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	featureRef := extensions.Ref{Kind: "feature-evaluator", ID: "fixture.pdf-input", ContractVersion: 1}
+	if err := registry.Register(Definition{
+		Ref: operationRef, DisplayName: "Analyze document", Description: "Derive route requirements from the typed artifact envelope.",
+		InputSchemaRef: inputSchemaRef, ArtifactInputs: []ArtifactInput{{Role: "source-document", TypeRef: artifactRef, MinCount: 1, MaxCount: 1}},
+		ResourceBounds: DefaultResourceBounds(), ReplaySafety: ReplayNever,
+		InputPayload: func(normalize.Request) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
+		CompileRequirements: func(request normalize.Request) ([]normalize.FeatureRequirement, error) {
+			if len(request.Artifacts) != 1 {
+				return nil, errors.New("exactly one source document is required")
+			}
+			artifact := request.Artifacts[0]
+			constraints, err := json.Marshal(map[string]any{"mediaType": artifact.MediaType, "maxBytes": artifact.SizeBytes})
+			if err != nil {
+				return nil, err
+			}
+			return []normalize.FeatureRequirement{{Ref: featureRef, Constraints: constraints}}, nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	extensionSnapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.Seal(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := extensions.BodyRef{ID: "fixture-body", MediaType: "application/pdf", SizeBytes: 160, ExpiresAt: time.Now().Add(time.Minute), Replayable: true}
+	request := normalize.Request{
+		Model: "document-role", Operation: normalize.Operation(operationRef.ID), OperationContractVersion: operationRef.ContractVersion,
+		Artifacts: []extensions.ArtifactRef{{
+			TypeRef: artifactRef, Role: "source-document", Owner: extensions.ArtifactOwner{Domain: "client"},
+			ReplayScope: extensions.ArtifactReplayRequest, Sensitivity: extensions.ArtifactPrivate,
+			MediaType: body.MediaType, SizeBytes: body.SizeBytes, ExpiresAt: body.ExpiresAt, Body: &body,
+		}},
+	}
+	prepared, err := snapshot.Prepare(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.Requirements) != 1 || prepared.Requirements[0].Ref != featureRef {
+		t.Fatalf("artifact-derived feature requirement=%#v", prepared.Requirements)
+	}
+	var constraints map[string]any
+	if err := json.Unmarshal(prepared.Requirements[0].Constraints, &constraints); err != nil {
+		t.Fatal(err)
+	}
+	if constraints["mediaType"] != "application/pdf" || constraints["maxBytes"] != float64(160) {
+		t.Fatalf("requirements did not reflect exact artifact metadata: %#v", constraints)
 	}
 }
 
