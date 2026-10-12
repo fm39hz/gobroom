@@ -78,7 +78,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/artifacts -run '^(TestFileStoreStreamsBoundedOwnerScopedLeases|TestFileStoreEnforcesPerBodyTotalAndContextBounds|TestFileStorePrunesExpiredBodyReferences|TestContextArtifactAccessRequiresExactRecipientAndPolicy)$$' -count=1
 	go test ./internal/kernel -run '^(TestKernelEnforcesExactOperationEventSchemaAtAdapterBoundary|TestKernelValidatesProjectedOperationResultAtCompleteEvent)$$' -count=1
 	go test ./internal/operations -run '^TestOperationResultSchemaRequiresBoundedProjectorAtRegistration$$' -count=1
-	go test ./internal/provider -run '^(TestMultipartRequestCodecStreamsConfiguredArtifactFields|TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions|TestMultipartRequestCodecFailsClosedForUnmappedArtifactsAndStreamMode)$$' -count=1
+	go test ./internal/provider -run '^(TestMultipartRequestCodecStreamsConfiguredArtifactFields|TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions|TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult|TestMultipartRequestCodecFailsClosedForUnmappedArtifactsAndStreamMode)$$' -count=1
 	go test ./internal/provider -run '^TestMultipartRequestCodecDeclaresExactArtifactRoleCompatibility$$' -count=1
 	go test ./internal/tui -run '^TestTUIDeviceAuthorizationShowsPublicInstructionsAndPollsDaemon$$' -count=1
 	go test ./internal/tui -run '^TestTUIAuthorizationCodeFlowShowsLoopbackModeAndPollsTerminalStatus$$' -count=1

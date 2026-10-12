@@ -122,6 +122,9 @@ func (c *MultipartRequestCodec) ArtifactRoleMappings() map[string]string {
 func (c *MultipartRequestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
+		if kernel.IsResponseCompatibilityFacet(facet) {
+			continue
+		}
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"multipart.form"}, Disposition: kernel.FacetUnsupported, Reason: "multipart form codec only maps the operation payload and declared artifact ports"}
 		switch facet {
 		case kernel.FacetWireRequest:
@@ -140,7 +143,7 @@ func (c *MultipartRequestCodec) DescribeCompatibility(input kernel.Compatibility
 	return result
 }
 
-func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, _ kernel.Route, _ kernel.Credential) (kernel.UpstreamRequest, error) {
+func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, _ kernel.Credential) (kernel.UpstreamRequest, error) {
 	if c == nil || ctx == nil || request.Model == "" {
 		return kernel.UpstreamRequest{}, fmt.Errorf("multipart codec requires a context and model")
 	}
@@ -174,13 +177,17 @@ func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.Norm
 		leases = append(leases, lease)
 	}
 
+	model := route.ExternalModel
+	if model == "" {
+		model = request.Model
+	}
 	reader, writer := io.Pipe()
 	form := multipart.NewWriter(writer)
 	headers := make(http.Header)
 	headers.Set("Content-Type", form.FormDataContentType())
 	stopCancellation := context.AfterFunc(ctx, func() { _ = writer.CloseWithError(ctx.Err()) })
 	go func() {
-		err := writeMultipartOperation(ctx, form, request, c.options, c.artifactFields, leases)
+		err := writeMultipartOperation(ctx, form, request, model, c.options, c.artifactFields, leases)
 		stopCancellation()
 		if err != nil {
 			_ = writer.CloseWithError(err)
@@ -191,7 +198,7 @@ func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.Norm
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: "/", Headers: headers, Body: reader}, nil
 }
 
-func writeMultipartOperation(ctx context.Context, form *multipart.Writer, request kernel.NormalizedRequest, options MultipartRequestCodecOptions, mappings map[string]MultipartArtifactField, leases []*artifacts.Lease) error {
+func writeMultipartOperation(ctx context.Context, form *multipart.Writer, request kernel.NormalizedRequest, model string, options MultipartRequestCodecOptions, mappings map[string]MultipartArtifactField, leases []*artifacts.Lease) error {
 	defer func() {
 		for _, lease := range leases {
 			_ = lease.Close()
@@ -200,7 +207,7 @@ func writeMultipartOperation(ctx context.Context, form *multipart.Writer, reques
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := form.WriteField(options.ModelField, request.Model); err != nil {
+	if err := form.WriteField(options.ModelField, model); err != nil {
 		return err
 	}
 	payload := request.OperationPayload

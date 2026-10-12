@@ -172,11 +172,10 @@ facts in the request snapshot, not body bytes, so candidate fallback does not
 rescan large inputs; facts are stripped before adapter compatibility planning
 and provider request encoding. The selected provider boundary independently
 rechecks recipient policy before a codec can open the lease.
-This is the generic binary path, not yet proof of provider-specific multimodal
-JSON extraction, wire rendering, or a built-in non-chat operation running
-end-to-end. A fake-provider HTTP→kernel→adapter fixture proves that the
-registered operation can consume the leased bytes and return a response;
-native provider rendering remains a separate adapter contract.
+This proves the generic binary path and manifest-selected multipart wire
+framing end-to-end against a deterministic fake provider. It is not proof of
+provider-native multimodal JSON extraction or real service-specific framing;
+those remain adapter contracts.
 
 The artifact type descriptor declares legal scopes and transfer rules; the
 issuer may narrow them. Ingress cannot grant portability merely by labeling
