@@ -163,8 +163,15 @@ store supports bounded request-scoped spool files and cancellable owner-scoped
 leases. A generic multipart ingress binds file fields to exact artifact type
 and role refs, streams them into the spool, and releases temporary bodies when
 the request ends or decode fails. Operation definitions declare named artifact
-input ports; request preparation validates role/type/count and the selected
-provider boundary rechecks recipient policy before a codec can open the lease.
+input ports. An operation may bind a versioned artifact-interpreter ref and
+options to an input role. The interpreter streams only that artifact through a
+bounded, cancellable lease and returns facts checked against its registered
+result schema; an artifact-requirement compiler maps those facts into exact
+feature requirements before route eligibility. The daemon caches validated
+facts in the request snapshot, not body bytes, so candidate fallback does not
+rescan large inputs; facts are stripped before adapter compatibility planning
+and provider request encoding. The selected provider boundary independently
+rechecks recipient policy before a codec can open the lease.
 This is the generic binary path, not yet proof of provider-specific multimodal
 JSON extraction, wire rendering, or a built-in non-chat operation running
 end-to-end. A fake-provider HTTP→kernel→adapter fixture proves that the

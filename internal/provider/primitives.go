@@ -327,6 +327,72 @@ func (r *RuntimeRegistry) RegisterFeatureEvaluator(ref extensions.Ref, implement
 	}, func(json.RawMessage) (any, error) { return evaluator, nil })
 }
 
+// RegisterArtifactInterpreter adds a versioned bounded stream interpreter to
+// the shared extension catalog. Operations bind this exact ref to named input
+// roles and compile its schema-validated facts into request requirements.
+func (r *RuntimeRegistry) RegisterArtifactInterpreter(ref extensions.Ref, implementationVersion, displayName, description string, factsSchemaRef extensions.Ref, factsSchema json.RawMessage, optionsSchemaRef *extensions.Ref, optionsSchema json.RawMessage, bounds extensions.ResourceBounds, factory func(json.RawMessage) (any, error)) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if err := ref.Validate(); err != nil || ref.Kind != extensions.ArtifactInterpreterKind {
+		return fmt.Errorf("artifact interpreter requires an exact %q reference", extensions.ArtifactInterpreterKind)
+	}
+	if factsSchemaRef.Kind != extensions.SchemaKind || factsSchemaRef.ContractVersion == 0 {
+		return fmt.Errorf("artifact interpreter %q requires an exact facts schema reference", ref.Key())
+	}
+	factsDocument, err := extensions.BindSchemaDocument(factsSchemaRef, factsSchema)
+	if err != nil {
+		return fmt.Errorf("artifact interpreter %q facts schema: %w", ref.Key(), err)
+	}
+	if err := r.Primitives.catalog.RegisterSchema(factsSchemaRef, factsDocument); err != nil {
+		return err
+	}
+	var optionsRef *extensions.Ref
+	if optionsSchemaRef != nil {
+		if optionsSchemaRef.Kind != extensions.SchemaKind || optionsSchemaRef.ContractVersion == 0 {
+			return fmt.Errorf("artifact interpreter %q has an invalid options schema ref", ref.Key())
+		}
+		optionsDocument, err := extensions.BindSchemaDocument(*optionsSchemaRef, optionsSchema)
+		if err != nil {
+			return fmt.Errorf("artifact interpreter %q options schema: %w", ref.Key(), err)
+		}
+		if err := r.Primitives.catalog.RegisterSchema(*optionsSchemaRef, optionsDocument); err != nil {
+			return err
+		}
+		copy := *optionsSchemaRef
+		optionsRef = &copy
+	} else if len(optionsSchema) > 0 {
+		return fmt.Errorf("artifact interpreter %q options schema body requires an exact schema ref", ref.Key())
+	}
+	return r.Primitives.catalog.Register(extensions.Descriptor{
+		Ref: ref, ImplementationVersion: implementationVersion, DisplayName: displayName, Description: description,
+		OptionsSchemaRef: optionsRef, ResultSchemaRef: &factsSchemaRef, ResourceBounds: bounds,
+	}, extensions.Factory(factory))
+}
+
+// RegisterSchemaDocument adds a local JSON Schema to the shared extension
+// catalog. Its ref and all references remain version-pinned at catalog freeze.
+func (r *RuntimeRegistry) RegisterSchemaDocument(ref extensions.Ref, schema json.RawMessage) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	document, err := extensions.BindSchemaDocument(ref, schema)
+	if err != nil {
+		return err
+	}
+	return r.Primitives.catalog.RegisterSchema(ref, document)
+}
+
+// RegisterExtension adds a statically linked versioned implementation to the
+// shared catalog. Provider modules should declare dependencies and schemas on
+// the descriptor; Freeze rejects unresolved refs before the daemon serves.
+func (r *RuntimeRegistry) RegisterExtension(descriptor extensions.Descriptor, factory extensions.Factory) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	return r.Primitives.catalog.Register(descriptor, factory)
+}
+
 func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 	return NewRuntimeRegistryWithModules()
 }

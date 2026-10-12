@@ -137,15 +137,16 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	if err != nil {
 		return err
 	}
+	operationRef := extensions.Ref{Kind: "operation", ID: string(req.Operation), ContractVersion: req.OperationContractVersion}
+	if definition, exists := k.Operations.Resolve(operationRef); exists && definition.ResourceBounds.DeadlineMillis > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(definition.ResourceBounds.DeadlineMillis)*time.Millisecond)
+		defer cancel()
+	}
 	externalRequirements := append([]normalize.FeatureRequirement(nil), req.Requirements...)
-	preparedOperation, err := k.Operations.Prepare(req)
+	preparedOperation, err := k.prepareOperation(ctx, &req)
 	if err != nil {
 		return err
-	}
-	if deadline := preparedOperation.ResourceBounds.DeadlineMillis; deadline > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(deadline)*time.Millisecond)
-		defer cancel()
 	}
 	req.Requirements = mergeRequirements(externalRequirements, preparedOperation.Requirements)
 	transformBindings := cloneTransformBindings(snapshot.TransformBindings)
@@ -161,7 +162,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 			return err
 		}
 		transformFailures = append(transformFailures, report.Failures...)
-		preparedOperation, err = k.Operations.Prepare(req)
+		preparedOperation, err = k.prepareOperation(ctx, &req)
 		if err != nil {
 			return err
 		}
@@ -187,7 +188,36 @@ func mergeRequirements(required, derived []normalize.FeatureRequirement) []norma
 	return result
 }
 
+func (k *Kernel) prepareOperation(ctx context.Context, request *NormalizedRequest) (operations.Prepared, error) {
+	if k.Operations == nil || request == nil {
+		return operations.Prepared{}, fmt.Errorf("operation catalog and request are required")
+	}
+	var openBody operations.ArtifactBodyOpener
+	if k.ArtifactStore != nil {
+		openBody = func(openCtx context.Context, artifact extensions.ArtifactRef, recipient extensions.Ref) (io.ReadCloser, error) {
+			receiver := extensions.ArtifactOwner{Domain: "harness"}
+			return k.ArtifactStore.OpenArtifact(openCtx, k.Operations.ExtensionCatalog(), artifact, receiver, recipient)
+		}
+	}
+	prepared, err := k.Operations.PrepareWithArtifactBodies(ctx, *request, openBody)
+	if err != nil {
+		return operations.Prepared{}, err
+	}
+	request.ArtifactFacts = cloneOperationArtifactFacts(prepared.ArtifactFacts)
+	return prepared, nil
+}
+
+func cloneOperationArtifactFacts(facts []normalize.ArtifactFacts) []normalize.ArtifactFacts {
+	cloned := make([]normalize.ArtifactFacts, len(facts))
+	for index, fact := range facts {
+		fact.Value = append(json.RawMessage(nil), fact.Value...)
+		cloned[index] = fact
+	}
+	return cloned
+}
+
 func (k *Kernel) adapterForRoute(route Route, request NormalizedRequest, requirements RequestRequirements, transformBindings []TransformBinding, scopes []TransformScope, transformFailures []TransformFailure, lossPolicy CompatibilityPolicy) (ProviderAdapter, CompatibilityPlan) {
+	request.ArtifactFacts = nil
 	operation := requirements.Operation
 	operationBinding, ok := route.OperationBindings[operation]
 	if !ok || requirements.OperationContractVersion == 0 || operationBinding.ContractVersion != requirements.OperationContractVersion {
@@ -274,7 +304,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			return err
 		}
 		transformFailures = append(append([]TransformFailure(nil), transformFailures...), report.Failures...)
-		prepared, err := k.Operations.Prepare(req)
+		prepared, err := k.prepareOperation(ctx, &req)
 		if err != nil {
 			return err
 		}
@@ -333,7 +363,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					return err
 				}
 				candidateTransformFailures = append(candidateTransformFailures, report.Failures...)
-				prepared, err := k.Operations.Prepare(candidateRequest)
+				prepared, err := k.prepareOperation(ctx, &candidateRequest)
 				if err != nil {
 					return err
 				}
@@ -453,7 +483,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			refreshed := false
 			idempotencyRetried := false
 		retryUpstream:
-			upstream, err := adapter.Prepare(attemptCtx, candidateRequest, candidate, selectedCredential)
+			providerRequest := candidateRequest
+			providerRequest.ArtifactFacts = nil
+			upstream, err := adapter.Prepare(attemptCtx, providerRequest, candidate, selectedCredential)
 			if err != nil {
 				k.Scheduler.Release(candidate)
 				if idempotencyRetried {

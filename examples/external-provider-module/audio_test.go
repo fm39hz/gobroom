@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fm39hz/gobroom/pkg/daemon"
 	"github.com/fm39hz/gobroom/pkg/provider"
@@ -73,6 +74,50 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 	}
 	if prepared.Method != http.MethodPost || prepared.URL != "https://audio.example/v1/audio/transcriptions" || prepared.Headers.Get("Authorization") != "Bearer module-secret" || !strings.Contains(string(body), "audio_url") {
 		t.Fatalf("external module produced invalid request: method=%s URL=%s headers=%#v body=%s", prepared.Method, prepared.URL, prepared.Headers, body)
+	}
+}
+
+func TestExternalModuleInterpretsBoundedArtifactAndCompilesRequirement(t *testing.T) {
+	runtime, err := provider.NewRuntimeRegistryWithModules(AudioModule{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations, err := runtime.OperationSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactRef := provider.Ref{Kind: provider.ArtifactKind, ID: "example.audio.body", ContractVersion: 1}
+	interpreterRef := provider.Ref{Kind: provider.ArtifactInterpreterKind, ID: "example.audio.header", ContractVersion: 1}
+	body := []byte("RIFFWAVE")
+	bodyRef := provider.BodyRef{ID: "fixture-body", MediaType: "audio/wav", SizeBytes: int64(len(body)), ExpiresAt: time.Now().Add(time.Minute), Replayable: true}
+	request := provider.OperationRequest{
+		Model: "asr", Operation: audioInspectOperation, OperationContractVersion: 1,
+		Artifacts: []provider.ArtifactRef{{
+			TypeRef: artifactRef, Role: "audio", Owner: provider.ArtifactOwner{Domain: "client"},
+			ReplayScope: provider.ArtifactReplayRequest, Sensitivity: provider.ArtifactPrivate,
+			MediaType: bodyRef.MediaType, SizeBytes: bodyRef.SizeBytes, ExpiresAt: bodyRef.ExpiresAt, Body: &bodyRef,
+		}},
+	}
+	opened := 0
+	prepared, err := operations.PrepareWithArtifactBodies(context.Background(), request, func(_ context.Context, artifact provider.ArtifactRef, recipient provider.Ref) (io.ReadCloser, error) {
+		opened++
+		if artifact.TypeRef != artifactRef || recipient != interpreterRef {
+			t.Fatalf("interpreter lease request artifact=%#v recipient=%#v", artifact.TypeRef, recipient)
+		}
+		return io.NopCloser(strings.NewReader(string(body))), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened != 1 || len(prepared.ArtifactFacts) != 1 || len(prepared.Requirements) != 1 {
+		t.Fatalf("artifact inspection result: opened=%d facts=%#v requirements=%#v", opened, prepared.ArtifactFacts, prepared.Requirements)
+	}
+	if prepared.Requirements[0].Ref != (provider.Ref{Kind: "feature-evaluator", ID: "example.audio.codec", ContractVersion: 1}) || string(prepared.Requirements[0].Constraints) != `{"codec":"wav"}` {
+		t.Fatalf("opaque audio bytes did not become a typed route requirement: %#v", prepared.Requirements)
+	}
+	request.ArtifactFacts = prepared.ArtifactFacts
+	if _, err := operations.Prepare(request); err != nil || opened != 1 {
+		t.Fatalf("cached artifact facts were not reused: opened=%d err=%v", opened, err)
 	}
 }
 

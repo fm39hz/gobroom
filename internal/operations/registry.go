@@ -3,9 +3,14 @@
 package operations
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -24,21 +29,27 @@ const (
 )
 
 type Definition struct {
-	Ref                 extensions.Ref
-	DisplayName         string
-	Description         string
-	InputSchemaRef      extensions.Ref
-	ResultSchemaRef     *extensions.Ref
-	EventSchemaRefs     []extensions.Ref
-	ArtifactInputs      []ArtifactInput
-	ArtifactOutputs     []ArtifactOutput
-	NewResultProjector  ResultProjectorFactory
-	ResourceBounds      extensions.ResourceBounds
-	ReplaySafety        ReplaySafety
-	InputPayload        func(normalize.Request) (json.RawMessage, error)
-	ValidateRequest     func(normalize.Request) error
-	CompileRequirements func(normalize.Request) ([]normalize.FeatureRequirement, error)
+	Ref                         extensions.Ref
+	DisplayName                 string
+	Description                 string
+	InputSchemaRef              extensions.Ref
+	ResultSchemaRef             *extensions.Ref
+	EventSchemaRefs             []extensions.Ref
+	ArtifactInputs              []ArtifactInput
+	ArtifactOutputs             []ArtifactOutput
+	ArtifactInterpreters        []extensions.ArtifactInterpreterBinding
+	NewResultProjector          ResultProjectorFactory
+	ResourceBounds              extensions.ResourceBounds
+	ReplaySafety                ReplaySafety
+	InputPayload                func(normalize.Request) (json.RawMessage, error)
+	ValidateRequest             func(normalize.Request) error
+	CompileRequirements         func(normalize.Request) ([]normalize.FeatureRequirement, error)
+	CompileArtifactRequirements func(normalize.Request, []normalize.ArtifactFacts) ([]normalize.FeatureRequirement, error)
 }
+
+type ArtifactBodyOpener func(context.Context, extensions.ArtifactRef, extensions.Ref) (io.ReadCloser, error)
+
+var ErrArtifactInspectionLimit = errors.New("artifact interpreter input exceeds its declared bound")
 
 // ResultProjector incrementally derives one bounded, operation-typed result
 // from canonical response events. Implementations must enforce the supplied
@@ -75,6 +86,7 @@ type Prepared struct {
 	ReplaySafety   ReplaySafety
 	ResourceBounds extensions.ResourceBounds
 	Artifacts      []extensions.ArtifactRef
+	ArtifactFacts  []normalize.ArtifactFacts
 }
 
 func DefaultResourceBounds() extensions.ResourceBounds {
@@ -199,9 +211,36 @@ func (r *Registry) Register(definition Definition) error {
 		}
 		seenOutputRoles[output.Role] = true
 	}
+	inputRoles := make(map[string]bool, len(definition.ArtifactInputs))
+	for _, input := range definition.ArtifactInputs {
+		inputRoles[input.Role] = true
+	}
+	seenInterpreterRoles := map[string]bool{}
+	for index, binding := range definition.ArtifactInterpreters {
+		if !inputRoles[binding.Role] || seenInterpreterRoles[binding.Role] {
+			return fmt.Errorf("operation %q has an invalid or duplicate interpreter binding for artifact role %q", definition.Ref.Key(), binding.Role)
+		}
+		if err := binding.InterpreterRef.Validate(); err != nil || binding.InterpreterRef.Kind != extensions.ArtifactInterpreterKind {
+			return fmt.Errorf("operation %q artifact role %q requires an exact artifact-interpreter ref", definition.Ref.Key(), binding.Role)
+		}
+		if definition.CompileArtifactRequirements == nil {
+			return fmt.Errorf("operation %q binds artifact interpreters without an artifact requirement compiler", definition.Ref.Key())
+		}
+		options := binding.Options
+		if len(options) == 0 {
+			options = json.RawMessage(`{}`)
+		}
+		if !json.Valid(options) {
+			return fmt.Errorf("operation %q artifact interpreter options are invalid JSON", definition.Ref.Key())
+		}
+		binding.Options = append(json.RawMessage(nil), options...)
+		definition.ArtifactInterpreters[index] = binding
+		seenInterpreterRoles[binding.Role] = true
+	}
 	definition.EventSchemaRefs = append([]extensions.Ref(nil), definition.EventSchemaRefs...)
 	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
 	definition.ArtifactOutputs = append([]ArtifactOutput(nil), definition.ArtifactOutputs...)
+	definition.ArtifactInterpreters = append([]extensions.ArtifactInterpreterBinding(nil), definition.ArtifactInterpreters...)
 	if definition.ResultSchemaRef != nil {
 		copy := *definition.ResultSchemaRef
 		definition.ResultSchemaRef = &copy
@@ -210,7 +249,7 @@ func (r *Registry) Register(definition Definition) error {
 		Ref: definition.Ref, ImplementationVersion: fmt.Sprint(definition.Ref.ContractVersion),
 		DisplayName: definition.DisplayName, Description: definition.Description,
 		InputSchemaRef: &definition.InputSchemaRef, ResultSchemaRef: definition.ResultSchemaRef,
-		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactPortTypeRefs(definition.ArtifactInputs, definition.ArtifactOutputs), ArtifactInputs: definition.ArtifactInputs, ArtifactOutputs: definition.ArtifactOutputs, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
+		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactPortTypeRefs(definition.ArtifactInputs, definition.ArtifactOutputs), ArtifactInputs: definition.ArtifactInputs, ArtifactOutputs: definition.ArtifactOutputs, ArtifactInterpreters: definition.ArtifactInterpreters, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
 	}
 	if err := r.catalog.Register(descriptor, func(json.RawMessage) (any, error) { return definition, nil }); err != nil {
 		return err
@@ -320,6 +359,27 @@ func (r *Registry) Seal(catalog *extensions.Snapshot) (*Snapshot, error) {
 				return nil, fmt.Errorf("operation %q artifact output type %q is missing or has no artifact policy", ref.Key(), artifactOutput.TypeRef.Key())
 			}
 		}
+		for _, interpreterBinding := range definition.ArtifactInterpreters {
+			interpreter, ok := catalog.Descriptor(interpreterBinding.InterpreterRef)
+			if !ok || interpreter.Ref.Kind != extensions.ArtifactInterpreterKind || interpreter.ResultSchemaRef == nil {
+				return nil, fmt.Errorf("operation %q artifact interpreter %q is missing its facts schema contract", ref.Key(), interpreterBinding.InterpreterRef.Key())
+			}
+			if _, ok := catalog.Schema(*interpreter.ResultSchemaRef); !ok {
+				return nil, fmt.Errorf("operation %q artifact interpreter facts schema %q is missing", ref.Key(), interpreter.ResultSchemaRef.Key())
+			}
+		}
+		for _, interpreterBinding := range definition.ArtifactInterpreters {
+			interpreterDescriptor, implementation, err := catalog.Bind(interpreterBinding.InterpreterRef, interpreterBinding.Options)
+			if err != nil {
+				return nil, fmt.Errorf("operation %q artifact interpreter %q: %w", ref.Key(), interpreterBinding.InterpreterRef.Key(), err)
+			}
+			if interpreterDescriptor.ResultSchemaRef == nil {
+				return nil, fmt.Errorf("operation %q artifact interpreter %q has no facts schema", ref.Key(), interpreterBinding.InterpreterRef.Key())
+			}
+			if _, ok := implementation.(extensions.ArtifactInterpreter); !ok {
+				return nil, fmt.Errorf("operation %q artifact interpreter %q factory returned %T", ref.Key(), interpreterBinding.InterpreterRef.Key(), implementation)
+			}
+		}
 		definitions[ref] = cloneDefinition(definition)
 	}
 	r.sealed = &Snapshot{definitions: definitions, catalog: catalog}
@@ -338,6 +398,10 @@ func cloneDefinition(definition Definition) Definition {
 	definition.EventSchemaRefs = append([]extensions.Ref(nil), definition.EventSchemaRefs...)
 	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
 	definition.ArtifactOutputs = append([]ArtifactOutput(nil), definition.ArtifactOutputs...)
+	definition.ArtifactInterpreters = append([]extensions.ArtifactInterpreterBinding(nil), definition.ArtifactInterpreters...)
+	for index := range definition.ArtifactInterpreters {
+		definition.ArtifactInterpreters[index].Options = append(json.RawMessage(nil), definition.ArtifactInterpreters[index].Options...)
+	}
 	if definition.ResultSchemaRef != nil {
 		result := *definition.ResultSchemaRef
 		definition.ResultSchemaRef = &result
@@ -505,10 +569,26 @@ func (s *Snapshot) ValidateResult(operationRef extensions.Ref, result json.RawMe
 }
 
 func (s *Snapshot) Prepare(request normalize.Request) (Prepared, error) {
+	return s.PrepareWithArtifactBodies(context.Background(), request, nil)
+}
+
+// PrepareWithArtifactBodies validates an invocation, runs only the exact
+// operation-bound artifact interpreters, and compiles requirements from their
+// schema-validated facts. The opener grants one owner-scoped read lease at a
+// time; body bytes never enter the normalized request or fact cache.
+func (s *Snapshot) PrepareWithArtifactBodies(ctx context.Context, request normalize.Request, openBody ArtifactBodyOpener) (Prepared, error) {
+	if ctx == nil {
+		return Prepared{}, fmt.Errorf("operation preparation requires a context")
+	}
 	ref := extensions.Ref{Kind: "operation", ID: string(request.Operation), ContractVersion: request.OperationContractVersion}
 	definition, ok := s.Resolve(ref)
 	if !ok {
 		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("contract is not registered")}
+	}
+	if definition.ResourceBounds.DeadlineMillis > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(definition.ResourceBounds.DeadlineMillis)*time.Millisecond)
+		defer cancel()
 	}
 	allowedArtifacts := make(map[string]ArtifactInput, len(definition.ArtifactInputs))
 	for _, input := range definition.ArtifactInputs {
@@ -578,15 +658,215 @@ func (s *Snapshot) Prepare(request normalize.Request) (Prepared, error) {
 	if limit := definition.ResourceBounds.MaxInputBytes; limit > 0 && int64(inputBytes) > limit-artifactBytes {
 		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("input payload exceeds %d-byte operation limit", limit)}
 	}
+	facts, err := s.prepareArtifactFacts(ctx, request, definition, openBody)
+	if err != nil {
+		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("inspect operation artifacts: %w", err)}
+	}
+	var factsBytes int64
+	for _, fact := range facts {
+		factsBytes += int64(len(fact.Value))
+		if factsBytes > definition.ResourceBounds.MaxBufferedBytes {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("artifact facts exceed %d-byte operation buffer bound", definition.ResourceBounds.MaxBufferedBytes)}
+		}
+	}
 	requirements, err := definition.CompileRequirements(request)
 	if err != nil {
 		return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("compile requirements: %w", err)}
+	}
+	if definition.CompileArtifactRequirements != nil {
+		artifactRequirements, compileErr := definition.CompileArtifactRequirements(request, cloneArtifactFacts(facts))
+		if compileErr != nil {
+			return Prepared{}, &InputError{Ref: ref, Err: fmt.Errorf("compile artifact requirements: %w", compileErr)}
+		}
+		requirements = append(requirements, artifactRequirements...)
 	}
 	artifacts := make([]extensions.ArtifactRef, len(request.Artifacts))
 	for i, artifact := range request.Artifacts {
 		artifacts[i] = artifact.Clone()
 	}
-	return Prepared{Ref: ref, InputPayload: append(json.RawMessage(nil), payload...), Requirements: requirements, ReplaySafety: definition.ReplaySafety, ResourceBounds: definition.ResourceBounds, Artifacts: artifacts}, nil
+	return Prepared{Ref: ref, InputPayload: append(json.RawMessage(nil), payload...), Requirements: requirements, ReplaySafety: definition.ReplaySafety, ResourceBounds: definition.ResourceBounds, Artifacts: artifacts, ArtifactFacts: cloneArtifactFacts(facts)}, nil
+}
+
+func (s *Snapshot) prepareArtifactFacts(ctx context.Context, request normalize.Request, definition Definition, openBody ArtifactBodyOpener) ([]normalize.ArtifactFacts, error) {
+	if len(definition.ArtifactInterpreters) == 0 {
+		if len(request.ArtifactFacts) != 0 {
+			return nil, fmt.Errorf("request contains facts but operation declares no artifact interpreters")
+		}
+		return nil, nil
+	}
+	bindings := make(map[string]extensions.ArtifactInterpreterBinding, len(definition.ArtifactInterpreters))
+	for _, binding := range definition.ArtifactInterpreters {
+		bindings[binding.Role] = binding
+	}
+	expected := make([]struct {
+		artifact extensions.ArtifactRef
+		binding  extensions.ArtifactInterpreterBinding
+	}, 0, len(request.Artifacts))
+	for _, artifact := range request.Artifacts {
+		if binding, exists := bindings[artifact.Role]; exists {
+			expected = append(expected, struct {
+				artifact extensions.ArtifactRef
+				binding  extensions.ArtifactInterpreterBinding
+			}{artifact: artifact, binding: binding})
+		}
+	}
+	if len(expected) == 0 {
+		if len(request.ArtifactFacts) != 0 {
+			return nil, fmt.Errorf("request contains stale artifact facts")
+		}
+		return nil, nil
+	}
+	facts := make([]normalize.ArtifactFacts, 0, len(expected))
+	if len(request.ArtifactFacts) > 0 {
+		used := make([]bool, len(request.ArtifactFacts))
+		for _, item := range expected {
+			found := false
+			sourceDigest, err := artifactSourceDigest(item.artifact)
+			if err != nil {
+				return nil, err
+			}
+			for index, fact := range request.ArtifactFacts {
+				if used[index] || fact.Role != item.binding.Role || fact.InterpreterRef != item.binding.InterpreterRef || fact.SourceDigest != sourceDigest {
+					continue
+				}
+				if err := s.validateArtifactFacts(item.binding.InterpreterRef, fact.Value); err != nil {
+					return nil, err
+				}
+				used[index] = true
+				facts = append(facts, cloneArtifactFact(fact))
+				found = true
+				break
+			}
+			if !found {
+				return nil, fmt.Errorf("cached facts for artifact role %q do not match the current artifact and interpreter", item.binding.Role)
+			}
+		}
+		for _, matched := range used {
+			if !matched {
+				return nil, fmt.Errorf("request contains an unbound artifact facts entry")
+			}
+		}
+		return facts, nil
+	}
+	for _, item := range expected {
+		fact, err := s.inspectArtifact(ctx, item.artifact, item.binding, definition.ResourceBounds, openBody)
+		if err != nil {
+			return nil, err
+		}
+		facts = append(facts, fact)
+	}
+	return facts, nil
+}
+
+func (s *Snapshot) inspectArtifact(ctx context.Context, artifact extensions.ArtifactRef, binding extensions.ArtifactInterpreterBinding, operationBounds extensions.ResourceBounds, openBody ArtifactBodyOpener) (normalize.ArtifactFacts, error) {
+	descriptor, implementation, err := s.catalog.Bind(binding.InterpreterRef, binding.Options)
+	if err != nil {
+		return normalize.ArtifactFacts{}, err
+	}
+	interpreter, ok := implementation.(extensions.ArtifactInterpreter)
+	if !ok {
+		return normalize.ArtifactFacts{}, fmt.Errorf("artifact interpreter %q factory returned %T", binding.InterpreterRef.Key(), implementation)
+	}
+	if descriptor.ResultSchemaRef == nil {
+		return normalize.ArtifactFacts{}, fmt.Errorf("artifact interpreter %q has no facts schema", binding.InterpreterRef.Key())
+	}
+	if artifact.SizeBytes > descriptor.ResourceBounds.MaxInputBytes || artifact.SizeBytes > operationBounds.MaxInputBytes {
+		return normalize.ArtifactFacts{}, ErrArtifactInspectionLimit
+	}
+	deadline := descriptor.ResourceBounds.DeadlineMillis
+	if operationBounds.DeadlineMillis > 0 && operationBounds.DeadlineMillis < deadline {
+		deadline = operationBounds.DeadlineMillis
+	}
+	inspectCtx := ctx
+	if deadline > 0 {
+		var cancel context.CancelFunc
+		inspectCtx, cancel = context.WithTimeout(ctx, time.Duration(deadline)*time.Millisecond)
+		defer cancel()
+	}
+	var source io.ReadCloser
+	if len(artifact.Value) > 0 {
+		source = io.NopCloser(bytes.NewReader(artifact.Value))
+	} else {
+		if openBody == nil {
+			return normalize.ArtifactFacts{}, fmt.Errorf("artifact body opener is unavailable")
+		}
+		source, err = openBody(inspectCtx, artifact, binding.InterpreterRef)
+		if err != nil {
+			return normalize.ArtifactFacts{}, err
+		}
+	}
+	if source == nil {
+		return normalize.ArtifactFacts{}, fmt.Errorf("artifact body opener returned a nil reader")
+	}
+	defer source.Close()
+	reader := contextReader{ctx: inspectCtx, reader: io.LimitReader(source, artifact.SizeBytes)}
+	value, err := interpreter.InspectArtifact(inspectCtx, artifact.Clone(), reader)
+	if err != nil {
+		return normalize.ArtifactFacts{}, fmt.Errorf("interpreter %q: %w", binding.InterpreterRef.Key(), err)
+	}
+	if err := inspectCtx.Err(); err != nil {
+		return normalize.ArtifactFacts{}, err
+	}
+	if int64(len(value)) > descriptor.ResourceBounds.MaxOutputBytes || int64(len(value)) > descriptor.ResourceBounds.MaxBufferedBytes {
+		return normalize.ArtifactFacts{}, fmt.Errorf("artifact interpreter %q facts exceed declared output bounds", binding.InterpreterRef.Key())
+	}
+	if err := s.catalog.ValidateSchema(*descriptor.ResultSchemaRef, value); err != nil {
+		return normalize.ArtifactFacts{}, fmt.Errorf("artifact interpreter %q facts violate schema: %w", binding.InterpreterRef.Key(), err)
+	}
+	sourceDigest, err := artifactSourceDigest(artifact)
+	if err != nil {
+		return normalize.ArtifactFacts{}, err
+	}
+	return normalize.ArtifactFacts{Role: binding.Role, SourceDigest: sourceDigest, InterpreterRef: binding.InterpreterRef, Value: append(json.RawMessage(nil), value...)}, nil
+}
+
+func artifactSourceDigest(artifact extensions.ArtifactRef) (string, error) {
+	metadata := artifact
+	metadata.Value = nil
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return "", fmt.Errorf("fingerprint artifact metadata: %w", err)
+	}
+	digest := sha256.New()
+	_, _ = digest.Write(encoded)
+	if len(artifact.Value) > 0 {
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write(artifact.Value)
+	}
+	return hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+func (s *Snapshot) validateArtifactFacts(interpreterRef extensions.Ref, value json.RawMessage) error {
+	descriptor, ok := s.catalog.Descriptor(interpreterRef)
+	if !ok || descriptor.ResultSchemaRef == nil {
+		return fmt.Errorf("artifact interpreter %q facts schema is unavailable", interpreterRef.Key())
+	}
+	return s.catalog.ValidateSchema(*descriptor.ResultSchemaRef, value)
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(buffer []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(buffer)
+}
+
+func cloneArtifactFact(fact normalize.ArtifactFacts) normalize.ArtifactFacts {
+	fact.Value = append(json.RawMessage(nil), fact.Value...)
+	return fact
+}
+
+func cloneArtifactFacts(facts []normalize.ArtifactFacts) []normalize.ArtifactFacts {
+	result := make([]normalize.ArtifactFacts, len(facts))
+	for index, fact := range facts {
+		result[index] = cloneArtifactFact(fact)
+	}
+	return result
 }
 
 func artifactPortTypeRefs(inputs []ArtifactInput, outputs []ArtifactOutput) []extensions.Ref {

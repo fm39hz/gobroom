@@ -31,6 +31,11 @@ func CloneRequest(request Request) Request {
 	for i, artifact := range request.Artifacts {
 		clone.Artifacts[i] = artifact.Clone()
 	}
+	clone.ArtifactFacts = make([]ArtifactFacts, len(request.ArtifactFacts))
+	for i, facts := range request.ArtifactFacts {
+		facts.Value = append(json.RawMessage(nil), facts.Value...)
+		clone.ArtifactFacts[i] = facts
+	}
 	clone.Messages = make([]Message, len(request.Messages))
 	for i, message := range request.Messages {
 		clone.Messages[i] = cloneMessage(message)

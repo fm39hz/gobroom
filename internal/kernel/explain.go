@@ -46,7 +46,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 		request.OperationContractVersion = 1
 	}
 	externalRequirements := append([]normalize.FeatureRequirement(nil), request.Requirements...)
-	prepared, err := k.Operations.Prepare(request)
+	prepared, err := k.prepareOperation(ctx, &request)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 			return nil, fmt.Errorf("daemon request transform: %w", err)
 		}
 		transformFailures = append(transformFailures, report.Failures...)
-		prepared, err = k.Operations.Prepare(request)
+		prepared, err = k.prepareOperation(ctx, &request)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +107,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 					break
 				}
 				candidateTransformFailures = append(candidateTransformFailures, report.Failures...)
-				prepared, prepareErr := k.Operations.Prepare(candidateRequest)
+				prepared, prepareErr := k.prepareOperation(ctx, &candidateRequest)
 				if prepareErr != nil {
 					preflightErr = prepareErr
 					break
@@ -127,7 +127,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 			candidateRequest = normalize.CloneRequest(candidateRequest)
 			if report, applyErr := k.Transforms.ApplyScopesWithReport(ctx, &candidateRequest, bindings, attemptScopes...); applyErr != nil {
 				preflightErr = fmt.Errorf("route %q request transform: %w", path.route.ID, applyErr)
-			} else if prepared, prepareErr := k.Operations.Prepare(candidateRequest); prepareErr != nil {
+			} else if prepared, prepareErr := k.prepareOperation(ctx, &candidateRequest); prepareErr != nil {
 				preflightErr = prepareErr
 			} else {
 				candidateTransformFailures = append(candidateTransformFailures, report.Failures...)

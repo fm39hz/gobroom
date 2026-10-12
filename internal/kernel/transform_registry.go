@@ -736,6 +736,9 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	if !reflect.DeepEqual(before.Artifacts, after.Artifacts) {
 		return fmt.Errorf("%w: changed artifact references or ownership", ErrTransformSafetyViolation)
 	}
+	if !reflect.DeepEqual(before.ArtifactFacts, after.ArtifactFacts) {
+		return fmt.Errorf("%w: changed daemon-derived artifact facts", ErrTransformSafetyViolation)
+	}
 	if err := require(!reflect.DeepEqual(before.Tools, after.Tools), TransformTools, "tool definitions"); err != nil {
 		return err
 	}

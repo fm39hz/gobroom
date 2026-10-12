@@ -1,13 +1,17 @@
 package extensions
 
 import (
+	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 )
 
 const ArtifactKind = "artifact"
+const ArtifactInterpreterKind = "artifact-interpreter"
 
 type ArtifactReplayScope string
 
@@ -77,6 +81,12 @@ type ArtifactPolicy struct {
 	SensitivityLimit   ArtifactSensitivity   `json:"sensitivityLimit"`
 	AllowedMediaTypes  []string              `json:"allowedMediaTypes,omitempty"`
 	RecipientContracts []Ref                 `json:"recipientContracts,omitempty"`
+}
+
+// ArtifactInterpreter inspects a bounded, authorized artifact body and returns
+// schema-validated facts. It never receives a provider route or credential.
+type ArtifactInterpreter interface {
+	InspectArtifact(context.Context, ArtifactRef, io.Reader) (json.RawMessage, error)
 }
 
 func (a ArtifactRef) Clone() ArtifactRef {

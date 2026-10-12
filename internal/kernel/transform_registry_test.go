@@ -927,6 +927,9 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 	setRequirement := func(request *NormalizedRequest) {
 		request.Requirements = append(request.Requirements, normalize.FeatureRequirement{Ref: extensions.Ref{Kind: "feature", ID: "image", ContractVersion: 1}})
 	}
+	setArtifactFacts := func(request *NormalizedRequest) {
+		request.ArtifactFacts[0].Value = json.RawMessage(`{"magic":"forged"}`)
+	}
 	setExtension := func(request *NormalizedRequest) {
 		request.Extensions = map[string]any{"vendor.example/options": map[string]any{"mode": "fast"}}
 	}
@@ -956,6 +959,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 		{name: "operation payload declared", effects: []TransformEffect{TransformInput}, mutate: setOperationInput},
 		{name: "modality declared", effects: []TransformEffect{TransformInput}, mutate: setModality},
 		{name: "derived requirement declared", effects: []TransformEffect{TransformInput}, mutate: setRequirement},
+		{name: "derived artifact facts immutable", effects: []TransformEffect{TransformInput}, mutate: setArtifactFacts, wantError: "daemon-derived artifact facts"},
 		{name: "opaque extension immutable", effects: []TransformEffect{TransformOptions}, mutate: setExtension, wantError: "opaque source request extensions"},
 		{name: "unsupported evidence immutable", effects: []TransformEffect{TransformInput}, mutate: func(request *NormalizedRequest) { request.UnsupportedFacets = nil }, wantError: "unsupported-facet evidence"},
 		{name: "unsupported generation evidence immutable", effects: []TransformEffect{TransformOptions}, mutate: func(request *NormalizedRequest) { request.Generation.Unsupported = nil }, wantError: "unsupported generation-option evidence"},
@@ -996,6 +1000,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 				Generation:        normalize.GenerationOptions{Unsupported: []string{"vendor_option"}},
 				Thinking:          normalize.ThinkingIntent{Mode: "level", Effort: "medium", Source: "ingress"},
 				Session:           normalize.SessionContext{ProviderState: json.RawMessage(`{"state":"provider-owned"}`)},
+				ArtifactFacts:     []normalize.ArtifactFacts{{Role: "document", SourceDigest: "digest", InterpreterRef: extensions.Ref{Kind: extensions.ArtifactInterpreterKind, ID: "fixture", ContractVersion: 1}, Value: json.RawMessage(`{"magic":"%PDF-"}`)}},
 			}
 			binding := TransformBinding{ID: "matrix", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope()}
 			err := registry.ApplyScopes(context.Background(), &request, []TransformBinding{binding}, daemonTransformScope())
@@ -1008,7 +1013,7 @@ func TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded(t *testing
 			if err == nil || !strings.Contains(err.Error(), test.wantError) {
 				t.Fatalf("mutation error=%v want substring %q", err, test.wantError)
 			}
-			if len(request.UnsupportedFacets) != 1 || request.UnsupportedFacets[0] != "content.opaque" || request.Generation.Unsupported[0] != "vendor_option" || request.Messages[0].Content.([]normalize.ContentPart)[0].Metadata["cache_control"] != "ephemeral" || request.Prompt.Layers[0].Parts[0].Metadata["cache_control"] != "ephemeral" || request.Tools[0].Metadata["vendor"] != "original" || request.Raw["vendor_extension"].(map[string]any)["opaque"] != "original" || string(request.Session.ProviderState) != `{"state":"provider-owned"}` {
+			if len(request.UnsupportedFacets) != 1 || request.UnsupportedFacets[0] != "content.opaque" || request.Generation.Unsupported[0] != "vendor_option" || request.Messages[0].Content.([]normalize.ContentPart)[0].Metadata["cache_control"] != "ephemeral" || request.Prompt.Layers[0].Parts[0].Metadata["cache_control"] != "ephemeral" || request.Tools[0].Metadata["vendor"] != "original" || request.Raw["vendor_extension"].(map[string]any)["opaque"] != "original" || string(request.Session.ProviderState) != `{"state":"provider-owned"}` || string(request.ArtifactFacts[0].Value) != `{"magic":"%PDF-"}` {
 				t.Fatalf("rejected transform leaked a mutation: %#v", request)
 			}
 		})

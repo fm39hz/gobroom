@@ -28,6 +28,7 @@ type Request struct {
 	OperationContractVersion uint64                   `json:"operationContractVersion"`
 	OperationPayload         json.RawMessage          `json:"operationPayload,omitempty"`
 	Artifacts                []extensions.ArtifactRef `json:"artifacts,omitempty"`
+	ArtifactFacts            []ArtifactFacts          `json:"-"`
 	SourceFormat             Format                   `json:"-"`
 	Stream                   bool                     `json:"stream,omitempty"`
 	Messages                 []Message                `json:"messages,omitempty"`
@@ -45,6 +46,15 @@ type Request struct {
 	Extensions               map[string]any           `json:"-"`
 	Raw                      map[string]any           `json:"-"`
 	Mutations                RequestMutationSet       `json:"-"`
+}
+
+// ArtifactFacts are daemon-derived, schema-validated projections of opaque
+// artifact bodies. They are request-local and never accepted from client JSON.
+type ArtifactFacts struct {
+	Role           string
+	SourceDigest   string
+	InterpreterRef extensions.Ref
+	Value          json.RawMessage
 }
 
 // RequestMutationSet records only semantic facets changed by request

@@ -45,10 +45,19 @@ type QuotaSource = core.QuotaSource
 type ErrorClassifier = core.ErrorClassifier
 
 type Ref = extensions.Ref
+type ExtensionFactory = extensions.Factory
+type ExtensionDescriptor = extensions.Descriptor
 type ResourceBounds = extensions.ResourceBounds
 type ArtifactInput = extensions.ArtifactInput
 type ArtifactOutput = extensions.ArtifactOutput
 type ArtifactRef = extensions.ArtifactRef
+type ArtifactOwner = extensions.ArtifactOwner
+type BodyRef = extensions.BodyRef
+type ArtifactInterpreter = extensions.ArtifactInterpreter
+type ArtifactInterpreterBinding = extensions.ArtifactInterpreterBinding
+type ArtifactReplayScope = extensions.ArtifactReplayScope
+type ArtifactSensitivity = extensions.ArtifactSensitivity
+type ArtifactPolicy = extensions.ArtifactPolicy
 
 type Endpoint = kernel.Endpoint
 type Transport = kernel.Transport
@@ -79,6 +88,7 @@ type SessionStore = kernel.SessionStore
 type Format = normalize.Format
 type Task = normalize.Operation
 type OperationRequest = normalize.Request
+type ArtifactFacts = normalize.ArtifactFacts
 type FeatureRequirement = normalize.FeatureRequirement
 type Message = normalize.Message
 type Tool = normalize.Tool
@@ -91,6 +101,8 @@ type Modalities = normalize.Modalities
 type ContinuityState = normalize.ContinuityState
 type OperationDefinition = operations.Definition
 type OperationRegistry = operations.Registry
+type OperationSnapshot = operations.Snapshot
+type ArtifactBodyOpener = operations.ArtifactBodyOpener
 type ResultProjector = operations.ResultProjector
 type ResultProjectorFactory = operations.ResultProjectorFactory
 type ReplaySafety = operations.ReplaySafety
@@ -124,8 +136,15 @@ const (
 	ReplayWithKey        = operations.ReplayWithKey
 	ReplayNever          = operations.ReplayNever
 
-	SchemaKind   = extensions.SchemaKind
-	ArtifactKind = extensions.ArtifactKind
+	SchemaKind              = extensions.SchemaKind
+	ArtifactKind            = extensions.ArtifactKind
+	ArtifactInterpreterKind = extensions.ArtifactInterpreterKind
+	ArtifactReplayRequest   = extensions.ArtifactReplayRequest
+	ArtifactReplaySession   = extensions.ArtifactReplaySession
+	ArtifactReplayPortable  = extensions.ArtifactReplayPortable
+	ArtifactPublic          = extensions.ArtifactPublic
+	ArtifactPrivate         = extensions.ArtifactPrivate
+	ArtifactSecret          = extensions.ArtifactSecret
 
 	FacetWireRequest      = kernel.FacetWireRequest
 	FacetReasoningIntent  = kernel.FacetReasoningIntent

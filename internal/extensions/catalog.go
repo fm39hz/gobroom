@@ -80,25 +80,35 @@ type ArtifactOutput struct {
 	MaxCount int    `json:"maxCount"`
 }
 
+// ArtifactInterpreterBinding selects a versioned content interpreter for one
+// named operation input. Interpreters are shared across operations/artifact
+// types and produce facts validated against their descriptor result schema.
+type ArtifactInterpreterBinding struct {
+	Role           string          `json:"role"`
+	InterpreterRef Ref             `json:"interpreterRef"`
+	Options        json.RawMessage `json:"options,omitempty"`
+}
+
 type Descriptor struct {
-	Ref                   Ref              `json:"ref"`
-	ImplementationVersion string           `json:"implementationVersion"`
-	DisplayName           string           `json:"displayName"`
-	Description           string           `json:"description"`
-	OptionsSchemaRef      *Ref             `json:"optionsSchemaRef,omitempty"`
-	InputSchemaRef        *Ref             `json:"inputSchemaRef,omitempty"`
-	ResultSchemaRef       *Ref             `json:"resultSchemaRef,omitempty"`
-	EventSchemaRefs       []Ref            `json:"eventSchemaRefs,omitempty"`
-	ReplaySafety          string           `json:"replaySafety,omitempty"`
-	Dependencies          []Ref            `json:"dependencies,omitempty"`
-	SemanticContracts     []Ref            `json:"semanticContracts,omitempty"`
-	ArtifactInputs        []ArtifactInput  `json:"artifactInputs,omitempty"`
-	ArtifactOutputs       []ArtifactOutput `json:"artifactOutputs,omitempty"`
-	LifecycleCapabilities []string         `json:"lifecycleCapabilities,omitempty"`
-	FailureModes          []string         `json:"failureModes,omitempty"`
-	ResourceBounds        ResourceBounds   `json:"resourceBounds"`
-	ArtifactPolicy        *ArtifactPolicy  `json:"artifactPolicy,omitempty"`
-	SetupView             json.RawMessage  `json:"setupView,omitempty"`
+	Ref                   Ref                          `json:"ref"`
+	ImplementationVersion string                       `json:"implementationVersion"`
+	DisplayName           string                       `json:"displayName"`
+	Description           string                       `json:"description"`
+	OptionsSchemaRef      *Ref                         `json:"optionsSchemaRef,omitempty"`
+	InputSchemaRef        *Ref                         `json:"inputSchemaRef,omitempty"`
+	ResultSchemaRef       *Ref                         `json:"resultSchemaRef,omitempty"`
+	EventSchemaRefs       []Ref                        `json:"eventSchemaRefs,omitempty"`
+	ReplaySafety          string                       `json:"replaySafety,omitempty"`
+	Dependencies          []Ref                        `json:"dependencies,omitempty"`
+	SemanticContracts     []Ref                        `json:"semanticContracts,omitempty"`
+	ArtifactInputs        []ArtifactInput              `json:"artifactInputs,omitempty"`
+	ArtifactOutputs       []ArtifactOutput             `json:"artifactOutputs,omitempty"`
+	ArtifactInterpreters  []ArtifactInterpreterBinding `json:"artifactInterpreters,omitempty"`
+	LifecycleCapabilities []string                     `json:"lifecycleCapabilities,omitempty"`
+	FailureModes          []string                     `json:"failureModes,omitempty"`
+	ResourceBounds        ResourceBounds               `json:"resourceBounds"`
+	ArtifactPolicy        *ArtifactPolicy              `json:"artifactPolicy,omitempty"`
+	SetupView             json.RawMessage              `json:"setupView,omitempty"`
 }
 
 type Schema struct {
@@ -284,6 +294,9 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	if len(descriptor.ArtifactOutputs) > 0 && descriptor.Ref.Kind != "operation" {
 		return Descriptor{}, fmt.Errorf("only operation extensions may declare artifact output ports")
 	}
+	if len(descriptor.ArtifactInterpreters) > 0 && descriptor.Ref.Kind != "operation" {
+		return Descriptor{}, fmt.Errorf("only operation extensions may bind artifact interpreters")
+	}
 	if len(descriptor.FailureModes) > 0 && descriptor.Ref.Kind != "request_transform" && descriptor.Ref.Kind != "response_transform" {
 		return Descriptor{}, fmt.Errorf("only request and response transforms may declare failure modes")
 	}
@@ -313,6 +326,29 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 			return Descriptor{}, fmt.Errorf("extension %q artifact output %q requires an exact artifact type", descriptor.Ref.Key(), output.Role)
 		}
 		seenOutputRoles[output.Role] = true
+	}
+	seenInterpreterRoles := map[string]bool{}
+	for index, binding := range descriptor.ArtifactInterpreters {
+		if strings.TrimSpace(binding.Role) == "" || seenInterpreterRoles[binding.Role] {
+			return Descriptor{}, fmt.Errorf("extension %q has an invalid or duplicate artifact interpreter role", descriptor.Ref.Key())
+		}
+		if err := binding.InterpreterRef.Validate(); err != nil || binding.InterpreterRef.Kind != ArtifactInterpreterKind {
+			return Descriptor{}, fmt.Errorf("extension %q artifact interpreter for role %q requires an exact %q ref", descriptor.Ref.Key(), binding.Role, ArtifactInterpreterKind)
+		}
+		options := binding.Options
+		if len(options) == 0 {
+			options = json.RawMessage(`{}`)
+		}
+		canonical, value, err := canonicalJSON(options)
+		if err != nil {
+			return Descriptor{}, fmt.Errorf("extension %q artifact interpreter options: %w", descriptor.Ref.Key(), err)
+		}
+		if _, ok := value.(map[string]any); !ok {
+			return Descriptor{}, fmt.Errorf("extension %q artifact interpreter options must be a JSON object", descriptor.Ref.Key())
+		}
+		binding.Options = canonical
+		descriptor.ArtifactInterpreters[index] = binding
+		seenInterpreterRoles[binding.Role] = true
 	}
 	if descriptor.Ref.Kind == ArtifactKind {
 		if descriptor.ArtifactPolicy == nil || descriptor.ResourceBounds.MaxInputBytes <= 0 {
@@ -377,17 +413,17 @@ func (c *Catalog) Freeze() (*Snapshot, error) {
 	if c.frozen {
 		return c.snapshot, nil
 	}
-	if err := c.validateGraph(); err != nil {
+	compiled, err := c.compileSchemas()
+	if err != nil {
+		return nil, err
+	}
+	if err := c.validateGraph(compiled); err != nil {
 		return nil, err
 	}
 	for ref, item := range c.registrations {
 		if item.factory == nil {
 			return nil, fmt.Errorf("extension %q has no registered implementation factory", ref.Key())
 		}
-	}
-	compiled, err := c.compileSchemas()
-	if err != nil {
-		return nil, err
 	}
 	entries := make(map[Ref]registration, len(c.registrations))
 	for ref, item := range c.registrations {
@@ -506,6 +542,9 @@ func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
 		}
 		for _, output := range item.descriptor.ArtifactOutputs {
 			dependencies = append(dependencies, output.TypeRef)
+		}
+		for _, interpreter := range item.descriptor.ArtifactInterpreters {
+			dependencies = append(dependencies, interpreter.InterpreterRef)
 		}
 		if item.descriptor.ArtifactPolicy != nil {
 			dependencies = append(dependencies, item.descriptor.ArtifactPolicy.RecipientContracts...)
@@ -774,7 +813,8 @@ func (s *Snapshot) ValidateArtifact(artifact ArtifactRef, receiver ArtifactOwner
 	return nil
 }
 
-func (c *Catalog) validateGraph() error {
+func (c *Catalog) validateGraph(compiled map[Ref]*jsonschema.Schema) error {
+	validationSnapshot := &Snapshot{registrations: c.registrations, compiled: compiled}
 	for _, item := range c.registrations {
 		descriptor := item.descriptor
 		if descriptor.OptionsSchemaRef != nil {
@@ -818,6 +858,24 @@ func (c *Catalog) validateGraph() error {
 				return fmt.Errorf("operation %q artifact output %q references missing artifact contract %q", descriptor.Ref.Key(), output.Role, output.TypeRef.Key())
 			}
 		}
+		if descriptor.Ref.Kind == "operation" {
+			inputRoles := make(map[string]bool, len(descriptor.ArtifactInputs))
+			for _, input := range descriptor.ArtifactInputs {
+				inputRoles[input.Role] = true
+			}
+			for _, binding := range descriptor.ArtifactInterpreters {
+				if !inputRoles[binding.Role] {
+					return fmt.Errorf("operation %q binds an artifact interpreter to undeclared role %q", descriptor.Ref.Key(), binding.Role)
+				}
+				interpreter, ok := c.registrations[binding.InterpreterRef]
+				if !ok || interpreter.descriptor.Ref.Kind != ArtifactInterpreterKind || interpreter.descriptor.ResultSchemaRef == nil {
+					return fmt.Errorf("operation %q references invalid artifact interpreter %q", descriptor.Ref.Key(), binding.InterpreterRef.Key())
+				}
+				if err := validationSnapshot.ValidateOptions(binding.InterpreterRef, binding.Options); err != nil {
+					return fmt.Errorf("operation %q artifact interpreter %q options: %w", descriptor.Ref.Key(), binding.InterpreterRef.Key(), err)
+				}
+			}
+		}
 		if descriptor.ArtifactPolicy != nil {
 			for _, recipient := range descriptor.ArtifactPolicy.RecipientContracts {
 				if _, ok := c.registrations[recipient]; !ok {
@@ -838,6 +896,11 @@ func (c *Catalog) validateGraph() error {
 		state[ref] = 1
 		for _, dependency := range c.registrations[ref].descriptor.Dependencies {
 			if err := visit(dependency); err != nil {
+				return err
+			}
+		}
+		for _, interpreter := range c.registrations[ref].descriptor.ArtifactInterpreters {
+			if err := visit(interpreter.InterpreterRef); err != nil {
 				return err
 			}
 		}
@@ -970,6 +1033,9 @@ func validateBounds(descriptor Descriptor) error {
 	if descriptor.Ref.Kind == "transform" && (descriptor.ResourceBounds.MaxBufferedBytes <= 0 || descriptor.ResourceBounds.DeadlineMillis <= 0) {
 		return fmt.Errorf("transform requires positive maxBufferedBytes and deadlineMillis")
 	}
+	if descriptor.Ref.Kind == ArtifactInterpreterKind && (descriptor.ResultSchemaRef == nil || descriptor.ResourceBounds.MaxInputBytes <= 0 || descriptor.ResourceBounds.MaxOutputBytes <= 0 || descriptor.ResourceBounds.MaxBufferedBytes <= 0 || descriptor.ResourceBounds.DeadlineMillis <= 0) {
+		return fmt.Errorf("artifact interpreter requires an exact facts schema and positive input/output/buffer/deadline bounds")
+	}
 	return nil
 }
 
@@ -978,6 +1044,10 @@ func cloneDescriptor(descriptor Descriptor) Descriptor {
 	descriptor.SemanticContracts = append([]Ref(nil), descriptor.SemanticContracts...)
 	descriptor.ArtifactInputs = append([]ArtifactInput(nil), descriptor.ArtifactInputs...)
 	descriptor.ArtifactOutputs = append([]ArtifactOutput(nil), descriptor.ArtifactOutputs...)
+	descriptor.ArtifactInterpreters = append([]ArtifactInterpreterBinding(nil), descriptor.ArtifactInterpreters...)
+	for index := range descriptor.ArtifactInterpreters {
+		descriptor.ArtifactInterpreters[index].Options = append(json.RawMessage(nil), descriptor.ArtifactInterpreters[index].Options...)
+	}
 	descriptor.EventSchemaRefs = append([]Ref(nil), descriptor.EventSchemaRefs...)
 	descriptor.LifecycleCapabilities = append([]string(nil), descriptor.LifecycleCapabilities...)
 	descriptor.FailureModes = append([]string(nil), descriptor.FailureModes...)
