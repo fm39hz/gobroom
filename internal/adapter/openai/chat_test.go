@@ -263,6 +263,74 @@ func TestKernelRejectsMissingClientRendererBeforeDispatch(t *testing.T) {
 	}
 }
 
+func TestKernelStreamsInterleavedToolLifecycleToAnthropicClient(t *testing.T) {
+	upstreamWire := strings.Join([]string{
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_alpha","type":"function"}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup","arguments":"{\"q\":"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_beta","type":"function"}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"x\":1}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"name":"second_tool"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"weather\"}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_tools","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	var dispatched atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		dispatched.Add(1)
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode provider request: %v", err)
+		} else if body["stream"] != true {
+			t.Errorf("streaming intent was lost upstream: %#v", body)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstreamWire)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "tools", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "physical-tools",
+			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	parsed, err := normalize.JSON("/v1/messages", http.Header{"Anthropic-Version": []string{"2023-06-01"}}, []byte(`{"model":"tools","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"find weather"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}},{"name":"second_tool","input_schema":{"type":"object"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	output := writer.Body.String()
+	if dispatched.Load() != 1 || !strings.Contains(writer.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("dispatches=%d content-type=%q output=%s", dispatched.Load(), writer.Header().Get("Content-Type"), output)
+	}
+	for _, expected := range []string{
+		`"id":"call_alpha"`, `"name":"lookup"`, `"id":"call_beta"`, `"name":"second_tool"`,
+		`"partial_json":"{\"q\":"`, `"partial_json":"\"weather\"}"`, `"partial_json":"{\"x\":1}"`,
+		`"stop_reason":"tool_use"`, "event: message_stop",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("Anthropic stream omitted %q: %s", expected, output)
+		}
+	}
+	if strings.Count(output, "event: content_block_start") != 2 {
+		t.Fatalf("interleaved deltas did not produce two tool blocks: %s", output)
+	}
+}
+
 func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
 	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})

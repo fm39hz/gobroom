@@ -150,6 +150,7 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 		}
 	case kernel.EventToolCallDelta:
 		block := s.getBlock(event, "tool_use")
+		wasOpened := block.opened
 		if event.ToolCallID != "" {
 			block.toolID = event.ToolCallID
 		}
@@ -160,8 +161,16 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 		if err := s.openToolBlock(block); err != nil {
 			return err
 		}
-		if s.streaming && event.ToolArguments != "" {
-			return s.emitSSE("content_block_delta", map[string]any{"type": "content_block_delta", "index": block.index, "delta": map[string]any{"type": "input_json_delta", "partial_json": event.ToolArguments}})
+		if s.streaming && block.opened {
+			arguments := event.ToolArguments
+			if !wasOpened {
+				// Metadata can arrive after argument fragments. Once the block is
+				// open, flush the buffered prefix exactly once before later deltas.
+				arguments = block.arguments.String()
+			}
+			if arguments != "" {
+				return s.emitSSE("content_block_delta", map[string]any{"type": "content_block_delta", "index": block.index, "delta": map[string]any{"type": "input_json_delta", "partial_json": arguments}})
+			}
 		}
 	case kernel.EventThinkingDelta:
 		if !s.renderThinking {
@@ -349,7 +358,7 @@ func (s *anthropicSession) openToolBlock(block *anthropicBlock) error {
 		return nil
 	}
 	if block.toolID == "" || block.toolName == "" {
-		return fmt.Errorf("Anthropic tool rendering requires a tool ID and name")
+		return nil
 	}
 	return s.openBlockWithContent(block, map[string]any{"type": "tool_use", "id": block.toolID, "name": block.toolName, "input": map[string]any{}})
 }

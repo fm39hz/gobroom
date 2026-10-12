@@ -14,9 +14,9 @@ import (
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
-func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
+func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) error {
 	if emit == nil {
-		return
+		return nil
 	}
 	now := time.Now()
 	objectType := stringValue(payload["object"])
@@ -53,7 +53,15 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 			for index, raw := range calls {
 				call, _ := raw.(map[string]any)
 				function, _ := call["function"].(map[string]any)
-				emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: index, ToolCallID: stringValue(call["id"]), ToolName: stringValue(function["name"]), ToolArguments: stringValue(function["arguments"])})
+				toolIndex := index
+				if rawIndex, exists := call["index"]; exists {
+					n, valid := rawIndex.(float64)
+					if !valid || n < 0 || n > float64(int(^uint(0)>>1)) || n != float64(int(n)) {
+						return fmt.Errorf("OpenAI tool call delta has invalid index %v", rawIndex)
+					}
+					toolIndex = int(n)
+				}
+				emit(kernel.ResponseEvent{At: now, Kind: kernel.EventToolCallDelta, Index: toolIndex, ToolCallID: stringValue(call["id"]), ToolName: stringValue(function["name"]), ToolArguments: stringValue(function["arguments"])})
 			}
 		}
 		if finish := stringValue(choice["finish_reason"]); finish != "" {
@@ -107,6 +115,7 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) {
 		event := kernel.UsageEvent{InputTokens: int64(numberValue(inputTokens)), OutputTokens: int64(numberValue(outputTokens))}
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &event})
 	}
+	return nil
 }
 
 func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse, wireFormat normalize.Format, emit func(kernel.ResponseEvent) error, hooks kernel.StreamHooks) error {
@@ -153,7 +162,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				return fmt.Errorf("decode upstream SSE JSON: %w", err)
 			}
 			var events []kernel.ResponseEvent
-			emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) })
+			if err := emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) }); err != nil {
+				return fmt.Errorf("decode OpenAI response event: %w", err)
+			}
 			for _, event := range events {
 				if event.Kind == kernel.EventResponseComplete {
 					completed = true
@@ -187,7 +198,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 		return fmt.Errorf("decode upstream JSON: %w", err)
 	}
 	var events []kernel.ResponseEvent
-	emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) })
+	if err := emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) }); err != nil {
+		return fmt.Errorf("decode OpenAI response: %w", err)
+	}
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
 	}
