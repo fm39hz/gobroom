@@ -28,6 +28,7 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 	request := input.Request
 	native := request.SourceFormat == normalize.FormatOpenAIResponses
 	anthropic := request.SourceFormat == normalize.FormatAnthropic
+	chat := request.SourceFormat == normalize.FormatOpenAIChat
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
 		if kernel.IsResponseCompatibilityFacet(facet) {
@@ -73,10 +74,76 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "Anthropic Messages semantics are rebuilt from typed IR into the Responses input contract"
 			}
+		} else if chat {
+			mapping.Reason = "OpenAI Chat semantics have no declared Responses mapping"
+			if responsesChatFacetRepresentable(request, facet) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "OpenAI Chat semantics are rebuilt from typed IR into the Responses input contract"
+			}
 		}
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func responsesChatFacetRepresentable(request kernel.NormalizedRequest, facet string) bool {
+	if hasUnsupportedFacet(request, facet) {
+		return false
+	}
+	switch facet {
+	case kernel.FacetWireRequest:
+		return true
+	case kernel.FacetPromptLayers:
+		for _, layer := range request.Prompt.Layers {
+			role := layer.Role
+			if role == "" {
+				role = "system"
+			}
+			if role != "system" && role != "developer" {
+				return false
+			}
+			if _, err := anthropicPromptText(layer); err != nil {
+				return false
+			}
+		}
+		return true
+	case kernel.FacetToolDefinitions:
+		return openAIAnthropicToolsRepresentable(request)
+	case kernel.FacetToolHistory:
+		return openAIAnthropicHistoryRepresentable(request)
+	case kernel.FacetToolChoice:
+		return openAIAnthropicToolChoiceRepresentable(request.ToolChoice) && openAIAnthropicToolChoiceMatchesTools(request)
+	case kernel.FacetReasoningIntent:
+		return responsesChatReasoningRepresentable(request.Thinking)
+	case kernel.FacetReasoningBudget:
+		return request.Thinking.Mode == "budget" && request.Thinking.BudgetTokens > 0 && request.Thinking.Effort == ""
+	case kernel.FacetContinuity:
+		return request.Continuity.PreviousResponse != ""
+	case kernel.FacetGenerationOptions:
+		return openAIAnthropicResponsesGenerationRepresentable(request.Generation)
+	case kernel.FacetVisionInput:
+		for _, message := range request.Messages {
+			if _, _, err := openAIResponsesContent(message.Content, message.Role); err != nil {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func responsesChatReasoningRepresentable(intent normalize.ThinkingIntent) bool {
+	switch intent.Mode {
+	case "", "inherit", "disabled", "auto":
+		return intent.Effort == "" && intent.BudgetTokens == 0
+	case "level":
+		return openAIResponsesReasoningMutationRepresentable(intent)
+	case "budget":
+		return intent.BudgetTokens > 0 && intent.Effort == ""
+	default:
+		return false
+	}
 }
 
 func openAIResponsesReasoningMutationRepresentable(intent normalize.ThinkingIntent) bool {
@@ -173,6 +240,12 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 	if request.SourceFormat == normalize.FormatAnthropic {
 		var err error
 		body, err = encodeAnthropicRequestAsOpenAIResponses(request, route.ExternalModel)
+		if err != nil {
+			return kernel.UpstreamRequest{}, err
+		}
+	} else if request.SourceFormat == normalize.FormatOpenAIChat {
+		var err error
+		body, err = encodeOpenAIChatRequestAsOpenAIResponses(request, route.ExternalModel)
 		if err != nil {
 			return kernel.UpstreamRequest{}, err
 		}

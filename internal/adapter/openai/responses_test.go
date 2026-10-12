@@ -303,6 +303,85 @@ func TestKernelRendersResponsesJSONItemsAsAnthropicToolUseBlocks(t *testing.T) {
 	}
 }
 
+func TestKernelMapsOpenAIChatRequestThroughResponsesAndBack(t *testing.T) {
+	responseBody := `{"id":"resp_chat_crosswire","object":"response","status":"completed","output":[{"id":"msg_answer","type":"message","role":"assistant","content":[{"type":"output_text","text":"I found it."}]},{"id":"fc_answer","type":"function_call","call_id":"call_answer","name":"lookup","arguments":"{\"id\":7}"}],"usage":{"input_tokens":13,"output_tokens":4}}`
+	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode Responses request: %v", err)
+		} else {
+			input, _ := body["input"].([]any)
+			if body["model"] != "responses-physical" || body["messages"] != nil || body["max_output_tokens"] != float64(512) || body["temperature"] != float64(0.25) || body["top_p"] != float64(0.8) || body["tool_choice"] != "required" || len(input) != 4 {
+				t.Errorf("OpenAI Chat request was not rebuilt as Responses input: %#v", body)
+			}
+			if reasoning, ok := body["reasoning"].(map[string]any); !ok || reasoning["effort"] != "high" {
+				t.Errorf("reasoning effort was not translated: %#v", body["reasoning"])
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, BaseURL: "https://provider.test/v1", ExternalModel: "responses-physical",
+			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-responses"] = composed
+	parsed, err := normalize.JSON("/v1/chat/completions", http.Header{}, []byte(`{"model":"junior","stream":false,"max_tokens":512,"temperature":0.25,"top_p":0.8,"reasoning_effort":"high","tool_choice":"required","messages":[{"role":"system","content":"Be precise."},{"role":"user","content":"Look up item 7."},{"role":"assistant","content":null,"tool_calls":[{"id":"call_history","type":"function","function":{"name":"lookup","arguments":"{\"id\":7}"}}]},{"role":"tool","tool_call_id":"call_history","content":"{\"found\":true}"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanations, err := engine.ExplainCompatibility(context.Background(), "junior", parsed.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explanations) != 1 || !explanations[0].Compatible {
+		t.Fatalf("OpenAI Chat→Responses compatibility=%#v", explanations)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Choices []struct {
+			FinishReason string `json:"finish_reason"`
+			Message      struct {
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage map[string]int64 `json:"usage"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode OpenAI Chat response %q: %v", writer.Body.String(), err)
+	}
+	if len(result.Choices) != 1 || result.Choices[0].Message.Content != "I found it." || result.Choices[0].FinishReason != "tool_calls" || len(result.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("Responses→OpenAI Chat result=%#v", result)
+	}
+	call := result.Choices[0].Message.ToolCalls[0]
+	if call.ID != "call_answer" || call.Function.Name != "lookup" || call.Function.Arguments != `{"id":7}` || result.Usage["prompt_tokens"] != 13 || result.Usage["completion_tokens"] != 4 || result.Usage["total_tokens"] != 17 {
+		t.Fatalf("Responses tool/usage projection: call=%#v usage=%#v", call, result.Usage)
+	}
+}
+
 func TestResponsesJSONSemanticDecoderRejectsIncompleteStatus(t *testing.T) {
 	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
 	response := kernel.UpstreamResponse{

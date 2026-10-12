@@ -15,7 +15,20 @@ func encodeAnthropicRequestAsOpenAIResponses(request kernel.NormalizedRequest, m
 		!openAIAnthropicResponsesGenerationRepresentable(request.Generation) || !openAIResponsesAnthropicReasoningRepresentable(request.Thinking) {
 		return nil, fmt.Errorf("Anthropic request contains semantics that OpenAI Responses cannot represent")
 	}
+	return encodeCanonicalRequestAsOpenAIResponses(request, model)
+}
 
+func encodeOpenAIChatRequestAsOpenAIResponses(request kernel.NormalizedRequest, model string) (map[string]any, error) {
+	if len(request.UnsupportedFacets) > 0 || !responsesChatFacetRepresentable(request, kernel.FacetPromptLayers) ||
+		!responsesChatFacetRepresentable(request, kernel.FacetToolDefinitions) || !responsesChatFacetRepresentable(request, kernel.FacetToolHistory) ||
+		!responsesChatFacetRepresentable(request, kernel.FacetToolChoice) || !responsesChatFacetRepresentable(request, kernel.FacetGenerationOptions) ||
+		!responsesChatReasoningRepresentable(request.Thinking) {
+		return nil, fmt.Errorf("OpenAI Chat request contains semantics that OpenAI Responses cannot represent")
+	}
+	return encodeCanonicalRequestAsOpenAIResponses(request, model)
+}
+
+func encodeCanonicalRequestAsOpenAIResponses(request kernel.NormalizedRequest, model string) (map[string]any, error) {
 	input := make([]map[string]any, 0, len(request.Prompt.Layers)+len(request.Messages))
 	for _, layer := range request.Prompt.Layers {
 		role := layer.Role
@@ -98,12 +111,11 @@ func encodeAnthropicRequestAsOpenAIResponses(request kernel.NormalizedRequest, m
 	if request.Generation.TopP != nil {
 		body["top_p"] = *request.Generation.TopP
 	}
-	if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" {
-		if request.Thinking.Mode == "disabled" {
-			body["reasoning"] = map[string]any{"effort": "none"}
-		} else {
-			body["reasoning"] = map[string]any{"effort": request.Thinking.Effort}
-		}
+	for key, value := range normalize.OpenAIResponsesReasoning(request.Thinking) {
+		body[key] = value
+	}
+	if request.Continuity.PreviousResponse != "" {
+		body["previous_response_id"] = request.Continuity.PreviousResponse
 	}
 	return body, nil
 }
