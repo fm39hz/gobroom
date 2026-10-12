@@ -348,6 +348,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.UsageSourceRef = operationBinding.UsageSourceRef
 			candidate.UsageOptions = operationBinding.UsageOptions
 			candidate.SessionStoreRef = operationBinding.SessionStoreRef
+			sessionKey := requestSessionKey(req)
+			var sessionState SessionState
+			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
+				if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
+					if saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey); loadErr == nil && found {
+						sessionState = saved
+						candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
+						if candidateRequest.Continuity.PreviousResponse == "" {
+							candidateRequest.Continuity.PreviousResponse = saved.ResponseID
+						}
+					}
+				}
+			}
 			operationRef := extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			artifactOutputs, _ := k.Operations.ArtifactOutputs(operationRef)
 			if len(artifactOutputs) > 0 && k.ArtifactStore == nil {
@@ -407,19 +420,6 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						feedback.MarkFailure(candidate, ErrorAuth, err)
 					}
 					continue
-				}
-			}
-			sessionKey := requestSessionKey(req)
-			var sessionState SessionState
-			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
-				if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
-					if saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey); loadErr == nil && found {
-						sessionState = saved
-						candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
-						if candidateRequest.Continuity.PreviousResponse == "" {
-							candidateRequest.Continuity.PreviousResponse = saved.ResponseID
-						}
-					}
 				}
 			}
 			attemptCtx := ctx

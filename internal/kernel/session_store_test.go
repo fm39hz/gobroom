@@ -13,11 +13,17 @@ import (
 )
 
 type continuitySessionAdapter struct {
-	previousResponse string
+	plannedPreviousResponse string
+	plannedContinuityFacet  bool
+	previousResponse        string
 }
 
 func (*continuitySessionAdapter) ID() string { return "continuity-session" }
-func (*continuitySessionAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+func (a *continuitySessionAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	a.plannedPreviousResponse = input.Request.Continuity.PreviousResponse
+	for _, facet := range input.Policy.RequiredFacets {
+		a.plannedContinuityFacet = a.plannedContinuityFacet || facet == FacetContinuity
+	}
 	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 }
 func (a *continuitySessionAdapter) Prepare(_ context.Context, request NormalizedRequest, _ Route, _ Credential) (UpstreamRequest, error) {
@@ -67,6 +73,12 @@ func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	}
 	if adapter.previousResponse != "response-previous" {
 		t.Fatalf("previous response was not loaded into normalized request: %q", adapter.previousResponse)
+	}
+	if adapter.plannedPreviousResponse != "response-previous" {
+		t.Fatalf("compatibility admission did not receive loaded continuation state: %q", adapter.plannedPreviousResponse)
+	}
+	if !adapter.plannedContinuityFacet {
+		t.Fatal("compatibility admission omitted the stored continuity facet")
 	}
 	state, ok, err := sessions.Load(context.Background(), route, "client-session")
 	if err != nil || !ok || state.ResponseID != "response-next" {

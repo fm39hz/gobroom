@@ -41,6 +41,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/provider -run '^TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonCompositionRootRegistersStaticProviderModule$$' -count=1
 	go test ./internal/kernel -run '^TestRequiredRequestFacetsSeparateReasoningBudgetFromEffort$$' -count=1
+	go test ./internal/kernel -run '^TestKernelLoadsAndSavesProviderSessionContinuity$$' -count=1
 	go test ./internal/adapter/gemini -run '^TestGeminiReasonsAboutBudgetSeparatelyFromEffort$$' -count=1
 	go test ./internal/adapter/openai -run '^(TestOpenAIChatBudgetRequiresExactNativeSourceEvidence|TestNativeResponsesBudgetRequiresExactUnmodifiedSourceEvidence|TestNativeChatReasoningMutationRequiresDeclaredModeMapping|TestNativeResponsesReasoningMutationRequiresDeclaredModeMapping|TestKernelExcludesTransformedUnsupportedResponsesReasoningBeforeDispatch|TestMalformedAnthropicReasoningCannotBeReclaimedByOpenAIChatCodec|TestParserUnsupportedAnthropicToolChoiceCannotBeReclaimedByOpenAIChatCodec)$$' -count=1
 	go test ./internal/adapter/anthropic -run '^TestReasoningBudgetRaisesAnthropicOutputLimitOnlyWithNamedLossApproval$$' -count=1
