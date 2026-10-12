@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
@@ -20,6 +21,7 @@ import (
 type nativeResponsesMutationFixture struct{}
 type responsesInputMutationFixture struct{}
 type responsesToolHistoryMutationFixture struct{}
+type responsesUnsupportedReasoningMutationFixture struct{}
 
 func (nativeResponsesMutationFixture) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-native-options", ContractVersion: 1}, ImplementationVersion: "1", Label: "Responses native options", Description: "Change typed facets for native Responses egress.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformTools, kernel.TransformOptions, kernel.TransformThinking, kernel.TransformContinuity}}
@@ -64,6 +66,15 @@ func (responsesToolHistoryMutationFixture) Apply(_ context.Context, request *ker
 			message.Content = "updated result"
 		}
 	}
+	return nil
+}
+
+func (responsesUnsupportedReasoningMutationFixture) Definition() kernel.TransformDefinition {
+	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.responses-unsupported-reasoning", ContractVersion: 1}, ImplementationVersion: "1", Label: "Unsupported Responses reasoning mutation", Description: "Set a reasoning mode without a declared Responses mapping.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformThinking}}
+}
+
+func (responsesUnsupportedReasoningMutationFixture) Apply(_ context.Context, request *kernel.NormalizedRequest, _ json.RawMessage) error {
+	request.Thinking = normalize.ThinkingIntent{Mode: "enabled", Source: "fixture"}
 	return nil
 }
 
@@ -504,6 +515,46 @@ func TestKernelExcludesOpenAIResponsesRouteForAnthropicThinkingBudgetBeforeDispa
 	gateway.Adapters["openai-responses"] = composed
 	if err := gateway.Execute(context.Background(), parsed.Request, kernel.Credential{}, httptest.NewRecorder()); err == nil || dispatched != 0 {
 		t.Fatalf("unrepresentable thinking budget reached Responses upstream: err=%v dispatches=%d", err, dispatched)
+	}
+}
+
+func TestKernelExcludesTransformedUnsupportedResponsesReasoningBeforeDispatch(t *testing.T) {
+	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "role", "input": "think",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transform := responsesUnsupportedReasoningMutationFixture{}
+	scope := kernel.TransformScope{Kind: kernel.TransformScopeDaemon}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "responses-route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{ID: "responses-route", Enabled: true, BaseURL: "http://provider.test/v1", ExternalModel: "model", OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}},
+		}}},
+		TransformBindings: []kernel.TransformBinding{{ID: "unsupported-reasoning", TransformRef: transform.Definition().Ref, Enabled: true, Scope: scope}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dispatched atomic.Int32
+	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		dispatched.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+	})}}
+	gateway, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gateway.Close()
+	if err := gateway.Transforms.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	gateway.Adapters["openai-responses"] = composed
+	if err := gateway.Execute(context.Background(), parsed.Request, kernel.Credential{}, httptest.NewRecorder()); err == nil || dispatched.Load() != 0 {
+		t.Fatalf("unsupported transformed reasoning intent reached Responses upstream: err=%v dispatches=%d", err, dispatched.Load())
 	}
 }
 
