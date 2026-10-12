@@ -485,13 +485,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 		retryUpstream:
 			providerRequest := candidateRequest
 			providerRequest.ArtifactFacts = nil
-			upstream, err := adapter.Prepare(attemptCtx, providerRequest, candidate, selectedCredential)
-			if err != nil {
+			var upstream UpstreamRequest
+			var prepareErr error
+			if planned, ok := adapter.(CompatibilityPlanPreparer); ok {
+				upstream, prepareErr = planned.PrepareWithCompatibility(attemptCtx, providerRequest, candidate, selectedCredential, compatibilityPlan)
+			} else {
+				upstream, prepareErr = adapter.Prepare(attemptCtx, providerRequest, candidate, selectedCredential)
+			}
+			if prepareErr != nil {
 				k.Scheduler.Release(candidate)
 				if idempotencyRetried {
-					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: err}
+					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: prepareErr}
 				}
-				failureClass, memberErr = ErrorRetryable, err
+				failureClass, memberErr = ErrorRetryable, prepareErr
 				continue
 			}
 			if idempotencyKey != "" {

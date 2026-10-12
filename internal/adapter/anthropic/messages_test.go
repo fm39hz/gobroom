@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -16,6 +17,11 @@ import (
 )
 
 type nativeAnthropicRequestTransform struct{}
+type anthropicRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f anthropicRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func (nativeAnthropicRequestTransform) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.native-anthropic", ContractVersion: 1}, ImplementationVersion: "1", Label: "Native Anthropic fixture", Description: "Mutate typed native Anthropic facets.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformPrompt, kernel.TransformInput, kernel.TransformTools, kernel.TransformThinking, kernel.TransformOptions}}
@@ -133,6 +139,99 @@ func TestReasoningBudgetRaisesAnthropicOutputLimitOnlyWithNamedLossApproval(t *t
 	if thinking["budget_tokens"] != float64(2048) || body["max_tokens"] != float64(3072) || body["temperature"] != 0.4 || body["top_p"] != 0.8 || !reflect.DeepEqual(body["stop_sequences"], []any{"DONE"}) {
 		t.Fatalf("Anthropic payload did not match admitted requested/effective values: %#v", body)
 	}
+}
+
+func TestKernelAppliesOnlyApprovedAnthropicReasoningBudgetLossToWire(t *testing.T) {
+	const lossID = "anthropic.reasoning-budget-raises-max-output"
+	makeKernel := func(allow bool, dispatches *atomic.Int32, observed *int) *kernel.Kernel {
+		policy := kernel.LossPolicy{}
+		ceiling := kernel.LossPolicyCeiling{AllowOnly: true}
+		if allow {
+			policy.Allow = []string{lossID}
+			ceiling.Allow = []string{lossID}
+		}
+		snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+			LossCeiling:  ceiling,
+			PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
+			Nodes: []kernel.ModelNode{{
+				ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback,
+				Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}, LossPolicy: policy,
+			}},
+			Routes: []kernel.Route{{
+				ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, BaseURL: "https://provider.test/v1", ExternalModel: "claude-model",
+				OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"anthropic-messages"}}},
+			}},
+		}, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, err := kernel.New(snapshot, nil, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		composed := NewAdapter().(kernel.ComposedAdapter)
+		composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: anthropicRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			dispatches.Add(1)
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Errorf("decode Anthropic request: %v", err)
+			} else if value, ok := body["max_tokens"].(float64); !ok || int(value) != 3072 {
+				t.Errorf("approved reasoning-budget loss was not applied on wire: max_tokens=%#v body=%#v", body["max_tokens"], body)
+			} else {
+				*observed = int(value)
+			}
+			responseBody := `{"id":"msg_loss","type":"message","role":"assistant","model":"claude-model","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":4,"output_tokens":2}}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
+		})}}
+		engine.Adapters["anthropic-messages"] = composed
+		return engine
+	}
+	maxOutput := 512
+	request := kernel.NormalizedRequest{
+		Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: "reason carefully"}},
+		Thinking:   normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 2048},
+		Generation: normalize.GenerationOptions{MaxOutputTokens: &maxOutput},
+	}
+
+	var deniedDispatches atomic.Int32
+	deniedObserved := 0
+	denied := makeKernel(false, &deniedDispatches, &deniedObserved)
+	err := denied.Execute(context.Background(), request, kernel.Credential{}, httptest.NewRecorder())
+	denied.Close()
+	if err == nil || deniedDispatches.Load() != 0 {
+		t.Fatalf("unapproved reasoning-budget loss reached provider: err=%v dispatches=%d", err, deniedDispatches.Load())
+	}
+
+	var dispatches atomic.Int32
+	observedMaxTokens := 0
+	allowed := makeKernel(true, &dispatches, &observedMaxTokens)
+	writer := httptest.NewRecorder()
+	if err := allowed.Execute(context.Background(), request, kernel.Credential{}, writer); err != nil {
+		allowed.Close()
+		t.Fatal(err)
+	}
+	if dispatches.Load() != 1 || observedMaxTokens != 3072 {
+		allowed.Close()
+		t.Fatalf("approved loss wire execution: dispatches=%d max_tokens=%d", dispatches.Load(), observedMaxTokens)
+	}
+	select {
+	case event := <-allowed.Events:
+		validLoss := false
+		if len(event.CompatibilityLosses) == 1 {
+			requested, requestedOK := lossInteger(event.CompatibilityLosses[0].Requested)
+			effective, effectiveOK := lossInteger(event.CompatibilityLosses[0].Effective)
+			validLoss = event.CompatibilityLosses[0].ID == lossID && requestedOK && effectiveOK && requested == 512 && effective == 3072
+		}
+		if event.CompatibilityFidelity != kernel.FidelityLossy || !validLoss {
+			allowed.Close()
+			t.Fatalf("usage does not attest the applied wire loss: %#v", event)
+		}
+	default:
+		allowed.Close()
+		t.Fatal("successful execution omitted compatibility usage")
+	}
+	allowed.Close()
 }
 
 func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {

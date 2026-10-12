@@ -279,6 +279,14 @@ TransformContract.Describe(binding, semanticContract) -> MappingReport
 CompatibilityPlanner.Build(reports, requirements, policy) -> Plan | Rejection
 ```
 
+The kernel passes the exact admitted candidate plan to provider preparation via
+an optional `CompatibilityPlanPreparer` contract. A composed codec may consume
+that plan through `PlannedRequestCodec` when an approved, explicitly named loss
+changes the effective provider request. The kernel stays provider-agnostic:
+the codec must validate that the planned requested/effective values match the
+typed invocation, and the resulting usage event retains the same loss record.
+Codecs that need no plan continue to implement the ordinary request codec.
+
 Feature requirements carry an exact, versioned evaluator reference; route
 capability evidence remains keyed by semantic feature ID. Feature evaluator
 descriptors live in the frozen shared extension catalog, bind through the

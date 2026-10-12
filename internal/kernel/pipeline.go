@@ -19,6 +19,19 @@ type RequestCodec interface {
 	Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error)
 }
 
+// PlannedRequestCodec may consume the exact admitted compatibility plan when
+// preparing provider wire data. It is used for explicitly approved lossy
+// mappings; codecs that do not need plan evidence keep the simpler contract.
+type PlannedRequestCodec interface {
+	PrepareWithCompatibility(context.Context, NormalizedRequest, Route, Credential, CompatibilityPlan) (UpstreamRequest, error)
+}
+
+// CompatibilityPlanPreparer lets the kernel pass the candidate-specific plan
+// to composed adapters without coupling the kernel to any provider codec.
+type CompatibilityPlanPreparer interface {
+	PrepareWithCompatibility(context.Context, NormalizedRequest, Route, Credential, CompatibilityPlan) (UpstreamRequest, error)
+}
+
 type ResponseDecoder interface {
 	ID() string
 	PossibleEvents() []ResponseEventKind
@@ -210,7 +223,16 @@ func withRequiredFacet(policy CompatibilityPolicy, facet string) CompatibilityPo
 }
 
 func (a ComposedAdapter) Prepare(ctx context.Context, req NormalizedRequest, route Route, credential Credential) (UpstreamRequest, error) {
-	upstream, err := a.Request.Prepare(ctx, req, route, credential)
+	return a.PrepareWithCompatibility(ctx, req, route, credential, CompatibilityPlan{})
+}
+func (a ComposedAdapter) PrepareWithCompatibility(ctx context.Context, req NormalizedRequest, route Route, credential Credential, plan CompatibilityPlan) (UpstreamRequest, error) {
+	var upstream UpstreamRequest
+	var err error
+	if planned, ok := a.Request.(PlannedRequestCodec); ok {
+		upstream, err = planned.PrepareWithCompatibility(ctx, req, route, credential, plan)
+	} else {
+		upstream, err = a.Request.Prepare(ctx, req, route, credential)
+	}
 	if err != nil {
 		return UpstreamRequest{}, err
 	}

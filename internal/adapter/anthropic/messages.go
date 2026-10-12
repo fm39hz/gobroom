@@ -230,6 +230,9 @@ func anthropicReasoningIntentRepresentable(intent normalize.ThinkingIntent) bool
 func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
+func (c messagesRequestCodec) PrepareWithCompatibility(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential, plan kernel.CompatibilityPlan) (kernel.UpstreamRequest, error) {
+	return c.adapter.PrepareWithCompatibility(ctx, request, route, credential, plan)
+}
 
 type messagesResponseDecoder struct{ adapter Messages }
 
@@ -497,7 +500,11 @@ func emitAnthropicBlock(block map[string]any, index int, emit func(kernel.Respon
 	return nil
 }
 
-func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+func (a Messages) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	return a.PrepareWithCompatibility(ctx, request, route, credential, kernel.CompatibilityPlan{})
+}
+
+func (a Messages) PrepareWithCompatibility(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential, plan kernel.CompatibilityPlan) (kernel.UpstreamRequest, error) {
 	url := "/messages"
 	body := map[string]any{}
 	if request.SourceFormat == normalize.FormatAnthropic {
@@ -552,6 +559,18 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 	if request.SourceFormat != normalize.FormatAnthropic {
 		applyAnthropicThinking(body, request.Thinking)
 	}
+	for _, loss := range plan.Losses {
+		if loss.ID != "anthropic.reasoning-budget-raises-max-output" {
+			continue
+		}
+		requested, requestedOK := lossInteger(loss.Requested)
+		effective, effectiveOK := lossInteger(loss.Effective)
+		maxOutput := request.Generation.MaxOutputTokens
+		if !requestedOK || !effectiveOK || maxOutput == nil || requested != *maxOutput || effective != request.Thinking.BudgetTokens+1024 || effective <= requested {
+			return kernel.UpstreamRequest{}, fmt.Errorf("approved Anthropic reasoning-budget loss does not match the request")
+		}
+		body["max_tokens"] = effective
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		return kernel.UpstreamRequest{}, err
@@ -564,6 +583,20 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 		headers.Set("x-api-key", secret)
 	}
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+}
+
+func lossInteger(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), int64(int(typed)) == typed
+	case float64:
+		converted := int(typed)
+		return converted, float64(converted) == typed
+	default:
+		return 0, false
+	}
 }
 
 func applyAnthropicThinking(body map[string]any, intent normalize.ThinkingIntent) {
