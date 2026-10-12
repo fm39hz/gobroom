@@ -115,13 +115,15 @@ type ContentPart struct {
 }
 
 type ToolCall struct {
-	ID           string          `json:"id"`
-	Type         string          `json:"type"`
-	Name         string          `json:"name,omitempty"`
-	Arguments    any             `json:"arguments,omitempty"`
-	State        ToolCallState   `json:"-"`
-	ProviderData json.RawMessage `json:"-"`
-	Metadata     map[string]any  `json:"-"`
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	Name            string          `json:"name,omitempty"`
+	Arguments       any             `json:"arguments,omitempty"`
+	State           ToolCallState   `json:"-"`
+	ProviderData    json.RawMessage `json:"-"`
+	Signature       string          `json:"-"`
+	SignatureIssuer extensions.Ref  `json:"-"`
+	Metadata        map[string]any  `json:"-"`
 }
 
 type ToolCallState string

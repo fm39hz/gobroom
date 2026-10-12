@@ -132,13 +132,13 @@ func conversationMessages(messages []Message) []Message {
 
 func normalizeMessages(body map[string]any, format Format) []Message {
 	if raw, ok := body["messages"].([]any); ok {
-		return messagesFromArray(raw)
+		return messagesFromArray(raw, format)
 	}
 	if input, ok := body["input"].([]any); ok {
 		if format == FormatOpenAIResponses {
-			return responsesMessagesFromArray(input)
+			return responsesMessagesFromArray(input, format)
 		}
-		return messagesFromArray(input)
+		return messagesFromArray(input, format)
 	}
 	if text, ok := body["input"].(string); ok {
 		return []Message{{Role: "user", Content: text}}
@@ -158,7 +158,7 @@ func normalizeMessages(body map[string]any, format Format) []Message {
 	return nil
 }
 
-func responsesMessagesFromArray(raw []any) []Message {
+func responsesMessagesFromArray(raw []any, format Format) []Message {
 	result := make([]Message, 0, len(raw))
 	for _, value := range raw {
 		item, ok := value.(map[string]any)
@@ -178,7 +178,7 @@ func responsesMessagesFromArray(raw []any) []Message {
 		case "function_call_output":
 			result = append(result, Message{Role: "tool", ToolCallID: stringValue(item["call_id"]), Content: item["output"], Metadata: item})
 		default:
-			result = append(result, messagesFromArray([]any{item})...)
+			result = append(result, messagesFromArray([]any{item}, format)...)
 		}
 	}
 	return result
@@ -584,7 +584,7 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func messagesFromArray(raw []any) []Message {
+func messagesFromArray(raw []any, format Format) []Message {
 	result := make([]Message, 0, len(raw))
 	for _, value := range raw {
 		m, ok := value.(map[string]any)
@@ -596,7 +596,11 @@ func messagesFromArray(raw []any) []Message {
 			for _, rawCall := range calls {
 				c, _ := rawCall.(map[string]any)
 				fn, _ := c["function"].(map[string]any)
-				msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: stringValue(c["id"]), Type: stringValue(c["type"]), Name: stringValue(fn["name"]), Arguments: fn["arguments"], Metadata: c})
+				call := ToolCall{ID: stringValue(c["id"]), Type: stringValue(c["type"]), Name: stringValue(fn["name"]), Arguments: fn["arguments"], Metadata: c}
+				if format == FormatOpenAIChat {
+					call.Signature = stringValue(c["thoughtSignature"])
+				}
+				msg.ToolCalls = append(msg.ToolCalls, call)
 			}
 		}
 		result = append(result, msg)

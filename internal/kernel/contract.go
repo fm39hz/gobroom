@@ -482,9 +482,10 @@ type UsageEnricher interface {
 }
 
 type SessionState struct {
-	ResponseID   string          `json:"responseId,omitempty"`
-	ProviderData json.RawMessage `json:"providerData,omitempty"`
-	ExpiresAt    time.Time       `json:"-"`
+	ResponseID   string           `json:"responseId,omitempty"`
+	ProviderData json.RawMessage  `json:"providerData,omitempty"`
+	Signatures   []SignatureProof `json:"signatures,omitempty"`
+	ExpiresAt    time.Time        `json:"-"`
 }
 
 type SessionStore interface {
@@ -500,5 +501,6 @@ var (
 	ErrSessionStateUnavailable = errors.New("provider session state unavailable")
 	ErrSignatureIssuerMissing  = errors.New("signed response event has no provider issuer")
 	ErrSignatureIssuerMismatch = errors.New("signed response event issuer does not match selected provider")
+	ErrSignatureProofLimit     = errors.New("provider session signature proof limit exceeded")
 	ErrSnapshotInvalid         = errors.New("invalid route snapshot")
 )

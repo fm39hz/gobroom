@@ -68,6 +68,13 @@ func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []k
 			} else {
 				mapping.Reason = "tool history lacks a representable role, function name or JSON-object arguments"
 			}
+		case kernel.FacetReasoningSignature:
+			if geminiSignatureHistoryRepresentable(request, input.Route.DefinitionRef) {
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "opaque tool signatures are attested to this exact provider definition by session state"
+			} else {
+				mapping.Reason = "opaque tool signature has no matching session proof for this provider definition"
+			}
 		case kernel.FacetToolChoice:
 			if geminiToolChoiceRepresentable(request.Raw) {
 				mapping.Disposition = kernel.FacetTranslated
@@ -176,6 +183,19 @@ func geminiToolHistoryRepresentable(request kernel.NormalizedRequest) bool {
 		}
 		if _, err := geminiRole(message.Role); err != nil {
 			return false
+		}
+	}
+	return true
+}
+
+func geminiSignatureHistoryRepresentable(request kernel.NormalizedRequest, issuer extensions.Ref) bool {
+	for _, message := range request.Messages {
+		for _, call := range message.ToolCalls {
+			if call.Signature != "" {
+				if issuer.Kind != "provider-definition" || issuer.Validate() != nil || call.SignatureIssuer != issuer {
+					return false
+				}
+			}
 		}
 	}
 	return true
@@ -412,6 +432,9 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 // the raw Chat body through would send `messages` to Gemini and appear to work
 // for neither tools nor streaming.
 func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	if !geminiSignatureHistoryRepresentable(request, route.DefinitionRef) {
+		return kernel.UpstreamRequest{}, fmt.Errorf("Gemini cannot replay a tool signature without an attestation from this provider definition")
+	}
 	operation := "generateContent"
 	if request.Stream {
 		operation = "streamGenerateContent?alt=sse"
@@ -513,14 +536,7 @@ func geminiRequest(request kernel.NormalizedRequest) (generateContentRequest, er
 					return generateContentRequest{}, fmt.Errorf("encode Gemini function call %q: %w", call.Name, err)
 				}
 				part := geminiPart{FunctionCall: &geminiFunctionCall{ID: call.ID, Name: call.Name, Args: args}}
-				if metadata, err := json.Marshal(call.Metadata); err == nil {
-					var callMetadata struct {
-						ThoughtSignature string `json:"thoughtSignature"`
-					}
-					if json.Unmarshal(metadata, &callMetadata) == nil {
-						part.ThoughtSignature = callMetadata.ThoughtSignature
-					}
-				}
+				part.ThoughtSignature = call.Signature
 				parts = append(parts, part)
 			}
 		}

@@ -1026,6 +1026,7 @@ func TestRequestTransformCannotAppendOpaqueMessageMetadata(t *testing.T) {
 		{name: "content part", message: Message{Role: "user", Content: []normalize.ContentPart{{Type: "text", Text: "added", Metadata: map[string]any{"cache_control": "ephemeral"}}}}},
 		{name: "tool call metadata", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, Metadata: map[string]any{"vendor": "opaque"}}}}},
 		{name: "tool call provider data", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, ProviderData: []byte(`{"opaque":true}`)}}}},
+		{name: "tool signature provenance", message: Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-new", Type: "function", Name: "lookup", Arguments: map[string]any{}, Signature: "opaque-signature", SignatureIssuer: extensions.Ref{Kind: "provider-definition", ID: "issuer", ContractVersion: 1}}}}},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

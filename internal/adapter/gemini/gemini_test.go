@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -148,13 +149,13 @@ func TestPrepareTranslatesChatHistoryToolsAndStreamEndpoint(t *testing.T) {
 		Messages: []normalize.Message{
 			{Role: "system", Content: "be concise"},
 			{Role: "user", Content: "search this"},
-			{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "search", Arguments: map[string]any{"q": "x"}, Metadata: map[string]any{"thoughtSignature": "sig"}}}},
+			{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "search", Arguments: map[string]any{"q": "x"}, Signature: "sig", SignatureIssuer: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}}}},
 			{Role: "tool", ToolCallID: "call-1", Content: `{"ok":true}`},
 		},
 		Tools: []normalize.Tool{{Type: "function", Function: map[string]any{"name": "search", "description": "search", "parameters": map[string]any{"type": "object"}}}},
 		Raw:   map[string]any{"tool_choice": "required"},
 	}
-	prepared, err := (Gemini{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://gemini.test", ExternalModel: "gemini-3"}, kernel.Credential{})
+	prepared, err := (Gemini{}).Prepare(context.Background(), request, kernel.Route{DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, BaseURL: "https://gemini.test", ExternalModel: "gemini-3"}, kernel.Credential{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,6 +266,29 @@ func TestPrepareMapsBase64ImageToInlineData(t *testing.T) {
 	}
 }
 
+func TestGeminiSignatureHistoryRequiresExactSessionIssuerAttestation(t *testing.T) {
+	issuer := extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}
+	otherIssuer := extensions.Ref{Kind: "provider-definition", ID: "other", ContractVersion: 1}
+	for _, test := range []struct {
+		name   string
+		ref    extensions.Ref
+		wantOK bool
+	}{
+		{name: "attested exact issuer", ref: issuer, wantOK: true},
+		{name: "missing issuer proof", wantOK: false},
+		{name: "different provider issuer", ref: otherIssuer, wantOK: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "call-1", Name: "lookup", Arguments: map[string]any{}, Signature: "opaque-sig", SignatureIssuer: test.ref}}}}}
+			policy := kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}
+			plan := NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: request, Route: kernel.Route{DefinitionRef: issuer}, Policy: policy})
+			if plan.Supported != test.wantOK {
+				t.Fatalf("signature admission supported=%v want %v: %#v", plan.Supported, test.wantOK, plan)
+			}
+		})
+	}
+}
+
 func TestGeminiToolThoughtSignatureSurvivesOpenAIHistoryNormalization(t *testing.T) {
 	result, err := normalize.Map("/v1/chat/completions", http.Header{}, map[string]any{
 		"model": "role",
@@ -285,7 +309,7 @@ func TestGeminiToolThoughtSignatureSurvivesOpenAIHistoryNormalization(t *testing
 		t.Fatal(err)
 	}
 	parts := body.Contents[1].Parts
-	if len(parts) == 0 || parts[0].ThoughtSignature != "opaque-signature" {
+	if len(parts) == 0 || parts[0].ThoughtSignature != "opaque-signature" || result.Request.Messages[1].ToolCalls[0].Signature != "opaque-signature" {
 		t.Fatalf("signature did not survive normalization: %#v", parts)
 	}
 }

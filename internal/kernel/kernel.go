@@ -367,6 +367,10 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 				}
 			}
+			if requestHasToolSignature(candidateRequest.Messages) {
+				candidateRequest = normalize.CloneRequest(candidateRequest)
+				attestToolCallSignatures(&candidateRequest, sessionState.Signatures, candidate.DefinitionRef)
+			}
 			operationRef := extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			artifactOutputs, _ := k.Operations.ArtifactOutputs(operationRef)
 			if len(artifactOutputs) > 0 && k.ArtifactStore == nil {
@@ -561,6 +565,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					if event.SignatureIssuer != candidate.DefinitionRef {
 						return ErrSignatureIssuerMismatch
 					}
+					if event.Signature != "" {
+						proofs, proofErr := appendSignatureProof(sessionState.Signatures, event.Signature, event.SignatureIssuer)
+						if proofErr != nil {
+							return proofErr
+						}
+						sessionState.Signatures = proofs
+					}
 				}
 				if len(event.Artifacts) > 0 {
 					if len(artifactOutputs) == 0 || event.Kind != EventArtifact {
@@ -676,7 +687,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				compatibilitySummary := SummarizeCompatibilityPlan(compatibilityPlan)
 				event.CompatibilityPlan = &compatibilitySummary
 				releaseAttempt()
-				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0) {
+				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0 || len(sessionState.Signatures) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
 						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
 					}

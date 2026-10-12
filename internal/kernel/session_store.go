@@ -61,6 +61,14 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 	if len(state.ProviderData) > 64*1024 || len(state.ProviderData) > 0 && !json.Valid(state.ProviderData) {
 		return fmt.Errorf("provider session state must be valid JSON no larger than 64 KiB")
 	}
+	if len(state.Signatures) > MaxProviderSignatureProofs {
+		return ErrSignatureProofLimit
+	}
+	for _, proof := range state.Signatures {
+		if err := validateSignatureProof(proof); err != nil {
+			return err
+		}
+	}
 	if state.ExpiresAt.IsZero() {
 		ttl := s.TTL
 		if ttl <= 0 {
@@ -83,5 +91,6 @@ func makeSessionStoreKey(route Route, sessionID string) (sessionStoreKey, error)
 
 func cloneSessionState(state SessionState) SessionState {
 	state.ProviderData = append(json.RawMessage(nil), state.ProviderData...)
+	state.Signatures = append([]SignatureProof(nil), state.Signatures...)
 	return state
 }

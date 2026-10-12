@@ -393,6 +393,9 @@ func RequiredRequestFacets(request NormalizedRequest) []string {
 	if requestHasToolHistory(request.Messages) {
 		required = append(required, FacetToolHistory)
 	}
+	if requestHasToolSignature(request.Messages) {
+		required = append(required, FacetReasoningSignature)
+	}
 	if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" && request.Thinking.Mode != "budget" || request.Thinking.Effort != "" {
 		required = append(required, FacetReasoningIntent)
 	}
@@ -424,6 +427,17 @@ func RequiredRequestFacets(request NormalizedRequest) []string {
 	}
 	required = append(required, request.UnsupportedFacets...)
 	return uniqueSorted(required)
+}
+
+func requestHasToolSignature(messages []normalize.Message) bool {
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.Signature != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // RequiredResponseEvents describes event families the selected client renderer

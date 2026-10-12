@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,9 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Skipf("loopback listener unavailable in test environment: %v", err)
 	}
+	var upstreamCalls atomic.Int32
 	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
 		if r.Method != http.MethodPost || r.URL.Path != "/v1beta/models/gemini-3-flash:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
 			t.Errorf("upstream target=%s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
@@ -50,7 +53,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 			parts, _ := modelTurn["parts"].([]any)
 			if len(parts) != 1 {
 				t.Errorf("model function-call parts=%#v", parts)
-			} else if call, _ := parts[0].(map[string]any); call["thoughtSignature"] != "opaque-sig" {
+			} else if call, _ := parts[0].(map[string]any); call["thoughtSignature"] != "opaque-sig" && call["thoughtSignature"] != "next-sig" {
 				t.Errorf("tool thought signature not carried upstream: %#v", call)
 			}
 			toolTurn, _ := contents[2].(map[string]any)
@@ -84,9 +87,10 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	profile := kernel.CapabilityProfile{
 		kernel.CapabilityTools: {State: kernel.SupportNative},
 	}
+	route := kernel.Route{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}, SessionStoreRef: binding.SessionStoreRef}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "assistant-role", TargetRef: "assistant-role"}},
-		Routes:       []kernel.Route{{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}},
+		Routes:       []kernel.Route{route},
 		Nodes:        []kernel.ModelNode{{ID: "assistant-role", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini:gemini-3-flash", Fidelity: kernel.FidelityExact}}}},
 	}, 1)
 	if err != nil {
@@ -98,8 +102,14 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	}
 	defer gateway.Close()
 	gateway.Adapters[binding.AdapterID] = binding.Adapter
-
-	request, err := normalize.Map("/v1/chat/completions", http.Header{}, map[string]any{
+	if binding.SessionStore == nil || binding.SessionStoreRef.ID == "" {
+		t.Fatal("Gemini binding did not compose a session store for signature provenance")
+	}
+	gateway.SessionStores[binding.SessionStoreRef] = binding.SessionStore
+	sessionID := "gemini-signature-session"
+	requestHeaders := make(http.Header)
+	requestHeaders.Set("x-session-id", sessionID)
+	request, err := normalize.Map("/v1/chat/completions", requestHeaders, map[string]any{
 		"model": "assistant-role", "stream": true,
 		"messages": []any{
 			map[string]any{"role": "system", "content": "Be precise."},
@@ -115,6 +125,33 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := gateway.Execute(context.Background(), request.Request, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) {
+		t.Fatalf("client-echoed opaque signature was accepted without session issuer proof: %v", err)
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("unattested signature reached upstream: calls=%d", upstreamCalls.Load())
+	}
+	priorProof, err := kernel.NewSignatureProof("opaque-sig", route.DefinitionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongIssuer := extensions.Ref{Kind: "provider-definition", ID: "other-provider", ContractVersion: 1}
+	wrongProof, err := kernel.NewSignatureProof("opaque-sig", wrongIssuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.SessionStore.Save(context.Background(), route, sessionID, kernel.SessionState{Signatures: []kernel.SignatureProof{wrongProof}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gateway.Execute(context.Background(), request.Request, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) {
+		t.Fatalf("wrong-issuer session proof was accepted: %v", err)
+	}
+	if upstreamCalls.Load() != 0 {
+		t.Fatalf("wrong-issuer proof reached upstream: calls=%d", upstreamCalls.Load())
+	}
+	if err := binding.SessionStore.Save(context.Background(), route, sessionID, kernel.SessionState{Signatures: []kernel.SignatureProof{priorProof}}); err != nil {
+		t.Fatal(err)
+	}
 	recorder := httptest.NewRecorder()
 	err = gateway.Execute(context.Background(), request.Request, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, recorder)
 	if err != nil {
@@ -124,6 +161,26 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	if recorder.Code != http.StatusOK || !strings.Contains(response, `"content":"Here is the result."`) || !strings.Contains(response, `"thoughtSignature":"next-sig"`) || !strings.Contains(response, "data: [DONE]") {
 		t.Fatalf("status=%d translated stream=%s", recorder.Code, response)
 	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("session-attested signature upstream calls=%d, want 1", upstreamCalls.Load())
+	}
+	saved, ok, err := binding.SessionStore.Load(context.Background(), route, sessionID)
+	if err != nil || !ok {
+		t.Fatalf("session signature state load: ok=%v err=%v", ok, err)
+	}
+	nextProof, err := kernel.NewSignatureProof("next-sig", route.DefinitionRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSignatureProof(saved.Signatures, nextProof) {
+		t.Fatalf("Gemini response signature was not persisted for this issuer: %#v", saved.Signatures)
+	}
+	followUp := normalize.CloneRequest(request.Request)
+	followUp.Messages[1].ToolCalls[0].Signature = "next-sig"
+	followUpRecorder := httptest.NewRecorder()
+	if err := gateway.Execute(context.Background(), followUp, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, followUpRecorder); err != nil {
+		t.Fatalf("same-session signature replay was rejected: %v", err)
+	}
 	select {
 	case usage := <-gateway.Events:
 		if usage.Status != "ok" || usage.InputTokens != 11 || usage.OutputTokens != 6 || usage.ExternalModel != "gemini-3-flash" {
@@ -132,6 +189,15 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("kernel did not emit completed Gemini usage")
 	}
+}
+
+func containsSignatureProof(proofs []kernel.SignatureProof, expected kernel.SignatureProof) bool {
+	for _, proof := range proofs {
+		if proof == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGeminiRuntimeBindingPropagatesRequestCancellation(t *testing.T) {

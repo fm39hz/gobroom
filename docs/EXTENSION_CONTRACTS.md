@@ -203,6 +203,10 @@ Provider-signed response events carry the exact provider-definition issuer ref;
 the kernel rejects missing or mismatched issuers before rendering, and response
 transforms cannot rewrite that provenance. A renderer may preserve a signature
 only when the response decoder declares the signature event family.
+Opaque tool signatures echoed by clients are untrusted until the selected
+provider's session store contains the matching digest/issuer proof. The raw
+signature is never persisted; a different provider, connection, model or
+session cannot attest it.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

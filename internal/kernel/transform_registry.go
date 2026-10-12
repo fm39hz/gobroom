@@ -787,7 +787,7 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 		}
 		for j := range left.ToolCalls {
 			beforeCall, afterCall := left.ToolCalls[j], right.ToolCalls[j]
-			if beforeCall.ID != afterCall.ID || beforeCall.Type != afterCall.Type || beforeCall.Name != afterCall.Name || beforeCall.State != afterCall.State || !bytes.Equal(beforeCall.ProviderData, afterCall.ProviderData) || !reflect.DeepEqual(beforeCall.Metadata, afterCall.Metadata) {
+			if beforeCall.ID != afterCall.ID || beforeCall.Type != afterCall.Type || beforeCall.Name != afterCall.Name || beforeCall.State != afterCall.State || beforeCall.Signature != afterCall.Signature || beforeCall.SignatureIssuer != afterCall.SignatureIssuer || !bytes.Equal(beforeCall.ProviderData, afterCall.ProviderData) || !reflect.DeepEqual(beforeCall.Metadata, afterCall.Metadata) {
 				return fmt.Errorf("%w: changed tool-call identity, correlation or opaque data", ErrTransformSafetyViolation)
 			}
 			if !reflect.DeepEqual(beforeCall.Arguments, afterCall.Arguments) {
@@ -819,7 +819,7 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 			}
 		}
 		for callIndex, call := range message.ToolCalls {
-			if call.Metadata != nil || len(call.ProviderData) > 0 {
+			if call.Metadata != nil || len(call.ProviderData) > 0 || call.Signature != "" || call.SignatureIssuer.ID != "" {
 				return fmt.Errorf("%w: added message %d tool call %d carries opaque provider metadata", ErrTransformSafetyViolation, index, callIndex)
 			}
 		}

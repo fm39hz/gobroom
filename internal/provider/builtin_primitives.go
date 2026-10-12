@@ -60,6 +60,7 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 	definitions := []ProviderDefinition{
 		{
 			ContractVersion: 1, ID: "gemini", Version: "1", DisplayName: "Google Gemini", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+			Session:    PrimitiveRef{Kind: PrimitiveSessionStore, ID: "session", ContractVersion: 1},
 			Operations: map[Operation]OperationBinding{OperationChat: {Protocol: kernel.ProtocolGemini, TaskRef: OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: "gemini", Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "gemini-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "gemini-json", ContractVersion: 1}, UsageSource: PrimitiveRef{Kind: PrimitiveUsageSource, ID: "http-header-usage", ContractVersion: 1}, ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}}},
 		},
 		{
