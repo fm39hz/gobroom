@@ -492,8 +492,9 @@ type SessionStore interface {
 }
 
 var (
-	ErrModelNotPublished = errors.New("model is not published")
-	ErrNoRoute           = errors.New("no usable route")
-	ErrOperationRequired = errors.New("semantic operation is required")
-	ErrSnapshotInvalid   = errors.New("invalid route snapshot")
+	ErrModelNotPublished       = errors.New("model is not published")
+	ErrNoRoute                 = errors.New("no usable route")
+	ErrOperationRequired       = errors.New("semantic operation is required")
+	ErrSessionStateUnavailable = errors.New("provider session state unavailable")
+	ErrSnapshotInvalid         = errors.New("invalid route snapshot")
 )

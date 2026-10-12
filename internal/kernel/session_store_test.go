@@ -3,14 +3,24 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
+
+type failingSessionStore struct{}
+
+func (failingSessionStore) ID() string { return "failing-session" }
+func (failingSessionStore) Load(context.Context, Route, string) (SessionState, bool, error) {
+	return SessionState{}, false, errors.New("private storage path detail")
+}
+func (failingSessionStore) Save(context.Context, Route, string, SessionState) error { return nil }
 
 type continuitySessionAdapter struct {
 	plannedPreviousResponse string
@@ -83,6 +93,43 @@ func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	state, ok, err := sessions.Load(context.Background(), route, "client-session")
 	if err != nil || !ok || state.ResponseID != "response-next" {
 		t.Fatalf("saved session state=%#v ok=%v err=%v", state, ok, err)
+	}
+}
+
+func TestKernelFailsClosedWhenSessionStateCannotBeLoaded(t *testing.T) {
+	sessionStoreRef := extensions.Ref{Kind: "session_store", ID: "failing-session", ContractVersion: 1}
+	route := Route{ID: "route", DefinitionID: "provider", ExternalModel: "model", Protocol: ProtocolOpenAIChat, Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{
+		normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreRef: sessionStoreRef},
+	}}
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
+		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
+		Routes:       []Route{route},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	adapter := &continuitySessionAdapter{}
+	engine.Adapters[adapter.ID()] = adapter
+	engine.SessionStores[sessionStoreRef] = failingSessionStore{}
+	request := NormalizedRequest{
+		Model: "model", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		SourceFormat: normalize.FormatOpenAIChat, Session: normalize.SessionContext{ID: "client-session"},
+	}
+	err = engine.Execute(context.Background(), request, Credential{}, httptest.NewRecorder())
+	if !errors.Is(err, ErrSessionStateUnavailable) {
+		t.Fatalf("session load failure=%v, want ErrSessionStateUnavailable", err)
+	}
+	if strings.Contains(err.Error(), "private storage path detail") {
+		t.Fatalf("session backend detail escaped to request boundary: %v", err)
+	}
+	if adapter.plannedPreviousResponse != "" || adapter.previousResponse != "" {
+		t.Fatalf("kernel planned or dispatched request after failed continuity load: planned=%q dispatched=%q", adapter.plannedPreviousResponse, adapter.previousResponse)
 	}
 }
 

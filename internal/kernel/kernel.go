@@ -351,13 +351,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			sessionKey := requestSessionKey(req)
 			var sessionState SessionState
 			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
-				if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
-					if saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey); loadErr == nil && found {
-						sessionState = saved
-						candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
-						if candidateRequest.Continuity.PreviousResponse == "" {
-							candidateRequest.Continuity.PreviousResponse = saved.ResponseID
-						}
+				sessionStore := k.SessionStores[candidate.SessionStoreRef]
+				if sessionStore == nil {
+					return ErrSessionStateUnavailable
+				}
+				saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey)
+				if loadErr != nil {
+					return ErrSessionStateUnavailable
+				}
+				if found {
+					sessionState = saved
+					candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
+					if candidateRequest.Continuity.PreviousResponse == "" {
+						candidateRequest.Continuity.PreviousResponse = saved.ResponseID
 					}
 				}
 			}
