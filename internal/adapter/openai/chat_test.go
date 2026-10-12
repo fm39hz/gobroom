@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -370,6 +371,64 @@ func TestKernelRejectsIncompleteToolIdentityWithoutSuccessfulStreamEnd(t *testin
 	}
 	if strings.Contains(writer.Body.String(), "event: message_stop") {
 		t.Fatalf("malformed tool call received a successful terminal event: %s", writer.Body.String())
+	}
+}
+
+func TestKernelInterruptedCrossProtocolStreamStaysIncompleteAndDoesNotFallback(t *testing.T) {
+	var primaryCalls, backupCalls atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == "primary.test" {
+			primaryCalls.Add(1)
+			partial := `data: {"id":"chatcmpl_partial","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"partial answer"},"finish_reason":null}]}` + "\n\n"
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(partial)), Request: request}, nil
+		}
+		if request.URL.Host == "backup.test" {
+			backupCalls.Add(1)
+			complete := `data: {"id":"chatcmpl_backup","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"must not be sent"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(complete)), Request: request}, nil
+		}
+		t.Errorf("unexpected upstream host %q", request.URL.Host)
+		return nil, errors.New("unexpected upstream host")
+	})}}
+	operationBinding := map[normalize.Operation]kernel.RouteOperationBinding{
+		normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}},
+	}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
+		Nodes: []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{
+			{Kind: kernel.MemberRoute, ID: "primary", Fidelity: kernel.FidelityExact},
+			{Kind: kernel.MemberRoute, ID: "backup", Fidelity: kernel.FidelityExact},
+		}}},
+		Routes: []kernel.Route{
+			{ID: "primary", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://primary.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+			{ID: "backup", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://backup.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+		},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	parsed, err := normalize.JSON("/v1/messages", http.Header{"Anthropic-Version": []string{"2023-06-01"}}, []byte(`{"model":"role","max_tokens":128,"stream":true,"messages":[{"role":"user","content":"hello"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	err = engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncated cross-protocol stream error=%v", err)
+	}
+	output := writer.Body.String()
+	if primaryCalls.Load() != 1 || backupCalls.Load() != 0 {
+		t.Fatalf("stream failure after client output must not fallback: primary=%d backup=%d", primaryCalls.Load(), backupCalls.Load())
+	}
+	if !strings.Contains(output, "partial answer") || strings.Contains(output, "message_stop") || strings.Contains(output, "message_delta") || strings.Contains(output, "must not be sent") {
+		t.Fatalf("partial Anthropic stream was falsely finalized or replaced: %s", output)
 	}
 }
 
