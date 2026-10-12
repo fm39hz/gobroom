@@ -56,6 +56,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/kernel -run '^TestExplainCompatibilityUsesModelPathAndDoesNotDispatch$$' -count=1
 	go test ./internal/daemon -run '^TestRouteExplainIPCPreflightsRequestCompatibility$$' -count=1
 	go test ./internal/operations -run '^TestOperationArtifactOutputsAreTypedBoundedAndRecipientScoped$$' -count=1
+	go test ./internal/kernel -run '^TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient$$' -count=1
 	go test ./internal/artifacts -run '^(TestResponseArtifactScopeStreamsAuthorizesAndReleasesLease|TestResponseArtifactScopeRejectsUnauthorizedRecipientWithoutSpooling|TestResponseArtifactScopeEnforcesAggregateOperationOutputBound)$$' -count=1
 	go test ./internal/kernel -run '^TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease$$' -count=1
 	go test ./internal/kernel -run '^TestResponseTransformCannotRewriteArtifactReference$$' -count=1

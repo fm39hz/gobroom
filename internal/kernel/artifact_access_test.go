@@ -17,12 +17,15 @@ import (
 )
 
 type artifactConsumerAdapter struct {
-	received string
-	planned  *CompatibilityContext
+	received   string
+	planned    *CompatibilityContext
+	plans      int
+	executions int
 }
 
 func (a *artifactConsumerAdapter) ID() string { return "artifact-consumer" }
 func (a *artifactConsumerAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	a.plans++
 	if a.planned != nil {
 		*a.planned = input
 	}
@@ -44,7 +47,8 @@ func (a *artifactConsumerAdapter) Prepare(ctx context.Context, request Normalize
 	a.received = string(body)
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://artifact"}, nil
 }
-func (*artifactConsumerAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResponse, error) {
+func (a *artifactConsumerAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResponse, error) {
+	a.executions++
 	return UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}, nil
 }
 func (*artifactConsumerAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
@@ -142,12 +146,28 @@ func TestKernelGrantsMultipartBodyOnlyToDeclaredOperationRecipient(t *testing.T)
 	if adapter.received != "private-document" || response.Body.String() != "ok" {
 		t.Fatalf("adapter body=%q response=%q", adapter.received, response.Body.String())
 	}
+	if adapter.plans != 1 || adapter.executions != 1 {
+		t.Fatalf("valid artifact route plans=%d executions=%d, want one each", adapter.plans, adapter.executions)
+	}
 	if len(planned.ArtifactTransfers) != 1 {
 		t.Fatalf("compatibility plan omitted authorized artifact transfer: %#v", planned.ArtifactTransfers)
 	}
 	transfer := planned.ArtifactTransfers[0]
 	if transfer.TypeRef != artifactRef || transfer.Role != "source-document" || transfer.OperationRef != operationRef || transfer.SourceDomain != "client" || transfer.TargetProvider != providerRef || transfer.Sensitivity != extensions.ArtifactPrivate || transfer.ReplayScope != extensions.ArtifactReplayRequest || transfer.MediaType != "application/octet-stream" || transfer.SizeBytes != int64(len("private-document")) || !transfer.BodyLease {
 		t.Fatalf("artifact transfer plan=%#v", transfer)
+	}
+	expiredRequest := request
+	expiredRequest.Artifacts = append([]extensions.ArtifactRef(nil), request.Artifacts...)
+	expiredAt := time.Now().Add(-time.Second)
+	expiredRequest.Artifacts[0].ExpiresAt = expiredAt
+	expiredBody := *expiredRequest.Artifacts[0].Body
+	expiredBody.ExpiresAt = expiredAt
+	expiredRequest.Artifacts[0].Body = &expiredBody
+	if err := gateway.Execute(context.Background(), expiredRequest, Credential{}, httptest.NewRecorder()); err == nil {
+		t.Fatal("expired artifact was accepted")
+	}
+	if adapter.plans != 1 || adapter.executions != 1 {
+		t.Fatalf("expired artifact reached compatibility/dispatch: plans=%d executions=%d", adapter.plans, adapter.executions)
 	}
 	if err := spool.Release(owner, bodyRef); err != nil {
 		t.Fatal(err)
