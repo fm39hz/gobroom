@@ -205,6 +205,34 @@ func TestOpenAIChatBudgetRequiresExactNativeSourceEvidence(t *testing.T) {
 	t.Fatalf("native reasoning-budget facet was not declared: %#v", plan.Mappings)
 }
 
+func TestMalformedAnthropicReasoningCannotBeReclaimedByOpenAIChatCodec(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"junior","max_tokens":512,"thinking":{"type":"enabled","budget_tokens":2000},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"think"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Request.UnsupportedFacets) == 0 {
+		t.Fatal("malformed incompatible Anthropic reasoning fields were not retained as unsupported")
+	}
+	plan := NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}})
+	if plan.Supported {
+		t.Fatalf("OpenAI Chat codec reclaimed a parser-rejected Anthropic reasoning facet: %#v", plan)
+	}
+}
+
+func TestParserUnsupportedAnthropicToolChoiceCannotBeReclaimedByOpenAIChatCodec(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"junior","max_tokens":512,"tool_choice":"vendor_mode","messages":[{"role":"user","content":"search"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasUnsupportedFacet(parsed.Request, kernel.FacetToolChoice) {
+		t.Fatalf("parser did not retain unknown tool-choice semantics: %#v", parsed.Request.UnsupportedFacets)
+	}
+	plan := NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: parsed.Request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(parsed.Request)}})
+	if plan.Supported {
+		t.Fatalf("codec claimed a mapping for parser-unsupported tool choice: %#v", plan)
+	}
+}
+
 func TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/chat/completions", http.Header{}, []byte(`{"model":"public","messages":[{"role":"user","content":"original"}]}`))
 	if err != nil {

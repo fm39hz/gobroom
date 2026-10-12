@@ -115,6 +115,12 @@ func TestReasoningBudgetRaisesAnthropicOutputLimitOnlyWithNamedLossApproval(t *t
 	if !plan.Supported {
 		t.Fatalf("explicitly granted Anthropic budget loss was not admitted: %#v", plan)
 	}
+	request.UnsupportedFacets = []string{kernel.FacetReasoningIntent}
+	plan = adapter.PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}})
+	if plan.Supported {
+		t.Fatalf("Anthropic codec reclaimed a parser-rejected reasoning facet: %#v", plan)
+	}
+	request.UnsupportedFacets = nil
 	prepared, err := (Messages{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "claude-test"}, kernel.Credential{})
 	if err != nil {
 		t.Fatal(err)

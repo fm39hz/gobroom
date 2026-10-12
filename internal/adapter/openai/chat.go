@@ -52,6 +52,8 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 					mapping.Reason = "OpenAI Chat has no declared reasoning-budget mapping for a synthesized or transformed budget"
 				}
 			}
+		} else if anthropic && hasUnsupportedFacet(input.Request, facet) {
+			mapping.Reason = "Anthropic source request marks this semantic facet unsupported"
 		} else if anthropic {
 			mapping.Disposition = kernel.FacetUnsupported
 			mapping.Reason = "Anthropic request semantics are not represented by the OpenAI Chat codec"
@@ -90,7 +92,7 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 }
 
 func openAIChatBudgetPassthrough(request kernel.NormalizedRequest) bool {
-	if request.Mutations.Thinking || request.Thinking.BudgetTokens <= 0 {
+	if request.Mutations.Thinking || hasUnsupportedFacet(request, kernel.FacetReasoningBudget) || request.Thinking.BudgetTokens <= 0 {
 		return false
 	}
 	thinking := openAIObject(request.Raw["thinking"])

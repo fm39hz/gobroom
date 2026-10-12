@@ -84,7 +84,7 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 				} else {
 					mapping.Disposition = kernel.FacetPreserved
 				}
-			} else if anthropicReasoningIntentRepresentable(input.Request.Thinking) {
+			} else if !anthropicHasUnsupportedFacet(input.Request, kernel.FacetReasoningIntent) && anthropicReasoningIntentRepresentable(input.Request.Thinking) {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "canonical thinking intent is mapped to Anthropic thinking fields"
 			} else {
@@ -98,7 +98,7 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 					mapping.Disposition = kernel.FacetPreserved
 					mapping.Reason = "native Anthropic reasoning budget is forwarded unchanged"
 				}
-			} else if (input.Request.Thinking.Mode == "budget" || input.Request.Thinking.Mode == "enabled") && input.Request.Thinking.BudgetTokens > 0 && input.Request.Thinking.Effort == "" {
+			} else if !anthropicHasUnsupportedFacet(input.Request, kernel.FacetReasoningBudget) && !anthropicHasUnsupportedFacet(input.Request, kernel.FacetReasoningIntent) && (input.Request.Thinking.Mode == "budget" || input.Request.Thinking.Mode == "enabled") && input.Request.Thinking.BudgetTokens > 0 && input.Request.Thinking.Effort == "" {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "reasoning budget is mapped to Anthropic thinking.budget_tokens"
 				if maxOutput := input.Request.Generation.MaxOutputTokens; maxOutput != nil && *maxOutput <= input.Request.Thinking.BudgetTokens {

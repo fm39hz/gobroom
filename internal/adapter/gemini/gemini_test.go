@@ -105,6 +105,12 @@ func TestGeminiReasonsAboutBudgetSeparatelyFromEffort(t *testing.T) {
 	if plan.Supported {
 		t.Fatalf("missing required budget value was admitted: %#v", plan)
 	}
+	request.Thinking.BudgetTokens = 1024
+	request.UnsupportedFacets = []string{kernel.FacetReasoningBudget}
+	plan = NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}})
+	if plan.Supported {
+		t.Fatalf("codec reclaimed a normalization-rejected reasoning budget: %#v", plan)
+	}
 }
 
 func TestKernelRejectsGeminiContinuityBeforePreparingUpstreamRequest(t *testing.T) {

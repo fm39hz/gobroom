@@ -33,6 +33,11 @@ func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []k
 			continue
 		}
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"invocation"}, Disposition: kernel.FacetUnsupported, Reason: "Gemini request codec has no safe mapping for this facet"}
+		if geminiHasUnsupportedFacet(request, facet) {
+			mapping.Reason = "source normalization marked this required facet unsupported"
+			result = append(result, mapping)
+			continue
+		}
 		if !nativeIngress {
 			result = append(result, mapping)
 			continue
@@ -102,6 +107,16 @@ func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []k
 	}
 	return result
 }
+
+func geminiHasUnsupportedFacet(request kernel.NormalizedRequest, facet string) bool {
+	for _, unsupported := range request.UnsupportedFacets {
+		if unsupported == facet {
+			return true
+		}
+	}
+	return false
+}
+
 func (c requestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
