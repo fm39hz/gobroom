@@ -130,7 +130,7 @@ func TestMultipartOperationIngressReleasesPartialSpoolsOnDecodeFailure(t *testin
 }
 
 func TestMultipartIngressBindingsMustMatchOperationArtifactPorts(t *testing.T) {
-	snapshot, artifactRef := multipartTestOperationSnapshot(t)
+	snapshot, artifactRef, _ := multipartTestOperationSnapshot(t)
 	codec := MultipartOperationIngress{
 		CodecID: "fixture-multipart", Operation: "fixture.inspect", OperationContractVersion: 1,
 		Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/fixture"}},
@@ -154,10 +154,45 @@ func TestMultipartIngressBindingsMustMatchOperationArtifactPorts(t *testing.T) {
 
 type multipartE2EAdapter struct {
 	received      string
+	features      []normalize.FeatureRequirement
 	planCalls     int
 	prepareCalls  int
 	prepareErr    error
 	compatibility kernel.CompatibilityPlan
+}
+
+type binaryPrefixInterpreter struct{}
+
+func (binaryPrefixInterpreter) InspectArtifact(_ context.Context, _ extensions.ArtifactRef, body io.Reader) (json.RawMessage, error) {
+	var header [6]byte
+	if _, err := io.ReadFull(body, header[:]); err != nil {
+		return nil, err
+	}
+	if string(header[:]) != "binary" {
+		return nil, fmt.Errorf("unsupported binary signature %q", header[:])
+	}
+	return json.RawMessage(`{"kind":"binary"}`), nil
+}
+
+type binaryKindFeature struct{ evaluations *int }
+
+func (feature binaryKindFeature) Evaluate(capability kernel.Capability, constraints json.RawMessage) (bool, string) {
+	*feature.evaluations++
+	var requested struct {
+		Kind string `json:"kind"`
+	}
+	var supported struct {
+		Kinds []string `json:"kinds"`
+	}
+	if json.Unmarshal(constraints, &requested) != nil || json.Unmarshal(capability.Constraints, &supported) != nil || capability.State != kernel.SupportNative {
+		return false, "invalid binary-kind evidence"
+	}
+	for _, kind := range supported.Kinds {
+		if kind == requested.Kind {
+			return true, ""
+		}
+	}
+	return false, "binary kind is not supported"
 }
 
 type transcriptProjector struct {
@@ -200,6 +235,7 @@ func (a *multipartE2EAdapter) PlanCompatibility(input kernel.CompatibilityContex
 }
 func (a *multipartE2EAdapter) Prepare(ctx context.Context, request kernel.NormalizedRequest, _ kernel.Route, _ kernel.Credential) (kernel.UpstreamRequest, error) {
 	a.prepareCalls++
+	a.features = append([]normalize.FeatureRequirement(nil), request.Requirements...)
 	if len(request.Artifacts) != 1 {
 		a.prepareErr = fmt.Errorf("expected one operation artifact, got %d", len(request.Artifacts))
 		return kernel.UpstreamRequest{}, a.prepareErr
@@ -216,18 +252,36 @@ func (a *multipartE2EAdapter) Prepare(ctx context.Context, request kernel.Normal
 	} else {
 		a.prepareErr = err
 	}
-	return kernel.UpstreamRequest{Method: http.MethodPost, URL: "test://multipart"}, err
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: "test://multipart", Body: strings.NewReader(a.received)}, err
 }
-func (*multipartE2EAdapter) Execute(context.Context, kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
-	return kernel.UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"result":"decoded"}`))}, nil
+func (*multipartE2EAdapter) Execute(_ context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return kernel.UpstreamResponse{}, err
+	}
+	result, err := json.Marshal(map[string]string{"transcript": string(body)})
+	if err != nil {
+		return kernel.UpstreamResponse{}, err
+	}
+	return kernel.UpstreamResponse{Status: http.StatusOK, Body: io.NopCloser(bytes.NewReader(result))}, nil
 }
 func (*multipartE2EAdapter) ClassifyError(int, []byte) kernel.ErrorClass {
 	return kernel.ErrorRetryable
 }
 func (*multipartE2EAdapter) RenderResponse(ctx context.Context, response kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
 	defer response.Body.Close()
+	resultBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Transcript string `json:"transcript"`
+	}
+	if err := json.Unmarshal(resultBody, &result); err != nil {
+		return err
+	}
 	if hooks.ValidateEvent != nil {
-		for _, event := range []kernel.ResponseEvent{{Kind: kernel.EventTextDelta, Text: "decoded"}, {Kind: kernel.EventResponseComplete}} {
+		for _, event := range []kernel.ResponseEvent{{Kind: kernel.EventTextDelta, Text: result.Transcript}, {Kind: kernel.EventResponseComplete}} {
 			if err := hooks.ValidateEvent(ctx, event); err != nil {
 				return err
 			}
@@ -236,17 +290,17 @@ func (*multipartE2EAdapter) RenderResponse(ctx context.Context, response kernel.
 			}
 		}
 	}
-	_, err := io.Copy(writer, response.Body)
+	_, err = writer.Write(resultBody)
 	return err
 }
 
 func TestMultipartOperationExecutesThroughHTTPKernelAndAdapter(t *testing.T) {
-	operationSnapshot, artifactType := multipartTestOperationSnapshot(t)
+	operationSnapshot, artifactType, featureRef := multipartTestOperationSnapshot(t)
 	recipient := extensions.Ref{Kind: "provider-encoder", ID: "fixture.document-reader", ContractVersion: 1}
 	runtimeSnapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "document-inspection", TargetRef: "document-inspection"}},
 		Nodes:        []kernel.ModelNode{{ID: "document-inspection", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "fixture-route", Fidelity: kernel.FidelityExact}}}},
-		Routes: []kernel.Route{{ID: "fixture-route", NodeID: "fixture-provider", DefinitionID: recipient.ID, DefinitionRef: recipient, ExternalModel: "document-reader", Protocol: kernel.Protocol("fixture.binary"), Enabled: true,
+		Routes: []kernel.Route{{ID: "fixture-route", NodeID: "fixture-provider", DefinitionID: recipient.ID, DefinitionRef: recipient, ExternalModel: "document-reader", Protocol: kernel.Protocol("fixture.binary"), Enabled: true, Profile: kernel.CapabilityProfile{featureRef.ID: {State: kernel.SupportNative, Constraints: json.RawMessage(`{"kinds":["binary"]}`)}},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{"fixture.inspect": {ContractVersion: 1, AdapterIDs: []string{"multipart-e2e"}}}}},
 	}, 1)
 	if err != nil {
@@ -258,6 +312,11 @@ func TestMultipartOperationExecutesThroughHTTPKernelAndAdapter(t *testing.T) {
 	}
 	defer gateway.Close()
 	gateway.Operations = operationSnapshot
+	evaluations := 0
+	gateway.Features = kernel.NewFeatureRegistry()
+	if err := gateway.Features.Register(featureRef, binaryKindFeature{evaluations: &evaluations}); err != nil {
+		t.Fatal(err)
+	}
 	adapter := &multipartE2EAdapter{}
 	gateway.Adapters[adapter.ID()] = adapter
 	bodyStore, err := artifacts.NewStore(t.TempDir(), artifacts.Limits{MaxBytes: 128, MaxBodyBytes: 64, DefaultTTL: time.Minute})
@@ -304,12 +363,15 @@ func TestMultipartOperationExecutesThroughHTTPKernelAndAdapter(t *testing.T) {
 	request.Header.Set("Content-Type", form.FormDataContentType())
 	response := httptest.NewRecorder()
 	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(response, request)
-	if response.Code != http.StatusOK || response.Body.String() != `{"result":"decoded"}` || adapter.received != "binary-input" {
+	if response.Code != http.StatusOK || response.Body.String() != `{"transcript":"binary-input"}` || adapter.received != "binary-input" {
 		t.Fatalf("multipart endpoint status=%d body=%q adapter-input=%q plan-calls=%d prepare-calls=%d prepare-error=%v compatibility=%#v", response.Code, response.Body.String(), adapter.received, adapter.planCalls, adapter.prepareCalls, adapter.prepareErr, adapter.compatibility)
+	}
+	if len(adapter.features) != 1 || adapter.features[0].Ref != featureRef || string(adapter.features[0].Constraints) != `{"kind":"binary"}` || evaluations != 1 {
+		t.Fatalf("body-derived route requirement did not reach eligibility and provider: requirements=%#v evaluator-calls=%d", adapter.features, evaluations)
 	}
 }
 
-func multipartTestOperationSnapshot(t *testing.T) (*operations.Snapshot, extensions.Ref) {
+func multipartTestOperationSnapshot(t *testing.T) (*operations.Snapshot, extensions.Ref, extensions.Ref) {
 	t.Helper()
 	catalog := extensions.NewCatalog()
 	registry, err := operations.NewRegistry(catalog)
@@ -343,12 +405,28 @@ func multipartTestOperationSnapshot(t *testing.T) (*operations.Snapshot, extensi
 	}
 	artifactRef := extensions.Ref{Kind: extensions.ArtifactKind, ID: "fixture.document", ContractVersion: 1}
 	recipientRef := extensions.Ref{Kind: "provider-encoder", ID: "fixture.document-reader", ContractVersion: 1}
+	factsSchemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "fixture.binary-facts", ContractVersion: 1}
+	factsSchema, err := extensions.BindSchemaDocument(factsSchemaRef, json.RawMessage(`{"type":"object","properties":{"kind":{"const":"binary"}},"required":["kind"],"additionalProperties":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RegisterSchema(factsSchemaRef, factsSchema); err != nil {
+		t.Fatal(err)
+	}
+	interpreterRef := extensions.Ref{Kind: extensions.ArtifactInterpreterKind, ID: "fixture.binary-prefix", ContractVersion: 1}
+	if err := catalog.Register(extensions.Descriptor{
+		Ref: interpreterRef, ImplementationVersion: "1", DisplayName: "Binary prefix", Description: "Inspect a bounded six-byte media signature.",
+		ResultSchemaRef: &factsSchemaRef, ResourceBounds: extensions.ResourceBounds{MaxInputBytes: 32, MaxOutputBytes: 64, MaxBufferedBytes: 64, DeadlineMillis: 500},
+	}, func(json.RawMessage) (any, error) { return binaryPrefixInterpreter{}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	featureRef := extensions.Ref{Kind: kernel.FeatureEvaluatorKind, ID: "fixture.binary-input", ContractVersion: 1}
 	if err := catalog.Register(extensions.Descriptor{Ref: recipientRef, ImplementationVersion: "1", DisplayName: "Document reader", Description: "Fixture consumer."}, func(json.RawMessage) (any, error) { return struct{}{}, nil }); err != nil {
 		t.Fatal(err)
 	}
 	policy := extensions.ArtifactPolicy{
 		OwnerDomains: []string{"client"}, ReplayScopes: []extensions.ArtifactReplayScope{extensions.ArtifactReplayRequest},
-		SensitivityLimit: extensions.ArtifactPrivate, AllowedMediaTypes: []string{"application/octet-stream"}, RecipientContracts: []extensions.Ref{recipientRef},
+		SensitivityLimit: extensions.ArtifactPrivate, AllowedMediaTypes: []string{"application/octet-stream"}, RecipientContracts: []extensions.Ref{recipientRef, interpreterRef},
 	}
 	if err := catalog.Register(extensions.Descriptor{
 		Ref: artifactRef, ImplementationVersion: "1", DisplayName: "Document body", Description: "Fixture binary input.",
@@ -359,10 +437,17 @@ func multipartTestOperationSnapshot(t *testing.T) (*operations.Snapshot, extensi
 	if err := registry.Register(operations.Definition{
 		Ref: operationRef, DisplayName: "Inspect fixture", Description: "Consumes one document body.",
 		InputSchemaRef: inputSchemaRef, ResultSchemaRef: &resultSchemaRef, EventSchemaRefs: []extensions.Ref{eventSchemaRef},
-		ArtifactInputs: []operations.ArtifactInput{{Role: "source-document", TypeRef: artifactRef, MinCount: 1, MaxCount: 1}},
-		ResourceBounds: operations.DefaultResourceBounds(), ReplaySafety: operations.ReplayNever,
+		ArtifactInputs:       []operations.ArtifactInput{{Role: "source-document", TypeRef: artifactRef, MinCount: 1, MaxCount: 1}},
+		ArtifactInterpreters: []extensions.ArtifactInterpreterBinding{{Role: "source-document", InterpreterRef: interpreterRef}},
+		ResourceBounds:       operations.DefaultResourceBounds(), ReplaySafety: operations.ReplayNever,
 		InputPayload:        func(normalize.Request) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 		CompileRequirements: func(normalize.Request) ([]normalize.FeatureRequirement, error) { return nil, nil },
+		CompileArtifactRequirements: func(_ normalize.Request, facts []normalize.ArtifactFacts) ([]normalize.FeatureRequirement, error) {
+			if len(facts) != 1 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return []normalize.FeatureRequirement{{Ref: featureRef, Constraints: append(json.RawMessage(nil), facts[0].Value...)}}, nil
+		},
 		NewResultProjector: func(bounds extensions.ResourceBounds) (operations.ResultProjector, error) {
 			return &transcriptProjector{max: bounds.MaxBufferedBytes}, nil
 		},
@@ -377,5 +462,5 @@ func multipartTestOperationSnapshot(t *testing.T) (*operations.Snapshot, extensi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return snapshot, artifactRef
+	return snapshot, artifactRef, featureRef
 }
