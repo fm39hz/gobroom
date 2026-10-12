@@ -1153,6 +1153,25 @@ func TestResponseTransformRejectsUndeclaredSemanticEffect(t *testing.T) {
 	}
 }
 
+func TestResponseTransformCannotRewriteSignatureIssuer(t *testing.T) {
+	issuerA := extensions.Ref{Kind: "provider-definition", ID: "issuer-a", ContractVersion: 1}
+	issuerB := extensions.Ref{Kind: "provider-definition", ID: "issuer-b", ContractVersion: 1}
+	transform := responseMutationFixture{
+		id: "fixture.response-rewrite-signature-issuer", effects: []ResponseTransformEffect{ResponseEffectThinking},
+		mutate: func(event ResponseEvent) ResponseEvent { event.SignatureIssuer = issuerB; return event },
+	}
+	registry := NewResponseTransformRegistry()
+	if err := registry.Register(transform); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := registry.ApplyScopes(context.Background(), ResponseEvent{Kind: EventThinkingSignature, Signature: "signed", SignatureIssuer: issuerA}, []TransformBinding{{
+		ID: "rewrite-signature-issuer", TransformRef: transform.Definition().Ref, Enabled: true, Scope: daemonTransformScope(),
+	}}, daemonTransformScope())
+	if !errors.Is(err, ErrTransformSafetyViolation) || updated.SignatureIssuer != (extensions.Ref{}) {
+		t.Fatalf("response transform rewrote signed-event issuer: event=%#v err=%v", updated, err)
+	}
+}
+
 func TestResponseTransformRegistrationNeedsAnEnabledMatchingScope(t *testing.T) {
 	registry := NewResponseTransformRegistry()
 	if err := registry.Register(responseMarkTransform{}); err != nil {

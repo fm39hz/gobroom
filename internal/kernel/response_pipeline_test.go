@@ -25,6 +25,84 @@ type usageAccountingDecoder struct{}
 type usageAccountingRenderer struct{ rendered *UsageEvent }
 type usageAccountingTransform struct{}
 type commitOnEventRenderer struct{}
+type thinkingSignatureDecoder struct{}
+type signatureCaptureRenderer struct{ issuer *extensions.Ref }
+
+type issuerSignatureAdapter struct {
+	eventIssuer extensions.Ref
+	eventKind   ResponseEventKind
+	eventOpaque json.RawMessage
+}
+
+func (a issuerSignatureAdapter) ID() string { return "issuer-signature-fixture" }
+func (a issuerSignatureAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
+	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityTranslated)
+}
+func (issuerSignatureAdapter) Prepare(context.Context, NormalizedRequest, Route, Credential) (UpstreamRequest, error) {
+	return UpstreamRequest{Method: http.MethodPost, URL: "fixture://signed"}, nil
+}
+func (issuerSignatureAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResponse, error) {
+	return UpstreamResponse{Status: http.StatusOK, Body: http.NoBody}, nil
+}
+func (issuerSignatureAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
+func (a issuerSignatureAdapter) RenderResponse(ctx context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+	kind := a.eventKind
+	if kind == "" {
+		kind = EventThinkingSignature
+	}
+	if err := hooks.ValidateEvent(ctx, ResponseEvent{Kind: kind, Signature: "opaque-signature", SignatureIssuer: a.eventIssuer, Opaque: a.eventOpaque}); err != nil {
+		return err
+	}
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(UsageEvent{Status: "ok"})
+	}
+	return nil
+}
+
+func (thinkingSignatureDecoder) ID() string { return "thinking-signature-decoder" }
+func (thinkingSignatureDecoder) PossibleEvents() []ResponseEventKind {
+	return []ResponseEventKind{EventThinkingSignature, EventResponseComplete}
+}
+func (thinkingSignatureDecoder) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
+func (thinkingSignatureDecoder) Decode(_ context.Context, _ UpstreamResponse, emit func(ResponseEvent) error, _ StreamHooks) error {
+	if err := emit(ResponseEvent{Kind: EventThinkingSignature, Signature: "signed-by-provider"}); err != nil {
+		return err
+	}
+	return emit(ResponseEvent{Kind: EventResponseComplete})
+}
+func (signatureCaptureRenderer) ID() normalize.Format { return normalize.FormatOpenAIChat }
+func (signatureCaptureRenderer) SupportsResponse(options ResponseRenderContext) CompatibilityPlan {
+	return eventDeclarationTestRenderer{}.SupportsResponse(options)
+}
+func (r signatureCaptureRenderer) Begin(context.Context, ResponseRenderContext, http.ResponseWriter) (ResponseRenderSession, error) {
+	return signatureCaptureSession{issuer: r.issuer}, nil
+}
+
+type signatureCaptureSession struct{ issuer *extensions.Ref }
+
+func (s signatureCaptureSession) Emit(_ context.Context, event ResponseEvent) error {
+	if event.Kind == EventThinkingSignature {
+		*s.issuer = event.SignatureIssuer
+	}
+	return nil
+}
+func (signatureCaptureSession) Finish(context.Context, error) error { return nil }
+
+func TestComposedAdapterBindsSignatureEventToProviderIssuer(t *testing.T) {
+	issuer := extensions.Ref{Kind: "provider-definition", ID: "issuer-a", ContractVersion: 3}
+	var captured extensions.Ref
+	adapter := ComposedAdapter{
+		AdapterID: "signature-issuer-binding", Response: thinkingSignatureDecoder{},
+		Renderers: map[normalize.Format]ResponseRenderer{normalize.FormatOpenAIChat: signatureCaptureRenderer{issuer: &captured}},
+	}
+	err := adapter.RenderResponse(context.Background(), UpstreamResponse{Status: http.StatusOK, Headers: make(http.Header), Body: http.NoBody}, httptest.NewRecorder(), normalize.FormatOpenAIChat, StreamHooks{ProviderIssuer: issuer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured != issuer {
+		t.Fatalf("signature issuer=%#v want selected provider %#v", captured, issuer)
+	}
+}
 
 func (usageAccountingDecoder) ID() string { return "usage-accounting-decoder" }
 func (usageAccountingDecoder) PossibleEvents() []ResponseEventKind {
@@ -113,6 +191,51 @@ func TestResponseSafeFailOpenStopsAfterFirstRenderedEvent(t *testing.T) {
 	}
 	if !writer.committed {
 		t.Fatal("fixture did not commit its first event before the second transform failure")
+	}
+}
+
+func TestKernelRejectsResponseSignatureFromWrongIssuer(t *testing.T) {
+	issuer := extensions.Ref{Kind: "provider-definition", ID: "issuer-a", ContractVersion: 1}
+	otherIssuer := extensions.Ref{Kind: "provider-definition", ID: "issuer-b", ContractVersion: 1}
+	snapshot, err := BuildSnapshot(SnapshotInput{
+		PublicModels: []PublicModel{{Name: "role", TargetRef: "physical"}},
+		Nodes:        []ModelNode{{ID: "physical", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "signed-route", Fidelity: FidelityExact}}}},
+		Routes: []Route{{ID: "signed-route", DefinitionID: issuer.ID, DefinitionRef: issuer, Protocol: ProtocolAnthropic, Enabled: true, OperationBindings: map[normalize.Operation]RouteOperationBinding{
+			normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"issuer-signature-fixture"}},
+		}}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name        string
+		eventIssuer extensions.Ref
+		eventKind   ResponseEventKind
+		eventOpaque json.RawMessage
+		wantErr     error
+	}{
+		{name: "matching issuer", eventIssuer: issuer},
+		{name: "wrong issuer", eventIssuer: otherIssuer, wantErr: ErrSignatureIssuerMismatch},
+		{name: "missing issuer", wantErr: ErrSignatureIssuerMissing},
+		{name: "wrong issuer on opaque tool signature", eventIssuer: otherIssuer, eventKind: EventToolCallDelta, eventOpaque: json.RawMessage(`{"thoughtSignature":"sig"}`), wantErr: ErrSignatureIssuerMismatch},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := New(snapshot, nil, 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer engine.Close()
+			engine.Adapters["issuer-signature-fixture"] = issuerSignatureAdapter{eventIssuer: test.eventIssuer, eventKind: test.eventKind, eventOpaque: test.eventOpaque}
+			request := NormalizedRequest{Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
+			err = engine.Execute(context.Background(), request, Credential{}, httptest.NewRecorder())
+			if test.wantErr == nil {
+				if err != nil {
+					t.Fatalf("matching issuer signature rejected: %v", err)
+				}
+			} else if !errors.Is(err, test.wantErr) {
+				t.Fatalf("issuer validation error=%v, want %v", err, test.wantErr)
+			}
+		})
 	}
 }
 

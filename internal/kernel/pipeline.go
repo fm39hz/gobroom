@@ -272,6 +272,9 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	responseOutputStarted := responseWriterOutputStarted(writer)
 	var totalEventBytes int64
 	emit := func(event ResponseEvent) error {
+		if event.Kind == EventThinkingSignature && event.SignatureIssuer.ID == "" {
+			event.SignatureIssuer = hooks.ProviderIssuer
+		}
 		if event.Kind == EventResponseComplete {
 			providerComplete = true
 			if event.Usage != nil {
@@ -297,7 +300,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 			event = transformed
 		}
 		if hooks.MaxEventBytes > 0 {
-			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
+			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.SignatureIssuer.ID)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
 			artifactBytes := int64(0)
 			for _, artifact := range event.Artifacts {
 				eventBytes += int64(len(artifact.TypeRef.ID)+len(artifact.Role)+len(artifact.MediaType)+len(artifact.Sensitivity)+len(artifact.Value)) + 64

@@ -400,7 +400,7 @@ func (r *ResponseTransformRegistry) ApplyScopesWithReport(ctx context.Context, e
 			}
 			return ResponseEvent{}, report, fmt.Errorf("response transform %q: %w", definition.Ref.Key(), err)
 		}
-		if updated.Kind != before.Kind || updated.At != before.At || updated.Index != before.Index || updated.ResponseID != before.ResponseID || updated.ItemID != before.ItemID || updated.ContentType != before.ContentType || updated.BlockType != before.BlockType || updated.StopReason != before.StopReason || updated.ToolCallID != before.ToolCallID || updated.ToolName != before.ToolName || updated.Signature != before.Signature || updated.Error != before.Error || updated.WireFormat != before.WireFormat || !bytes.Equal(updated.Raw, before.Raw) || !bytes.Equal(updated.Opaque, before.Opaque) {
+		if updated.Kind != before.Kind || updated.At != before.At || updated.Index != before.Index || updated.ResponseID != before.ResponseID || updated.ItemID != before.ItemID || updated.ContentType != before.ContentType || updated.BlockType != before.BlockType || updated.StopReason != before.StopReason || updated.ToolCallID != before.ToolCallID || updated.ToolName != before.ToolName || updated.Signature != before.Signature || updated.SignatureIssuer != before.SignatureIssuer || updated.Error != before.Error || updated.WireFormat != before.WireFormat || !bytes.Equal(updated.Raw, before.Raw) || !bytes.Equal(updated.Opaque, before.Opaque) {
 			return ResponseEvent{}, report, fmt.Errorf("response transform %q: %w: changed immutable event identity or opaque data", definition.Ref.Key(), ErrTransformSafetyViolation)
 		}
 		if !reflect.DeepEqual(updated.Artifacts, before.Artifacts) {

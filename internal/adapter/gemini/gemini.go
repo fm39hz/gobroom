@@ -15,6 +15,7 @@ import (
 	"time"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -341,7 +342,7 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 			if len(payload.Candidates) == 0 {
 				continue
 			}
-			_, events, usage := openAIResponse(payload)
+			_, events, usage := openAIResponse(payload, hooks.ProviderIssuer)
 			totalUsage.InputTokens = usage.InputTokens
 			if usage.OutputTokens > 0 {
 				totalUsage.OutputTokens = usage.OutputTokens
@@ -384,7 +385,7 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 		if hooks.OnFirstByte != nil {
 			hooks.OnFirstByte(time.Now())
 		}
-		_, events, usage := openAIResponse(payload)
+		_, events, usage := openAIResponse(payload, hooks.ProviderIssuer)
 		totalUsage = usage
 		for _, event := range events {
 			if err := emit(event); err != nil {
@@ -873,7 +874,7 @@ func (Gemini) ClassifyError(status int, _ []byte) kernel.ErrorClass {
 	return kernel.ErrorRetryable
 }
 
-func openAIResponse(payload geminiGenerateContentResponse) (openAIChatResponse, []kernel.ResponseEvent, kernel.UsageEvent) {
+func openAIResponse(payload geminiGenerateContentResponse, issuer extensions.Ref) (openAIChatResponse, []kernel.ResponseEvent, kernel.UsageEvent) {
 	created := time.Now().Unix()
 	text := strings.Builder{}
 	reasoning := strings.Builder{}
@@ -900,7 +901,11 @@ func openAIResponse(payload geminiGenerateContentResponse) (openAIChatResponse, 
 				}
 				toolCalls = append(toolCalls, openAIChatToolCall{ID: call.ID, Type: "function", ThoughtSignature: part.ThoughtSignature, Function: openAIChatToolFunction{Name: call.Name, Arguments: arguments}})
 				providerData, _ := json.Marshal(map[string]string{"thoughtSignature": part.ThoughtSignature})
-				events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments, Opaque: providerData})
+				event := kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventToolCallDelta, Index: len(toolCalls) - 1, ToolCallID: call.ID, ToolName: call.Name, ToolArguments: arguments, Signature: part.ThoughtSignature, Opaque: providerData}
+				if part.ThoughtSignature != "" {
+					event.SignatureIssuer = issuer
+				}
+				events = append(events, event)
 			}
 		}
 	}

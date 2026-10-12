@@ -405,6 +405,7 @@ type StreamHooks struct {
 	ArtifactAccess    *artifacts.Access
 	Streaming         bool
 	Model             string
+	ProviderIssuer    extensions.Ref
 	MaxEventBytes     int64
 	MaxOutputBytes    int64
 }
@@ -427,25 +428,26 @@ const (
 )
 
 type ResponseEvent struct {
-	At            time.Time
-	Kind          ResponseEventKind
-	Index         int
-	ResponseID    string
-	ItemID        string
-	ContentType   string
-	BlockType     string
-	StopReason    string
-	Text          string
-	Signature     string
-	ToolCallID    string
-	ToolName      string
-	ToolArguments string
-	Usage         *UsageEvent
-	Error         string
-	WireFormat    normalize.Format
-	Raw           []byte
-	Opaque        json.RawMessage
-	Artifacts     []extensions.ArtifactRef
+	At              time.Time
+	Kind            ResponseEventKind
+	Index           int
+	ResponseID      string
+	ItemID          string
+	ContentType     string
+	BlockType       string
+	StopReason      string
+	Text            string
+	Signature       string
+	SignatureIssuer extensions.Ref
+	ToolCallID      string
+	ToolName        string
+	ToolArguments   string
+	Usage           *UsageEvent
+	Error           string
+	WireFormat      normalize.Format
+	Raw             []byte
+	Opaque          json.RawMessage
+	Artifacts       []extensions.ArtifactRef
 }
 
 type UsageEvent struct {
@@ -496,5 +498,7 @@ var (
 	ErrNoRoute                 = errors.New("no usable route")
 	ErrOperationRequired       = errors.New("semantic operation is required")
 	ErrSessionStateUnavailable = errors.New("provider session state unavailable")
+	ErrSignatureIssuerMissing  = errors.New("signed response event has no provider issuer")
+	ErrSignatureIssuerMismatch = errors.New("signed response event issuer does not match selected provider")
 	ErrSnapshotInvalid         = errors.New("invalid route snapshot")
 )

@@ -199,6 +199,10 @@ Semantic events share response ID, sequence, item/content identity and a
 versioned payload. Common text/thinking/tool/usage/completion/error events
 remain typed; operation-specific progress/results use registered event
 artifacts. The decoder validates order and tool-call identity before emission.
+Provider-signed response events carry the exact provider-definition issuer ref;
+the kernel rejects missing or mismatched issuers before rendering, and response
+transforms cannot rewrite that provenance. A renderer may preserve a signature
+only when the response decoder declares the signature event family.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

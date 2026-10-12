@@ -551,6 +551,17 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			resultFinalized := false
 			validateEvent := func(_ context.Context, event ResponseEvent) error {
 				sequence++
+				if event.Kind == EventThinkingSignature || event.Signature != "" || event.SignatureIssuer.ID != "" {
+					if event.SignatureIssuer.ID == "" {
+						return ErrSignatureIssuerMissing
+					}
+					if candidate.DefinitionRef.Kind != "provider-definition" || candidate.DefinitionRef.Validate() != nil {
+						return ErrSignatureIssuerMissing
+					}
+					if event.SignatureIssuer != candidate.DefinitionRef {
+						return ErrSignatureIssuerMismatch
+					}
+				}
 				if len(event.Artifacts) > 0 {
 					if len(artifactOutputs) == 0 || event.Kind != EventArtifact {
 						return fmt.Errorf("operation %q emitted artifacts outside its declared artifact event", operationRef.Key())
@@ -624,7 +635,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					attemptReleased = true
 				}
 			}
-			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
+			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
 				releaseAttempt()
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
@@ -795,6 +806,9 @@ func operationEventPayload(event ResponseEvent, sequence uint64) (json.RawMessag
 		if value != "" {
 			content[key] = value
 		}
+	}
+	if event.SignatureIssuer.ID != "" {
+		content["signatureIssuer"] = event.SignatureIssuer.Key()
 	}
 	if event.Index != 0 {
 		content["index"] = event.Index
