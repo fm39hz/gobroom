@@ -41,9 +41,19 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Chat request codec has no declared mapping for this input facet"}
 		if native {
 			switch facet {
-			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Chat request is forwarded in its native wire contract"
+			case kernel.FacetReasoningIntent:
+				if !input.Request.Mutations.Thinking {
+					mapping.Disposition = kernel.FacetPreserved
+					mapping.Reason = "the OpenAI Chat reasoning intent is forwarded in its native wire contract"
+				} else if !hasUnsupportedFacet(input.Request, facet) && openAIChatReasoningMutationRepresentable(input.Request.Thinking) {
+					mapping.Disposition = kernel.FacetTranslated
+					mapping.Reason = "transformed reasoning effort is encoded as reasoning_effort"
+				} else {
+					mapping.Reason = "OpenAI Chat can encode transformed effort only; this reasoning mode has no declared mapping"
+				}
 			case kernel.FacetReasoningBudget:
 				if openAINativeBudgetPassthrough(input.Request) {
 					mapping.Disposition = kernel.FacetPreserved
@@ -89,6 +99,10 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func openAIChatReasoningMutationRepresentable(intent normalize.ThinkingIntent) bool {
+	return intent.BudgetTokens == 0 && intent.Effort != "" && (intent.Mode == "" || intent.Mode == "inherit" || intent.Mode == "level")
 }
 
 func openAINativeBudgetPassthrough(request kernel.NormalizedRequest) bool {

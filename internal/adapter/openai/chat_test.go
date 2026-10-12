@@ -205,6 +205,27 @@ func TestOpenAIChatBudgetRequiresExactNativeSourceEvidence(t *testing.T) {
 	t.Fatalf("native reasoning-budget facet was not declared: %#v", plan.Mappings)
 }
 
+func TestNativeChatReasoningMutationRequiresDeclaredModeMapping(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		intent normalize.ThinkingIntent
+		want   kernel.FacetDisposition
+	}{
+		{name: "effort", intent: normalize.ThinkingIntent{Mode: "level", Effort: "high"}, want: kernel.FacetTranslated},
+		{name: "enabled without budget", intent: normalize.ThinkingIntent{Mode: "enabled"}, want: kernel.FacetUnsupported},
+		{name: "budget without exact raw evidence", intent: normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 512}, want: kernel.FacetUnsupported},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Thinking: test.intent, Mutations: normalize.RequestMutationSet{Thinking: true}}
+			policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetReasoningIntent}}
+			plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIChatFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy}, normalize.FormatOpenAIChat)}, policy)
+			if len(plan.Mappings) != 1 || plan.Mappings[0].Disposition != test.want {
+				t.Fatalf("reasoning mutation disposition=%#v want %s; plan=%#v", plan.Mappings, test.want, plan)
+			}
+		})
+	}
+}
+
 func TestMalformedAnthropicReasoningCannotBeReclaimedByOpenAIChatCodec(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/messages", http.Header{}, []byte(`{"model":"junior","max_tokens":512,"thinking":{"type":"enabled","budget_tokens":2000},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"think"}]}`))
 	if err != nil {

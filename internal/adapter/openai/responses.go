@@ -36,9 +36,20 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"request"}, Disposition: kernel.FacetUnsupported, Reason: "OpenAI Responses request codec cannot safely translate this facet from the client contract"}
 		if native {
 			switch facet {
-			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetContinuity, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetContinuity, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Responses request is forwarded in its native wire contract"
+			}
+			if facet == kernel.FacetReasoningIntent {
+				if !request.Mutations.Thinking {
+					mapping.Disposition = kernel.FacetPreserved
+					mapping.Reason = "the OpenAI Responses reasoning intent is forwarded in its native wire contract"
+				} else if !hasUnsupportedFacet(request, facet) && openAIResponsesReasoningMutationRepresentable(request.Thinking) {
+					mapping.Disposition = kernel.FacetTranslated
+					mapping.Reason = "transformed reasoning intent is encoded as a Responses reasoning object"
+				} else {
+					mapping.Reason = "OpenAI Responses has no declared mapping for this transformed reasoning intent"
+				}
 			}
 			if facet == kernel.FacetReasoningBudget {
 				if openAINativeBudgetPassthrough(request) {
@@ -66,6 +77,20 @@ func openAIResponsesFacetReport(input kernel.CompatibilityContext) []kernel.Face
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func openAIResponsesReasoningMutationRepresentable(intent normalize.ThinkingIntent) bool {
+	if intent.BudgetTokens > 0 {
+		return false
+	}
+	switch intent.Mode {
+	case "disabled", "auto":
+		return intent.Effort == ""
+	case "level":
+		return intent.Effort != ""
+	default:
+		return false
+	}
 }
 
 func responsesAnthropicFacetRepresentable(request kernel.NormalizedRequest, facet string) bool {

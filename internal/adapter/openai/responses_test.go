@@ -179,6 +179,28 @@ func TestNativeResponsesBudgetRequiresExactUnmodifiedSourceEvidence(t *testing.T
 	}
 }
 
+func TestNativeResponsesReasoningMutationRequiresDeclaredModeMapping(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		intent normalize.ThinkingIntent
+		want   kernel.FacetDisposition
+	}{
+		{name: "effort", intent: normalize.ThinkingIntent{Mode: "level", Effort: "high"}, want: kernel.FacetTranslated},
+		{name: "auto", intent: normalize.ThinkingIntent{Mode: "auto"}, want: kernel.FacetTranslated},
+		{name: "enabled without budget", intent: normalize.ThinkingIntent{Mode: "enabled"}, want: kernel.FacetUnsupported},
+		{name: "budget", intent: normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 512}, want: kernel.FacetUnsupported},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := normalize.Request{SourceFormat: normalize.FormatOpenAIResponses, Thinking: test.intent, Mutations: normalize.RequestMutationSet{Thinking: true}}
+			policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetReasoningIntent}}
+			plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy})}, policy)
+			if len(plan.Mappings) != 1 || plan.Mappings[0].Disposition != test.want {
+				t.Fatalf("reasoning mutation disposition=%#v want %s; plan=%#v", plan.Mappings, test.want, plan)
+			}
+		})
+	}
+}
+
 func TestNativeResponsesOverlaysTransformedInputAndPromptPreservingItems(t *testing.T) {
 	parsed, err := normalize.Map("/v1/responses", http.Header{}, map[string]any{
 		"model": "role",
