@@ -181,6 +181,30 @@ func TestChatPrepareEncodesAddedCanonicalTypedMessage(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatBudgetRequiresExactNativeSourceEvidence(t *testing.T) {
+	request := normalize.Request{
+		Model: "native", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: "think carefully"}},
+		Thinking: normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 512},
+		Raw:      map[string]any{"thinking": map[string]any{"budget_tokens": float64(512)}},
+	}
+	plan := NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}})
+	if !plan.Supported {
+		t.Fatalf("exact native budget was not preserved: %#v", plan)
+	}
+	for _, mapping := range plan.Mappings {
+		if mapping.Facet == kernel.FacetReasoningBudget && mapping.Disposition == kernel.FacetPreserved {
+			request.Raw = nil
+			plan = NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}})
+			if plan.Supported {
+				t.Fatalf("synthesized budget was silently assumed native: %#v", plan)
+			}
+			return
+		}
+	}
+	t.Fatalf("native reasoning-budget facet was not declared: %#v", plan.Mappings)
+}
+
 func TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix(t *testing.T) {
 	parsed, err := normalize.JSON("/v1/chat/completions", http.Header{}, []byte(`{"model":"public","messages":[{"role":"user","content":"original"}]}`))
 	if err != nil {

@@ -80,6 +80,15 @@ type Format = normalize.Format
 type Task = normalize.Operation
 type OperationRequest = normalize.Request
 type FeatureRequirement = normalize.FeatureRequirement
+type Message = normalize.Message
+type Tool = normalize.Tool
+type ToolCall = normalize.ToolCall
+type PromptPlan = normalize.PromptPlan
+type PromptLayer = normalize.PromptLayer
+type ThinkingIntent = normalize.ThinkingIntent
+type GenerationOptions = normalize.GenerationOptions
+type Modalities = normalize.Modalities
+type ContinuityState = normalize.ContinuityState
 type OperationDefinition = operations.Definition
 type OperationRegistry = operations.Registry
 type ResultProjector = operations.ResultProjector
@@ -119,6 +128,8 @@ const (
 	ArtifactKind = extensions.ArtifactKind
 
 	FacetWireRequest      = kernel.FacetWireRequest
+	FacetReasoningIntent  = kernel.FacetReasoningIntent
+	FacetReasoningBudget  = kernel.FacetReasoningBudget
 	FacetTranslated       = kernel.FacetTranslated
 	FacetPreserved        = kernel.FacetPreserved
 	EventTextDelta        = kernel.EventTextDelta

@@ -76,6 +76,13 @@ func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []k
 			} else {
 				mapping.Reason = err.Error()
 			}
+		case kernel.FacetReasoningBudget:
+			if (request.Thinking.Mode == "budget" || request.Thinking.Mode == "enabled") && request.Thinking.BudgetTokens > 0 && request.Thinking.Effort == "" {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "the exact reasoning token budget is mapped to Gemini thinkingBudget"
+			} else {
+				mapping.Reason = "Gemini requires an explicit positive budget without a competing effort level"
+			}
 		case kernel.FacetVisionInput:
 			if geminiVisionInputRepresentable(request) {
 				mapping.Disposition = kernel.FacetTranslated
@@ -773,7 +780,7 @@ func geminiThinkingConfigFor(intent normalize.ThinkingIntent) (*geminiThinkingCo
 		config.ThinkingBudget = &budget
 	case "budget", "enabled":
 		if intent.BudgetTokens <= 0 {
-			return nil, nil
+			return nil, fmt.Errorf("Gemini requires an explicit positive reasoning budget for mode %q", intent.Mode)
 		}
 		config.ThinkingBudget = &intent.BudgetTokens
 	case "level":

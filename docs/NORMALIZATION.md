@@ -54,8 +54,12 @@ sources are wired.
 
 The target reasoning intent distinguishes absent/inherit, explicit auto,
 disabled, ordinal level and numeric budget. It also carries summary intent,
-strictness and provenance. Harness wire shapes, route reasoning dialects and
-lossy-mapping policy are specified in the
+strictness and provenance. Compatibility treats `reasoning.intent` (mode or
+effort) separately from `reasoning.budget` (a numeric token budget), so a codec
+cannot claim one merely because it supports the other. If a target requires
+raising a conflicting output-token ceiling, the candidate reports a named
+requested/effective loss and needs explicit policy approval. Harness wire
+shapes, route reasoning dialects and lossy-mapping policy are specified in the
 [Physical model contract](PHYSICAL_MODELS.md); an absent field must not be
 silently normalized into an explicit provider default.
 

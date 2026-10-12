@@ -44,6 +44,13 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 			case kernel.FacetWireRequest, kernel.FacetPromptLayers, kernel.FacetToolDefinitions, kernel.FacetToolHistory, kernel.FacetToolChoice, kernel.FacetReasoningIntent, kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the OpenAI Chat request is forwarded in its native wire contract"
+			case kernel.FacetReasoningBudget:
+				if openAIChatBudgetPassthrough(input.Request) {
+					mapping.Disposition = kernel.FacetPreserved
+					mapping.Reason = "the exact native reasoning budget is forwarded without mutation"
+				} else {
+					mapping.Reason = "OpenAI Chat has no declared reasoning-budget mapping for a synthesized or transformed budget"
+				}
 			}
 		} else if anthropic {
 			mapping.Disposition = kernel.FacetUnsupported
@@ -80,6 +87,28 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 		result = append(result, mapping)
 	}
 	return result
+}
+
+func openAIChatBudgetPassthrough(request kernel.NormalizedRequest) bool {
+	if request.Mutations.Thinking || request.Thinking.BudgetTokens <= 0 {
+		return false
+	}
+	thinking := openAIObject(request.Raw["thinking"])
+	var budget int
+	switch value := thinking["budget_tokens"].(type) {
+	case float64:
+		budget = int(value)
+	case int:
+		budget = value
+	case int64:
+		budget = int(value)
+	case json.Number:
+		parsed, err := value.Int64()
+		if err == nil {
+			budget = int(parsed)
+		}
+	}
+	return budget == request.Thinking.BudgetTokens
 }
 
 func openAIAnthropicPromptRepresentable(request kernel.NormalizedRequest) bool {

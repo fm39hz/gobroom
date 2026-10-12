@@ -80,6 +80,33 @@ func TestGeminiCompatibilityPlanRejectsUnsupportedRequestFacetsBeforeDispatch(t 
 	}
 }
 
+func TestGeminiReasonsAboutBudgetSeparatelyFromEffort(t *testing.T) {
+	request := normalize.Request{
+		Model: "gemini", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: "hello"}},
+		Thinking: normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 1024},
+	}
+	policy := kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}
+	plan := NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: policy})
+	if !plan.Supported {
+		t.Fatalf("Gemini rejected an exactly mapped token budget: %#v", plan)
+	}
+	found := false
+	for _, mapping := range plan.Mappings {
+		if mapping.Facet == kernel.FacetReasoningBudget {
+			found = mapping.Disposition == kernel.FacetTranslated && strings.Contains(mapping.Reason, "exact reasoning token budget")
+		}
+	}
+	if !found {
+		t.Fatalf("compatibility plan did not declare exact budget translation: %#v", plan.Mappings)
+	}
+	request.Thinking.BudgetTokens = 0
+	plan = NewAdapter().PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}})
+	if plan.Supported {
+		t.Fatalf("missing required budget value was admitted: %#v", plan)
+	}
+}
+
 func TestKernelRejectsGeminiContinuityBeforePreparingUpstreamRequest(t *testing.T) {
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},

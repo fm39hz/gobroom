@@ -94,6 +94,29 @@ func TestCompatibilityPlanComposesFacetMappingsInStageOrder(t *testing.T) {
 	}
 }
 
+func TestRequiredRequestFacetsSeparateReasoningBudgetFromEffort(t *testing.T) {
+	contains := func(facets []string, wanted string) bool {
+		for _, facet := range facets {
+			if facet == wanted {
+				return true
+			}
+		}
+		return false
+	}
+	budget := RequiredRequestFacets(NormalizedRequest{Thinking: normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 512}})
+	if !contains(budget, FacetReasoningBudget) || contains(budget, FacetReasoningIntent) {
+		t.Fatalf("token budget was conflated with effort intent: %v", budget)
+	}
+	effort := RequiredRequestFacets(NormalizedRequest{Thinking: normalize.ThinkingIntent{Mode: "level", Effort: "high"}})
+	if !contains(effort, FacetReasoningIntent) || contains(effort, FacetReasoningBudget) {
+		t.Fatalf("effort level was conflated with token budget: %v", effort)
+	}
+	combined := RequiredRequestFacets(NormalizedRequest{Thinking: normalize.ThinkingIntent{Mode: "enabled", BudgetTokens: 1024}})
+	if !contains(combined, FacetReasoningIntent) || !contains(combined, FacetReasoningBudget) {
+		t.Fatalf("combined reasoning mode and budget lost a required facet: %v", combined)
+	}
+}
+
 func TestCompatibilityPlanFailsClosedForRequiredUnknownOrUnsupportedFacet(t *testing.T) {
 	cases := []struct {
 		name    string

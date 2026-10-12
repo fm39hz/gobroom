@@ -81,6 +81,54 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	}
 }
 
+func TestReasoningBudgetRaisesAnthropicOutputLimitOnlyWithNamedLossApproval(t *testing.T) {
+	maxOutput := 512
+	temperature, topP := 0.4, 0.8
+	request := normalize.Request{
+		Model: "role", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		SourceFormat: normalize.FormatOpenAIChat, Messages: []normalize.Message{{Role: "user", Content: "transcribe"}},
+		Thinking:   normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 2048},
+		Generation: normalize.GenerationOptions{MaxOutputTokens: &maxOutput, Temperature: &temperature, TopP: &topP, StopSequences: []string{"DONE"}},
+	}
+	adapter := NewAdapter().(kernel.ComposedAdapter)
+	policy := kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}
+	plan := adapter.PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: policy})
+	if plan.Supported {
+		t.Fatalf("output limit below reasoning budget was admitted without a loss grant: %#v", plan)
+	}
+	var loss *kernel.LossRecord
+	ungrantedReason := ""
+	for _, mapping := range plan.Mappings {
+		if mapping.Facet == kernel.FacetReasoningBudget && len(mapping.Losses) == 1 {
+			loss = &mapping.Losses[0]
+			ungrantedReason = mapping.Reason
+		}
+	}
+	if loss == nil || loss.ID != "anthropic.reasoning-budget-raises-max-output" || loss.Requested != float64(512) || loss.Effective != float64(3072) || !strings.Contains(ungrantedReason, "not permitted") {
+		if loss == nil {
+			t.Fatalf("reasoning-budget/output-limit mismatch lacks named loss evidence: %#v", plan.Mappings)
+		}
+		t.Fatalf("reasoning-budget/output-limit loss fields: id=%q requested=%T(%#v) effective=%T(%#v) reason=%q", loss.ID, loss.Requested, loss.Requested, loss.Effective, loss.Effective, ungrantedReason)
+	}
+	policy.AllowedLosses = []string{loss.ID}
+	plan = adapter.PlanCompatibility(kernel.CompatibilityContext{Request: request, Policy: policy})
+	if !plan.Supported {
+		t.Fatalf("explicitly granted Anthropic budget loss was not admitted: %#v", plan)
+	}
+	prepared, err := (Messages{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "claude-test"}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	thinking, _ := body["thinking"].(map[string]any)
+	if thinking["budget_tokens"] != float64(2048) || body["max_tokens"] != float64(3072) || body["temperature"] != 0.4 || body["top_p"] != 0.8 || !reflect.DeepEqual(body["stop_sequences"], []any{"DONE"}) {
+		t.Fatalf("Anthropic payload did not match admitted requested/effective values: %#v", body)
+	}
+}
+
 func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {
 	body := `{"id":"msg_live","type":"message","model":"claude-opus-4-8","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":10370,"output_tokens":4}}`
 	recorder := httptest.NewRecorder()

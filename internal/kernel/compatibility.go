@@ -36,6 +36,7 @@ const (
 	FacetToolHistory             = "tools.history"
 	FacetToolChoice              = "tools.choice"
 	FacetReasoningIntent         = "reasoning.intent"
+	FacetReasoningBudget         = "reasoning.budget"
 	FacetReasoningSignature      = "reasoning.signature"
 	FacetContinuity              = "continuity.previous_response"
 	FacetOpaqueContent           = "content.opaque"
@@ -392,8 +393,11 @@ func RequiredRequestFacets(request NormalizedRequest) []string {
 	if requestHasToolHistory(request.Messages) {
 		required = append(required, FacetToolHistory)
 	}
-	if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" || request.Thinking.Effort != "" || request.Thinking.BudgetTokens > 0 {
+	if request.Thinking.Mode != "" && request.Thinking.Mode != "inherit" && request.Thinking.Mode != "budget" || request.Thinking.Effort != "" {
 		required = append(required, FacetReasoningIntent)
+	}
+	if request.Thinking.Mode == "budget" || request.Thinking.BudgetTokens > 0 {
+		required = append(required, FacetReasoningBudget)
 	}
 	if request.Continuity.PreviousResponse != "" || request.Continuity.ResponseID != "" || len(request.Continuity.EncryptedContent) > 0 {
 		required = append(required, FacetContinuity)

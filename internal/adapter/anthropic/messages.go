@@ -84,19 +84,52 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 				} else {
 					mapping.Disposition = kernel.FacetPreserved
 				}
-			} else {
+			} else if anthropicReasoningIntentRepresentable(input.Request.Thinking) {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "canonical thinking intent is mapped to Anthropic thinking fields"
+			} else {
+				mapping.Reason = "Anthropic requires a supported reasoning mode and a positive budget for enabled thinking"
+			}
+		case kernel.FacetReasoningBudget:
+			if native {
+				if input.Request.Mutations.Thinking && anthropicHasUnsupportedFacet(input.Request, kernel.FacetReasoningBudget) {
+					mapping.Reason = "native thinking transform cannot rewrite an unsupported source reasoning budget"
+				} else {
+					mapping.Disposition = kernel.FacetPreserved
+					mapping.Reason = "native Anthropic reasoning budget is forwarded unchanged"
+				}
+			} else if (input.Request.Thinking.Mode == "budget" || input.Request.Thinking.Mode == "enabled") && input.Request.Thinking.BudgetTokens > 0 && input.Request.Thinking.Effort == "" {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "reasoning budget is mapped to Anthropic thinking.budget_tokens"
+				if maxOutput := input.Request.Generation.MaxOutputTokens; maxOutput != nil && *maxOutput <= input.Request.Thinking.BudgetTokens {
+					effective := input.Request.Thinking.BudgetTokens + 1024
+					mapping.Disposition = kernel.FacetDegraded
+					mapping.Reason = "Anthropic requires max_tokens above the reasoning budget; explicit loss approval is required"
+					mapping.Losses = []kernel.LossRecord{{
+						ID: "anthropic.reasoning-budget-raises-max-output", Requested: *maxOutput, Effective: effective,
+						SemanticPaths: []string{"generation.max_output_tokens", "thinking.budget_tokens"},
+					}}
+				}
 			}
 		case kernel.FacetToolHistory, kernel.FacetContinuity:
 			if native && facet == kernel.FacetToolHistory {
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "tool history is forwarded in native Anthropic messages"
 			}
-		case kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput, kernel.FacetGenerationOptions:
+		case kernel.FacetVisionInput, kernel.FacetAudioInput, kernel.FacetVideoInput, kernel.FacetDocumentInput:
 			if native {
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the native Anthropic payload is forwarded without rewriting"
+			}
+		case kernel.FacetGenerationOptions:
+			if native {
+				mapping.Disposition = kernel.FacetPreserved
+				mapping.Reason = "native Anthropic generation options are forwarded without rewriting"
+			} else if anthropicGenerationOptionsRepresentable(input.Request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "max output tokens, temperature, top-p and stop sequences are mapped to Anthropic fields"
+			} else {
+				mapping.Reason = "one or more generation options have no declared Anthropic mapping"
 			}
 		case kernel.FacetReasoningSignature, kernel.FacetOpaqueContent, kernel.FacetToolResultStatus, kernel.FacetToolBlockOrder, kernel.FacetClientMetadata:
 			if native {
@@ -178,6 +211,22 @@ func anthropicToolDefinitionsRepresentable(request kernel.NormalizedRequest) boo
 	}
 	return true
 }
+
+func anthropicGenerationOptionsRepresentable(request kernel.NormalizedRequest) bool {
+	return len(request.Generation.Unsupported) == 0
+}
+
+func anthropicReasoningIntentRepresentable(intent normalize.ThinkingIntent) bool {
+	switch intent.Mode {
+	case "disabled", "auto", "level":
+		return true
+	case "budget", "enabled":
+		return intent.BudgetTokens > 0 && intent.Effort == ""
+	default:
+		return false
+	}
+}
+
 func (c messagesRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	return c.adapter.Prepare(ctx, request, route, credential)
 }
@@ -479,6 +528,21 @@ func (a Messages) Prepare(_ context.Context, request kernel.NormalizedRequest, r
 			}
 			body["tool_choice"] = anthropicToolChoice(request.ToolChoice)
 		}
+		if !anthropicGenerationOptionsRepresentable(request) {
+			return kernel.UpstreamRequest{}, fmt.Errorf("Anthropic codec cannot represent generation options: %s", strings.Join(request.Generation.Unsupported, ", "))
+		}
+		if maxOutput := request.Generation.MaxOutputTokens; maxOutput != nil {
+			body["max_tokens"] = *maxOutput
+		}
+		if temperature := request.Generation.Temperature; temperature != nil {
+			body["temperature"] = *temperature
+		}
+		if topP := request.Generation.TopP; topP != nil {
+			body["top_p"] = *topP
+		}
+		if request.Generation.StopSequences != nil {
+			body["stop_sequences"] = append([]string(nil), request.Generation.StopSequences...)
+		}
 	}
 	body["model"] = route.ExternalModel
 	body["stream"] = request.Stream
@@ -507,7 +571,7 @@ func applyAnthropicThinking(body map[string]any, intent normalize.ThinkingIntent
 	for key, value := range translated {
 		body[key] = value
 	}
-	if intent.Mode == "budget" && intent.BudgetTokens > 0 {
+	if (intent.Mode == "budget" || intent.Mode == "enabled") && intent.BudgetTokens > 0 {
 		if max, ok := body["max_tokens"].(float64); !ok || int(max) <= intent.BudgetTokens {
 			body["max_tokens"] = intent.BudgetTokens + 1024
 		}

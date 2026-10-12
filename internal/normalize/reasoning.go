@@ -24,7 +24,7 @@ func AnthropicReasoning(intent ThinkingIntent) map[string]any {
 	switch intent.Mode {
 	case "disabled":
 		return map[string]any{"thinking": map[string]any{"type": "disabled"}}
-	case "budget":
+	case "budget", "enabled":
 		if intent.BudgetTokens > 0 {
 			return map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": intent.BudgetTokens}}
 		}
