@@ -191,6 +191,139 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("loopback listener unavailable in test environment: %v", err)
+	}
+	var upstreamCalls atomic.Int32
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/v1beta/models/gemini-3-flash:generateContent" || r.URL.RawQuery != "" {
+			t.Errorf("upstream target=%s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if r.Header.Get("x-goog-api-key") != "integration-key" {
+			t.Errorf("x-goog-api-key=%q", r.Header.Get("x-goog-api-key"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode Gemini request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if body["messages"] != nil || body["input"] != nil || body["instructions"] != nil {
+			t.Errorf("Responses wire leaked into Gemini request: %#v", body)
+		}
+		instruction, _ := body["systemInstruction"].(map[string]any)
+		instructionParts, _ := instruction["parts"].([]any)
+		contents, _ := body["contents"].([]any)
+		tools, _ := body["tools"].([]any)
+		config, _ := body["toolConfig"].(map[string]any)
+		calling, _ := config["functionCallingConfig"].(map[string]any)
+		generation, _ := body["generationConfig"].(map[string]any)
+		thinking, _ := generation["thinkingConfig"].(map[string]any)
+		if len(instructionParts) != 1 || len(contents) != 3 || len(tools) != 1 || calling["mode"] != "ANY" || body["temperature"] != nil || generation["temperature"] != 0.2 || generation["topP"] != 0.7 || generation["maxOutputTokens"] != float64(512) || thinking["thinkingLevel"] != "high" {
+			t.Errorf("typed Responses request was not composed as Gemini request: %#v", body)
+		}
+		userTurn, _ := contents[0].(map[string]any)
+		userParts, _ := userTurn["parts"].([]any)
+		if len(userParts) != 1 || userParts[0].(map[string]any)["text"] != "Find item 7." {
+			t.Errorf("Responses input message mapping=%#v", contents[0])
+		}
+		modelTurn, _ := contents[1].(map[string]any)
+		modelParts, _ := modelTurn["parts"].([]any)
+		if len(modelParts) != 1 || modelParts[0].(map[string]any)["functionCall"] == nil {
+			t.Errorf("Responses function call history mapping=%#v", contents[1])
+		}
+		toolTurn, _ := contents[2].(map[string]any)
+		toolParts, _ := toolTurn["parts"].([]any)
+		if len(toolParts) != 1 || toolParts[0].(map[string]any)["functionResponse"] == nil {
+			t.Errorf("Responses function result history mapping=%#v", contents[2])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"Found it."},{"functionCall":{"name":"lookup","args":{"found":true}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":14,"candidatesTokenCount":4}}`)
+	}))
+	upstream.Listener = listener
+	upstream.Start()
+	defer upstream.Close()
+
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := provider.NewRuntimeBindingBuilder(registry).Build("gemini", provider.OperationChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini-route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "gemini-route", NodeID: "gemini-node", DefinitionID: "gemini",
+			DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1},
+			Protocol:      kernel.ProtocolGemini, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection",
+			Profile: kernel.CapabilityProfile{
+				kernel.CapabilityTools:  {State: kernel.SupportNative},
+				kernel.CapabilityVision: {State: kernel.SupportNative},
+			}, Enabled: true,
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {
+				ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}, SessionStoreRef: binding.SessionStoreRef,
+			}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, kernel.AlwaysOpenGate{}, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters[binding.AdapterID] = binding.Adapter
+	engine.SessionStores[binding.SessionStoreRef] = binding.SessionStore
+	requestBody := `{"model":"junior","instructions":"Be precise.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."}]},{"type":"function_call","call_id":"call_prior","name":"lookup","arguments":"{\"id\":7}"},{"type":"function_call_output","call_id":"call_prior","output":"{\"found\":true}"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":512,"temperature":0.2,"top_p":0.7,"reasoning":{"effort":"high"}}`
+	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanations, err := engine.ExplainCompatibility(context.Background(), "junior", parsed.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explanations) != 1 || !explanations[0].Compatible {
+		t.Fatalf("Responses→Gemini compatibility=%#v", explanations)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Object string           `json:"object"`
+		Status string           `json:"status"`
+		Output []map[string]any `json:"output"`
+		Usage  map[string]int64 `json:"usage"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode OpenAI Responses projection %q: %v", writer.Body.String(), err)
+	}
+	if upstreamCalls.Load() != 1 || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 || result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["name"] != "lookup" || result.Usage["input_tokens"] != 14 || result.Usage["output_tokens"] != 4 {
+		t.Fatalf("Gemini→Responses result=%#v upstream calls=%d", result, upstreamCalls.Load())
+	}
+	for _, unsupported := range []string{
+		`{"model":"junior","previous_response_id":"resp_previous","input":"continue"}`,
+		`{"model":"junior","store":true,"input":"do not persist"}`,
+		`{"model":"junior","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"https://images.example/image.png"}]}]}`,
+	} {
+		unsupportedRequest, err := normalize.JSON("/v1/responses", http.Header{}, []byte(unsupported))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Execute(context.Background(), unsupportedRequest.Request, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || upstreamCalls.Load() != 1 {
+			t.Fatalf("unmapped Responses semantic reached Gemini: request=%s err=%v calls=%d", unsupported, err, upstreamCalls.Load())
+		}
+	}
+}
+
 func containsSignatureProof(proofs []kernel.SignatureProof, expected kernel.SignatureProof) bool {
 	for _, proof := range proofs {
 		if proof == expected {

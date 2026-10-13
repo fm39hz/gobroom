@@ -47,6 +47,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/adapter/gemini -run '^TestGeminiSignatureHistoryRequiresExactSessionIssuerAttestation$$' -count=1
 	go test ./internal/adapter/gemini -run '^TestGeminiToolCallWithoutProviderIDGetsStableResponseIdentity$$' -count=1
 	go test ./internal/kernel -run '^TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip$$' -count=1
+	go test ./internal/kernel -run '^TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack$$' -count=1
 	go test ./internal/kernel -run '^TestRequestTransformCannotAppendOpaqueMessageMetadata$$' -count=1
 	go test ./internal/adapter/openai -run '^(TestOpenAIChatBudgetRequiresExactNativeSourceEvidence|TestNativeResponsesBudgetRequiresExactUnmodifiedSourceEvidence|TestNativeChatReasoningMutationRequiresDeclaredModeMapping|TestNativeResponsesReasoningMutationRequiresDeclaredModeMapping|TestKernelExcludesTransformedUnsupportedResponsesReasoningBeforeDispatch|TestMalformedAnthropicReasoningCannotBeReclaimedByOpenAIChatCodec|TestParserUnsupportedAnthropicToolChoiceCannotBeReclaimedByOpenAIChatCodec)$$' -count=1
 	go test ./internal/adapter/openai -run '^TestKernelPreservesNativeChatSSEWithoutTransforms$$' -count=1

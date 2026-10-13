@@ -28,6 +28,7 @@ func (requestCodec) ID() string { return "gemini-json" }
 func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
 	request := input.Request
 	nativeIngress := request.SourceFormat == normalize.FormatOpenAIChat
+	responsesIngress := request.SourceFormat == normalize.FormatOpenAIResponses
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
 		if kernel.IsResponseCompatibilityFacet(facet) {
@@ -36,6 +37,55 @@ func (requestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []k
 		mapping := kernel.FacetMapping{Facet: facet, Paths: []string{"invocation"}, Disposition: kernel.FacetUnsupported, Reason: "Gemini request codec has no safe mapping for this facet"}
 		if geminiHasUnsupportedFacet(request, facet) {
 			mapping.Reason = "source normalization marked this required facet unsupported"
+			result = append(result, mapping)
+			continue
+		}
+		if responsesIngress {
+			mapping.Reason = "OpenAI Responses semantics have no declared Gemini mapping for this facet"
+			if !geminiResponsesEnvelopeRepresentable(request) || geminiHasUnsupportedFacet(request, facet) {
+				mapping.Reason = "Responses envelope or normalization contains semantics unsupported by Gemini"
+				result = append(result, mapping)
+				continue
+			}
+			switch facet {
+			case kernel.FacetWireRequest:
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "OpenAI Responses input is rebuilt from typed messages as Gemini contents"
+			case kernel.FacetPromptLayers:
+				if geminiPromptLayersRepresentable(request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Responses instructions are mapped to Gemini systemInstruction"
+				}
+			case kernel.FacetToolDefinitions:
+				if geminiToolDefinitionsRepresentable(request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Responses function declarations are mapped to Gemini functionDeclarations"
+				}
+			case kernel.FacetToolHistory:
+				if geminiToolHistoryRepresentable(request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Responses function calls and outputs are mapped to Gemini functionCall/functionResponse parts"
+				}
+			case kernel.FacetToolChoice:
+				if geminiResponsesToolChoiceRepresentable(request.ToolChoice) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "typed Responses tool choice is mapped to Gemini function-calling configuration"
+				}
+			case kernel.FacetReasoningIntent:
+				if _, err := geminiThinkingConfigFor(request.Thinking); err == nil {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Responses reasoning effort is mapped to Gemini thinkingConfig"
+				} else {
+					mapping.Reason = err.Error()
+				}
+			case kernel.FacetReasoningBudget:
+				if (request.Thinking.Mode == "budget" || request.Thinking.Mode == "enabled") && request.Thinking.BudgetTokens > 0 && request.Thinking.Effort == "" {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Responses reasoning budget is mapped to Gemini thinkingBudget"
+				}
+			case kernel.FacetVisionInput:
+				if geminiVisionInputRepresentable(request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "base64 Responses image inputs are mapped to Gemini inlineData"
+				}
+			case kernel.FacetGenerationOptions:
+				if geminiResponsesGenerationOptionsRepresentable(request) {
+					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Responses generation options have explicit Gemini mappings"
+				}
+			}
 			result = append(result, mapping)
 			continue
 		}
@@ -131,8 +181,10 @@ func (c requestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequ
 
 func geminiPromptLayersRepresentable(request kernel.NormalizedRequest) bool {
 	for _, layer := range request.Prompt.Layers {
-		if len(layer.Parts) > 0 {
-			return false
+		for _, part := range layer.Parts {
+			if part.Type != "text" {
+				return false
+			}
 		}
 	}
 	return true
@@ -222,6 +274,22 @@ func geminiArgumentsObject(value any) bool {
 func geminiVisionInputRepresentable(request kernel.NormalizedRequest) bool {
 	foundImage := false
 	valid := true
+	for _, message := range request.Messages {
+		if parts, ok := message.Content.([]normalize.ContentPart); ok {
+			for _, part := range parts {
+				if part.Type != "image" {
+					continue
+				}
+				foundImage = true
+				imageURL := part.URL
+				if imageURL == "" && part.Data != "" && part.MediaType != "" {
+					imageURL = "data:" + part.MediaType + ";base64," + part.Data
+				}
+				valid = valid && part.Detail == "" && strings.HasPrefix(imageURL, "data:image/") && strings.Contains(imageURL, ";base64,")
+			}
+			continue
+		}
+	}
 	var visit func(any)
 	visit = func(value any) {
 		switch item := value.(type) {
@@ -432,6 +500,9 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 // the raw Chat body through would send `messages` to Gemini and appear to work
 // for neither tools nor streaming.
 func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	if len(request.UnsupportedFacets) > 0 {
+		return kernel.UpstreamRequest{}, fmt.Errorf("Gemini request contains unsupported semantic facets: %s", strings.Join(request.UnsupportedFacets, ", "))
+	}
 	if !geminiSignatureHistoryRepresentable(request, route.DefinitionRef) {
 		return kernel.UpstreamRequest{}, fmt.Errorf("Gemini cannot replay a tool signature without an attestation from this provider definition")
 	}
@@ -463,16 +534,34 @@ func geminiRequest(request kernel.NormalizedRequest) (generateContentRequest, er
 		if layer.Text != "" {
 			systemParts = append(systemParts, geminiPart{Text: layer.Text})
 		}
+		for _, part := range layer.Parts {
+			if part.Type != "text" {
+				return generateContentRequest{}, fmt.Errorf("Gemini systemInstruction cannot encode prompt part %q", part.Type)
+			}
+			systemParts = append(systemParts, geminiPart{Text: part.Text})
+		}
 	}
 	var options openAIChatRequestOptions
-	if len(request.Raw) > 0 {
-		raw, err := json.Marshal(request.Raw)
-		if err != nil {
-			return generateContentRequest{}, fmt.Errorf("encode OpenAI request options: %w", err)
+	responsesIngress := request.SourceFormat == normalize.FormatOpenAIResponses
+	if responsesIngress {
+		if !geminiResponsesEnvelopeRepresentable(request) || !geminiResponsesGenerationOptionsRepresentable(request) || !geminiResponsesToolChoiceRepresentable(request.ToolChoice) {
+			return generateContentRequest{}, fmt.Errorf("OpenAI Responses request has fields that Gemini cannot preserve")
 		}
-		if err := decodeStrictJSON(raw, &options); err != nil {
-			return generateContentRequest{}, fmt.Errorf("decode OpenAI request options: %w", err)
+		options.Temperature = request.Generation.Temperature
+		options.TopP = request.Generation.TopP
+		options.MaxCompletionTokens = request.Generation.MaxOutputTokens
+	} else if request.SourceFormat == normalize.FormatOpenAIChat || request.SourceFormat == "" {
+		if len(request.Raw) > 0 {
+			raw, err := json.Marshal(request.Raw)
+			if err != nil {
+				return generateContentRequest{}, fmt.Errorf("encode OpenAI request options: %w", err)
+			}
+			if err := decodeStrictJSON(raw, &options); err != nil {
+				return generateContentRequest{}, fmt.Errorf("decode OpenAI request options: %w", err)
+			}
 		}
+	} else {
+		return generateContentRequest{}, fmt.Errorf("Gemini request codec does not support client contract %q", request.SourceFormat)
 	}
 	if options.Logprobs != nil || options.TopLogprobs != nil || len(options.LogitBias) > 0 || len(options.Functions) > 0 || len(options.FunctionCall) > 0 || options.ParallelToolCalls != nil {
 		return generateContentRequest{}, fmt.Errorf("Gemini adapter cannot preserve one or more requested OpenAI options: logprobs, logit_bias, legacy functions/function_call, parallel_tool_calls")
@@ -580,15 +669,36 @@ func geminiRequest(request kernel.NormalizedRequest) (generateContentRequest, er
 			declarations = append(declarations, geminiFunctionDeclaration{Name: function.Name, Description: function.Description, Parameters: function.Parameters})
 		}
 		body.Tools = []geminiTool{{FunctionDeclarations: declarations}}
-		if choice, err := geminiToolMode(options.ToolChoice); err != nil {
+		var choice *geminiFunctionCallingConfig
+		var err error
+		if responsesIngress {
+			choice, err = geminiToolModeForNormalizedChoice(request.ToolChoice)
+		} else {
+			choice, err = geminiToolMode(options.ToolChoice)
+		}
+		if err != nil {
 			return generateContentRequest{}, err
-		} else if choice != nil {
+		}
+		if choice != nil {
 			body.ToolConfig = &geminiToolConfig{FunctionCallingConfig: *choice}
 		}
-	} else if choice, err := geminiToolMode(options.ToolChoice); err != nil {
-		return generateContentRequest{}, err
-	} else if choice != nil && choice.Mode != "NONE" {
-		return generateContentRequest{}, fmt.Errorf("OpenAI tool_choice requests tool use but the request contains no tools")
+	} else {
+		var choice *geminiFunctionCallingConfig
+		var err error
+		if responsesIngress {
+			choice, err = geminiToolModeForNormalizedChoice(request.ToolChoice)
+		} else {
+			choice, err = geminiToolMode(options.ToolChoice)
+		}
+		if err != nil {
+			return generateContentRequest{}, err
+		}
+		if choice != nil && choice.Mode != "NONE" {
+			return generateContentRequest{}, fmt.Errorf("OpenAI tool_choice requests tool use but the request contains no tools")
+		}
+		if choice != nil {
+			body.ToolConfig = &geminiToolConfig{FunctionCallingConfig: *choice}
+		}
 	}
 
 	generation := &geminiGenerationConfig{
