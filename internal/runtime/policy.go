@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -109,20 +110,24 @@ func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 		if limit.Name == "" {
 			continue
 		}
-		snapshot := quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: limit.Name, Source: string(limit.Source), Generation: route.HealthGeneration.ForQuota(route.CredentialID, route.ExternalModel)}
+		authority := quota.AuthorityFromSource(string(limit.Source))
+		if authority == quota.AuthorityUnknown {
+			authority = quota.AuthorityInferred
+		}
+		snapshot := quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: limit.Name, Source: string(limit.Source), Authority: authority, ObservedAt: time.Now(), Generation: route.HealthGeneration.ForQuota(route.CredentialID, route.ExternalModel)}
 		snapshot.Limit, snapshot.Remaining, snapshot.ResetAt = limit.Limit, limit.Remaining, limit.ResetAt
 		if limit.Used != nil {
 			snapshot.Used = *limit.Used
 		}
-		if !g.Health.QuotaGenerationCurrent(snapshot) {
+		resolved, accepted := g.upsertQuotaAtCurrentGeneration(snapshot)
+		if !accepted {
 			continue
 		}
-		g.setQuota(snapshot)
 		g.mu.RLock()
 		observer := g.quotaObserver
 		g.mu.RUnlock()
 		if observer != nil {
-			observer(snapshot)
+			observer(resolved)
 		}
 	}
 }
@@ -252,23 +257,59 @@ func (g *PolicyGate) expireAffinity(now time.Time, forceOne bool) {
 	}
 }
 func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
+	_ = normalizeQuotaObservation(&snapshot, quota.AuthorityExplicit)
 	g.setQuota(snapshot)
 }
 
-func (g *PolicyGate) setQuota(snapshot quota.Snapshot) {
+func (g *PolicyGate) setQuota(snapshot quota.Snapshot) quota.Snapshot {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.quotas[quotaKey(snapshot)] = snapshot
+	key := quotaKey(snapshot)
+	if current, exists := g.quotas[key]; exists {
+		snapshot = quota.MergeSnapshot(current, snapshot)
+	}
+	g.quotas[key] = snapshot
+	return snapshot
 }
 
 func (g *PolicyGate) TrySetQuota(snapshot quota.Snapshot) bool {
+	_, accepted := g.UpsertQuota(snapshot)
+	return accepted
+}
+
+func (g *PolicyGate) UpsertQuota(snapshot quota.Snapshot) (quota.Snapshot, bool) {
 	g.generationMu.RLock()
 	defer g.generationMu.RUnlock()
+	return g.upsertQuotaAtCurrentGeneration(snapshot)
+}
+
+func (g *PolicyGate) upsertQuotaAtCurrentGeneration(snapshot quota.Snapshot) (quota.Snapshot, bool) {
 	if !g.Health.QuotaGenerationCurrent(snapshot) {
-		return false
+		return quota.Snapshot{}, false
 	}
-	g.setQuota(snapshot)
-	return true
+	if err := normalizeQuotaObservation(&snapshot, quota.AuthorityQuotaAPI); err != nil {
+		return quota.Snapshot{}, false
+	}
+	return g.setQuota(snapshot), true
+}
+
+func normalizeQuotaObservation(snapshot *quota.Snapshot, fallback quota.EvidenceAuthority) error {
+	if snapshot == nil {
+		return fmt.Errorf("quota snapshot is required")
+	}
+	if snapshot.ObservedAt.IsZero() {
+		snapshot.ObservedAt = time.Now()
+	}
+	if snapshot.Authority == quota.AuthorityUnknown {
+		snapshot.Authority = quota.AuthorityFromSource(snapshot.Source)
+		if snapshot.Authority == quota.AuthorityUnknown {
+			snapshot.Authority = fallback
+		}
+	}
+	if snapshot.Source == "" && snapshot.Authority != quota.AuthorityUnknown {
+		snapshot.Source = snapshot.Authority.String()
+	}
+	return nil
 }
 
 func (g *PolicyGate) ClearQuotasForConnection(connectionID string) {

@@ -223,11 +223,26 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 		t.Fatal(err)
 	}
 	remaining := float64(0)
-	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Generation: "generation-a", Remaining: &remaining}); err != nil {
+	observedAt := time.Now().UTC()
+	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Generation: "generation-a", Authority: quota.AuthorityResponseHeader, ObservedAt: observedAt, Remaining: &remaining, Source: "response_header"}); err != nil {
 		t.Fatal(err)
 	}
-	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 1 || snapshots[0].Generation != "generation-a" {
+	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 1 || snapshots[0].Generation != "generation-a" || snapshots[0].Authority != quota.AuthorityResponseHeader || !snapshots[0].ObservedAt.Equal(observedAt) {
 		t.Fatalf("quota generation did not round-trip: %#v err=%v", snapshots, err)
+	}
+	olderRemaining := float64(20)
+	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Generation: "generation-a", Authority: quota.AuthorityQuotaAPI, ObservedAt: time.Now().Add(-time.Minute), Remaining: &olderRemaining, Source: "http-json-quota"}); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 1 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 0 || snapshots[0].Authority != quota.AuthorityResponseHeader {
+		t.Fatalf("older quota API write overwrote newer stored observation: %#v err=%v", snapshots, err)
+	}
+	equalTimeAPI := quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Generation: "generation-a", Authority: quota.AuthorityQuotaAPI, ObservedAt: observedAt, Remaining: &olderRemaining, Source: "http-json-quota"}
+	if err := s.SaveQuotaSnapshot(equalTimeAPI); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 1 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 0 || snapshots[0].Authority != quota.AuthorityResponseHeader {
+		t.Fatalf("equal-time lower-authority write overwrote header evidence: %#v err=%v", snapshots, err)
 	}
 	if err := s.SaveProviderRuntime(ProviderRuntime{ProviderNodeID: "node-a", Status: "cooldown", ConsecutiveFailures: 1, ErrorCode: "capacity"}); err != nil {
 		t.Fatal(err)

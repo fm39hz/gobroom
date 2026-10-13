@@ -172,15 +172,20 @@ blocking window is exhausted; non-blocking low headroom may influence ranking.
 
 ## Passive limit collection
 
-Evidence priority:
+Quota window conflict resolution:
 
 ```text
-response headers from real success/failure
-  -> success body metadata
-  -> error body metadata
-  -> opportunistic quota enrichment after quota-like evidence
-  -> estimated category backoff
+newer observation timestamp
+  -> wins over older evidence for the same provider/connection/model/window
+  -> equal timestamp: response header > success body > error body > quota API > inferred
 ```
+
+Quota API observations are timestamped when the fetch starts, so a slow
+enrichment cannot overwrite a later real inference response. Different scopes
+and named windows remain separate entries; a broad provider snapshot never
+erases a more specific connection/model window. SQLite applies the same
+freshness/authority rule atomically, so out-of-order asynchronous writes cannot
+reintroduce an older value.
 
 The generic HTTP/JSON classifier recognizes `Retry-After` (delta or
 HTTP-date), common rate-limit headers, and common JSON error-envelope fields

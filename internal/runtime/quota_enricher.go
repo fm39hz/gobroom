@@ -79,6 +79,7 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 	}
 	q.last[key] = now
 	q.mu.Unlock()
+	requestedAt := now
 	timeout := q.Timeout
 	if timeout <= 0 {
 		timeout = 15 * time.Second
@@ -108,6 +109,13 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 				snapshot.ModelRef = route.ExternalModel
 			}
 			snapshot.Generation = route.HealthGeneration.ForQuota(snapshot.ConnectionID, snapshot.ModelRef)
+			snapshot.Authority = quota.AuthorityQuotaAPI
+			if snapshot.Source == "" {
+				snapshot.Source = "quota_api"
+			}
+			if snapshot.ObservedAt.IsZero() {
+				snapshot.ObservedAt = requestedAt
+			}
 			q.Record(snapshot)
 		}
 		return nil, nil

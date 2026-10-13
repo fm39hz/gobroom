@@ -71,6 +71,7 @@ func (p QuotaPoller) poll(ctx context.Context) {
 		if endpoint == nil || transport == nil {
 			continue
 		}
+		requestedAt := time.Now()
 		snapshots, err := source.Fetch(ctx, provider.QuotaRequest{Credential: credential, Route: route, Endpoint: endpoint, Transport: transport, EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName})
 		if err != nil {
 			continue
@@ -86,6 +87,13 @@ func (p QuotaPoller) poll(ctx context.Context) {
 				snapshot.ModelRef = route.ExternalModel
 			}
 			snapshot.Generation = route.HealthGeneration.ForQuota(snapshot.ConnectionID, snapshot.ModelRef)
+			snapshot.Authority = quota.AuthorityQuotaAPI
+			if snapshot.Source == "" {
+				snapshot.Source = "quota_api"
+			}
+			if snapshot.ObservedAt.IsZero() {
+				snapshot.ObservedAt = requestedAt
+			}
 			p.Record(snapshot)
 		}
 	}

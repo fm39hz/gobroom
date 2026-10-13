@@ -98,7 +98,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
 CREATE TABLE IF NOT EXISTS quota_snapshots (
   id TEXT PRIMARY KEY, provider_node_id TEXT NOT NULL, connection_id TEXT,
-  model_ref TEXT, window_name TEXT NOT NULL, generation TEXT NOT NULL DEFAULT '', used REAL NOT NULL DEFAULT 0,
+  model_ref TEXT, window_name TEXT NOT NULL, generation TEXT NOT NULL DEFAULT '',
+  authority INTEGER NOT NULL DEFAULT 0, observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  observed_at_ns INTEGER NOT NULL DEFAULT 0, used REAL NOT NULL DEFAULT 0,
   limit_value REAL, remaining REAL, reset_at TEXT, source TEXT NOT NULL DEFAULT 'provider',
   metadata_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -228,6 +230,9 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE provider_runtime ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_availability ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE quota_snapshots ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE quota_snapshots ADD COLUMN authority INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.DB.Exec(`ALTER TABLE quota_snapshots ADD COLUMN observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP`)
+	_, _ = s.DB.Exec(`ALTER TABLE quota_snapshots ADD COLUMN observed_at_ns INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE transform_bindings ADD COLUMN failure_mode TEXT NOT NULL DEFAULT 'fail_closed'`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
@@ -1058,12 +1063,25 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 
 func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
 	metadata := "{}"
-	_, err := s.DB.Exec(`INSERT INTO quota_snapshots(id,provider_node_id,connection_id,model_ref,window_name,generation,used,limit_value,remaining,reset_at,source,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,used=excluded.used,limit_value=excluded.limit_value,remaining=excluded.remaining,reset_at=excluded.reset_at,source=excluded.source,updated_at=CURRENT_TIMESTAMP`, quotaID(snapshot), snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.Generation, snapshot.Used, snapshot.Limit, snapshot.Remaining, timeString(snapshot.ResetAt), snapshot.Source, metadata)
+	if snapshot.ObservedAt.IsZero() {
+		snapshot.ObservedAt = time.Now()
+	}
+	if snapshot.Authority == quota.AuthorityUnknown {
+		snapshot.Authority = quota.AuthorityFromSource(snapshot.Source)
+		if snapshot.Authority == quota.AuthorityUnknown {
+			snapshot.Authority = quota.AuthorityExplicit
+		}
+	}
+	if snapshot.Source == "" {
+		snapshot.Source = snapshot.Authority.String()
+	}
+	observedAt := snapshot.ObservedAt.UTC()
+	_, err := s.DB.Exec(`INSERT INTO quota_snapshots(id,provider_node_id,connection_id,model_ref,window_name,generation,authority,observed_at,observed_at_ns,used,limit_value,remaining,reset_at,source,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,authority=excluded.authority,observed_at=excluded.observed_at,observed_at_ns=excluded.observed_at_ns,used=excluded.used,limit_value=COALESCE(excluded.limit_value,quota_snapshots.limit_value),remaining=COALESCE(excluded.remaining,quota_snapshots.remaining),reset_at=COALESCE(excluded.reset_at,quota_snapshots.reset_at),source=excluded.source,metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP WHERE excluded.observed_at_ns>quota_snapshots.observed_at_ns OR (excluded.observed_at_ns=quota_snapshots.observed_at_ns AND (excluded.authority>quota_snapshots.authority OR (excluded.authority=quota_snapshots.authority AND excluded.source>=quota_snapshots.source)))`, quotaID(snapshot), snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.Generation, int(snapshot.Authority), observedAt.Format(time.RFC3339Nano), observedAt.UnixNano(), snapshot.Used, snapshot.Limit, snapshot.Remaining, timeString(snapshot.ResetAt), snapshot.Source, metadata)
 	return err
 }
 
 func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
-	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,generation,used,limit_value,remaining,COALESCE(reset_at,''),source FROM quota_snapshots`)
+	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,generation,authority,observed_at_ns,used,limit_value,remaining,COALESCE(reset_at,''),source FROM quota_snapshots`)
 	if err != nil {
 		return nil, err
 	}
@@ -1071,10 +1089,16 @@ func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
 	var result []quota.Snapshot
 	for rows.Next() {
 		var p quota.Snapshot
+		var authority int
+		var observedAt int64
 		var limit, remaining sql.NullFloat64
 		var reset, source string
-		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Generation, &p.Used, &limit, &remaining, &reset, &source); err != nil {
+		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Generation, &authority, &observedAt, &p.Used, &limit, &remaining, &reset, &source); err != nil {
 			return nil, err
+		}
+		p.Authority = quota.EvidenceAuthority(authority)
+		if observedAt > 0 {
+			p.ObservedAt = time.Unix(0, observedAt).UTC()
 		}
 		if limit.Valid {
 			v := limit.Float64

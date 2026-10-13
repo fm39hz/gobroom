@@ -320,10 +320,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 		},
 		Record: func(snapshot quota.Snapshot) {
-			if !d.policy.TrySetQuota(snapshot) {
+			resolved, accepted := d.policy.UpsertQuota(snapshot)
+			if !accepted {
 				return
 			}
-			if !quotaPersistence.Enqueue(snapshot) {
+			if !quotaPersistence.Enqueue(resolved) {
 				d.appendLog("warn", "opportunistic quota snapshot was not queued (queue full or configuration reset in progress)")
 			}
 		},
@@ -354,10 +355,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 				return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 			},
 			Record: func(snapshot quota.Snapshot) {
-				if !d.policy.TrySetQuota(snapshot) {
+				resolved, accepted := d.policy.UpsertQuota(snapshot)
+				if !accepted {
 					return
 				}
-				if !quotaPersistence.Enqueue(snapshot) {
+				if !quotaPersistence.Enqueue(resolved) {
 					d.appendLog("warn", "quota poll snapshot was not queued (queue full or configuration reset in progress)")
 				}
 			},
@@ -1091,13 +1093,17 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if snapshot.Generation == "" && !d.policy.Health.AttachQuotaGeneration(&snapshot) {
 			return fail(request, "quota snapshot does not match an active provider/connection/model")
 		}
-		if !d.policy.TrySetQuota(snapshot) {
+		if snapshot.Authority == quota.AuthorityUnknown {
+			snapshot.Authority = quota.AuthorityExplicit
+		}
+		resolved, accepted := d.policy.UpsertQuota(snapshot)
+		if !accepted {
 			return fail(request, "quota snapshot belongs to an obsolete provider configuration")
 		}
-		if err := d.store.SaveQuotaSnapshot(snapshot); err != nil {
+		if err := d.store.SaveQuotaSnapshot(resolved); err != nil {
 			return fail(request, err.Error())
 		}
-		return success(request, snapshot)
+		return success(request, resolved)
 	case "providers.create":
 		var input store.CreateProviderNodeInput
 		if err := decodeParams(request.Params, &input); err != nil {

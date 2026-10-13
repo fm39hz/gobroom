@@ -29,6 +29,13 @@ func TestHealthEntryDistinguishesPermanentInvalidationFromCooldown(t *testing.T)
 	}
 }
 
+func TestQuotaEntryShowsEvidenceAuthorityAndObservationTime(t *testing.T) {
+	entries, err := makeEntries("quota.list", json.RawMessage(`[{"ProviderNodeID":"provider","ConnectionID":"connection","ModelRef":"model","WindowName":"daily","Source":"openrouter-quota","Authority":"quota_api","ObservedAt":"2026-10-13T10:00:00Z","Remaining":0}]`), nil)
+	if err != nil || len(entries) != 1 || !strings.Contains(entries[0].detail, "Authority  quota_api") || !strings.Contains(entries[0].detail, "Observed   2026-10-13T10:00:00Z") {
+		t.Fatalf("quota evidence inspector=%#v err=%v", entries, err)
+	}
+}
+
 func TestPhysicalModelEntryUsesProviderPrefixAndKeepsCatalogIDInInspector(t *testing.T) {
 	providers := []providerNode{{ID: "node-secret-id", Name: "Orca", Prefix: "orca"}}
 	raw := json.RawMessage(`[{

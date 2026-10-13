@@ -96,6 +96,41 @@ func TestProviderModelQuotaGenerationIsStableAcrossConnections(t *testing.T) {
 	}
 }
 
+func TestPolicyGateResolvesQuotaSourcesByFreshnessAndAuthority(t *testing.T) {
+	gate := NewPolicyGate()
+	remainingZero := float64(0)
+	remainingFull := float64(12)
+	at := time.Now().UTC().Truncate(time.Second)
+	header := quota.Snapshot{ProviderNodeID: "provider", ConnectionID: "connection", ModelRef: "model", WindowName: "daily", Remaining: &remainingZero, Source: "response_header", Authority: quota.AuthorityResponseHeader, ObservedAt: at}
+	gate.SetQuota(header)
+	olderAPI := quota.Snapshot{ProviderNodeID: "provider", ConnectionID: "connection", ModelRef: "model", WindowName: "daily", Remaining: &remainingFull, Source: "http-json-quota", Authority: quota.AuthorityQuotaAPI, ObservedAt: at.Add(-time.Second)}
+	if !gate.TrySetQuota(olderAPI) {
+		t.Fatal("quota snapshot with no generation was rejected before generation fencing is enabled")
+	}
+	got := gate.Quotas()[quotaKey(header)]
+	if got.Remaining == nil || *got.Remaining != 0 || got.Authority != quota.AuthorityResponseHeader {
+		t.Fatalf("older quota API observation overwrote newer header evidence: %#v", got)
+	}
+	equalTimeAPI := olderAPI
+	equalTimeAPI.ObservedAt = at
+	if !gate.TrySetQuota(equalTimeAPI) {
+		t.Fatal("equal-time quota evidence was unexpectedly rejected")
+	}
+	got = gate.Quotas()[quotaKey(header)]
+	if got.Remaining == nil || *got.Remaining != 0 || got.Authority != quota.AuthorityResponseHeader {
+		t.Fatalf("lower-authority evidence overwrote equal-time header evidence: %#v", got)
+	}
+	newerAPI := olderAPI
+	newerAPI.ObservedAt = at.Add(time.Second)
+	if !gate.TrySetQuota(newerAPI) {
+		t.Fatal("newer provider API evidence was unexpectedly rejected")
+	}
+	got = gate.Quotas()[quotaKey(header)]
+	if got.Remaining == nil || *got.Remaining != 12 || got.Authority != quota.AuthorityQuotaAPI {
+		t.Fatalf("newer quota API evidence did not refresh the window: %#v", got)
+	}
+}
+
 func TestStructuredQuotaErrorEvidenceBlocksOnlyUntilProviderReset(t *testing.T) {
 	gate := NewPolicyGate()
 	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", Enabled: true}
