@@ -18,6 +18,28 @@ func TestResponsesNormalizesToSemanticMessages(t *testing.T) {
 	}
 }
 
+func TestResponsesReasoningBudgetRemainsSeparateFromEffort(t *testing.T) {
+	result, err := Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "junior", "input": "think", "reasoning": map[string]any{"max_output_tokens": float64(2048)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := result.Request.Thinking
+	if intent.Mode != "budget" || intent.BudgetTokens != 2048 || intent.Effort != "" || intent.Source != "reasoning" {
+		t.Fatalf("Responses reasoning budget was not typed independently: %#v", intent)
+	}
+	invalid, err := Map("/v1/responses", http.Header{}, map[string]any{
+		"model": "junior", "input": "think", "reasoning": map[string]any{"max_output_tokens": float64(2048), "effort": "high"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invalid.Request.UnsupportedFacets) == 0 {
+		t.Fatalf("conflicting Responses reasoning intent/budget was accepted: %#v", invalid.Request.Thinking)
+	}
+}
+
 func TestIdempotencyKeyIsRequestScopedAndValidated(t *testing.T) {
 	headers := http.Header{"Idempotency-Key": []string{"client-key-01"}}
 	result, err := Map("/v1/chat/completions", headers, map[string]any{"model": "m", "messages": []any{map[string]any{"role": "user", "content": "hello"}}})

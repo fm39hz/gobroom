@@ -182,8 +182,8 @@ func TestNativeResponsesCompatibilityRejectsUnsupportedOperationMutation(t *test
 func TestNativeResponsesBudgetRequiresExactUnmodifiedSourceEvidence(t *testing.T) {
 	request := normalize.Request{
 		SourceFormat: normalize.FormatOpenAIResponses,
-		Raw:          map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 2048}},
-		Thinking:     normalize.ThinkingIntent{Mode: "enabled", BudgetTokens: 2048, Source: "thinking"},
+		Raw:          map[string]any{"reasoning": map[string]any{"max_output_tokens": float64(2048)}},
+		Thinking:     normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 2048, Source: "reasoning"},
 	}
 	policy := kernel.CompatibilityPolicy{RequiredFacets: []string{kernel.FacetReasoningBudget}}
 	plan := kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{openAIResponsesFacetReport(kernel.CompatibilityContext{Request: request, Policy: policy})}, policy)

@@ -46,6 +46,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/adapter/gemini -run '^TestGeminiReasonsAboutBudgetSeparatelyFromEffort$$' -count=1
 	go test ./internal/adapter/gemini -run '^TestGeminiSignatureHistoryRequiresExactSessionIssuerAttestation$$' -count=1
 	go test ./internal/adapter/gemini -run '^TestGeminiToolCallWithoutProviderIDGetsStableResponseIdentity$$' -count=1
+	go test ./internal/normalize -run '^TestResponsesReasoningBudgetRemainsSeparateFromEffort$$' -count=1
 	go test ./internal/kernel -run '^TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip$$' -count=1
 	go test ./internal/kernel -run '^TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack$$' -count=1
 	go test ./internal/kernel -run '^TestRequestTransformCannotAppendOpaqueMessageMetadata$$' -count=1

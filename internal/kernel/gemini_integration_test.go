@@ -222,7 +222,7 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 		calling, _ := config["functionCallingConfig"].(map[string]any)
 		generation, _ := body["generationConfig"].(map[string]any)
 		thinking, _ := generation["thinkingConfig"].(map[string]any)
-		if len(instructionParts) != 1 || len(contents) != 3 || len(tools) != 1 || calling["mode"] != "ANY" || body["temperature"] != nil || generation["temperature"] != 0.2 || generation["topP"] != 0.7 || generation["maxOutputTokens"] != float64(512) || thinking["thinkingLevel"] != "high" {
+		if len(instructionParts) != 1 || len(contents) != 3 || len(tools) != 1 || calling["mode"] != "ANY" || body["temperature"] != nil || generation["temperature"] != 0.2 || generation["topP"] != 0.7 || generation["maxOutputTokens"] != float64(4096) || thinking["thinkingBudget"] != float64(2048) {
 			t.Errorf("typed Responses request was not composed as Gemini request: %#v", body)
 		}
 		userTurn, _ := contents[0].(map[string]any)
@@ -281,7 +281,7 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 	defer engine.Close()
 	engine.Adapters[binding.AdapterID] = binding.Adapter
 	engine.SessionStores[binding.SessionStoreRef] = binding.SessionStore
-	requestBody := `{"model":"junior","instructions":"Be precise.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."}]},{"type":"function_call","call_id":"call_prior","name":"lookup","arguments":"{\"id\":7}"},{"type":"function_call_output","call_id":"call_prior","output":"{\"found\":true}"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":512,"temperature":0.2,"top_p":0.7,"reasoning":{"effort":"high"}}`
+	requestBody := `{"model":"junior","instructions":"Be precise.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."}]},{"type":"function_call","call_id":"call_prior","name":"lookup","arguments":"{\"id\":7}"},{"type":"function_call_output","call_id":"call_prior","output":"{\"found\":true}"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":4096,"temperature":0.2,"top_p":0.7,"reasoning":{"max_output_tokens":2048}}`
 	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(requestBody))
 	if err != nil {
 		t.Fatal(err)

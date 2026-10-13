@@ -118,6 +118,23 @@ func openAINativeBudgetPassthrough(request kernel.NormalizedRequest) bool {
 	}
 	thinking := openAIObject(request.Raw["thinking"])
 	var budget int
+	if request.SourceFormat == normalize.FormatOpenAIResponses {
+		reasoning := openAIObject(request.Raw["reasoning"])
+		switch value := reasoning["max_output_tokens"].(type) {
+		case float64:
+			budget = int(value)
+		case int:
+			budget = value
+		case int64:
+			budget = int(value)
+		case json.Number:
+			parsed, err := value.Int64()
+			if err == nil {
+				budget = int(parsed)
+			}
+		}
+		return budget == request.Thinking.BudgetTokens
+	}
 	switch value := thinking["budget_tokens"].(type) {
 	case float64:
 		budget = int(value)

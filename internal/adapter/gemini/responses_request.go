@@ -45,8 +45,18 @@ func geminiResponsesEnvelopeRepresentable(request kernel.NormalizedRequest) bool
 	}
 	if rawReasoning, exists := request.Raw["reasoning"]; exists {
 		reasoning, ok := rawReasoning.(map[string]any)
-		if !ok || !responsesReasoningKeysOnly(reasoning, "effort") {
+		if !ok || !responsesReasoningKeysOnly(reasoning, "effort", "max_output_tokens") {
 			return false
+		}
+		if effort, hasEffort := reasoning["effort"]; hasEffort {
+			if _, ok := effort.(string); !ok || reasoning["max_output_tokens"] != nil {
+				return false
+			}
+		}
+		if rawBudget, hasBudget := reasoning["max_output_tokens"]; hasBudget {
+			if value, ok := rawBudget.(float64); !ok || value <= 0 || value != float64(int(value)) {
+				return false
+			}
 		}
 	}
 	if rawChoice, exists := request.Raw["tool_choice"]; exists && rawChoice != nil && !request.ToolChoice.Set {

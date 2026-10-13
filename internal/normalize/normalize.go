@@ -90,6 +90,9 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 		}
 	} else {
 		r.Thinking = normalizeThinking(body)
+		if format == FormatOpenAIResponses {
+			r.UnsupportedFacets = append(r.UnsupportedFacets, unsupportedResponsesReasoningFacets(body)...)
+		}
 	}
 	r.Session = SessionContext{ID: stringValue(headers.Get("x-session-id")), Client: headers.Get("user-agent"), Conversation: stringValue(body["conversation_id"])}
 	r.Continuity = normalizeContinuity(body)
@@ -799,9 +802,46 @@ func normalizeThinking(body map[string]any) ThinkingIntent {
 		return ThinkingIntent{Mode: stringValue(thinking["type"]), Effort: stringValue(thinking["effort"]), BudgetTokens: intValue(thinking["budget_tokens"]), Source: "thinking"}
 	}
 	if reasoning, ok := body["reasoning"].(map[string]any); ok {
+		if rawBudget, exists := reasoning["max_output_tokens"]; exists {
+			return ThinkingIntent{Mode: "budget", BudgetTokens: intValue(rawBudget), Effort: stringValue(reasoning["effort"]), Source: "reasoning"}
+		}
 		return ThinkingIntent{Mode: "level", Effort: stringValue(reasoning["effort"]), Source: "request_field"}
 	}
 	return ThinkingIntent{Mode: "inherit", Source: "absent"}
+}
+
+func unsupportedResponsesReasoningFacets(body map[string]any) []string {
+	var unsupported []string
+	if _, exists := body["thinking"]; exists {
+		unsupported = append(unsupported, "reasoning.intent")
+	}
+	if _, exists := body["reasoning_effort"]; exists {
+		unsupported = append(unsupported, "reasoning.intent")
+	}
+	raw, exists := body["reasoning"]
+	if !exists {
+		return uniqueStrings(unsupported)
+	}
+	reasoning, ok := raw.(map[string]any)
+	if !ok {
+		return uniqueStrings(append(unsupported, "reasoning.intent"))
+	}
+	for key := range reasoning {
+		if key != "effort" && key != "max_output_tokens" {
+			unsupported = append(unsupported, "reasoning.intent")
+		}
+	}
+	if effort, hasEffort := reasoning["effort"]; hasEffort {
+		if _, ok := effort.(string); !ok || intValue(reasoning["max_output_tokens"]) > 0 {
+			unsupported = append(unsupported, "reasoning.intent")
+		}
+	}
+	if budget, hasBudget := reasoning["max_output_tokens"]; hasBudget {
+		if parsed, valid := integerPointer(budget); !valid || parsed == nil || *parsed <= 0 {
+			unsupported = append(unsupported, "reasoning.budget")
+		}
+	}
+	return uniqueStrings(unsupported)
 }
 
 func normalizeAnthropicThinking(body map[string]any) (ThinkingIntent, bool) {
