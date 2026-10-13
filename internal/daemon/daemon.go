@@ -140,11 +140,6 @@ func (d *Daemon) storeLog(record LogRecord) {
 	}
 }
 
-type healthEvent struct {
-	route kernel.Route
-	state runtimehealth.RouteHealth
-}
-
 func New(config Config) *Daemon { return NewWithProviderModules(config) }
 
 // NewWithProviderModules lets a statically linked daemon build add reusable
@@ -410,11 +405,19 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 		return refreshed, nil
 	}
-	healthEvents := make(chan healthEvent, 256)
+	healthQueue := runtimehealth.NewHealthObservationQueue(8192, func(observation runtimehealth.HealthObservation) error {
+		return persistHealthState(d.store, observation.Route, observation.State)
+	}, func(observation runtimehealth.HealthObservation, err error) {
+		slog.Error("health state persistence failed", "scope", observation.State.LastScope, "route", observation.Route.ID, "error", err)
+	})
+	healthEventsDone := make(chan struct{})
+	go func() {
+		defer close(healthEventsDone)
+		healthQueue.Run()
+	}()
 	d.policy.Health.SetObserver(func(route kernel.Route, state runtimehealth.RouteHealth) {
-		select {
-		case healthEvents <- healthEvent{route: route, state: state}:
-		default:
+		if !healthQueue.Enqueue(runtimehealth.HealthObservation{Route: route, State: state}) {
+			slog.Error("health state queue rejected observation", "scope", state.LastScope, "route", route.ID)
 		}
 	})
 	runtimeRows, _ := d.store.ConnectionRuntimes()
@@ -449,26 +452,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.policy.Health.Restore(route, state)
 		}
 	}
-	healthEventsDone := make(chan struct{})
-	go func() {
-		defer close(healthEventsDone)
-		persist := func(event healthEvent) { _ = persistHealthState(d.store, event.route, event.state) }
-		for {
-			select {
-			case <-ctx.Done():
-				for {
-					select {
-					case event := <-healthEvents:
-						persist(event)
-					default:
-						return
-					}
-				}
-			case event := <-healthEvents:
-				persist(event)
-			}
-		}
-	}()
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})
@@ -499,6 +482,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if d.kernel != nil {
 			d.kernel.Close()
 		}
+		healthQueue.Close()
 		<-sessionDone
 		<-healthEventsDone
 		<-quotaPollerDone

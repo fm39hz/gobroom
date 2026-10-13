@@ -12,6 +12,13 @@ promoting a single-model failure into a connection outage. Broader
 provider-envelope and conflicting-evidence precedence coverage remains. Quota polling is opt-in and opportunistic enrichment is
 singleflight/cooldowned after real quota/rate-limit evidence.
 
+Health observations are coalesced by breaker identity in a bounded asynchronous
+writer. Inference does not wait on SQLite; queue saturation and write failures
+are reported to the daemon log, and shutdown drains accepted observations after
+the kernel has stopped producing them. A failed storage write is not retried
+indefinitely and can therefore leave restart state stale; request-time routing
+continues to use the in-memory observation.
+
 ## Principle
 
 GoBroom does not continuously ping providers to decide whether they are
@@ -610,6 +617,10 @@ not hide evidence/provenance behind a generic “healthy” badge.
 
 - Scoped route/connection/provider breaker state, scope-preserving SQLite
   persistence/restoration and one-real-request half-open trials are implemented.
+- Health-event persistence is non-blocking and coalesced by typed scope; queue
+  saturation and SQLite failures are visible in daemon logs, and accepted work
+  is drained during orderly shutdown. A durable retry/dead-letter policy is
+  still not implemented.
 - Request-class performance summaries are held in a bounded in-memory EWMA
   book; durable request-class performance evidence is not complete.
 - Rich aggregate Physical/provider status projections and log streaming are
