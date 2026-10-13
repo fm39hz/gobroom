@@ -195,7 +195,11 @@ func openAIResponsesContent(value any, role string) ([]map[string]any, bool, err
 			if imageURL == "" {
 				return nil, false, fmt.Errorf("image has no URL or typed base64 source")
 			}
-			content = append(content, map[string]any{"type": "input_image", "image_url": imageURL})
+			image := map[string]any{"type": "input_image", "image_url": imageURL}
+			if part.Detail != "" {
+				image["detail"] = part.Detail
+			}
+			content = append(content, image)
 		default:
 			return nil, false, fmt.Errorf("content part %q is not representable", part.Type)
 		}

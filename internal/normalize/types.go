@@ -119,6 +119,7 @@ type ContentPart struct {
 	Type      string         `json:"type"`
 	Text      string         `json:"text,omitempty"`
 	URL       string         `json:"url,omitempty"`
+	Detail    string         `json:"detail,omitempty"`
 	MediaType string         `json:"media_type,omitempty"`
 	Data      string         `json:"data,omitempty"`
 	Metadata  map[string]any `json:"-"`

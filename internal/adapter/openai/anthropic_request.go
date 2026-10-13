@@ -9,15 +9,15 @@ import (
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
-func encodeAnthropicRequestAsOpenAIChat(request kernel.NormalizedRequest, model string) (map[string]any, error) {
+func encodeTypedRequestAsOpenAIChat(request kernel.NormalizedRequest, model string) (map[string]any, error) {
 	if len(request.UnsupportedFacets) > 0 {
-		return nil, fmt.Errorf("Anthropic request has unsupported facets: %s", strings.Join(request.UnsupportedFacets, ", "))
+		return nil, fmt.Errorf("translated request has unsupported facets: %s", strings.Join(request.UnsupportedFacets, ", "))
 	}
 	if len(request.Generation.Unsupported) > 0 {
-		return nil, fmt.Errorf("OpenAI Chat cannot encode Anthropic options: %s", strings.Join(request.Generation.Unsupported, ", "))
+		return nil, fmt.Errorf("OpenAI Chat cannot encode generation options: %s", strings.Join(request.Generation.Unsupported, ", "))
 	}
 	if !openAIAnthropicPromptRepresentable(request) || !openAIAnthropicToolsRepresentable(request) || !openAIAnthropicHistoryRepresentable(request) || !openAIAnthropicToolChoiceRepresentable(request.ToolChoice) || !openAIAnthropicToolChoiceMatchesTools(request) || !openAIAnthropicGenerationRepresentable(request.Generation) {
-		return nil, fmt.Errorf("Anthropic request cannot be represented by the declared OpenAI Chat mapping")
+		return nil, fmt.Errorf("typed request cannot be represented by the OpenAI Chat mapping")
 	}
 	messages := make([]map[string]any, 0, len(request.Prompt.Layers)+len(request.Messages))
 	for _, layer := range request.Prompt.Layers {
@@ -35,6 +35,9 @@ func encodeAnthropicRequestAsOpenAIChat(request kernel.NormalizedRequest, model 
 		role := layer.Role
 		if role == "" {
 			role = "system"
+		}
+		if role != "system" && role != "developer" {
+			return nil, fmt.Errorf("OpenAI Chat cannot encode prompt layer role %q", role)
 		}
 		messages = append(messages, map[string]any{"role": role, "content": content})
 	}
@@ -82,11 +85,11 @@ func encodeAnthropicRequestAsOpenAIChat(request kernel.NormalizedRequest, model 
 				name = functionName
 			}
 			if name == "" {
-				return nil, fmt.Errorf("Anthropic tool has no name")
+				return nil, fmt.Errorf("function tool has no name")
 			}
 			function["name"] = name
 			if _, exists := function["parameters"]; !exists {
-				return nil, fmt.Errorf("Anthropic tool %q has no input schema", name)
+				return nil, fmt.Errorf("function tool %q has no parameter schema", name)
 			}
 			tools = append(tools, map[string]any{"type": "function", "function": function})
 		}
@@ -151,7 +154,11 @@ func openAIChatContent(content any) (any, error) {
 			if imageURL == "" {
 				return nil, fmt.Errorf("image has neither a URL nor a typed base64 source")
 			}
-			encoded = append(encoded, map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageURL}})
+			image := map[string]any{"url": imageURL}
+			if part.Detail != "" {
+				image["detail"] = part.Detail
+			}
+			encoded = append(encoded, map[string]any{"type": "image_url", "image_url": image})
 		default:
 			return nil, fmt.Errorf("content part %q is not representable in OpenAI Chat", part.Type)
 		}

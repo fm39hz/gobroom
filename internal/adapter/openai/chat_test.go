@@ -432,6 +432,123 @@ func TestKernelInterruptedCrossProtocolStreamStaysIncompleteAndDoesNotFallback(t
 	}
 }
 
+func TestKernelMapsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
+	responseBody := `{"id":"chatcmpl_responses_ingress","object":"chat.completion","model":"chat-model","choices":[{"index":0,"message":{"role":"assistant","content":"Done.","tool_calls":[{"id":"call_final","type":"function","function":{"name":"lookup","arguments":"{\"found\":true}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`
+	var dispatches atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		dispatches.Add(1)
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode OpenAI Chat request: %v", err)
+		} else {
+			messages, _ := body["messages"].([]any)
+			if body["model"] != "chat-physical" || body["input"] != nil || body["instructions"] != nil || len(messages) != 4 || body["max_tokens"] != float64(512) || body["temperature"] != 0.25 || body["top_p"] != 0.8 {
+				t.Errorf("Responses input was not rebuilt as Chat request: %#v", body)
+			}
+			if messages, ok := body["messages"].([]any); ok {
+				if messages[0].(map[string]any)["role"] != "developer" || messages[1].(map[string]any)["content"] == nil || messages[2].(map[string]any)["tool_calls"] == nil || messages[3].(map[string]any)["tool_call_id"] != "call_prior" {
+					t.Errorf("typed Responses prompt/history mapping=%#v", messages)
+				}
+				parts, _ := messages[1].(map[string]any)["content"].([]any)
+				var imageURL map[string]any
+				if len(parts) > 1 {
+					if imagePart, ok := parts[1].(map[string]any); ok {
+						imageURL, _ = imagePart["image_url"].(map[string]any)
+					}
+				}
+				if len(parts) != 2 || imageURL["url"] != "https://images.example/item.png" || imageURL["detail"] != "high" {
+					t.Errorf("Responses input image was not translated to Chat vision content: %#v", messages[1])
+				}
+			}
+			if choice, ok := body["tool_choice"].(map[string]any); !ok || choice["type"] != "function" || choice["function"].(map[string]any)["name"] != "lookup" {
+				t.Errorf("Responses function tool choice was not mapped to Chat: %#v", body["tool_choice"])
+			}
+			if body["reasoning_effort"] != "high" {
+				t.Errorf("Responses reasoning effort was not mapped to Chat: %#v", body["reasoning_effort"])
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "chat-physical",
+			Profile: kernel.CapabilityProfile{
+				kernel.CapabilityTools:  {State: kernel.SupportNative},
+				kernel.CapabilityVision: {State: kernel.SupportNative},
+			},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	requestBody := `{"model":"junior","stream":false,"instructions":"Be precise.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."},{"type":"input_image","image_url":"https://images.example/item.png","detail":"high"}]},{"type":"function_call","call_id":"call_prior","name":"lookup","arguments":"{\"id\":7}"},{"type":"function_call_output","call_id":"call_prior","output":"{\"found\":true}"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":{"type":"function","name":"lookup"},"max_output_tokens":512,"temperature":0.25,"top_p":0.8,"reasoning":{"effort":"high"}}`
+	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanations, err := engine.ExplainCompatibility(context.Background(), "junior", parsed.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explanations) != 1 || !explanations[0].Compatible {
+		t.Fatalf("Responses→Chat compatibility=%#v", explanations)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ID     string           `json:"id"`
+		Object string           `json:"object"`
+		Status string           `json:"status"`
+		Output []map[string]any `json:"output"`
+		Usage  map[string]int64 `json:"usage"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode OpenAI Responses projection %q: %v", writer.Body.String(), err)
+	}
+	if result.ID != "chatcmpl_responses_ingress" || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 || dispatches.Load() != 1 {
+		t.Fatalf("Chat→Responses result=%#v dispatches=%d", result, dispatches.Load())
+	}
+	if result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["call_id"] != "call_final" || result.Usage["input_tokens"] != 12 || result.Usage["output_tokens"] != 3 {
+		t.Fatalf("Chat→Responses output/usage=%#v usage=%#v", result.Output, result.Usage)
+	}
+
+	withContinuity := `{"model":"junior","previous_response_id":"resp_prev","input":"continue"}`
+	continuityRequest, err := normalize.JSON("/v1/responses", http.Header{}, []byte(withContinuity))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Execute(context.Background(), continuityRequest.Request, kernel.Credential{Secret: "secret"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || dispatches.Load() != 1 {
+		t.Fatalf("Responses continuity was silently lost on Chat route: err=%v dispatches=%d", err, dispatches.Load())
+	}
+	for _, unsupported := range []string{
+		`{"model":"junior","store":true,"input":"do not persist"}`,
+		`{"model":"junior","input":[{"type":"message","role":"user","content":[{"type":"input_image","file_id":"file_123"}]}]}`,
+		`{"model":"junior","reasoning":{"effort":"high","summary":"detailed"},"input":"unsupported reasoning summary"}`,
+		`{"model":"junior","tool_choice":{"type":"file_search"},"input":"unsupported choice"}`,
+		`{"model":"junior","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"citation","annotations":[{"type":"url_citation"}]}]}]}`,
+	} {
+		unsupportedRequest, err := normalize.JSON("/v1/responses", http.Header{}, []byte(unsupported))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Execute(context.Background(), unsupportedRequest.Request, kernel.Credential{Secret: "secret"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || dispatches.Load() != 1 {
+			t.Fatalf("unmapped Responses field was not rejected before Chat dispatch: request=%s err=%v calls=%d", unsupported, err, dispatches.Load())
+		}
+	}
+}
+
 func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
 	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})

@@ -41,6 +41,9 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 		Generation: normalizeGenerationOptions(body, format), Extensions: map[string]any{}, Raw: body,
 		Transport: TransportHints{AcceptJSON: strings.Contains(strings.ToLower(headers.Get("accept")), "application/json"), AcceptSSE: strings.Contains(strings.ToLower(headers.Get("accept")), "text/event-stream"), PreferredConnectionID: headers.Get("x-connection-id"), IdempotencyKey: idempotencyKey},
 	}
+	if format == FormatOpenAIResponses && !responsesToolDefinitionsValid(body["tools"]) {
+		r.UnsupportedFacets = append(r.UnsupportedFacets, "tools.definitions")
+	}
 	if format == FormatAnthropic {
 		r.Messages, r.UnsupportedFacets = normalizeAnthropicMessages(body)
 		if rawTools, ok := body["tools"].([]any); ok {
@@ -64,8 +67,19 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 			r.UnsupportedFacets = append(r.UnsupportedFacets, "client.metadata")
 		}
 	} else {
-		r.Messages = normalizeMessages(body, format)
+		var unsupported []string
+		r.Messages, unsupported = normalizeMessages(body, format)
+		r.UnsupportedFacets = append(r.UnsupportedFacets, unsupported...)
 		r.Prompt = inlinePromptPlan(r.Messages)
+		if format == FormatOpenAIResponses {
+			if rawInstructions, exists := body["instructions"]; exists {
+				if instructions, ok := rawInstructions.(string); ok {
+					r.Prompt.Layers = append([]PromptLayer{{Origin: PromptInline, Role: "developer", Text: instructions}}, r.Prompt.Layers...)
+				} else {
+					r.UnsupportedFacets = append(r.UnsupportedFacets, "prompt.layers")
+				}
+			}
+		}
 	}
 	r.Messages = conversationMessages(r.Messages)
 	if format == FormatAnthropic {
@@ -114,6 +128,8 @@ func inlinePromptPlan(messages []Message) PromptPlan {
 		layer := PromptLayer{Origin: PromptInline, Role: message.Role}
 		if text, ok := message.Content.(string); ok {
 			layer.Text = text
+		} else if parts, ok := message.Content.([]ContentPart); ok {
+			layer.Parts = append([]ContentPart(nil), parts...)
 		}
 		plan.Layers = append(plan.Layers, layer)
 	}
@@ -130,18 +146,18 @@ func conversationMessages(messages []Message) []Message {
 	return result
 }
 
-func normalizeMessages(body map[string]any, format Format) []Message {
+func normalizeMessages(body map[string]any, format Format) ([]Message, []string) {
 	if raw, ok := body["messages"].([]any); ok {
-		return messagesFromArray(raw, format)
+		return messagesFromArray(raw, format), nil
 	}
 	if input, ok := body["input"].([]any); ok {
 		if format == FormatOpenAIResponses {
-			return responsesMessagesFromArray(input, format)
+			return responsesMessagesFromArray(input)
 		}
-		return messagesFromArray(input, format)
+		return messagesFromArray(input, format), nil
 	}
 	if text, ok := body["input"].(string); ok {
-		return []Message{{Role: "user", Content: text}}
+		return []Message{{Role: "user", Content: text}}, nil
 	}
 	if contents, ok := body["contents"].([]any); ok {
 		result := make([]Message, 0, len(contents))
@@ -153,35 +169,177 @@ func normalizeMessages(body map[string]any, format Format) []Message {
 			}
 			result = append(result, Message{Role: role, Content: m["parts"], Metadata: m})
 		}
-		return result
+		return result, nil
 	}
-	return nil
+	return nil, nil
 }
 
-func responsesMessagesFromArray(raw []any, format Format) []Message {
+func responsesMessagesFromArray(raw []any) ([]Message, []string) {
 	result := make([]Message, 0, len(raw))
+	var unsupported []string
 	for _, value := range raw {
 		item, ok := value.(map[string]any)
 		if !ok {
+			unsupported = append(unsupported, "content.opaque")
 			continue
 		}
 		switch stringValue(item["type"]) {
 		case "function_call":
+			if !responsesOnlyKeys(item, "type", "id", "call_id", "name", "arguments") {
+				unsupported = append(unsupported, "tools.history")
+			}
 			callID := stringValue(item["call_id"])
 			if callID == "" {
 				callID = stringValue(item["id"])
+			}
+			if callID == "" || strings.TrimSpace(stringValue(item["name"])) == "" || item["arguments"] == nil {
+				unsupported = append(unsupported, "tools.history")
 			}
 			result = append(result, Message{Role: "assistant", ToolCalls: []ToolCall{{
 				ID: callID, Type: "function", Name: stringValue(item["name"]), Arguments: item["arguments"],
 				State: ToolCallProposed, Metadata: item,
 			}}, Metadata: item})
 		case "function_call_output":
-			result = append(result, Message{Role: "tool", ToolCallID: stringValue(item["call_id"]), Content: item["output"], Metadata: item})
+			if !responsesOnlyKeys(item, "type", "call_id", "output") {
+				unsupported = append(unsupported, "tools.history")
+			}
+			callID := stringValue(item["call_id"])
+			content, rejected := normalizeResponsesContent(item["output"])
+			unsupported = append(unsupported, rejected...)
+			if callID == "" || item["output"] == nil {
+				unsupported = append(unsupported, "tools.history")
+			}
+			result = append(result, Message{Role: "tool", ToolCallID: callID, Content: content, Metadata: item})
 		default:
-			result = append(result, messagesFromArray([]any{item}, format)...)
+			itemType := stringValue(item["type"])
+			if itemType != "" && itemType != "message" {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			if !responsesOnlyKeys(item, "type", "id", "role", "name", "content") {
+				unsupported = append(unsupported, "content.opaque")
+			}
+			role := stringValue(item["role"])
+			if role != "user" && role != "assistant" && role != "system" && role != "developer" {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			content, rejected := normalizeResponsesContent(item["content"])
+			unsupported = append(unsupported, rejected...)
+			result = append(result, Message{Role: role, Content: content, Name: stringValue(item["name"]), Metadata: item})
 		}
 	}
-	return result
+	return result, uniqueStrings(unsupported)
+}
+
+func normalizeResponsesContent(value any) (any, []string) {
+	if value == nil {
+		return nil, nil
+	}
+	if text, ok := value.(string); ok {
+		return text, nil
+	}
+	blocks, ok := value.([]any)
+	if !ok {
+		return nil, []string{"content.opaque"}
+	}
+	parts := make([]ContentPart, 0, len(blocks))
+	var unsupported []string
+	for _, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]any)
+		if !ok {
+			unsupported = append(unsupported, "content.opaque")
+			continue
+		}
+		switch stringValue(block["type"]) {
+		case "input_text", "output_text", "text":
+			if !responsesOnlyKeys(block, "type", "text", "annotations") || !responsesAnnotationsEmpty(block["annotations"]) {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			text, ok := block["text"].(string)
+			if !ok {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			parts = append(parts, ContentPart{Type: "text", Text: text, Metadata: block})
+		case "input_image":
+			if !responsesOnlyKeys(block, "type", "image_url", "detail") {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			imageURL := stringValue(block["image_url"])
+			if imageURL == "" {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			detail := stringValue(block["detail"])
+			if block["detail"] != nil && detail == "" {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			if detail != "" && detail != "auto" && detail != "low" && detail != "high" {
+				unsupported = append(unsupported, "content.opaque")
+				continue
+			}
+			parts = append(parts, ContentPart{Type: "image", URL: imageURL, Detail: detail, Metadata: block})
+		default:
+			unsupported = append(unsupported, "content.opaque")
+		}
+	}
+	return collapseContentParts(parts), uniqueStrings(unsupported)
+}
+
+func responsesToolDefinitionsValid(value any) bool {
+	if value == nil {
+		return true
+	}
+	tools, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]any)
+		if !ok || !responsesOnlyKeys(tool, "type", "name", "description", "parameters", "strict") ||
+			stringValue(tool["type"]) != "function" || stringValue(tool["name"]) == "" || mapValue(tool["parameters"]) == nil {
+			return false
+		}
+		if description, exists := tool["description"]; exists {
+			if _, ok := description.(string); !ok {
+				return false
+			}
+		}
+		if _, exists := tool["strict"]; exists {
+			if _, ok := tool["strict"].(bool); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func responsesOnlyKeys(value map[string]any, allowed ...string) bool {
+	for key := range value {
+		found := false
+		for _, candidate := range allowed {
+			if key == candidate {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func responsesAnnotationsEmpty(value any) bool {
+	if value == nil {
+		return true
+	}
+	annotations, ok := value.([]any)
+	return ok && len(annotations) == 0
 }
 
 func normalizeAnthropicSystem(value any, unsupported []string) (PromptPlan, []string) {
@@ -617,6 +775,16 @@ func normalizeTools(value any, format Format) []Tool {
 	for _, value := range raw {
 		m, ok := value.(map[string]any)
 		if ok {
+			if format == FormatOpenAIResponses {
+				function := make(map[string]any, len(m))
+				for key, item := range m {
+					if key != "type" {
+						function[key] = item
+					}
+				}
+				result = append(result, Tool{Type: stringValue(m["type"]), Name: stringValue(m["name"]), Function: function, Metadata: m})
+				continue
+			}
 			result = append(result, Tool{Type: stringValue(m["type"]), Name: stringValue(m["name"]), Function: mapValue(m["function"]), Metadata: m})
 		}
 	}
@@ -741,7 +909,9 @@ func normalizeToolCalls(r *Request) {
 
 func isCoreKey(k string) bool {
 	switch k {
-	case "model", "messages", "input", "contents", "stream", "tools", "reasoning_effort", "thinking", "reasoning", "conversation_id", "response_id", "previous_response_id", "operationPayload":
+	case "model", "messages", "input", "contents", "stream", "tools", "tool_choice", "parallel_tool_calls",
+		"reasoning_effort", "thinking", "reasoning", "conversation_id", "response_id", "previous_response_id",
+		"instructions", "max_tokens", "max_completion_tokens", "max_output_tokens", "temperature", "top_p", "stop", "stop_sequences", "operationPayload":
 		return true
 	}
 	return false

@@ -33,6 +33,7 @@ func (c chatRequestCodec) Prepare(ctx context.Context, request kernel.Normalized
 func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat normalize.Format) []kernel.FacetMapping {
 	native := input.Request.SourceFormat == nativeFormat
 	anthropic := input.Request.SourceFormat == normalize.FormatAnthropic
+	responses := input.Request.SourceFormat == normalize.FormatOpenAIResponses
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
 		if kernel.IsResponseCompatibilityFacet(facet) {
@@ -94,6 +95,12 @@ func openAIChatFacetReport(input kernel.CompatibilityContext, nativeFormat norma
 				if openAIAnthropicContentRepresentable(input.Request) {
 					mapping.Disposition, mapping.Reason = kernel.FacetTranslated, "Anthropic base64/URL image sources are encoded as OpenAI image_url parts"
 				}
+			}
+		} else if responses {
+			mapping.Reason = "OpenAI Responses semantics have no declared Chat mapping for this facet"
+			if chatProviderResponsesIngressFacetRepresentable(input.Request, facet) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "OpenAI Responses semantics are rebuilt from typed IR into the Chat request contract"
 			}
 		}
 		result = append(result, mapping)
@@ -343,7 +350,13 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 			return kernel.UpstreamRequest{}, fmt.Errorf("OpenAI Chat codec cannot translate Anthropic thinking intent without a declared provider capability")
 		}
 		var err error
-		body, err = encodeAnthropicRequestAsOpenAIChat(request, route.ExternalModel)
+		body, err = encodeTypedRequestAsOpenAIChat(request, route.ExternalModel)
+		if err != nil {
+			return kernel.UpstreamRequest{}, err
+		}
+	} else if request.SourceFormat == normalize.FormatOpenAIResponses {
+		var err error
+		body, err = encodeOpenAIResponsesRequestAsOpenAIChat(request, route.ExternalModel)
 		if err != nil {
 			return kernel.UpstreamRequest{}, err
 		}
