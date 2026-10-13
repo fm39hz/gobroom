@@ -662,6 +662,75 @@ func (s *Store) SaveModelAvailability(item ModelAvailability) error {
 	return err
 }
 
+// ResetConnectionRoutingState clears health and quota observations tied to the
+// previous connection configuration after explicit recovery.
+func (s *Store) ResetConnectionRoutingState(connectionID string) error {
+	if connectionID == "" {
+		return fmt.Errorf("connection ID is required")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM quota_snapshots WHERE connection_id=?`, connectionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ResetProviderRoutingState clears health and quota observations scoped to a
+// provider and its connections/models after provider configuration changes.
+func (s *Store) ResetProviderRoutingState(providerNodeID string) error {
+	if providerNodeID == "" {
+		return fmt.Errorf("provider node ID is required")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE provider_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE provider_node_id=?`, providerNodeID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM quota_snapshots WHERE provider_node_id=?`, providerNodeID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ClearInvalidModelHealth(connectionID string, modelIDs []string) error {
+	if connectionID == "" {
+		return fmt.Errorf("connection ID is required")
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, modelID := range modelIDs {
+		if modelID == "" {
+			continue
+		}
+		if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id=? AND model_ref=? AND status='invalid'`, connectionID, modelID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) SaveConnectionTransport(item ConnectionTransport) error {
 	config, err := json.Marshal(item.Config)
 	if err != nil {

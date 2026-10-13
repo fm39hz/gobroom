@@ -35,12 +35,23 @@ func TestHealthPersistenceKeepsScopeSeparated(t *testing.T) {
 	if err != nil || len(models) != 1 || models[0].ModelRef != "model" || models[0].ErrorCode != string(kernel.ScopeRoute) {
 		t.Fatalf("route-scoped persistence=%#v err=%v", models, err)
 	}
+	invalidModel := stateFor(kernel.ScopeRoute)
+	invalidModel.Invalid = true
+	if err := persistHealthState(state, route, invalidModel); err != nil {
+		t.Fatal(err)
+	}
+	models, err = state.ModelAvailabilities()
+	if err != nil || len(models) != 1 || models[0].Status != "invalid" {
+		t.Fatalf("permanent model invalidation was not persisted: %#v err=%v", models, err)
+	}
 
-	if err := persistHealthState(state, route, stateFor(kernel.ScopeConnection)); err != nil {
+	connectionState := stateFor(kernel.ScopeConnection)
+	connectionState.Invalid = true
+	if err := persistHealthState(state, route, connectionState); err != nil {
 		t.Fatal(err)
 	}
 	connections, err = state.ConnectionRuntimes()
-	if err != nil || len(connections) != 1 || connections[0].ConnectionID != "conn" {
+	if err != nil || len(connections) != 1 || connections[0].ConnectionID != "conn" || connections[0].Status != "invalid" {
 		t.Fatalf("connection-scoped persistence=%#v err=%v", connections, err)
 	}
 	models, err = state.ModelAvailabilities()

@@ -229,6 +229,32 @@ func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
 	defer g.mu.Unlock()
 	g.quotas[quotaKey(snapshot)] = snapshot
 }
+
+func (g *PolicyGate) ClearQuotasForConnection(connectionID string) {
+	if connectionID == "" {
+		return
+	}
+	g.mu.Lock()
+	for key, snapshot := range g.quotas {
+		if snapshot.ConnectionID == connectionID {
+			delete(g.quotas, key)
+		}
+	}
+	g.mu.Unlock()
+}
+
+func (g *PolicyGate) ClearQuotasForProvider(providerNodeID string) {
+	if providerNodeID == "" {
+		return
+	}
+	g.mu.Lock()
+	for key, snapshot := range g.quotas {
+		if snapshot.ProviderNodeID == providerNodeID {
+			delete(g.quotas, key)
+		}
+	}
+	g.mu.Unlock()
+}
 func (g *PolicyGate) Quotas() map[string]quota.Snapshot {
 	g.mu.RLock()
 	defer g.mu.RUnlock()

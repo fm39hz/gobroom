@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -187,12 +188,19 @@ func TestSelectiveImportStoresOnlyChosenRoutesAndConnectionEntitlements(t *testi
 	if models, err := s.Models(); err != nil || len(models) != 0 {
 		t.Fatalf("preview wrote catalog rows: %#v err=%v", models, err)
 	}
+	if err := s.SaveModelAvailability(store.ModelAvailability{ConnectionID: selected.ID, ModelRef: "model-b", Status: "invalid", Reason: "model_not_found", ErrorCode: string(kernel.ScopeRoute)}); err != nil {
+		t.Fatal(err)
+	}
 	result, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, []string{"model-b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Models != 1 || result.Available != 3 || !result.Complete {
+	if result.Models != 1 || result.Available != 3 || !result.Complete || !reflect.DeepEqual(result.ModelIDs, []string{"model-a", "model-b", "model-c"}) {
 		t.Fatalf("selective import result=%#v", result)
+	}
+	availability, err := s.ModelAvailabilities()
+	if err != nil || len(availability) != 1 || availability[0].Status != "available" {
+		t.Fatalf("positive discovery did not clear the exact model invalidation: %#v err=%v", availability, err)
 	}
 	models, err := s.Models()
 	if err != nil || len(models) != 1 || models[0].ExternalID != "model-b" {

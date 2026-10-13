@@ -82,6 +82,48 @@ func TestHealthGateRestoreRetainsPersistedScope(t *testing.T) {
 	}
 }
 
+func TestHealthGateKeepsPermanentProviderRejectionsBlockedUntilRecovery(t *testing.T) {
+	gate := NewHealthGate()
+	first := kernel.Route{ID: "model-a", NodeID: "provider", CredentialID: "conn"}
+	second := kernel.Route{ID: "model-b", NodeID: "provider", CredentialID: "conn"}
+	other := kernel.Route{ID: "model-c", NodeID: "provider", CredentialID: "other"}
+	gate.ObserveOutcome(first, kernel.ClassifiedOutcome{Cause: kernel.CauseAuth, Effect: kernel.EffectRejected, Scope: kernel.ScopeConnection, Retry: kernel.RetryNever, Confidence: 1})
+	if gate.Usable(first, time.Now()) || gate.Usable(second, time.Now()) || !gate.Usable(other, time.Now()) {
+		t.Fatal("connection auth rejection must invalidate all routes on that connection only")
+	}
+	if !gate.ResetScope(first, kernel.ScopeConnection) || !gate.Usable(first, time.Now()) || !gate.Usable(second, time.Now()) {
+		t.Fatal("explicit connection configuration update did not recover invalid routes")
+	}
+
+	gate.ObserveOutcome(first, kernel.ClassifiedOutcome{Cause: kernel.CauseModelNotFound, Effect: kernel.EffectRejected, Scope: kernel.ScopeRoute, Retry: kernel.RetryNever, Confidence: 1})
+	if gate.Usable(first, time.Now()) || !gate.Usable(second, time.Now()) {
+		t.Fatal("model-not-found must invalidate only the exact route")
+	}
+	if !gate.ClearInvalid(first, kernel.ScopeRoute) || !gate.Usable(first, time.Now()) {
+		t.Fatal("positive discovery evidence did not recover invalid model route")
+	}
+
+	gate.ObserveOutcome(first, kernel.ClassifiedOutcome{Cause: kernel.CauseRequestInvalid, Effect: kernel.EffectRejected, Scope: kernel.ScopeRequest, Retry: kernel.RetryNever, Confidence: 1})
+	if !gate.Usable(first, time.Now()) {
+		t.Fatal("client request validation error must not invalidate a provider route")
+	}
+}
+
+func TestHealthGateRestoresPermanentInvalidation(t *testing.T) {
+	gate := NewHealthGate()
+	gate.Restore(kernel.Route{CredentialID: "connection"}, RouteHealth{Invalid: true, LastCause: kernel.CauseAuth, LastScope: kernel.ScopeConnection})
+	route := kernel.Route{ID: "model", CredentialID: "connection"}
+	if gate.Usable(route, time.Now()) || gate.Acquire(route, time.Now()) {
+		t.Fatal("restored invalid connection must remain excluded without a deadline")
+	}
+	if len(gate.Snapshot()) != 0 {
+		t.Fatal("scope-only restore created a synthetic visible route")
+	}
+	if !gate.ResetScope(route, kernel.ScopeConnection) || !gate.Usable(route, time.Now()) {
+		t.Fatal("credential configuration change did not clear restored invalidation")
+	}
+}
+
 func TestHealthGateHalfOpenAllowsOneRealTrial(t *testing.T) {
 	gate := NewHealthGate()
 	route := kernel.Route{ID: "route"}

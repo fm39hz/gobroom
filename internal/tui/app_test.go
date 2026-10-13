@@ -22,6 +22,13 @@ import (
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
+func TestHealthEntryDistinguishesPermanentInvalidationFromCooldown(t *testing.T) {
+	entries, err := makeEntries("health.list", json.RawMessage(`{"route-a":{"Invalid":true,"LastCause":"auth","LastScope":"connection"}}`), nil)
+	if err != nil || len(entries) != 1 || entries[0].title != "invalid" || !strings.Contains(entries[0].detail, "State      invalid") {
+		t.Fatalf("permanent invalidation entry=%#v err=%v", entries, err)
+	}
+}
+
 func TestPhysicalModelEntryUsesProviderPrefixAndKeepsCatalogIDInInspector(t *testing.T) {
 	providers := []providerNode{{ID: "node-secret-id", Name: "Orca", Prefix: "orca"}}
 	raw := json.RawMessage(`[{

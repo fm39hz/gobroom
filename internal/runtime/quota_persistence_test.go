@@ -17,6 +17,77 @@ type quotaSnapshotMemorySink struct {
 	updates chan quota.Snapshot
 }
 
+type gatedQuotaSink struct {
+	mu      sync.Mutex
+	saved   map[string]quota.Snapshot
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *gatedQuotaSink) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	s.mu.Lock()
+	s.saved[quotaSnapshotQueueKey(snapshot)] = snapshot
+	s.mu.Unlock()
+	return nil
+}
+
+func TestQuotaSnapshotQueueResetFencesInflightPersistence(t *testing.T) {
+	sink := &gatedQuotaSink{saved: map[string]quota.Snapshot{}, entered: make(chan struct{}), release: make(chan struct{})}
+	queue := NewQuotaSnapshotQueue(sink, 4, nil)
+	snapshot := quota.Snapshot{ProviderNodeID: "provider", ConnectionID: "connection", ModelRef: "model", WindowName: "daily"}
+	if !queue.Enqueue(snapshot) {
+		t.Fatal("enqueue failed")
+	}
+	runDone := make(chan struct{})
+	go func() { queue.Run(); close(runDone) }()
+	select {
+	case <-sink.entered:
+	case <-time.After(time.Second):
+		t.Fatal("writer did not begin the queued write")
+	}
+	resetDone := make(chan error, 1)
+	go func() {
+		resetDone <- queue.ResetConnection(snapshot.ConnectionID, func() error {
+			sink.mu.Lock()
+			delete(sink.saved, quotaSnapshotQueueKey(snapshot))
+			sink.mu.Unlock()
+			return nil
+		})
+	}()
+	select {
+	case err := <-resetDone:
+		t.Fatalf("reset completed before the in-flight write was fenced: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(sink.release)
+	select {
+	case err := <-resetDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection reset did not complete after the write finished")
+	}
+	queue.Close()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("quota writer did not stop")
+	}
+	sink.mu.Lock()
+	_, found := sink.saved[quotaSnapshotQueueKey(snapshot)]
+	sink.mu.Unlock()
+	if found {
+		t.Fatal("in-flight stale quota snapshot survived configuration reset")
+	}
+	if queue.ResetProvider("provider", nil) == nil {
+		t.Fatal("nil provider reset callback must be rejected")
+	}
+}
+
 func (s *quotaSnapshotMemorySink) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
 	key := quotaSnapshotQueueKey(snapshot)
 	s.mu.Lock()

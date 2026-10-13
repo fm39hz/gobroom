@@ -10,6 +10,7 @@ import (
 type RouteHealth struct {
 	Failures      int
 	Successes     int
+	Invalid       bool
 	CooldownUntil time.Time
 	LastError     string
 	LastCause     kernel.OutcomeCause
@@ -36,7 +37,7 @@ func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 	defer g.mu.RUnlock()
 	for _, key := range healthKeys(route) {
 		state := g.scoped[key]
-		if state.CooldownUntil.After(now) {
+		if state.Invalid || state.CooldownUntil.After(now) {
 			return false
 		}
 	}
@@ -51,7 +52,7 @@ func (g *HealthGate) Acquire(route kernel.Route, now time.Time) bool {
 	acquired := make([]string, 0, 2)
 	for _, key := range healthKeys(route) {
 		state := g.scoped[key]
-		if state.CooldownUntil.After(now) {
+		if state.Invalid || state.CooldownUntil.After(now) {
 			for _, acquiredKey := range acquired {
 				delete(g.trials, acquiredKey)
 			}
@@ -96,15 +97,22 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 	if outcome.Cause == kernel.CauseSuccess {
 		state.Successes++
 		state.Failures = 0
+		state.Invalid = false
 		state.CooldownUntil = time.Time{}
 		state.LastSuccess = now
 		state.LastError = ""
 	} else {
 		state.Failures++
+		if permanentlyInvalidates(outcome) {
+			state.Invalid = true
+			state.CooldownUntil = time.Time{}
+		}
 		if outcome.Message != "" {
 			state.LastError = outcome.Message
 		}
-		if outcome.RetryAt.After(now) {
+		if state.Invalid {
+			state.CooldownUntil = time.Time{}
+		} else if outcome.RetryAt.After(now) {
 			state.CooldownUntil = outcome.RetryAt
 		} else if outcome.Retry != kernel.RetryNever {
 			state.CooldownUntil = now.Add(failureDelay(state.Failures, outcome.Cause))
@@ -124,6 +132,61 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 	if observer != nil {
 		observer(route, state)
 	}
+}
+
+func permanentlyInvalidates(outcome kernel.ClassifiedOutcome) bool {
+	if outcome.Scope == kernel.ScopeRequest || outcome.Effect != kernel.EffectRejected {
+		return false
+	}
+	switch outcome.Cause {
+	case kernel.CauseAuth, kernel.CausePermission, kernel.CauseModelNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+// ResetScope removes runtime suppression after an explicit configuration
+// change. The resulting neutral observation is persisted asynchronously.
+func (g *HealthGate) ResetScope(route kernel.Route, scope kernel.OutcomeScope) bool {
+	return g.resetScope(route, scope, false)
+}
+
+// ClearInvalid reopens only a permanently invalid route after positive
+// discovery evidence, preserving unrelated cooldowns and feedback.
+func (g *HealthGate) ClearInvalid(route kernel.Route, scope kernel.OutcomeScope) bool {
+	return g.resetScope(route, scope, true)
+}
+
+func (g *HealthGate) resetScope(route kernel.Route, scope kernel.OutcomeScope, invalidOnly bool) bool {
+	key := outcomeScopeKey(route, scope)
+	g.mu.Lock()
+	state, exists := g.scoped[key]
+	if invalidOnly && (!exists || !state.Invalid) {
+		g.mu.Unlock()
+		return false
+	}
+	state.Failures = 0
+	state.Invalid = false
+	state.CooldownUntil = time.Time{}
+	state.LastError = ""
+	state.LastCause = kernel.CauseUnknown
+	state.LastEvidence = ""
+	state.Confidence = 0
+	state.LastAttempt = time.Time{}
+	state.LastSuccess = time.Time{}
+	state.LastScope = scope
+	g.scoped[key] = state
+	if exists && route.ID != "" {
+		g.routes[route.ID] = state
+	}
+	delete(g.trials, key)
+	observer := g.observe
+	g.mu.Unlock()
+	if observer != nil {
+		observer(route, state)
+	}
+	return true
 }
 func (g *HealthGate) MarkFailure(route kernel.Route, class kernel.ErrorClass, err error) {
 	g.MarkFailureAfter(route, class, err, 0)
@@ -208,8 +271,10 @@ func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) {
 	defer g.mu.Unlock()
 	key := outcomeScopeKey(route, state.LastScope)
 	g.scoped[key] = state
-	if current := g.routes[route.ID]; current.LastAttempt.IsZero() || state.LastAttempt.After(current.LastAttempt) {
-		g.routes[route.ID] = state
+	if route.ID != "" {
+		if current := g.routes[route.ID]; current.LastAttempt.IsZero() || state.LastAttempt.After(current.LastAttempt) {
+			g.routes[route.ID] = state
+		}
 	}
 }
 func (g *HealthGate) Snapshot() map[string]RouteHealth {

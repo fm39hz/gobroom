@@ -26,12 +26,13 @@ type Service struct {
 	Operations *operations.Snapshot
 }
 type Result struct {
-	NodeID       string `json:"nodeId"`
-	ConnectionID string `json:"connectionId"`
-	Models       int    `json:"models"`
-	Available    int    `json:"available"`
-	Complete     bool   `json:"complete"`
-	URL          string `json:"url"`
+	NodeID       string   `json:"nodeId"`
+	ConnectionID string   `json:"connectionId"`
+	Models       int      `json:"models"`
+	ModelIDs     []string `json:"modelIds,omitempty"`
+	Available    int      `json:"available"`
+	Complete     bool     `json:"complete"`
+	URL          string   `json:"url"`
 }
 
 type ConnectionTestResult struct {
@@ -489,7 +490,10 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 	if err := s.Store.RecordConnectionModelSnapshot(connectionID, node.ID, externalIDs, catalog.Complete, "models_endpoint"); err != nil {
 		return Result{}, err
 	}
-	return Result{NodeID: nodeID, ConnectionID: connectionID, Models: len(modelsToImport), Available: len(catalog.Models), Complete: catalog.Complete, URL: endpointSummary(endpoint)}, nil
+	if err := s.Store.ClearInvalidModelHealth(connectionID, externalIDs); err != nil {
+		return Result{}, err
+	}
+	return Result{NodeID: nodeID, ConnectionID: connectionID, Models: len(modelsToImport), ModelIDs: externalIDs, Available: len(catalog.Models), Complete: catalog.Complete, URL: endpointSummary(endpoint)}, nil
 }
 
 func selectModels(models []provider.ModelDescriptor, selectedIDs []string) ([]provider.ModelDescriptor, error) {

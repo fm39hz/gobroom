@@ -207,6 +207,9 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 			}
 		}
 	}
+	if outcome.Cause == kernel.CauseAuth && (c.Options == nil || c.Options.DefaultScope == "") && outcome.Scope == kernel.ScopeRoute {
+		outcome.Scope = kernel.ScopeConnection
+	}
 	now := time.Now()
 	headerRetryAt := parseRetryAfter(headers.Get("Retry-After"), now)
 	headerResetAt := parseResetTimestamp(json.RawMessage(headers.Get("X-RateLimit-Reset")))

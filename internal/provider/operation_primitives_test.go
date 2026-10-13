@@ -180,4 +180,9 @@ func TestHTTPJSONErrorClassifierKeepsCoarseClassAlignedWithRichCause(t *testing.
 	if class != kernel.ErrorCooldown || outcome.Class != class || outcome.Cause != kernel.CauseQuotaExhausted {
 		t.Fatalf("explicit quota exhaustion was not retryable: class=%s outcome=%#v", class, outcome)
 	}
+
+	authOutcome := classifier.ClassifyOutcome(http.StatusUnauthorized, nil, []byte(`{"error":{"message":"invalid api key"}}`))
+	if authOutcome.Cause != kernel.CauseAuth || authOutcome.Scope != kernel.ScopeConnection || authOutcome.Retry != kernel.RetryNever || authOutcome.Effect != kernel.EffectRejected {
+		t.Fatalf("authentication failure did not carry permanent connection-scoped evidence: %#v", authOutcome)
+	}
 }

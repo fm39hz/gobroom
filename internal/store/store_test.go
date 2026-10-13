@@ -10,6 +10,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 func TestSQLitePragmasApplyToEveryPooledConnection(t *testing.T) {
@@ -221,6 +222,10 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	if err := s.SaveConnectionRuntime(ConnectionRuntime{ConnectionID: "conn-a", Status: "cooldown", BackoffLevel: 2, LastError: "429"}); err != nil {
 		t.Fatal(err)
 	}
+	remaining := float64(0)
+	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Remaining: &remaining}); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.SaveProviderRuntime(ProviderRuntime{ProviderNodeID: "node-a", Status: "cooldown", ConsecutiveFailures: 1, ErrorCode: "capacity"}); err != nil {
 		t.Fatal(err)
 	}
@@ -228,8 +233,42 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	if err != nil || len(providerRuntime) != 1 || providerRuntime[0].ProviderNodeID != "node-a" || providerRuntime[0].ErrorCode != "capacity" {
 		t.Fatalf("provider runtime=%#v err=%v", providerRuntime, err)
 	}
-	if err := s.SaveModelAvailability(ModelAvailability{ConnectionID: "conn-a", ModelRef: "model-a", Status: "blocked", Reason: "quota"}); err != nil {
+	if err := s.SaveModelAvailability(ModelAvailability{ConnectionID: "conn-a", ModelRef: "model-a", Status: "invalid", Reason: "model_not_found", ErrorCode: "route"}); err != nil {
 		t.Fatal(err)
+	}
+	if err := s.ResetConnectionRoutingState("conn-a"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 0 {
+		t.Fatalf("connection credential recovery retained stale quota snapshots: %#v err=%v", snapshots, err)
+	}
+	if runtimes, err := s.ConnectionRuntimes(); err != nil || len(runtimes) != 1 || runtimes[0].Status != "available" {
+		t.Fatalf("connection health reset=%#v err=%v", runtimes, err)
+	}
+	availability, err := s.ModelAvailabilities()
+	if err != nil || len(availability) != 1 {
+		t.Fatalf("connection model health reset=%#v err=%v", availability, err)
+	}
+	for _, model := range availability {
+		if model.Status != "available" {
+			t.Fatalf("connection model health reset did not clear invalid state: %#v", availability)
+		}
+	}
+	if err := s.SaveProviderRuntime(ProviderRuntime{ProviderNodeID: "node-a", Status: "invalid", ConsecutiveFailures: 2, ErrorCode: "auth"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Remaining: &remaining}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ResetProviderRoutingState("node-a"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 0 {
+		t.Fatalf("provider configuration recovery retained stale quota snapshots: %#v err=%v", snapshots, err)
+	}
+	providerRuntime, err = s.ProviderRuntimes()
+	if err != nil || len(providerRuntime) != 1 || providerRuntime[0].Status != "available" {
+		t.Fatalf("provider health reset=%#v err=%v", providerRuntime, err)
 	}
 	if err := s.SaveProxyPool(ProxyPool{ID: "pool-a", Name: "test", Enabled: true}); err != nil {
 		t.Fatal(err)

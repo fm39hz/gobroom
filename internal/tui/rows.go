@@ -96,6 +96,7 @@ type comboModel struct {
 type routeHealth struct {
 	Failures      int
 	Successes     int
+	Invalid       bool
 	CooldownUntil time.Time
 	LastError     string
 	LastCause     string
@@ -372,7 +373,9 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 		entries := make([]entry, 0, len(values))
 		for routeID, value := range values {
 			state := "healthy"
-			if !value.CooldownUntil.IsZero() {
+			if value.Invalid {
+				state = "invalid"
+			} else if !value.CooldownUntil.IsZero() {
 				state = "cooldown until " + value.CooldownUntil.Format(time.RFC3339)
 			}
 			detail := fmt.Sprintf("Route health\n\nState      %s\nFailures   %d\nSuccesses  %d\nCause      %s\nScope      %s\nEvidence   %s\nConfidence %.2f\nLast error\n%s\n\nInternal route ID\n%s", state, value.Failures, value.Successes, value.LastCause, value.LastScope, value.LastEvidence, value.Confidence, value.LastError, routeID)

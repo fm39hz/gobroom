@@ -20,6 +20,24 @@ func TestPolicyGateBlocksExhaustedQuota(t *testing.T) {
 	}
 }
 
+func TestPolicyGateClearsQuotaEvidenceAfterConfigurationRecovery(t *testing.T) {
+	gate := NewPolicyGate()
+	first := kernel.Route{ID: "route-a", NodeID: "provider", CredentialID: "connection-a", ExternalModel: "model"}
+	second := kernel.Route{ID: "route-b", NodeID: "provider", CredentialID: "connection-b", ExternalModel: "model"}
+	remaining := float64(0)
+	reset := time.Now().Add(time.Hour)
+	gate.SetQuota(quota.Snapshot{ProviderNodeID: "provider", ConnectionID: first.CredentialID, ModelRef: "model", WindowName: "daily", Remaining: &remaining, ResetAt: &reset})
+	gate.SetQuota(quota.Snapshot{ProviderNodeID: "provider", ConnectionID: second.CredentialID, ModelRef: "model", WindowName: "daily", Remaining: &remaining, ResetAt: &reset})
+	gate.ClearQuotasForConnection(first.CredentialID)
+	if !gate.Usable(first, time.Now()) || gate.Usable(second, time.Now()) {
+		t.Fatal("connection recovery must clear only that connection's cached quota evidence")
+	}
+	gate.ClearQuotasForProvider(first.NodeID)
+	if !gate.Usable(second, time.Now()) {
+		t.Fatal("provider configuration recovery must clear its remaining quota evidence")
+	}
+}
+
 func TestStructuredQuotaErrorEvidenceBlocksOnlyUntilProviderReset(t *testing.T) {
 	gate := NewPolicyGate()
 	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", Enabled: true}
