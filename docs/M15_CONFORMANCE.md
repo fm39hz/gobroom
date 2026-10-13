@@ -127,6 +127,10 @@ complements the Anthropic cross-wire interruption fixture: after Chat SSE has
 committed a partial response to a Responses client, the kernel preserves an
 incomplete Responses stream and does not switch to fallback.
 
+`TestKernelInterruptedChatProviderResponsesStreamDoesNotCompleteOrFallback`
+proves a truncated Chat-provider SSE translated into Responses stays visibly
+incomplete and cannot switch to a fallback after client output has started.
+
 The 2026-10-09 M11 follow-up adds an exhaustive request-effect/opaque-facet
 fixture, response-effect acceptance/rejection coverage, and a hierarchical
 fallback assertion that failed transform evidence from a rejected branch does
