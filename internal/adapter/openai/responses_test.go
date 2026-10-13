@@ -303,6 +303,89 @@ func TestKernelRendersResponsesJSONItemsAsAnthropicToolUseBlocks(t *testing.T) {
 	}
 }
 
+func TestKernelRestoresResponsesContinuityFromClientSession(t *testing.T) {
+	var dispatches atomic.Int32
+	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		call := dispatches.Add(1)
+		switch call {
+		case 1:
+			if body["previous_response_id"] != nil {
+				t.Errorf("first Responses call unexpectedly carried continuation: %#v", body["previous_response_id"])
+			}
+		case 2:
+			if body["previous_response_id"] != "resp_previous" {
+				t.Errorf("daemon session continuation was not restored into the next provider request: %#v", body)
+			}
+		default:
+			t.Errorf("unexpected Responses dispatch number %d", call)
+		}
+		responseID := "resp_previous"
+		text := "first turn"
+		if call == 2 {
+			responseID, text = "resp_next", "second turn"
+		}
+		responseBody, err := json.Marshal(map[string]any{
+			"id": responseID, "object": "response", "status": "completed",
+			"output": []any{map[string]any{"id": "msg_" + responseID, "type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": text}}}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(responseBody)), Request: request}, nil
+	})}}
+	sessionStoreRef := extensions.Ref{Kind: "session_store", ID: "responses-session", ContractVersion: 1}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, DefinitionID: "openai", CredentialID: "account", Protocol: kernel.ProtocolOpenAIResponses,
+			BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {
+				ContractVersion: 1, AdapterIDs: []string{"openai-responses"}, SessionStoreRef: sessionStoreRef,
+			}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-responses"] = composed
+	engine.SessionStores[sessionStoreRef] = kernel.NewMemorySessionStore()
+	for index, input := range []string{"first turn", "second turn"} {
+		parsed, err := normalize.JSON("/v1/responses", http.Header{"X-Session-Id": []string{"client-session"}}, []byte(`{"model":"junior","input":"`+input+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := httptest.NewRecorder()
+		if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
+			t.Fatalf("decode Responses turn %d %q: %v", index+1, writer.Body.String(), err)
+		}
+		wantID := "resp_previous"
+		if index == 1 {
+			wantID = "resp_next"
+		}
+		if result["id"] != wantID || result["status"] != "completed" {
+			t.Fatalf("Responses turn %d result=%#v", index+1, result)
+		}
+	}
+	if dispatches.Load() != 2 {
+		t.Fatalf("Responses continuity dispatch count=%d, want 2", dispatches.Load())
+	}
+}
+
 func TestKernelMapsOpenAIChatRequestThroughResponsesAndBack(t *testing.T) {
 	responseBody := `{"id":"resp_chat_crosswire","object":"response","status":"completed","output":[{"id":"msg_answer","type":"message","role":"assistant","content":[{"type":"output_text","text":"I found it."}]},{"id":"fc_answer","type":"function_call","call_id":"call_answer","name":"lookup","arguments":"{\"id\":7}"}],"usage":{"input_tokens":13,"output_tokens":4}}`
 	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
