@@ -227,8 +227,10 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 		}
 		userTurn, _ := contents[0].(map[string]any)
 		userParts, _ := userTurn["parts"].([]any)
-		if len(userParts) != 1 || userParts[0].(map[string]any)["text"] != "Find item 7." {
+		if len(userParts) != 2 || userParts[0].(map[string]any)["text"] != "Find item 7." {
 			t.Errorf("Responses input message mapping=%#v", contents[0])
+		} else if image, ok := userParts[1].(map[string]any)["inlineData"].(map[string]any); !ok || image["mimeType"] != "image/png" || image["data"] != "aGVsbG8=" {
+			t.Errorf("Responses image was not translated to Gemini inlineData: %#v", userParts[1])
 		}
 		modelTurn, _ := contents[1].(map[string]any)
 		modelParts, _ := modelTurn["parts"].([]any)
@@ -281,7 +283,7 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 	defer engine.Close()
 	engine.Adapters[binding.AdapterID] = binding.Adapter
 	engine.SessionStores[binding.SessionStoreRef] = binding.SessionStore
-	requestBody := `{"model":"junior","instructions":"Be precise.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."}]},{"type":"function_call","call_id":"call_prior","name":"lookup","arguments":"{\"id\":7}"},{"type":"function_call_output","call_id":"call_prior","output":"{\"found\":true}"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":4096,"temperature":0.2,"top_p":0.7,"reasoning":{"max_output_tokens":2048}}`
+	requestBody := `{"model":"junior","instructions":"Be precise.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]},{"type":"function_call","call_id":"call_prior","name":"lookup","arguments":"{\"id\":7}"},{"type":"function_call_output","call_id":"call_prior","output":"{\"found\":true}"}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":4096,"temperature":0.2,"top_p":0.7,"reasoning":{"max_output_tokens":2048}}`
 	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(requestBody))
 	if err != nil {
 		t.Fatal(err)
