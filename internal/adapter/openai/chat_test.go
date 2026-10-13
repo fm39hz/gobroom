@@ -517,7 +517,7 @@ func TestKernelMapsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
 	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode OpenAI Responses projection %q: %v", writer.Body.String(), err)
 	}
-	if result.ID != "chatcmpl_responses_ingress" || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 || dispatches.Load() != 1 {
+	if !strings.HasPrefix(result.ID, "resp_gobroom_") || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 || dispatches.Load() != 1 {
 		t.Fatalf("Chat→Responses result=%#v dispatches=%d", result, dispatches.Load())
 	}
 	if result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["call_id"] != "call_final" || result.Usage["input_tokens"] != 12 || result.Usage["output_tokens"] != 3 {
@@ -546,6 +546,69 @@ func TestKernelMapsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
 		if err := engine.Execute(context.Background(), unsupportedRequest.Request, kernel.Credential{Secret: "secret"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || dispatches.Load() != 1 {
 			t.Fatalf("unmapped Responses field was not rejected before Chat dispatch: request=%s err=%v calls=%d", unsupported, err, dispatches.Load())
 		}
+	}
+}
+
+func TestKernelStreamsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
+	upstreamWire := strings.Join([]string{
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Searching now."},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_stream","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"tea\"}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_stream","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":6,"completion_tokens":3}}`,
+		`data: [DONE]`,
+		"",
+	}, "\n\n")
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode OpenAI Chat stream request: %v", err)
+		} else if body["stream"] != true || body["input"] != nil || body["messages"] == nil {
+			t.Errorf("Responses stream request was not translated: %#v", body)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(upstreamWire)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "chat-physical",
+			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(`{"model":"junior","stream":true,"input":"Search for tea.","tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	output := writer.Body.String()
+	if !strings.Contains(writer.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("Responses stream content type=%q output=%s", writer.Header().Get("Content-Type"), output)
+	}
+	for _, expected := range []string{
+		"event: response.created", "event: response.output_text.delta", "Searching now.",
+		"event: response.output_item.added", `"call_id":"call_stream"`,
+		"event: response.function_call_arguments.delta", "event: response.function_call_arguments.done",
+		"event: response.completed", `"input_tokens":6`, `"output_tokens":3`,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("Responses stream omitted %q: %s", expected, output)
+		}
+	}
+	if strings.Contains(output, "[DONE]") || strings.Contains(output, "chatcmpl_stream") || !strings.Contains(output, `"id":"resp_gobroom_`) {
+		t.Fatalf("Responses stream leaked Chat framing/identity or used the wrong terminal: %s", output)
 	}
 }
 
