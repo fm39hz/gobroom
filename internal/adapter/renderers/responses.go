@@ -110,7 +110,7 @@ func (s *openAIResponsesSession) Emit(_ context.Context, event kernel.ResponseEv
 		}
 		return nil
 	}
-	if event.ResponseID != "" {
+	if event.ResponseID != "" && strings.HasPrefix(event.ResponseID, "resp_") && !s.started {
 		s.responseID = event.ResponseID
 	}
 	switch event.Kind {
