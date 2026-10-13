@@ -122,6 +122,49 @@ func TestHTTPJSONErrorClassifierKeeps429RateLimitAndRetryAfterHeader(t *testing.
 	}
 }
 
+func TestHTTPJSONErrorClassifierUsesRateLimitResetAndDeterministicDeadlinePrecedence(t *testing.T) {
+	classifier := HTTPJSONErrorClassifier{}
+	resetHeader := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)
+	resetBody := time.Now().Add(9 * time.Minute).UTC().Truncate(time.Second)
+	retryHeader := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
+	body := []byte(`{"error":{"type":"rate_limit_error","message":"Too many requests"}}`)
+
+	resetOnly := make(http.Header)
+	resetOnly.Set("X-RateLimit-Remaining", "0")
+	resetOnly.Set("X-RateLimit-Reset", strconv.FormatInt(resetHeader.Unix(), 10))
+	outcome := classifier.ClassifyOutcome(http.StatusTooManyRequests, resetOnly, body)
+	if !outcome.RetryAt.Equal(resetHeader) {
+		t.Fatalf("X-RateLimit-Reset did not drive route cooldown: got=%s want=%s", outcome.RetryAt, resetHeader)
+	}
+	if len(outcome.Limits) != 1 || outcome.Limits[0].Remaining == nil || *outcome.Limits[0].Remaining != 0 || outcome.Limits[0].ResetAt == nil || !outcome.Limits[0].ResetAt.Equal(resetHeader) {
+		t.Fatalf("rate limit window lost reset/remaining evidence: %#v", outcome.Limits)
+	}
+
+	conflicting := make(http.Header)
+	conflicting.Set("Retry-After", retryHeader.Format(http.TimeFormat))
+	conflicting.Set("X-RateLimit-Reset", strconv.FormatInt(resetHeader.Unix(), 10))
+	outcome = classifier.ClassifyOutcome(http.StatusTooManyRequests, conflicting, body)
+	if delta := outcome.RetryAt.Sub(retryHeader); delta < -time.Second || delta > time.Second {
+		t.Fatalf("Retry-After must outrank reset header: got=%s want=%s", outcome.RetryAt, retryHeader)
+	}
+
+	conflictingBody := []byte(`{"error":{"type":"rate_limit_error","message":"Too many requests","reset_at":"` + resetBody.Format(time.RFC3339) + `","retry_after":"75s"}}`)
+	outcome = classifier.ClassifyOutcome(http.StatusTooManyRequests, conflicting, conflictingBody)
+	if delta := outcome.RetryAt.Sub(resetBody); delta < -time.Second || delta > time.Second {
+		t.Fatalf("provider error reset must outrank response retry signals: got=%s want=%s", outcome.RetryAt, resetBody)
+	}
+
+	bodyRetryOnly := []byte(`{"error":{"type":"rate_limit_error","message":"Too many requests","retry_after":"75s"}}`)
+	outcome = classifier.ClassifyOutcome(http.StatusTooManyRequests, resetOnly, bodyRetryOnly)
+	if delta := outcome.RetryAt.Sub(resetHeader); delta < -time.Second || delta > time.Second {
+		t.Fatalf("reset header must outrank provider retry delay: got=%s want=%s", outcome.RetryAt, resetHeader)
+	}
+	invalidRequest := classifier.ClassifyOutcome(http.StatusBadRequest, resetOnly, []byte(`{"error":{"message":"invalid request"}}`))
+	if invalidRequest.Retry != kernel.RetryNever || !invalidRequest.RetryAt.IsZero() {
+		t.Fatalf("non-retryable request error inherited a retry deadline: %#v", invalidRequest)
+	}
+}
+
 func TestHTTPJSONErrorClassifierKeepsCoarseClassAlignedWithRichCause(t *testing.T) {
 	classifier := HTTPJSONErrorClassifier{}
 	invalidQuotaMention := []byte(`{"error":{"message":"quota parameter is invalid for this request"}}`)

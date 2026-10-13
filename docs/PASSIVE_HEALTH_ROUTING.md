@@ -220,10 +220,18 @@ Deadline precedence:
 ```text
 authoritative provider reset
   > Retry-After date/seconds
-  > provider reset header
+  > rate-limit reset header
+  > provider retry delay in the error body
   > opportunistic quota API
   > category-specific estimate
 ```
+
+For the generic HTTP/JSON classifier, an explicit reset timestamp in the error
+body wins, then a valid `Retry-After`, then `X-RateLimit-Reset`, then a
+structured body retry delay. The selected header reset is also retained on the
+typed rate-limit window, including when the response omits a remaining count.
+Expired or malformed timestamps do not mask a lower-precedence future
+deadline.
 
 Authoritative reset timestamps are not capped. Exponential backoff and maximum
 delay apply only to estimates. Small jitter may be added when reopening to

@@ -207,19 +207,37 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 			}
 		}
 	}
-	if !errorEvidence.ResetAt.IsZero() {
-		outcome.RetryAt = errorEvidence.ResetAt
-	} else if value := headers.Get("Retry-After"); value != "" {
-		outcome.RetryAt = parseRetryAfter(value, time.Now())
+	now := time.Now()
+	headerRetryAt := parseRetryAfter(headers.Get("Retry-After"), now)
+	headerResetAt := parseResetTimestamp(json.RawMessage(headers.Get("X-RateLimit-Reset")))
+	if outcome.Retry != kernel.RetryNever {
+		switch {
+		case errorEvidence.ResetAt.After(now):
+			outcome.RetryAt = errorEvidence.ResetAt
+		case headerRetryAt.After(now):
+			outcome.RetryAt = headerRetryAt
+		case headerResetAt.After(now):
+			outcome.RetryAt = headerResetAt
+		case errorEvidence.RetryAt.After(now):
+			outcome.RetryAt = errorEvidence.RetryAt
+		}
+	}
+	if headerRetryAt.After(now) || headerResetAt.After(now) {
 		outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
 	}
-	if remaining, err := strconv.ParseFloat(headers.Get("X-RateLimit-Remaining"), 64); err == nil {
-		window := kernel.LimitWindow{Name: "rate_limit", Kind: "requests", Remaining: &remaining, Source: kernel.EvidenceResponseHeader}
-		if at := parseResetTimestamp(json.RawMessage(headers.Get("X-RateLimit-Reset"))); !at.IsZero() {
-			window.ResetAt = &at
+	remaining, remainingErr := strconv.ParseFloat(headers.Get("X-RateLimit-Remaining"), 64)
+	if remainingErr == nil || !headerResetAt.IsZero() {
+		window := kernel.LimitWindow{Name: "rate_limit", Kind: "requests", Source: kernel.EvidenceResponseHeader}
+		if remainingErr == nil {
+			window.Remaining = &remaining
+		}
+		if !headerResetAt.IsZero() {
+			window.ResetAt = &headerResetAt
 		}
 		outcome.Limits = append(outcome.Limits, window)
-		outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
+		if len(outcome.Evidence) == 0 || outcome.Evidence[len(outcome.Evidence)-1] != kernel.EvidenceResponseHeader {
+			outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
+		}
 	}
 	if outcome.Cause == kernel.CauseQuotaExhausted || errorEvidence.HasWindow {
 		remaining := errorEvidence.Remaining
@@ -249,9 +267,6 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 			}
 		}
 		outcome.Limits = append(outcome.Limits, kernel.LimitWindow{Name: name, Kind: kind, Limit: errorEvidence.Limit, Used: errorEvidence.Used, Remaining: remaining, ResetAt: optionalTime(reset), Source: kernel.EvidenceErrorBody})
-	}
-	if outcome.RetryAt.IsZero() && !errorEvidence.RetryAt.IsZero() {
-		outcome.RetryAt = errorEvidence.RetryAt
 	}
 	return outcome
 }
