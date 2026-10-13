@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS connection_runtime (
   last_error TEXT, error_code TEXT, last_used_at TEXT, consecutive_use_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS provider_runtime (
+  provider_node_id TEXT PRIMARY KEY REFERENCES provider_nodes(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'active', consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  cooldown_until TEXT, last_error TEXT, error_code TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS model_availability (
   connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
   model_ref TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available',
@@ -418,6 +424,40 @@ type ConnectionRuntime struct {
 	ConnectionID, Status, CooldownUntil, RateLimitedUntil  string
 	ConsecutiveFailures, BackoffLevel, ConsecutiveUseCount int
 	LastError, ErrorCode, LastUsedAt                       string
+}
+
+type ProviderRuntime struct {
+	ProviderNodeID, Status, CooldownUntil string
+	ConsecutiveFailures                   int
+	LastError, ErrorCode                  string
+}
+
+func (s *Store) ProviderRuntimes() ([]ProviderRuntime, error) {
+	rows, err := s.DB.Query(`SELECT provider_node_id,status,consecutive_failures,COALESCE(cooldown_until,''),COALESCE(last_error,''),COALESCE(error_code,'') FROM provider_runtime`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ProviderRuntime
+	for rows.Next() {
+		var item ProviderRuntime
+		if err := rows.Scan(&item.ProviderNodeID, &item.Status, &item.ConsecutiveFailures, &item.CooldownUntil, &item.LastError, &item.ErrorCode); err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) SaveProviderRuntime(item ProviderRuntime) error {
+	if item.ProviderNodeID == "" {
+		return fmt.Errorf("provider node ID is required")
+	}
+	if item.Status == "" {
+		item.Status = "active"
+	}
+	_, err := s.DB.Exec(`INSERT INTO provider_runtime(provider_node_id,status,consecutive_failures,cooldown_until,last_error,error_code,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(provider_node_id) DO UPDATE SET status=excluded.status,consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,last_error=excluded.last_error,error_code=excluded.error_code,updated_at=CURRENT_TIMESTAMP`, item.ProviderNodeID, item.Status, item.ConsecutiveFailures, nullable(item.CooldownUntil), nullable(item.LastError), nullable(item.ErrorCode))
+	return err
 }
 
 func (s *Store) ConnectionRuntimes() ([]ConnectionRuntime, error) {

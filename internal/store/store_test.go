@@ -221,6 +221,13 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	if err := s.SaveConnectionRuntime(ConnectionRuntime{ConnectionID: "conn-a", Status: "cooldown", BackoffLevel: 2, LastError: "429"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.SaveProviderRuntime(ProviderRuntime{ProviderNodeID: "node-a", Status: "cooldown", ConsecutiveFailures: 1, ErrorCode: "capacity"}); err != nil {
+		t.Fatal(err)
+	}
+	providerRuntime, err := s.ProviderRuntimes()
+	if err != nil || len(providerRuntime) != 1 || providerRuntime[0].ProviderNodeID != "node-a" || providerRuntime[0].ErrorCode != "capacity" {
+		t.Fatalf("provider runtime=%#v err=%v", providerRuntime, err)
+	}
 	if err := s.SaveModelAvailability(ModelAvailability{ConnectionID: "conn-a", ModelRef: "model-a", Status: "blocked", Reason: "quota"}); err != nil {
 		t.Fatal(err)
 	}

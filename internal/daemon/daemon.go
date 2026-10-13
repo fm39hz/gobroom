@@ -426,6 +426,15 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeConnection})
 		}
 	}
+	providerRuntimeRows, _ := d.store.ProviderRuntimes()
+	for _, item := range providerRuntimeRows {
+		for _, route := range d.kernel.Snapshots.Load().Routes {
+			if route.NodeID != item.ProviderNodeID {
+				continue
+			}
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeProvider})
+		}
+	}
 	availabilityRows, _ := d.store.ModelAvailabilities()
 	for _, item := range availabilityRows {
 		blockedUntil := parseTime(item.BlockedUntil)
@@ -443,10 +452,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	healthEventsDone := make(chan struct{})
 	go func() {
 		defer close(healthEventsDone)
-		persist := func(event healthEvent) {
-			_ = d.store.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: event.route.CredentialID, Status: healthStatus(event.state), ConsecutiveFailures: event.state.Failures, CooldownUntil: formatTime(event.state.CooldownUntil), LastError: event.state.LastError, ErrorCode: string(event.state.LastCause)})
-			_ = d.store.SaveModelAvailability(store.ModelAvailability{ConnectionID: event.route.CredentialID, ModelRef: event.route.ExternalModel, Status: healthStatus(event.state), BlockedUntil: formatTime(event.state.CooldownUntil), Reason: string(event.state.LastCause), ErrorCode: string(event.state.LastScope), LastError: event.state.LastError, ConsecutiveFailures: event.state.Failures})
-		}
+		persist := func(event healthEvent) { _ = persistHealthState(d.store, event.route, event.state) }
 		for {
 			select {
 			case <-ctx.Done():
@@ -533,6 +539,19 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	started = true
 	return nil
+}
+
+func persistHealthState(stateStore *store.Store, route kernel.Route, state runtimehealth.RouteHealth) error {
+	switch state.LastScope {
+	case kernel.ScopeConnection:
+		return stateStore.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: route.CredentialID, Status: healthStatus(state), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
+	case kernel.ScopeProvider:
+		return stateStore.SaveProviderRuntime(store.ProviderRuntime{ProviderNodeID: route.NodeID, Status: healthStatus(state), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
+	case kernel.ScopeRoute, kernel.ScopeRouteConnection:
+		return stateStore.SaveModelAvailability(store.ModelAvailability{ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, Status: healthStatus(state), BlockedUntil: formatTime(state.CooldownUntil), Reason: string(state.LastCause), ErrorCode: string(state.LastScope), LastError: state.LastError, ConsecutiveFailures: state.Failures})
+	default:
+		return fmt.Errorf("unsupported health scope %q", state.LastScope)
+	}
 }
 
 func (d *Daemon) loadStoredProviderDefinitions(runtimeRegistry *provider.RuntimeRegistry) error {

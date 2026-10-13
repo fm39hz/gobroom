@@ -206,8 +206,11 @@ func failureDelay(failures int, cause kernel.OutcomeCause) time.Duration {
 func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.scoped[scopeKey(route)] = state
-	g.routes[route.ID] = state
+	key := outcomeScopeKey(route, state.LastScope)
+	g.scoped[key] = state
+	if current := g.routes[route.ID]; current.LastAttempt.IsZero() || state.LastAttempt.After(current.LastAttempt) {
+		g.routes[route.ID] = state
+	}
 }
 func (g *HealthGate) Snapshot() map[string]RouteHealth {
 	g.mu.RLock()

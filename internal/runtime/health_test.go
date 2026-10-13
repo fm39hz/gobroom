@@ -65,6 +65,23 @@ func TestHealthGateAppliesConnectionScopeAcrossRoutes(t *testing.T) {
 	}
 }
 
+func TestHealthGateRestoreRetainsPersistedScope(t *testing.T) {
+	gate := NewHealthGate()
+	first := kernel.Route{ID: "model-a", NodeID: "provider", CredentialID: "conn"}
+	second := kernel.Route{ID: "model-b", NodeID: "provider", CredentialID: "conn"}
+	blockedUntil := time.Now().Add(time.Hour)
+	gate.Restore(first, RouteHealth{Failures: 1, CooldownUntil: blockedUntil, LastCause: kernel.CauseCapacity, LastScope: kernel.ScopeProvider})
+	if gate.Usable(first, time.Now()) || gate.Usable(second, time.Now()) {
+		t.Fatal("restored provider-scoped failure must gate every route from that provider")
+	}
+
+	modelGate := NewHealthGate()
+	modelGate.Restore(first, RouteHealth{Failures: 1, CooldownUntil: blockedUntil, LastCause: kernel.CauseCapacity, LastScope: kernel.ScopeRoute})
+	if modelGate.Usable(first, time.Now()) || !modelGate.Usable(second, time.Now()) {
+		t.Fatal("restored route-scoped failure must not gate another model")
+	}
+}
+
 func TestHealthGateHalfOpenAllowsOneRealTrial(t *testing.T) {
 	gate := NewHealthGate()
 	route := kernel.Route{ID: "route"}

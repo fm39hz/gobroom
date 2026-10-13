@@ -6,8 +6,10 @@ times, applies bounded feedback ranking, captures TTFT/throughput and persists
 quota snapshots asynchronously. A daemon start → manifest-classified HTTP
 failure → shutdown/reopen fixture proves both body quota and header rate-limit
 windows survive restart, restore connection-scoped cause, and gate the route
-until reset. Broader provider-envelope and conflicting-evidence precedence
-coverage remains. Quota polling is opt-in and opportunistic enrichment is
+until reset. Route/model, connection and provider health scopes are persisted
+independently; restart restoration retains the original scope rather than
+promoting a single-model failure into a connection outage. Broader
+provider-envelope and conflicting-evidence precedence coverage remains. Quota polling is opt-in and opportunistic enrichment is
 singleflight/cooldowned after real quota/rate-limit evidence.
 
 ## Principle
@@ -596,12 +598,12 @@ not hide evidence/provenance behind a generic “healthy” badge.
    an explicit `--quota-poll` opt-in for providers that require it.
 9. Expose evidence, limits, effective order and policy controls in IPC/TUI.
 
-## Current implementation gaps
+## Remaining implementation gaps
 
-- Scoped route/connection/provider breaker state and one-real-request
-  half-open trials are implemented.
-- Request-class performance summaries are now held in a bounded in-memory EWMA
-  book; session affinity and durable evidence projections are not complete.
+- Scoped route/connection/provider breaker state, scope-preserving SQLite
+  persistence/restoration and one-real-request half-open trials are implemented.
+- Request-class performance summaries are held in a bounded in-memory EWMA
+  book; durable request-class performance evidence is not complete.
 - Rich aggregate Physical/provider status projections and log streaming are
   not complete; route-level health and usage evidence are durable and exposed
   through IPC/CLI/TUI.
