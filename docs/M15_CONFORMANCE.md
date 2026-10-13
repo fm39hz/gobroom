@@ -117,6 +117,11 @@ serving boundaries, not merely registry acceptance.
 | SG6: replay safety | A safe precommit failure can fallback. `Idempotency-Key` is validated at ingress; provider operation definitions may bind a valid upstream header only when the exact operation declares `scoped_idempotency_key`. `ReplayWithKey` derives a deterministic hash scoped to the exact provider definition, node/endpoint, credential, protocol, model and operation, retries at most once on the same route after ambiguous transport/eligible unknown-effect responses, and refuses cross-issuer fallback. `TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader`, `TestReplayWithKeyNeverFallsBackAcrossIssuerAfterAmbiguousRetry`, `TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch`, `TestProviderOperationBindsOnlyValidIdempotencyHeaderNames` and `TestLoaderBuildsTypedPhysicalAndComboGraph` cover the contract and manifest→snapshot path. An unsafe dispatched operation with ambiguous timeout cannot duplicate an upstream job; no operation switches routes after client commitment. Still missing: real provider idempotency semantics/expiry and async job effect fixtures. |
 | SG7: extension configuration and isolation | Versioned feature/policy/auth/operation schemas drive validation and generic control clients. A bundle includes user definitions/bindings and excludes secrets/session state. Missing compiled dependencies fail atomically. Reload pins existing streams to their old catalog/snapshot. Multiple long streams do not block control/auth actions. |
 
+`TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack` also proves a
+Responses base64 image is converted to Anthropic's typed `image.source` block
+through the serving kernel; image detail and file-ID inputs that the target
+contract cannot represent are rejected before dispatch.
+
 The 2026-10-09 M11 follow-up adds an exhaustive request-effect/opaque-facet
 fixture, response-effect acceptance/rejection coverage, and a hierarchical
 fallback assertion that failed transform evidence from a rejected branch does

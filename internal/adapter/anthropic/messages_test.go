@@ -252,7 +252,19 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 			tools, _ := body["tools"].([]any)
 			system, _ := body["system"].([]any)
 			choice, _ := body["tool_choice"].(map[string]any)
-			if body["model"] != "claude-physical" || body["input"] != nil || len(messages) != 1 || messages[0].(map[string]any)["content"] != "Find item 7." || len(tools) != 1 || len(system) != 1 || body["max_tokens"] != float64(512) || choice["type"] != "any" {
+			var content []any
+			if len(messages) == 1 {
+				if message, ok := messages[0].(map[string]any); ok {
+					content, _ = message["content"].([]any)
+				}
+			}
+			var source map[string]any
+			if len(content) > 1 {
+				if image, ok := content[1].(map[string]any); ok {
+					source, _ = image["source"].(map[string]any)
+				}
+			}
+			if body["model"] != "claude-physical" || body["input"] != nil || len(messages) != 1 || len(content) != 2 || content[0].(map[string]any)["text"] != "Find item 7." || content[1].(map[string]any)["type"] != "image" || source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] != "aGVsbG8=" || len(tools) != 1 || len(system) != 1 || body["max_tokens"] != float64(512) || choice["type"] != "any" {
 				t.Errorf("Responses request was not rebuilt as Anthropic Messages: %#v", body)
 			}
 		}
@@ -263,7 +275,10 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
 			ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, BaseURL: "https://provider.test/v1", ExternalModel: "claude-physical",
-			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			Profile: kernel.CapabilityProfile{
+				kernel.CapabilityTools:  {State: kernel.SupportNative},
+				kernel.CapabilityVision: {State: kernel.SupportNative},
+			},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"anthropic-messages"}}},
 		}},
 	}, 1)
@@ -276,7 +291,7 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 	}
 	defer engine.Close()
 	engine.Adapters["anthropic-messages"] = composed
-	requestBody := `{"model":"junior","instructions":"Use tools when needed.","input":"Find item 7.","tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":512}`
+	requestBody := `{"model":"junior","instructions":"Use tools when needed.","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Find item 7."},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":512}`
 	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(requestBody))
 	if err != nil {
 		t.Fatal(err)
@@ -314,6 +329,18 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 	}
 	if err := engine.Execute(context.Background(), continuity.Request, kernel.Credential{Secret: "anthropic-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || dispatches.Load() != 1 {
 		t.Fatalf("Responses continuity was silently dropped on Anthropic route: err=%v dispatches=%d", err, dispatches.Load())
+	}
+	for _, unsupported := range []string{
+		`{"model":"junior","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8=","detail":"high"}]}]}`,
+		`{"model":"junior","input":[{"type":"message","role":"user","content":[{"type":"input_image","file_id":"file_123"}]}]}`,
+	} {
+		unsupportedRequest, err := normalize.JSON("/v1/responses", http.Header{}, []byte(unsupported))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := engine.Execute(context.Background(), unsupportedRequest.Request, kernel.Credential{Secret: "anthropic-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || dispatches.Load() != 1 {
+			t.Fatalf("unmapped Responses image semantics reached Anthropic: request=%s err=%v calls=%d", unsupported, err, dispatches.Load())
+		}
 	}
 }
 

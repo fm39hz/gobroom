@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +29,7 @@ type messagesRequestCodec struct{ adapter Messages }
 func (c messagesRequestCodec) ID() string { return "anthropic-messages-json" }
 func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityContext) []kernel.FacetMapping {
 	native := input.Request.SourceFormat == normalize.FormatAnthropic
+	responses := input.Request.SourceFormat == normalize.FormatOpenAIResponses
 	result := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets))
 	for _, facet := range input.Policy.RequiredFacets {
 		if kernel.IsResponseCompatibilityFacet(facet) {
@@ -41,8 +44,10 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 				} else {
 					mapping.Disposition = kernel.FacetPreserved
 				}
-			} else {
+			} else if !responses || anthropicResponsesEnvelopeRepresentable(input.Request) {
 				mapping.Disposition = kernel.FacetTranslated
+			} else {
+				mapping.Reason = "Responses request contains fields Anthropic Messages cannot preserve"
 			}
 		case kernel.FacetPromptLayers:
 			if native {
@@ -73,7 +78,7 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 				} else {
 					mapping.Disposition = kernel.FacetPreserved
 				}
-			} else if anthropicToolChoiceRepresentable(input.Request.ToolChoice) && anthropicToolChoiceMatchesTools(input.Request) {
+			} else if len(input.Request.ToolChoice.Metadata) == 0 && anthropicToolChoiceRepresentable(input.Request.ToolChoice) && anthropicToolChoiceMatchesTools(input.Request) {
 				mapping.Disposition = kernel.FacetTranslated
 				mapping.Reason = "canonical tool choice is mapped to Anthropic tool_choice"
 			}
@@ -120,6 +125,9 @@ func (c messagesRequestCodec) DescribeCompatibility(input kernel.CompatibilityCo
 			if native {
 				mapping.Disposition = kernel.FacetPreserved
 				mapping.Reason = "the native Anthropic payload is forwarded without rewriting"
+			} else if facet == kernel.FacetVisionInput && anthropicTranslatedVisionRepresentable(input.Request) {
+				mapping.Disposition = kernel.FacetTranslated
+				mapping.Reason = "typed base64 and URL images are encoded as Anthropic image source blocks"
 			}
 		case kernel.FacetGenerationOptions:
 			if native {
@@ -190,8 +198,10 @@ func anthropicToolChoiceMatchesTools(request kernel.NormalizedRequest) bool {
 
 func anthropicPromptLayersRepresentable(request kernel.NormalizedRequest) bool {
 	for _, layer := range request.Prompt.Layers {
-		if len(layer.Parts) > 0 {
-			return false
+		for _, part := range layer.Parts {
+			if part.Type != "text" || part.Metadata["cache_control"] != nil {
+				return false
+			}
 		}
 	}
 	return true
@@ -199,6 +209,12 @@ func anthropicPromptLayersRepresentable(request kernel.NormalizedRequest) bool {
 
 func anthropicToolDefinitionsRepresentable(request kernel.NormalizedRequest) bool {
 	for _, tool := range request.Tools {
+		if tool.Function == nil || tool.Function["parameters"] == nil {
+			return false
+		}
+		if strict, ok := tool.Function["strict"].(bool); ok && strict {
+			return false
+		}
 		name := tool.Name
 		if tool.Function != nil {
 			if functionName, ok := tool.Function["name"].(string); ok && functionName != "" {
@@ -210,6 +226,51 @@ func anthropicToolDefinitionsRepresentable(request kernel.NormalizedRequest) boo
 		}
 	}
 	return true
+}
+
+func anthropicResponsesEnvelopeRepresentable(request kernel.NormalizedRequest) bool {
+	allowed := map[string]bool{
+		"model": true, "stream": true, "input": true, "instructions": true,
+		"tools": true, "tool_choice": true, "parallel_tool_calls": true,
+		"max_output_tokens": true, "max_completion_tokens": true,
+		"temperature": true, "top_p": true, "stop": true, "reasoning": true,
+	}
+	for key := range request.Raw {
+		if !allowed[key] {
+			return false
+		}
+	}
+	for key := range request.Extensions {
+		if !allowed[key] {
+			return false
+		}
+	}
+	return true
+}
+
+func anthropicTranslatedVisionRepresentable(request kernel.NormalizedRequest) bool {
+	found := false
+	for _, message := range request.Messages {
+		parts, ok := message.Content.([]normalize.ContentPart)
+		if !ok {
+			continue
+		}
+		for _, part := range parts {
+			if part.Type != "image" {
+				continue
+			}
+			if part.Detail != "" || part.URL == "" && (part.Data == "" || part.MediaType == "") {
+				return false
+			}
+			if strings.HasPrefix(part.URL, "data:") {
+				if _, _, err := anthropicImageDataSource(part); err != nil {
+					return false
+				}
+			}
+			found = true
+		}
+	}
+	return found
 }
 
 func anthropicGenerationOptionsRepresentable(request kernel.NormalizedRequest) bool {
@@ -518,13 +579,30 @@ func (a Messages) PrepareWithCompatibility(_ context.Context, request kernel.Nor
 		if len(request.Prompt.Layers) > 0 {
 			parts := make([]map[string]any, 0, len(request.Prompt.Layers))
 			for _, layer := range request.Prompt.Layers {
-				parts = append(parts, map[string]any{"type": "text", "text": layer.Text})
+				if len(layer.Parts) == 0 {
+					if layer.Text != "" {
+						parts = append(parts, map[string]any{"type": "text", "text": layer.Text})
+					}
+					continue
+				}
+				for _, part := range layer.Parts {
+					if part.Type != "text" || part.Metadata["cache_control"] != nil {
+						return kernel.UpstreamRequest{}, fmt.Errorf("Anthropic system prompt cannot encode prompt part %q", part.Type)
+					}
+					parts = append(parts, map[string]any{"type": "text", "text": part.Text})
+				}
 			}
-			body["system"] = parts
+			if len(parts) > 0 {
+				body["system"] = parts
+			}
 		}
 		body["messages"] = make([]map[string]any, 0, len(request.Messages))
 		for _, message := range request.Messages {
-			body["messages"] = append(body["messages"].([]map[string]any), map[string]any{"role": message.Role, "content": message.Content})
+			content, err := anthropicTranslatedContent(message.Content)
+			if err != nil {
+				return kernel.UpstreamRequest{}, fmt.Errorf("encode %s message for Anthropic: %w", message.Role, err)
+			}
+			body["messages"] = append(body["messages"].([]map[string]any), map[string]any{"role": message.Role, "content": content})
 		}
 		if len(request.Tools) > 0 {
 			body["tools"] = anthropicTools(request.Tools)
@@ -597,6 +675,62 @@ func lossInteger(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func anthropicTranslatedContent(content any) (any, error) {
+	if _, isString := content.(string); isString || content == nil {
+		return content, nil
+	}
+	parts, ok := content.([]normalize.ContentPart)
+	if !ok {
+		return nil, fmt.Errorf("typed content part contract required, got %T", content)
+	}
+	translated := make([]normalize.ContentPart, len(parts))
+	for index, part := range parts {
+		part.Metadata = nil
+		if part.Type == "image" {
+			if part.Detail != "" {
+				return nil, fmt.Errorf("Anthropic image source cannot preserve detail=%q", part.Detail)
+			}
+			if strings.HasPrefix(part.URL, "data:") {
+				mediaType, data, err := anthropicImageDataSource(part)
+				if err != nil {
+					return nil, err
+				}
+				part.URL = ""
+				part.MediaType, part.Data = mediaType, data
+			}
+		}
+		translated[index] = part
+	}
+	return nativeAnthropicAddedContent(translated)
+}
+
+func anthropicImageDataSource(part normalize.ContentPart) (string, string, error) {
+	if part.URL == "" {
+		if part.MediaType == "" || part.Data == "" {
+			return "", "", fmt.Errorf("Anthropic image requires a URL or typed base64 source")
+		}
+		if _, err := base64.StdEncoding.DecodeString(part.Data); err != nil {
+			return "", "", fmt.Errorf("decode image base64: %w", err)
+		}
+		return part.MediaType, part.Data, nil
+	}
+	if !strings.HasPrefix(part.URL, "data:") {
+		return "", "", fmt.Errorf("image URL is not a data URI")
+	}
+	metadata, encoded, found := strings.Cut(strings.TrimPrefix(part.URL, "data:"), ",")
+	if !found || !strings.HasSuffix(metadata, ";base64") {
+		return "", "", fmt.Errorf("Anthropic inline image must use a base64 data URI")
+	}
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSuffix(metadata, ";base64"))
+	if err != nil || !strings.HasPrefix(mediaType, "image/") {
+		return "", "", fmt.Errorf("Anthropic inline image has an invalid media type")
+	}
+	if _, err := base64.StdEncoding.DecodeString(encoded); err != nil {
+		return "", "", fmt.Errorf("decode image base64: %w", err)
+	}
+	return mediaType, encoded, nil
 }
 
 func applyAnthropicThinking(body map[string]any, intent normalize.ThinkingIntent) {
