@@ -8,16 +8,21 @@ failure → shutdown/reopen fixture proves both body quota and header rate-limit
 windows survive restart, restore connection-scoped cause, and gate the route
 until reset. Route/model, connection and provider health scopes are persisted
 independently; restart restoration retains the original scope rather than
-promoting a single-model failure into a connection outage. Broader
-provider-envelope and conflicting-evidence precedence coverage remains. Quota polling is opt-in and opportunistic enrichment is
+promoting a single-model failure into a connection outage. Generic conflict
+precedence is covered; broader provider-envelope coverage remains. Quota polling is opt-in and opportunistic enrichment is
 singleflight/cooldowned after real quota/rate-limit evidence.
 
 Health observations are coalesced by breaker identity in a bounded asynchronous
-writer. Inference does not wait on SQLite; queue saturation and write failures
-are reported to the daemon log, and shutdown drains accepted observations after
-the kernel has stopped producing them. A failed storage write is not retried
-indefinitely and can therefore leave restart state stale; request-time routing
-continues to use the in-memory observation.
+writer. Inference does not wait on SQLite. Each write gets a short bounded
+retry; repeated failures move the latest scope snapshot to a size/record-bounded
+0600 spool beside the database (or at `--runtime-spool`). The daemon replays
+pending entries with backoff across restart. After 12 failed retry cycles a
+record is retained as a dead letter; `gobroom persistence status` reports it
+and `gobroom persistence retry` requeues it. Queue/spool saturation and spool
+filesystem failures are reported to the daemon log. Shutdown drains accepted
+observations after the kernel has stopped producing them. If both SQLite and
+the spool are unavailable/full, the failed write is logged and cannot be
+recovered automatically.
 
 ## Principle
 
@@ -638,8 +643,9 @@ request snapshot cannot change routing for the current configuration.
   persistence/restoration and one-real-request half-open trials are implemented.
 - Health-event persistence is non-blocking and coalesced by typed scope; queue
   saturation and SQLite failures are visible in daemon logs, and accepted work
-  is drained during orderly shutdown. A durable retry/dead-letter policy is
-  still not implemented.
+  is drained during orderly shutdown. Bounded retry, a durable bounded spool,
+  dead-letter retention and CLI inspection/requeue are implemented. Failure of
+  both SQLite and the spool remains an explicit unrecoverable-storage case.
 - Request-class performance summaries are held in a bounded in-memory EWMA
   book; durable request-class performance evidence is not complete.
 - Rich aggregate Physical/provider status projections and log streaming are

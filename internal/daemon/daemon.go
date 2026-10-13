@@ -30,6 +30,10 @@ import (
 
 type Config struct {
 	DBPath                    string
+	RuntimeSpoolPath          string
+	RuntimeSpoolMaxBytes      int64
+	RuntimeSpoolMaxRecords    int
+	RuntimeSpoolMaxAttempts   int
 	IPCPath                   string
 	HTTPEnabled               bool
 	HTTPAddr                  string
@@ -47,6 +51,7 @@ type Daemon struct {
 	config              Config
 	providerModules     []provider.RuntimeModule
 	store               *store.Store
+	persistenceSpool    *runtimehealth.DurablePersistenceSpool
 	artifactStore       *artifacts.Store
 	server              *api.Server
 	ipc                 *IPCServer
@@ -157,6 +162,20 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.store = s
 	d.appendLog("info", "daemon starting")
+	spoolPath := d.config.RuntimeSpoolPath
+	if spoolPath == "" && d.config.DBPath != ":memory:" {
+		spoolPath = d.config.DBPath + ".runtime-spool.json"
+	}
+	if spoolPath != "" {
+		d.persistenceSpool, err = runtimehealth.OpenDurablePersistenceSpool(spoolPath, d.config.RuntimeSpoolMaxBytes, d.config.RuntimeSpoolMaxRecords, d.config.RuntimeSpoolMaxAttempts)
+		if err != nil {
+			_ = s.Close()
+			return fmt.Errorf("open runtime persistence spool: %w", err)
+		}
+		if count := d.persistenceSpool.DeadLetterCount(); count > 0 {
+			d.appendLog("error", fmt.Sprintf("runtime persistence spool has %d dead-letter records at %s", count, d.persistenceSpool.Path()))
+		}
+	}
 	runtimeRegistry, err := provider.NewRuntimeRegistryWithModules(d.providerModules...)
 	if err != nil {
 		_ = s.Close()
@@ -249,7 +268,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.policy = runtimehealth.NewPolicyGate()
 	d.policy.SetEnrichmentContext(ctx)
-	quotaPersistence := runtimehealth.NewQuotaSnapshotQueue(d.store, 512, func(snapshot quota.Snapshot, err error) {
+	quotaPersistence := runtimehealth.NewQuotaSnapshotQueue(quotaSnapshotSinkFunc(d.persistQuotaSnapshot), 512, func(snapshot quota.Snapshot, err error) {
 		d.appendLog("error", fmt.Sprintf("persist quota evidence %s/%s/%s/%s: %v", snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, err))
 	})
 	d.quotaPersistence = quotaPersistence
@@ -416,7 +435,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return refreshed, nil
 	}
 	healthQueue := runtimehealth.NewHealthObservationQueue(8192, func(observation runtimehealth.HealthObservation) error {
-		return persistHealthState(d.store, observation.Route, observation.State)
+		return d.persistHealthObservation(observation)
 	}, func(observation runtimehealth.HealthObservation, err error) {
 		slog.Error("health state persistence failed", "scope", observation.State.LastScope, "route", observation.Route.ID, "error", err)
 	})
@@ -444,6 +463,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err := d.restoreHealthForRoutes(initialRoutes); err != nil {
 		return fmt.Errorf("restore scoped health state: %w", err)
 	}
+	spoolReplayDone := d.runPersistenceSpoolReplay(ctx, healthQueue, quotaPersistence)
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})
@@ -487,6 +507,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if d.kernel != nil {
 			d.kernel.Close()
 		}
+		<-spoolReplayDone
 		healthQueue.Close()
 		<-sessionDone
 		<-healthEventsDone
@@ -995,6 +1016,23 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, "runtime policy unavailable")
 		}
 		return success(request, d.policy.Quotas())
+	case "persistence.status":
+		if d.persistenceSpool == nil {
+			return success(request, runtimehealth.PersistenceSpoolStatus{})
+		}
+		return success(request, d.persistenceSpool.Status())
+	case "persistence.retry":
+		if d.persistenceSpool == nil {
+			return fail(request, "durable runtime persistence spool is disabled")
+		}
+		requeued, err := d.persistenceSpool.RequeueDeadLetters()
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if requeued > 0 {
+			d.appendLog("info", fmt.Sprintf("requeued %d runtime persistence dead letters", requeued))
+		}
+		return success(request, map[string]any{"requeued": requeued})
 	case "usage.list":
 		limit := 100
 		if raw, ok := request.Params["limit"].(float64); ok && int(raw) > 0 {
@@ -1735,7 +1773,7 @@ func DefaultConfig() (Config, error) {
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713", ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts")}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), RuntimeSpoolPath: filepath.Join(configDir, "gobroom", "runtime-spool.json"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713", ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts")}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }

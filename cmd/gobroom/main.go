@@ -58,7 +58,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
 	root.AddCommand(extensionCommands())
-	root.AddCommand(healthCommand(), quotaCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), logsCommand(), routeExplainCommand(), compatibilityCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
+	root.AddCommand(healthCommand(), quotaCommand(), persistenceCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), logsCommand(), routeExplainCommand(), compatibilityCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
 	return root
 }
 
@@ -78,6 +78,17 @@ func simpleCommand(use, short, method string, flags map[string]*string) *cobra.C
 		cmd.Flags().StringVar(ptr, name, "", name)
 	}
 	return cmd
+}
+
+func persistenceCommand() *cobra.Command {
+	command := &cobra.Command{Use: "persistence", Short: "inspect and retry runtime persistence"}
+	command.AddCommand(&cobra.Command{Use: "status", Short: "show pending and dead-letter persistence records", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("persistence.status", nil)
+	}})
+	command.AddCommand(&cobra.Command{Use: "retry", Short: "requeue durable dead-letter records", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("persistence.retry", nil)
+	}})
+	return command
 }
 
 func resourceCommands() []*cobra.Command {

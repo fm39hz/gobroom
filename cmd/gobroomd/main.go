@@ -27,6 +27,7 @@ func main() {
 	}
 	defaults.DBPath = defaultDB
 	dbPath := flag.String("db", defaults.DBPath, "SQLite database path")
+	runtimeSpoolPath := flag.String("runtime-spool", defaults.RuntimeSpoolPath, "durable outbox for runtime health/quota persistence retries")
 	ipcPath := flag.String("ipc", defaults.IPCPath, "Unix socket path")
 	addr := flag.String("addr", defaults.HTTPAddr, "HTTP data plane listen address")
 	httpEnabled := flag.Bool("http", true, "enable HTTP data plane")
@@ -46,7 +47,18 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	d := daemon.New(daemon.Config{DBPath: *dbPath, IPCPath: *ipcPath, HTTPEnabled: *httpEnabled, HTTPAddr: *addr, HTTPControl: *httpControl, HTTPControlAddr: *controlAddr, HTTPToken: *httpToken, ProviderManifestDir: *providerManifestDir, QuotaPolling: *quotaPolling, ArtifactStoreDir: *artifactStoreDir, ArtifactStoreMaxBytes: *artifactStoreMaxBytes, ArtifactStoreMaxBodyBytes: *artifactStoreMaxBodyBytes})
+	config := daemonConfig(defaults, *dbPath, *runtimeSpoolPath, *ipcPath)
+	config.HTTPEnabled = *httpEnabled
+	config.HTTPAddr = *addr
+	config.HTTPControl = *httpControl
+	config.HTTPControlAddr = *controlAddr
+	config.HTTPToken = *httpToken
+	config.ProviderManifestDir = *providerManifestDir
+	config.QuotaPolling = *quotaPolling
+	config.ArtifactStoreDir = *artifactStoreDir
+	config.ArtifactStoreMaxBytes = *artifactStoreMaxBytes
+	config.ArtifactStoreMaxBodyBytes = *artifactStoreMaxBodyBytes
+	d := daemon.New(config)
 	if err := d.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
@@ -54,4 +66,11 @@ func main() {
 	if err := d.Wait(ctx); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func daemonConfig(defaults daemon.Config, dbPath, runtimeSpoolPath, ipcPath string) daemon.Config {
+	defaults.DBPath = dbPath
+	defaults.RuntimeSpoolPath = runtimeSpoolPath
+	defaults.IPCPath = ipcPath
+	return defaults
 }
