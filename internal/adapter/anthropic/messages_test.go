@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -232,6 +233,88 @@ func TestKernelAppliesOnlyApprovedAnthropicReasoningBudgetLossToWire(t *testing.
 		t.Fatal("successful execution omitted compatibility usage")
 	}
 	allowed.Close()
+}
+
+func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) {
+	responseBody := `{"id":"msg_responses_crosswire","type":"message","role":"assistant","model":"claude-physical","content":[{"type":"text","text":"I found it."},{"type":"tool_use","id":"call_anthropic","name":"lookup","input":{"found":true}}],"stop_reason":"tool_use","usage":{"input_tokens":9,"output_tokens":4}}`
+	var dispatches atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: anthropicRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		dispatches.Add(1)
+		if request.URL.String() != "https://provider.test/v1/messages" || request.Header.Get("x-api-key") != "anthropic-key" {
+			t.Errorf("Anthropic request target/auth: url=%q x-api-key=%q", request.URL.String(), request.Header.Get("x-api-key"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Errorf("decode Anthropic request: %v", err)
+		} else {
+			messages, _ := body["messages"].([]any)
+			tools, _ := body["tools"].([]any)
+			system, _ := body["system"].([]any)
+			choice, _ := body["tool_choice"].(map[string]any)
+			if body["model"] != "claude-physical" || body["input"] != nil || len(messages) != 1 || messages[0].(map[string]any)["content"] != "Find item 7." || len(tools) != 1 || len(system) != 1 || body["max_tokens"] != float64(512) || choice["type"] != "any" {
+				t.Errorf("Responses request was not rebuilt as Anthropic Messages: %#v", body)
+			}
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil
+	})}}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
+		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
+		Routes: []kernel.Route{{
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, BaseURL: "https://provider.test/v1", ExternalModel: "claude-physical",
+			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
+			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"anthropic-messages"}}},
+		}},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["anthropic-messages"] = composed
+	requestBody := `{"model":"junior","instructions":"Use tools when needed.","input":"Find item 7.","tools":[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"id":{"type":"integer"}}}}],"tool_choice":"required","max_output_tokens":512}`
+	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(requestBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	explanations, err := engine.ExplainCompatibility(context.Background(), "junior", parsed.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explanations) != 1 || !explanations[0].Compatible {
+		t.Fatalf("Responses→Anthropic compatibility=%#v", explanations)
+	}
+	writer := httptest.NewRecorder()
+	if err := engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "anthropic-key"}, writer); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ID     string           `json:"id"`
+		Object string           `json:"object"`
+		Status string           `json:"status"`
+		Output []map[string]any `json:"output"`
+		Usage  map[string]int64 `json:"usage"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode Responses projection %q: %v", writer.Body.String(), err)
+	}
+	if dispatches.Load() != 1 || !strings.HasPrefix(result.ID, "resp_gobroom_") || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 {
+		t.Fatalf("Anthropic→Responses result=%#v dispatches=%d", result, dispatches.Load())
+	}
+	if result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["call_id"] != "call_anthropic" || result.Usage["input_tokens"] != 9 || result.Usage["output_tokens"] != 4 {
+		t.Fatalf("Anthropic semantic output/usage=%#v usage=%#v", result.Output, result.Usage)
+	}
+	continuity, err := normalize.JSON("/v1/responses", http.Header{}, []byte(`{"model":"junior","previous_response_id":"resp_previous","input":"continue"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Execute(context.Background(), continuity.Request, kernel.Credential{Secret: "anthropic-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) || dispatches.Load() != 1 {
+		t.Fatalf("Responses continuity was silently dropped on Anthropic route: err=%v dispatches=%d", err, dispatches.Load())
+	}
 }
 
 func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {

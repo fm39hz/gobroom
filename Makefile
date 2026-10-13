@@ -106,6 +106,7 @@ test-conformance-transform-boundaries:
 	go test ./internal/kernel -run '^(TestRequestTransformCannotAppendOpaqueMessageMetadata|TestRequestTransformAcceptsCanonicalMessageSuffix|TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded)$$' -count=1
 	go test ./internal/adapter/openai -run '^(TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix|TestNativeChatMessageRejectsUnmappedCanonicalContentParts|TestNativeChatMessageRejectsUnmappedAddedMessageFields|TestNativeResponsesConvertsCanonicalNestedChatToolCallMetadata|TestNativeResponsesRejectsOpaqueNestedChatToolCallMetadata|TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange|TestNativeResponsesRejectsUnmappedAddedMessageFields|TestNativeResponsesOverlayRejectsSourceMessageRoleChange)$$' -count=1
 	go test ./internal/adapter/anthropic -run '^(TestNativeAnthropicOverlayAppendsTypedMessagesAndToolResults|TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages|TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent|TestNativeAnthropicOverlayRejectsReorderedSourceMessages|TestNativeAnthropicOverlayRejectsSourceMessageRoleChange|TestNativeAnthropicAddedMessageRejectsUnmappedFields)$$' -count=1
+	go test ./internal/adapter/anthropic -run '^TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack$$' -count=1
 	go test ./internal/api -run '^TestClientDisconnectCancelsDataPlaneExecution$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
 
