@@ -122,6 +122,11 @@ Responses base64 image is converted to Anthropic's typed `image.source` block
 through the serving kernel; image detail and file-ID inputs that the target
 contract cannot represent are rejected before dispatch.
 
+`TestKernelInterruptedChatProviderResponsesStreamDoesNotCompleteOrFallback`
+complements the Anthropic cross-wire interruption fixture: after Chat SSE has
+committed a partial response to a Responses client, the kernel preserves an
+incomplete Responses stream and does not switch to fallback.
+
 The 2026-10-09 M11 follow-up adds an exhaustive request-effect/opaque-facet
 fixture, response-effect acceptance/rejection coverage, and a hierarchical
 fallback assertion that failed transform evidence from a rejected branch does
