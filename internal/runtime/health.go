@@ -442,15 +442,15 @@ func failureDelay(failures int, cause kernel.OutcomeCause) time.Duration {
 	return delay
 }
 
-func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) {
+func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.generationEnabled && (!g.generationCurrentLocked(route, state.LastScope) || state.Generation != route.HealthGeneration.For(state.LastScope)) {
-		return
+		return false
 	}
 	key := outcomeScopeKey(route, state.LastScope)
-	if current, exists := g.scoped[key]; exists && current.Generation == state.Generation && !current.LastAttempt.IsZero() {
-		return
+	if current, exists := g.scoped[key]; exists && current.Generation == state.Generation && !current.LastAttempt.IsZero() && !state.LastAttempt.After(current.LastAttempt) {
+		return false
 	}
 	g.scoped[key] = state
 	if route.ID != "" {
@@ -458,6 +458,7 @@ func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) {
 			g.routes[route.ID] = state
 		}
 	}
+	return true
 }
 func (g *HealthGate) Snapshot() map[string]RouteHealth {
 	g.mu.RLock()
@@ -467,6 +468,13 @@ func (g *HealthGate) Snapshot() map[string]RouteHealth {
 		result[id] = state
 	}
 	return result
+}
+
+func (g *HealthGate) ScopedState(route kernel.Route, scope kernel.OutcomeScope) (RouteHealth, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	state, exists := g.scoped[outcomeScopeKey(route, scope)]
+	return state, exists
 }
 
 func scopeKey(route kernel.Route) string { return "route:" + route.ID }

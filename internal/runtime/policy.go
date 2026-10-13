@@ -283,6 +283,41 @@ func (g *PolicyGate) UpsertQuota(snapshot quota.Snapshot) (quota.Snapshot, bool)
 	return g.upsertQuotaAtCurrentGeneration(snapshot)
 }
 
+// RecordQuota applies evidence and forwards the resolved merge while holding
+// the route-generation read fence, so a reload cannot race the persistence
+// enqueue and make old-generation quota evidence appear current.
+func (g *PolicyGate) RecordQuota(snapshot quota.Snapshot, record func(quota.Snapshot)) bool {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
+	resolved, accepted := g.upsertQuotaAtCurrentGeneration(snapshot)
+	if !accepted {
+		return false
+	}
+	if record != nil {
+		record(resolved)
+	}
+	return true
+}
+
+func (g *PolicyGate) ReplayHealthObservation(observation HealthObservation, enqueue func(HealthObservation) bool) (bool, bool) {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
+	scope := observation.State.LastScope
+	if !g.Health.AcceptsOutcome(observation.Route, scope) || observation.State.Generation != observation.Route.HealthGeneration.For(scope) {
+		return false, false
+	}
+	g.Health.Restore(observation.Route, observation.State)
+	state, exists := g.Health.ScopedState(observation.Route, scope)
+	if !exists || state.Generation != observation.State.Generation {
+		return false, false
+	}
+	observation.State = state
+	if enqueue == nil {
+		return true, false
+	}
+	return true, enqueue(observation)
+}
+
 func (g *PolicyGate) upsertQuotaAtCurrentGeneration(snapshot quota.Snapshot) (quota.Snapshot, bool) {
 	if !g.Health.QuotaGenerationCurrent(snapshot) {
 		return quota.Snapshot{}, false
