@@ -194,6 +194,32 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if len(group) != 1 || group[0] != "route:a@account-a" {
 		t.Fatalf("available route group=%#v", group)
 	}
+	oldGeneration := snapshot.Routes["route:a@account-a"].HealthGeneration
+	if oldGeneration.Provider == "" || oldGeneration.Connection == "" || oldGeneration.Model == "" {
+		t.Fatalf("route is missing scope generations: %#v", oldGeneration)
+	}
+	if err := s.UpdateConnectionSecret("account-a", "secret-b"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = loader.LoadSnapshot(3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newGeneration := snapshot.Routes["route:a@account-a"].HealthGeneration
+	if newGeneration.Connection == oldGeneration.Connection || newGeneration.Provider != oldGeneration.Provider || newGeneration.Model != oldGeneration.Model {
+		t.Fatalf("credential update changed wrong health generations: old=%#v new=%#v", oldGeneration, newGeneration)
+	}
+	if _, err := s.UpdateProviderNode(store.UpdateProviderNodeInput{ID: "node-a", BaseURL: "https://new-provider.test/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err = loader.LoadSnapshot(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerGeneration := snapshot.Routes["route:a@account-a"].HealthGeneration
+	if providerGeneration.Provider == newGeneration.Provider {
+		t.Fatalf("provider endpoint update did not change provider generation: old=%#v new=%#v", newGeneration, providerGeneration)
+	}
 }
 
 func mustSnapshotStore(t *testing.T, snapshot kernel.Snapshot) *kernel.SnapshotStore {

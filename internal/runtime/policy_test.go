@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -35,6 +36,63 @@ func TestPolicyGateClearsQuotaEvidenceAfterConfigurationRecovery(t *testing.T) {
 	gate.ClearQuotasForProvider(first.NodeID)
 	if !gate.Usable(second, time.Now()) {
 		t.Fatal("provider configuration recovery must clear its remaining quota evidence")
+	}
+}
+
+func TestPolicyGateFencesQuotaEvidenceByRouteGeneration(t *testing.T) {
+	gate := NewPolicyGate()
+	oldRoute := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "credential-v1", Model: "model-v1"}}
+	gate.SetGenerations(map[string]kernel.Route{oldRoute.ID: oldRoute})
+	remaining := float64(0)
+	reset := time.Now().Add(time.Hour)
+	oldQuota := quota.Snapshot{ProviderNodeID: "provider", ConnectionID: "connection", ModelRef: "model", WindowName: "daily", Remaining: &remaining, ResetAt: &reset, Generation: oldRoute.HealthGeneration.ForQuota("connection", "model")}
+	if !gate.TrySetQuota(oldQuota) || gate.Usable(oldRoute, time.Now()) {
+		t.Fatal("matching-generation quota evidence was not applied")
+	}
+
+	newRoute := oldRoute
+	newRoute.HealthGeneration.Connection = "credential-v2"
+	gate.SetGenerations(map[string]kernel.Route{newRoute.ID: newRoute})
+	gate.PruneStaleQuotas()
+	if !gate.Usable(newRoute, time.Now()) {
+		t.Fatal("old quota evidence survived a connection generation change")
+	}
+	if gate.TrySetQuota(oldQuota) {
+		t.Fatal("late quota evidence from the previous credential generation was accepted")
+	}
+	newQuota := oldQuota
+	newQuota.Generation = newRoute.HealthGeneration.ForQuota("connection", "model")
+	if !gate.TrySetQuota(newQuota) || gate.Usable(newRoute, time.Now()) {
+		t.Fatal("new-generation quota evidence was not accepted")
+	}
+}
+
+func TestPolicyGateIgnoresLateOutcomeAndUsageFromOldRouteGeneration(t *testing.T) {
+	gate := NewPolicyGate()
+	oldRoute := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "credential-v1", Model: "model-v1"}}
+	gate.SetGenerations(map[string]kernel.Route{oldRoute.ID: oldRoute})
+	gate.ObserveUsage(oldRoute, kernel.UsageEvent{At: time.Now(), Status: "ok", SessionID: "old-session"})
+	newRoute := oldRoute
+	newRoute.HealthGeneration.Connection = "credential-v2"
+	gate.SetGenerations(map[string]kernel.Route{newRoute.ID: newRoute})
+	enrichmentCalls, quotaObservations := 0, 0
+	gate.SetQuotaEnricher(func(context.Context, kernel.Route) { enrichmentCalls++ })
+	gate.SetOutcomeQuotaObserver(func(quota.Snapshot) { quotaObservations++ })
+	gate.ObserveOutcome(oldRoute, kernel.ClassifiedOutcome{Cause: kernel.CauseRateLimited, Scope: kernel.ScopeConnection, Retry: kernel.RetryAfter, Limits: []kernel.LimitWindow{{Name: "daily", Source: kernel.EvidenceResponseHeader}}})
+	gate.ObserveUsage(oldRoute, kernel.UsageEvent{At: time.Now(), Status: "ok", SessionID: "old-session"})
+	if enrichmentCalls != 0 || quotaObservations != 0 || len(gate.Quotas()) != 0 || len(gate.Health.Snapshot()) != 0 || len(gate.Performance.Snapshot()) != 0 {
+		t.Fatalf("late old-generation evidence leaked into runtime: enrich=%d quota=%d quotas=%#v health=%#v performance=%#v", enrichmentCalls, quotaObservations, gate.Quotas(), gate.Health.Snapshot(), gate.Performance.Snapshot())
+	}
+}
+
+func TestProviderModelQuotaGenerationIsStableAcrossConnections(t *testing.T) {
+	gate := NewPolicyGate()
+	first := kernel.Route{ID: "route-a", NodeID: "provider", CredentialID: "connection-a", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "credential-a", Model: "catalog-route-a"}}
+	second := kernel.Route{ID: "route-b", NodeID: "provider", CredentialID: "connection-b", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "credential-b", Model: "catalog-route-b"}}
+	gate.Health.SetGenerations(map[string]kernel.Route{first.ID: first, second.ID: second})
+	snapshot := quota.Snapshot{ProviderNodeID: "provider", ModelRef: "model", WindowName: "daily"}
+	if !gate.Health.AttachQuotaGeneration(&snapshot) || !gate.Health.QuotaGenerationCurrent(snapshot) {
+		t.Fatalf("provider/model quota did not resolve across account routes: %#v", snapshot)
 	}
 }
 

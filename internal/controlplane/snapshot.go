@@ -1,6 +1,8 @@
 package controlplane
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -102,7 +104,8 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 			}
 		}
 		quotaBinding := l.Bindings[provider.RuntimeBindingKey(row.DefinitionID, provider.OperationQuota)]
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType})
+		providerGeneration := combineHealthGeneration(row.ProviderGeneration, binding.DefinitionRef.Key(), binding.ErrorClassifierRef.Key(), binding.AuthFlowID)
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType, HealthGeneration: kernel.RouteHealthGeneration{Provider: providerGeneration, Connection: row.ConnectionGeneration, Model: row.ModelGeneration}})
 		baseID := row.ID
 		if at := strings.IndexByte(baseID, '@'); at >= 0 {
 			baseID = baseID[:at]
@@ -152,4 +155,17 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 		}
 	}
 	return kernel.BuildSnapshot(input, version)
+}
+
+func combineHealthGeneration(parts ...string) string {
+	hasher := sha256.New()
+	for _, part := range parts {
+		var length [8]byte
+		for index := range length {
+			length[index] = byte(uint64(len(part)) >> (8 * index))
+		}
+		_, _ = hasher.Write(length[:])
+		_, _ = hasher.Write([]byte(part))
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
 }

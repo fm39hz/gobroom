@@ -65,6 +65,37 @@ type Route struct {
 	BaseURL              string
 	CredentialID         string
 	CredentialType       string
+	HealthGeneration     RouteHealthGeneration `json:"-"`
+}
+
+type RouteHealthGeneration struct {
+	Provider   string
+	Connection string
+	Model      string
+}
+
+func (g RouteHealthGeneration) For(scope OutcomeScope) string {
+	switch scope {
+	case ScopeProvider:
+		return g.Provider
+	case ScopeConnection:
+		return g.Provider + "\x00" + g.Connection
+	default:
+		return g.Provider + "\x00" + g.Connection + "\x00" + g.Model
+	}
+}
+
+func (g RouteHealthGeneration) ForQuota(connectionID, modelRef string) string {
+	switch {
+	case connectionID == "" && modelRef == "":
+		return g.Provider
+	case connectionID == "" && modelRef != "":
+		return g.Provider + "\x00" + modelRef
+	case connectionID != "" && modelRef == "":
+		return g.Provider + "\x00" + g.Connection
+	default:
+		return g.For(ScopeRoute)
+	}
 }
 
 type RouteOperationBinding struct {

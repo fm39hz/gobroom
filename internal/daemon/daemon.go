@@ -249,11 +249,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.policy = runtimehealth.NewPolicyGate()
 	d.policy.SetEnrichmentContext(ctx)
-	if snapshots, loadErr := d.store.QuotaSnapshots(); loadErr == nil {
-		for _, snapshot := range snapshots {
-			d.policy.SetQuota(snapshot)
-		}
-	}
 	quotaPersistence := runtimehealth.NewQuotaSnapshotQueue(d.store, 512, func(snapshot quota.Snapshot, err error) {
 		d.appendLog("error", fmt.Sprintf("persist quota evidence %s/%s/%s/%s: %v", snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, err))
 	})
@@ -325,7 +320,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 		},
 		Record: func(snapshot quota.Snapshot) {
-			d.policy.SetQuota(snapshot)
+			if !d.policy.TrySetQuota(snapshot) {
+				return
+			}
 			if !quotaPersistence.Enqueue(snapshot) {
 				d.appendLog("warn", "opportunistic quota snapshot was not queued (queue full or configuration reset in progress)")
 			}
@@ -357,7 +354,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 				return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 			},
 			Record: func(snapshot quota.Snapshot) {
-				d.policy.SetQuota(snapshot)
+				if !d.policy.TrySetQuota(snapshot) {
+					return
+				}
 				if !quotaPersistence.Enqueue(snapshot) {
 					d.appendLog("warn", "quota poll snapshot was not queued (queue full or configuration reset in progress)")
 				}
@@ -409,6 +408,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 			return kernel.Credential{}, fmt.Errorf("credential refreshed but health reset failed: %w", err)
 		}
 		resetConnectionHealth(d.policy.Health, d.kernel.Snapshots.Load().Routes, route.CredentialID, route.NodeID)
+		if err := d.server.Reload(); err != nil {
+			return kernel.Credential{}, fmt.Errorf("credential refreshed but route generation reload failed: %w", err)
+		}
 		return refreshed, nil
 	}
 	healthQueue := runtimehealth.NewHealthObservationQueue(8192, func(observation runtimehealth.HealthObservation) error {
@@ -426,40 +428,19 @@ func (d *Daemon) Start(ctx context.Context) error {
 			slog.Error("health state queue rejected observation", "scope", state.LastScope, "route", route.ID)
 		}
 	})
-	runtimeRows, _ := d.store.ConnectionRuntimes()
-	for _, item := range runtimeRows {
-		state := runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, Invalid: item.Status == "invalid", CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeConnection}
-		d.policy.Health.Restore(kernel.Route{CredentialID: item.ConnectionID}, state)
-		for _, route := range d.kernel.Snapshots.Load().Routes {
-			if route.CredentialID == item.ConnectionID {
-				d.policy.Health.Restore(route, state)
-			}
+	initialRoutes := d.kernel.Snapshots.Load().Routes
+	d.policy.SetGenerations(initialRoutes)
+	quotaSnapshots, err := d.store.QuotaSnapshots()
+	if err != nil {
+		return fmt.Errorf("restore quota snapshots: %w", err)
+	}
+	for _, snapshot := range quotaSnapshots {
+		if d.policy.Health.QuotaGenerationCurrent(snapshot) {
+			d.policy.SetQuota(snapshot)
 		}
 	}
-	providerRuntimeRows, _ := d.store.ProviderRuntimes()
-	for _, item := range providerRuntimeRows {
-		state := runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, Invalid: item.Status == "invalid", CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeProvider}
-		d.policy.Health.Restore(kernel.Route{NodeID: item.ProviderNodeID}, state)
-		for _, route := range d.kernel.Snapshots.Load().Routes {
-			if route.NodeID == item.ProviderNodeID {
-				d.policy.Health.Restore(route, state)
-			}
-		}
-	}
-	availabilityRows, _ := d.store.ModelAvailabilities()
-	for _, item := range availabilityRows {
-		blockedUntil := parseTime(item.BlockedUntil)
-		invalid := item.Status == "invalid"
-		if !invalid && (blockedUntil.IsZero() || !blockedUntil.After(time.Now())) {
-			continue
-		}
-		for _, route := range d.kernel.Snapshots.Load().Routes {
-			if route.CredentialID != item.ConnectionID || route.ExternalModel != item.ModelRef {
-				continue
-			}
-			state := runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, Invalid: invalid, CooldownUntil: blockedUntil, LastError: item.LastError, LastCause: kernel.OutcomeCause(item.Reason), LastScope: kernel.OutcomeScope(item.ErrorCode)}
-			d.policy.Health.Restore(route, state)
-		}
+	if err := d.restoreHealthForRoutes(initialRoutes); err != nil {
+		return fmt.Errorf("restore scoped health state: %w", err)
 	}
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
@@ -469,7 +450,20 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if err := d.kernel.ValidateTransformBindings(snapshot.TransformBindings); err != nil {
 			return err
 		}
-		return d.kernel.PublishSnapshot(snapshot)
+		if err := kernel.ValidateSnapshot(snapshot); err != nil {
+			return err
+		}
+		previous := d.kernel.Snapshots.Load()
+		d.policy.SetGenerations(snapshot.Routes)
+		if err := d.restoreHealthForRoutes(snapshot.Routes); err != nil {
+			d.policy.SetGenerations(previous.Routes)
+			return err
+		}
+		if err := d.kernel.PublishSnapshot(snapshot); err != nil {
+			d.policy.SetGenerations(previous.Routes)
+			return err
+		}
+		return nil
 	})
 	usageCtx, usageCancel := context.WithCancel(ctx)
 	d.usageCancel = usageCancel
@@ -537,14 +531,63 @@ func (d *Daemon) Start(ctx context.Context) error {
 func persistHealthState(stateStore *store.Store, route kernel.Route, state runtimehealth.RouteHealth) error {
 	switch state.LastScope {
 	case kernel.ScopeConnection:
-		return stateStore.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: route.CredentialID, Status: healthStatus(state), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
+		return stateStore.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: route.CredentialID, Status: healthStatus(state), Generation: route.HealthGeneration.For(state.LastScope), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
 	case kernel.ScopeProvider:
-		return stateStore.SaveProviderRuntime(store.ProviderRuntime{ProviderNodeID: route.NodeID, Status: healthStatus(state), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
+		return stateStore.SaveProviderRuntime(store.ProviderRuntime{ProviderNodeID: route.NodeID, Status: healthStatus(state), Generation: route.HealthGeneration.For(state.LastScope), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
 	case kernel.ScopeRoute, kernel.ScopeRouteConnection:
-		return stateStore.SaveModelAvailability(store.ModelAvailability{ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, Status: healthStatus(state), BlockedUntil: formatTime(state.CooldownUntil), Reason: string(state.LastCause), ErrorCode: string(state.LastScope), LastError: state.LastError, ConsecutiveFailures: state.Failures})
+		return stateStore.SaveModelAvailability(store.ModelAvailability{ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, Status: healthStatus(state), Generation: route.HealthGeneration.For(state.LastScope), BlockedUntil: formatTime(state.CooldownUntil), Reason: string(state.LastCause), ErrorCode: string(state.LastScope), LastError: state.LastError, ConsecutiveFailures: state.Failures})
 	default:
 		return fmt.Errorf("unsupported health scope %q", state.LastScope)
 	}
+}
+
+func (d *Daemon) restoreHealthForRoutes(routes map[string]kernel.Route) error {
+	connections, err := d.store.ConnectionRuntimes()
+	if err != nil {
+		return err
+	}
+	for _, item := range connections {
+		for _, route := range routes {
+			if route.CredentialID != item.ConnectionID || item.Generation != route.HealthGeneration.For(kernel.ScopeConnection) {
+				continue
+			}
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, Invalid: item.Status == "invalid", Generation: item.Generation, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeConnection})
+		}
+	}
+	providers, err := d.store.ProviderRuntimes()
+	if err != nil {
+		return err
+	}
+	for _, item := range providers {
+		for _, route := range routes {
+			if route.NodeID != item.ProviderNodeID || item.Generation != route.HealthGeneration.For(kernel.ScopeProvider) {
+				continue
+			}
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, Invalid: item.Status == "invalid", Generation: item.Generation, CooldownUntil: parseTime(item.CooldownUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.ErrorCode), LastScope: kernel.ScopeProvider})
+		}
+	}
+	availability, err := d.store.ModelAvailabilities()
+	if err != nil {
+		return err
+	}
+	for _, item := range availability {
+		blockedUntil := parseTime(item.BlockedUntil)
+		invalid := item.Status == "invalid"
+		if !invalid && (blockedUntil.IsZero() || !blockedUntil.After(time.Now())) {
+			continue
+		}
+		scope := kernel.OutcomeScope(item.ErrorCode)
+		if scope != kernel.ScopeRoute && scope != kernel.ScopeRouteConnection {
+			continue
+		}
+		for _, route := range routes {
+			if route.CredentialID != item.ConnectionID || route.ExternalModel != item.ModelRef || item.Generation != route.HealthGeneration.For(scope) {
+				continue
+			}
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{Failures: item.ConsecutiveFailures, Invalid: invalid, Generation: item.Generation, CooldownUntil: blockedUntil, LastError: item.LastError, LastCause: kernel.OutcomeCause(item.Reason), LastScope: scope})
+		}
+	}
+	return nil
 }
 
 func (d *Daemon) resetConnectionRoutingState(connectionID string) error {
@@ -1045,7 +1088,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &snapshot); err != nil {
 			return fail(request, err.Error())
 		}
-		d.policy.SetQuota(snapshot)
+		if snapshot.Generation == "" && !d.policy.Health.AttachQuotaGeneration(&snapshot) {
+			return fail(request, "quota snapshot does not match an active provider/connection/model")
+		}
+		if !d.policy.TrySetQuota(snapshot) {
+			return fail(request, "quota snapshot belongs to an obsolete provider configuration")
+		}
 		if err := d.store.SaveQuotaSnapshot(snapshot); err != nil {
 			return fail(request, err.Error())
 		}

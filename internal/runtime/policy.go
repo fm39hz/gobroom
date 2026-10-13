@@ -13,6 +13,7 @@ import (
 type PolicyGate struct {
 	Health        *HealthGate
 	Performance   *PerformanceBook
+	generationMu  sync.RWMutex
 	mu            sync.RWMutex
 	quotas        map[string]quota.Snapshot
 	enrich        func(context.Context, kernel.Route)
@@ -40,7 +41,18 @@ type RouteExplanation struct {
 func NewPolicyGate() *PolicyGate {
 	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}, affinity: map[string]sessionRoute{}, enrichCtx: context.Background()}
 }
+
+func (g *PolicyGate) SetGenerations(routes map[string]kernel.Route) {
+	g.generationMu.Lock()
+	changed := g.Health.SetGenerations(routes)
+	g.resetRouteGenerations(changed)
+	g.pruneStaleQuotas()
+	g.generationMu.Unlock()
+}
+
 func (g *PolicyGate) Usable(route kernel.Route, now time.Time) bool {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
 	if !g.Health.Usable(route, now) {
 		return false
 	}
@@ -81,6 +93,11 @@ func (g *PolicyGate) SetOutcomeQuotaObserver(observer func(quota.Snapshot)) {
 }
 
 func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.ClassifiedOutcome) {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
+	if !g.Health.AcceptsOutcome(route, outcome.Scope) {
+		return
+	}
 	g.Health.ObserveOutcome(route, outcome)
 	g.mu.RLock()
 	enrich, enrichCtx := g.enrich, g.enrichCtx
@@ -92,12 +109,15 @@ func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 		if limit.Name == "" {
 			continue
 		}
-		snapshot := quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: limit.Name, Source: string(limit.Source)}
+		snapshot := quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: limit.Name, Source: string(limit.Source), Generation: route.HealthGeneration.ForQuota(route.CredentialID, route.ExternalModel)}
 		snapshot.Limit, snapshot.Remaining, snapshot.ResetAt = limit.Limit, limit.Remaining, limit.ResetAt
 		if limit.Used != nil {
 			snapshot.Used = *limit.Used
 		}
-		g.SetQuota(snapshot)
+		if !g.Health.QuotaGenerationCurrent(snapshot) {
+			continue
+		}
+		g.setQuota(snapshot)
 		g.mu.RLock()
 		observer := g.quotaObserver
 		g.mu.RUnlock()
@@ -108,6 +128,11 @@ func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 }
 
 func (g *PolicyGate) ObserveUsage(route kernel.Route, event kernel.UsageEvent) {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
+	if !g.Health.AcceptsOutcome(route, kernel.ScopeRoute) {
+		return
+	}
 	if g.Performance != nil {
 		g.Performance.Observe(route, event)
 	}
@@ -129,6 +154,8 @@ func (g *PolicyGate) RankRoutes(routes []kernel.Route, now time.Time) []kernel.R
 }
 
 func (g *PolicyGate) RankRoutesFor(routes []kernel.Route, now time.Time, requestClass string) []kernel.Route {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
 	states := g.Health.Snapshot()
 	performance := map[string]PerformanceStats{}
 	if g.Performance != nil {
@@ -225,15 +252,31 @@ func (g *PolicyGate) expireAffinity(now time.Time, forceOne bool) {
 	}
 }
 func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
+	g.setQuota(snapshot)
+}
+
+func (g *PolicyGate) setQuota(snapshot quota.Snapshot) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.quotas[quotaKey(snapshot)] = snapshot
+}
+
+func (g *PolicyGate) TrySetQuota(snapshot quota.Snapshot) bool {
+	g.generationMu.RLock()
+	defer g.generationMu.RUnlock()
+	if !g.Health.QuotaGenerationCurrent(snapshot) {
+		return false
+	}
+	g.setQuota(snapshot)
+	return true
 }
 
 func (g *PolicyGate) ClearQuotasForConnection(connectionID string) {
 	if connectionID == "" {
 		return
 	}
+	g.generationMu.Lock()
+	defer g.generationMu.Unlock()
 	g.mu.Lock()
 	for key, snapshot := range g.quotas {
 		if snapshot.ConnectionID == connectionID {
@@ -247,6 +290,8 @@ func (g *PolicyGate) ClearQuotasForProvider(providerNodeID string) {
 	if providerNodeID == "" {
 		return
 	}
+	g.generationMu.Lock()
+	defer g.generationMu.Unlock()
 	g.mu.Lock()
 	for key, snapshot := range g.quotas {
 		if snapshot.ProviderNodeID == providerNodeID {
@@ -254,6 +299,42 @@ func (g *PolicyGate) ClearQuotasForProvider(providerNodeID string) {
 		}
 	}
 	g.mu.Unlock()
+}
+
+func (g *PolicyGate) PruneStaleQuotas() {
+	g.generationMu.Lock()
+	defer g.generationMu.Unlock()
+	g.pruneStaleQuotas()
+}
+
+func (g *PolicyGate) pruneStaleQuotas() {
+	g.mu.Lock()
+	for key, snapshot := range g.quotas {
+		if !g.Health.QuotaGenerationCurrent(snapshot) {
+			delete(g.quotas, key)
+		}
+	}
+	g.mu.Unlock()
+}
+
+func (g *PolicyGate) resetRouteGenerations(routeIDs []string) {
+	if len(routeIDs) == 0 {
+		return
+	}
+	if g.Performance != nil {
+		g.Performance.ResetRoutes(routeIDs)
+	}
+	changed := make(map[string]struct{}, len(routeIDs))
+	for _, routeID := range routeIDs {
+		changed[routeID] = struct{}{}
+	}
+	g.affinityMu.Lock()
+	for sessionID, route := range g.affinity {
+		if _, stale := changed[route.RouteID]; stale {
+			delete(g.affinity, sessionID)
+		}
+	}
+	g.affinityMu.Unlock()
 }
 func (g *PolicyGate) Quotas() map[string]quota.Snapshot {
 	g.mu.RLock()

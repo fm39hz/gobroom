@@ -85,6 +85,18 @@ func (b *PerformanceBook) Snapshot() map[string]PerformanceStats {
 	return result
 }
 
+func (b *PerformanceBook) ResetRoutes(routeIDs []string) {
+	if b == nil || len(routeIDs) == 0 {
+		return
+	}
+	b.mu.Lock()
+	for _, routeID := range routeIDs {
+		delete(b.byRoute, routeID)
+		delete(b.byClass, routeID)
+	}
+	b.mu.Unlock()
+}
+
 func ewmaDuration(previous, value time.Duration, alpha float64) time.Duration {
 	if value <= 0 {
 		return previous

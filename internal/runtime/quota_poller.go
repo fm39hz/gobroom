@@ -85,6 +85,7 @@ func (p QuotaPoller) poll(ctx context.Context) {
 			if snapshot.ModelRef == "" {
 				snapshot.ModelRef = route.ExternalModel
 			}
+			snapshot.Generation = route.HealthGeneration.ForQuota(snapshot.ConnectionID, snapshot.ModelRef)
 			p.Record(snapshot)
 		}
 	}

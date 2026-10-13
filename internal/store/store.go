@@ -3,7 +3,9 @@ package store
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -96,7 +98,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
 CREATE TABLE IF NOT EXISTS quota_snapshots (
   id TEXT PRIMARY KEY, provider_node_id TEXT NOT NULL, connection_id TEXT,
-  model_ref TEXT, window_name TEXT NOT NULL, used REAL NOT NULL DEFAULT 0,
+  model_ref TEXT, window_name TEXT NOT NULL, generation TEXT NOT NULL DEFAULT '', used REAL NOT NULL DEFAULT 0,
   limit_value REAL, remaining REAL, reset_at TEXT, source TEXT NOT NULL DEFAULT 'provider',
   metadata_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -105,20 +107,20 @@ CREATE TABLE IF NOT EXISTS connection_runtime (
   connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'active', consecutive_failures INTEGER NOT NULL DEFAULT 0,
   cooldown_until TEXT, rate_limited_until TEXT, backoff_level INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT, error_code TEXT, last_used_at TEXT, consecutive_use_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT, error_code TEXT, generation TEXT NOT NULL DEFAULT '', last_used_at TEXT, consecutive_use_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS provider_runtime (
   provider_node_id TEXT PRIMARY KEY REFERENCES provider_nodes(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'active', consecutive_failures INTEGER NOT NULL DEFAULT 0,
-  cooldown_until TEXT, last_error TEXT, error_code TEXT,
+  cooldown_until TEXT, last_error TEXT, error_code TEXT, generation TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS model_availability (
   connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
   model_ref TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'available',
   blocked_until TEXT, reason TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0,
-  backoff_level INTEGER NOT NULL DEFAULT 0, last_error TEXT, error_code TEXT,
+  backoff_level INTEGER NOT NULL DEFAULT 0, last_error TEXT, error_code TEXT, generation TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(connection_id, model_ref)
 );
@@ -222,6 +224,10 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_fidelity TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_losses_json TEXT NOT NULL DEFAULT '[]'`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_plan_json TEXT NOT NULL DEFAULT 'null'`)
+	_, _ = s.DB.Exec(`ALTER TABLE connection_runtime ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE provider_runtime ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE model_availability ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE quota_snapshots ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE transform_bindings ADD COLUMN failure_mode TEXT NOT NULL DEFAULT 'fail_closed'`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_catalog ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN limits_json TEXT NOT NULL DEFAULT '{}'`)
@@ -422,18 +428,20 @@ func boolInt(value bool) int {
 
 type ConnectionRuntime struct {
 	ConnectionID, Status, CooldownUntil, RateLimitedUntil  string
+	Generation                                             string `json:"-"`
 	ConsecutiveFailures, BackoffLevel, ConsecutiveUseCount int
 	LastError, ErrorCode, LastUsedAt                       string
 }
 
 type ProviderRuntime struct {
 	ProviderNodeID, Status, CooldownUntil string
+	Generation                            string `json:"-"`
 	ConsecutiveFailures                   int
 	LastError, ErrorCode                  string
 }
 
 func (s *Store) ProviderRuntimes() ([]ProviderRuntime, error) {
-	rows, err := s.DB.Query(`SELECT provider_node_id,status,consecutive_failures,COALESCE(cooldown_until,''),COALESCE(last_error,''),COALESCE(error_code,'') FROM provider_runtime`)
+	rows, err := s.DB.Query(`SELECT provider_node_id,status,consecutive_failures,COALESCE(cooldown_until,''),COALESCE(last_error,''),COALESCE(error_code,''),generation FROM provider_runtime`)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +449,7 @@ func (s *Store) ProviderRuntimes() ([]ProviderRuntime, error) {
 	var result []ProviderRuntime
 	for rows.Next() {
 		var item ProviderRuntime
-		if err := rows.Scan(&item.ProviderNodeID, &item.Status, &item.ConsecutiveFailures, &item.CooldownUntil, &item.LastError, &item.ErrorCode); err != nil {
+		if err := rows.Scan(&item.ProviderNodeID, &item.Status, &item.ConsecutiveFailures, &item.CooldownUntil, &item.LastError, &item.ErrorCode, &item.Generation); err != nil {
 			return nil, err
 		}
 		result = append(result, item)
@@ -456,12 +464,12 @@ func (s *Store) SaveProviderRuntime(item ProviderRuntime) error {
 	if item.Status == "" {
 		item.Status = "active"
 	}
-	_, err := s.DB.Exec(`INSERT INTO provider_runtime(provider_node_id,status,consecutive_failures,cooldown_until,last_error,error_code,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(provider_node_id) DO UPDATE SET status=excluded.status,consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,last_error=excluded.last_error,error_code=excluded.error_code,updated_at=CURRENT_TIMESTAMP`, item.ProviderNodeID, item.Status, item.ConsecutiveFailures, nullable(item.CooldownUntil), nullable(item.LastError), nullable(item.ErrorCode))
+	_, err := s.DB.Exec(`INSERT INTO provider_runtime(provider_node_id,status,consecutive_failures,cooldown_until,last_error,error_code,generation,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(provider_node_id) DO UPDATE SET status=excluded.status,consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,last_error=excluded.last_error,error_code=excluded.error_code,generation=excluded.generation,updated_at=CURRENT_TIMESTAMP`, item.ProviderNodeID, item.Status, item.ConsecutiveFailures, nullable(item.CooldownUntil), nullable(item.LastError), nullable(item.ErrorCode), item.Generation)
 	return err
 }
 
 func (s *Store) ConnectionRuntimes() ([]ConnectionRuntime, error) {
-	rows, err := s.DB.Query(`SELECT connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,last_used_at,consecutive_use_count FROM connection_runtime`)
+	rows, err := s.DB.Query(`SELECT connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,generation,last_used_at,consecutive_use_count FROM connection_runtime`)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +478,7 @@ func (s *Store) ConnectionRuntimes() ([]ConnectionRuntime, error) {
 	for rows.Next() {
 		var item ConnectionRuntime
 		var cooldown, limited, lastError, errorCode, lastUsed sql.NullString
-		if err := rows.Scan(&item.ConnectionID, &item.Status, &item.ConsecutiveFailures, &cooldown, &limited, &item.BackoffLevel, &lastError, &errorCode, &lastUsed, &item.ConsecutiveUseCount); err != nil {
+		if err := rows.Scan(&item.ConnectionID, &item.Status, &item.ConsecutiveFailures, &cooldown, &limited, &item.BackoffLevel, &lastError, &errorCode, &item.Generation, &lastUsed, &item.ConsecutiveUseCount); err != nil {
 			return nil, err
 		}
 		item.CooldownUntil, item.RateLimitedUntil, item.LastError, item.ErrorCode, item.LastUsedAt = nullString(cooldown), nullString(limited), nullString(lastError), nullString(errorCode), nullString(lastUsed)
@@ -481,12 +489,13 @@ func (s *Store) ConnectionRuntimes() ([]ConnectionRuntime, error) {
 
 type ModelAvailability struct {
 	ConnectionID, ModelRef, Status, BlockedUntil, Reason string
+	Generation                                           string `json:"-"`
 	ConsecutiveFailures, BackoffLevel                    int
 	LastError, ErrorCode                                 string
 }
 
 func (s *Store) ModelAvailabilities() ([]ModelAvailability, error) {
-	rows, err := s.DB.Query(`SELECT connection_id,model_ref,status,COALESCE(blocked_until,''),COALESCE(reason,''),consecutive_failures,backoff_level,COALESCE(last_error,''),COALESCE(error_code,'') FROM model_availability`)
+	rows, err := s.DB.Query(`SELECT connection_id,model_ref,status,COALESCE(blocked_until,''),COALESCE(reason,''),consecutive_failures,backoff_level,COALESCE(last_error,''),COALESCE(error_code,''),generation FROM model_availability`)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +503,7 @@ func (s *Store) ModelAvailabilities() ([]ModelAvailability, error) {
 	var result []ModelAvailability
 	for rows.Next() {
 		var item ModelAvailability
-		if err := rows.Scan(&item.ConnectionID, &item.ModelRef, &item.Status, &item.BlockedUntil, &item.Reason, &item.ConsecutiveFailures, &item.BackoffLevel, &item.LastError, &item.ErrorCode); err != nil {
+		if err := rows.Scan(&item.ConnectionID, &item.ModelRef, &item.Status, &item.BlockedUntil, &item.Reason, &item.ConsecutiveFailures, &item.BackoffLevel, &item.LastError, &item.ErrorCode, &item.Generation); err != nil {
 			return nil, err
 		}
 		result = append(result, item)
@@ -629,8 +638,8 @@ type ProviderSession struct {
 func (s *Store) ConnectionRuntime(id string) (ConnectionRuntime, bool, error) {
 	var item ConnectionRuntime
 	var cooldown, limited, lastUsed, lastError, errorCode sql.NullString
-	row := s.DB.QueryRow(`SELECT connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,last_used_at,consecutive_use_count FROM connection_runtime WHERE connection_id=?`, id)
-	if err := row.Scan(&item.ConnectionID, &item.Status, &item.ConsecutiveFailures, &cooldown, &limited, &item.BackoffLevel, &lastError, &errorCode, &lastUsed, &item.ConsecutiveUseCount); err != nil {
+	row := s.DB.QueryRow(`SELECT connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,generation,last_used_at,consecutive_use_count FROM connection_runtime WHERE connection_id=?`, id)
+	if err := row.Scan(&item.ConnectionID, &item.Status, &item.ConsecutiveFailures, &cooldown, &limited, &item.BackoffLevel, &lastError, &errorCode, &item.Generation, &lastUsed, &item.ConsecutiveUseCount); err != nil {
 		if err == sql.ErrNoRows {
 			return ConnectionRuntime{}, false, nil
 		}
@@ -647,7 +656,7 @@ func (s *Store) SaveConnectionRuntime(item ConnectionRuntime) error {
 	if item.Status == "" {
 		item.Status = "active"
 	}
-	_, err := s.DB.Exec(`INSERT INTO connection_runtime(connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,last_used_at,consecutive_use_count,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id) DO UPDATE SET status=excluded.status,consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,rate_limited_until=excluded.rate_limited_until,backoff_level=excluded.backoff_level,last_error=excluded.last_error,error_code=excluded.error_code,last_used_at=excluded.last_used_at,consecutive_use_count=excluded.consecutive_use_count,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Status, item.ConsecutiveFailures, nullable(item.CooldownUntil), nullable(item.RateLimitedUntil), item.BackoffLevel, nullable(item.LastError), nullable(item.ErrorCode), nullable(item.LastUsedAt), item.ConsecutiveUseCount)
+	_, err := s.DB.Exec(`INSERT INTO connection_runtime(connection_id,status,consecutive_failures,cooldown_until,rate_limited_until,backoff_level,last_error,error_code,generation,last_used_at,consecutive_use_count,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id) DO UPDATE SET status=excluded.status,consecutive_failures=excluded.consecutive_failures,cooldown_until=excluded.cooldown_until,rate_limited_until=excluded.rate_limited_until,backoff_level=excluded.backoff_level,last_error=excluded.last_error,error_code=excluded.error_code,generation=excluded.generation,last_used_at=excluded.last_used_at,consecutive_use_count=excluded.consecutive_use_count,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Status, item.ConsecutiveFailures, nullable(item.CooldownUntil), nullable(item.RateLimitedUntil), item.BackoffLevel, nullable(item.LastError), nullable(item.ErrorCode), item.Generation, nullable(item.LastUsedAt), item.ConsecutiveUseCount)
 	return err
 }
 
@@ -658,7 +667,7 @@ func (s *Store) SaveModelAvailability(item ModelAvailability) error {
 	if item.Status == "" {
 		item.Status = "available"
 	}
-	_, err := s.DB.Exec(`INSERT INTO model_availability(connection_id,model_ref,status,blocked_until,reason,consecutive_failures,backoff_level,last_error,error_code,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,model_ref) DO UPDATE SET status=excluded.status,blocked_until=excluded.blocked_until,reason=excluded.reason,consecutive_failures=excluded.consecutive_failures,backoff_level=excluded.backoff_level,last_error=excluded.last_error,error_code=excluded.error_code,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.ModelRef, item.Status, nullable(item.BlockedUntil), nullable(item.Reason), item.ConsecutiveFailures, item.BackoffLevel, nullable(item.LastError), nullable(item.ErrorCode))
+	_, err := s.DB.Exec(`INSERT INTO model_availability(connection_id,model_ref,status,blocked_until,reason,consecutive_failures,backoff_level,last_error,error_code,generation,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,model_ref) DO UPDATE SET status=excluded.status,blocked_until=excluded.blocked_until,reason=excluded.reason,consecutive_failures=excluded.consecutive_failures,backoff_level=excluded.backoff_level,last_error=excluded.last_error,error_code=excluded.error_code,generation=excluded.generation,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.ModelRef, item.Status, nullable(item.BlockedUntil), nullable(item.Reason), item.ConsecutiveFailures, item.BackoffLevel, nullable(item.LastError), nullable(item.ErrorCode), item.Generation)
 	return err
 }
 
@@ -673,10 +682,10 @@ func (s *Store) ResetConnectionRoutingState(connectionID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
+	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
+	if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM quota_snapshots WHERE connection_id=?`, connectionID); err != nil {
@@ -696,13 +705,13 @@ func (s *Store) ResetProviderRoutingState(providerNodeID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE provider_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE provider_node_id=?`, providerNodeID); err != nil {
+	if _, err := tx.Exec(`UPDATE provider_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE provider_node_id=?`, providerNodeID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
+	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
+	if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM quota_snapshots WHERE provider_node_id=?`, providerNodeID); err != nil {
@@ -724,7 +733,7 @@ func (s *Store) ClearInvalidModelHealth(connectionID string, modelIDs []string) 
 		if modelID == "" {
 			continue
 		}
-		if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,updated_at=CURRENT_TIMESTAMP WHERE connection_id=? AND model_ref=? AND status='invalid'`, connectionID, modelID); err != nil {
+		if _, err := tx.Exec(`UPDATE model_availability SET status='available',blocked_until=NULL,reason=NULL,consecutive_failures=0,backoff_level=0,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE connection_id=? AND model_ref=? AND status='invalid'`, connectionID, modelID); err != nil {
 			return err
 		}
 	}
@@ -1049,12 +1058,12 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 
 func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
 	metadata := "{}"
-	_, err := s.DB.Exec(`INSERT INTO quota_snapshots(id,provider_node_id,connection_id,model_ref,window_name,used,limit_value,remaining,reset_at,source,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET used=excluded.used,limit_value=excluded.limit_value,remaining=excluded.remaining,reset_at=excluded.reset_at,source=excluded.source,updated_at=CURRENT_TIMESTAMP`, quotaID(snapshot), snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.Used, snapshot.Limit, snapshot.Remaining, timeString(snapshot.ResetAt), snapshot.Source, metadata)
+	_, err := s.DB.Exec(`INSERT INTO quota_snapshots(id,provider_node_id,connection_id,model_ref,window_name,generation,used,limit_value,remaining,reset_at,source,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,used=excluded.used,limit_value=excluded.limit_value,remaining=excluded.remaining,reset_at=excluded.reset_at,source=excluded.source,updated_at=CURRENT_TIMESTAMP`, quotaID(snapshot), snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.Generation, snapshot.Used, snapshot.Limit, snapshot.Remaining, timeString(snapshot.ResetAt), snapshot.Source, metadata)
 	return err
 }
 
 func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
-	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,used,limit_value,remaining,reset_at,source FROM quota_snapshots`)
+	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,generation,used,limit_value,remaining,COALESCE(reset_at,''),source FROM quota_snapshots`)
 	if err != nil {
 		return nil, err
 	}
@@ -1064,7 +1073,7 @@ func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
 		var p quota.Snapshot
 		var limit, remaining sql.NullFloat64
 		var reset, source string
-		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Used, &limit, &remaining, &reset, &source); err != nil {
+		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Generation, &p.Used, &limit, &remaining, &reset, &source); err != nil {
 			return nil, err
 		}
 		if limit.Valid {
@@ -1222,13 +1231,16 @@ func (s *Store) Models() ([]Model, error) {
 type RouteRecord struct {
 	ID, NodeID, Prefix, ExternalModel, Protocol, DefinitionID string
 	BaseURL, AuthMode, CredentialID, CredentialType           string
+	ProviderGeneration                                        string `json:"-"`
+	ConnectionGeneration                                      string `json:"-"`
+	ModelGeneration                                           string `json:"-"`
 	Profile                                                   kernel.CapabilityProfile
 	Limits                                                    kernel.TokenLimits
 	Enabled                                                   bool
 }
 
 func (s *Store) Routes() ([]RouteRecord, error) {
-	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),m.external_id,m.enabled,
+	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),COALESCE(n.models_path,'/models'),m.external_id,m.enabled,
 	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
@@ -1243,20 +1255,34 @@ WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL
 	for rows.Next() {
 		var r RouteRecord
 		var enabled int
-		var capabilities, limits string
+		var capabilities, limits, modelsPath string
+		var modelID string
 		var credentialSecret string
-		if err := rows.Scan(&r.ID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.BaseURL, &r.AuthMode, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
+		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
 			return nil, err
 		}
+		r.ID = modelID
 		r.Enabled = enabled == 1
 		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
 		_ = json.Unmarshal([]byte(limits), &r.Limits)
+		r.ProviderGeneration = configGeneration(r.NodeID, r.BaseURL, r.Protocol, r.DefinitionID, r.AuthMode, modelsPath)
+		r.ConnectionGeneration = configGeneration(r.CredentialID, r.CredentialType, credentialSecret)
+		r.ModelGeneration = configGeneration(modelID, r.ExternalModel, capabilities, limits)
 		if r.CredentialID != "" {
 			r.ID = r.ID + "@" + r.CredentialID
 		}
 		result = append(result, r)
 	}
 	return result, rows.Err()
+}
+
+func configGeneration(parts ...string) string {
+	hasher := sha256.New()
+	for _, part := range parts {
+		_, _ = hasher.Write([]byte(part))
+		_, _ = hasher.Write([]byte{0})
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 type UpsertCatalogModelInput struct {

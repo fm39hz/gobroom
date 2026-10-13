@@ -223,8 +223,11 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 		t.Fatal(err)
 	}
 	remaining := float64(0)
-	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Remaining: &remaining}); err != nil {
+	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: "node-a", ConnectionID: "conn-a", ModelRef: "model-a", WindowName: "daily", Generation: "generation-a", Remaining: &remaining}); err != nil {
 		t.Fatal(err)
+	}
+	if snapshots, err := s.QuotaSnapshots(); err != nil || len(snapshots) != 1 || snapshots[0].Generation != "generation-a" {
+		t.Fatalf("quota generation did not round-trip: %#v err=%v", snapshots, err)
 	}
 	if err := s.SaveProviderRuntime(ProviderRuntime{ProviderNodeID: "node-a", Status: "cooldown", ConsecutiveFailures: 1, ErrorCode: "capacity"}); err != nil {
 		t.Fatal(err)

@@ -124,6 +124,33 @@ func TestHealthGateRestoresPermanentInvalidation(t *testing.T) {
 	}
 }
 
+func TestHealthGateFencesOutcomesAcrossConfigurationGenerations(t *testing.T) {
+	gate := NewHealthGate()
+	oldRoute := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "credential-v1", Model: "model-v1"}}
+	gate.SetGenerations(map[string]kernel.Route{oldRoute.ID: oldRoute})
+	gate.ObserveOutcome(oldRoute, kernel.ClassifiedOutcome{Cause: kernel.CauseAuth, Effect: kernel.EffectRejected, Scope: kernel.ScopeConnection, Retry: kernel.RetryNever, Confidence: 1})
+	if gate.Usable(oldRoute, time.Now()) {
+		t.Fatal("matching-generation auth rejection should block the connection")
+	}
+
+	newRoute := oldRoute
+	newRoute.HealthGeneration.Connection = "credential-v2"
+	gate.SetGenerations(map[string]kernel.Route{newRoute.ID: newRoute})
+	if !gate.Usable(newRoute, time.Now()) {
+		t.Fatal("configuration generation change did not clear the old connection invalidation")
+	}
+	gate.ObserveOutcome(oldRoute, kernel.ClassifiedOutcome{Cause: kernel.CauseAuth, Effect: kernel.EffectRejected, Scope: kernel.ScopeConnection, Retry: kernel.RetryNever, Confidence: 1})
+	gate.Release(oldRoute)
+	if !gate.Usable(newRoute, time.Now()) {
+		t.Fatal("late outcome from an old request re-invalidated the new credential generation")
+	}
+
+	gate.Restore(newRoute, RouteHealth{Invalid: true, Generation: "credential-v1", LastCause: kernel.CauseAuth, LastScope: kernel.ScopeConnection})
+	if !gate.Usable(newRoute, time.Now()) {
+		t.Fatal("persisted health from an obsolete generation was restored")
+	}
+}
+
 func TestHealthGateHalfOpenAllowsOneRealTrial(t *testing.T) {
 	gate := NewHealthGate()
 	route := kernel.Route{ID: "route"}

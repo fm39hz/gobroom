@@ -107,6 +107,7 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 			if snapshot.ModelRef == "" {
 				snapshot.ModelRef = route.ExternalModel
 			}
+			snapshot.Generation = route.HealthGeneration.ForQuota(snapshot.ConnectionID, snapshot.ModelRef)
 			q.Record(snapshot)
 		}
 		return nil, nil

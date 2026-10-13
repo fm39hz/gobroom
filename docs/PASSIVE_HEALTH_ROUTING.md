@@ -599,6 +599,8 @@ not hide evidence/provenance behind a generic “healthy” badge.
 10. New or stale routes are unknown, not unhealthy or healthy.
 11. Half-open permits one real trial for the scoped breaker key.
 12. Provider quirks live in classifier/extractor/enricher primitives.
+13. Outcomes from a request pinned to an obsolete provider/credential/model
+    generation cannot update health, quota or performance for the active route.
 
 Authentication, permission and model-not-found rejections are persistent
 invalidations at their classified scope, not cooldowns that periodically send
@@ -606,6 +608,11 @@ the same failing request again. Credential/provider configuration changes
 reset their affected health and quota state; successful model discovery clears
 a model invalidation only for upstream IDs present in the returned catalog. A client
 request-validation error never invalidates provider health.
+
+Persisted feedback is valid only for the opaque provider/credential/model
+generation that produced it. Generationless or stale rows are treated as
+unknown, and late outcomes, usage, or quota enrichment from an older immutable
+request snapshot cannot change routing for the current configuration.
 
 ## Delivery sequence
 

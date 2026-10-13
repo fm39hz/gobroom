@@ -10,6 +10,7 @@ type Snapshot struct {
 	ConnectionID   string
 	ModelRef       string
 	WindowName     string
+	Generation     string `json:"-"`
 	Used           float64
 	Limit          *float64
 	Remaining      *float64
