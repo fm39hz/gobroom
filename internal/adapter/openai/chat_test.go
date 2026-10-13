@@ -612,6 +612,64 @@ func TestKernelStreamsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
 	}
 }
 
+func TestKernelInterruptedChatProviderResponsesStreamDoesNotCompleteOrFallback(t *testing.T) {
+	var primaryCalls, backupCalls atomic.Int32
+	composed := NewAdapter().(kernel.ComposedAdapter)
+	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == "primary.test" {
+			primaryCalls.Add(1)
+			partial := `data: {"id":"chatcmpl_incomplete","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"partial Responses answer"},"finish_reason":null}]}` + "\n\n"
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(partial)), Request: request}, nil
+		}
+		if request.URL.Host == "backup.test" {
+			backupCalls.Add(1)
+			complete := `data: {"id":"chatcmpl_backup","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"fallback must not appear"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(complete)), Request: request}, nil
+		}
+		t.Errorf("unexpected upstream host %q", request.URL.Host)
+		return nil, errors.New("unexpected upstream host")
+	})}}
+	operationBinding := map[normalize.Operation]kernel.RouteOperationBinding{
+		normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}},
+	}
+	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
+		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
+		Nodes: []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{
+			{Kind: kernel.MemberRoute, ID: "primary", Fidelity: kernel.FidelityExact},
+			{Kind: kernel.MemberRoute, ID: "backup", Fidelity: kernel.FidelityExact},
+		}}},
+		Routes: []kernel.Route{
+			{ID: "primary", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://primary.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+			{ID: "backup", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://backup.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+		},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := kernel.New(snapshot, nil, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	engine.Adapters["openai-chat"] = composed
+	parsed, err := normalize.JSON("/v1/responses", http.Header{}, []byte(`{"model":"role","stream":true,"input":"answer"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := httptest.NewRecorder()
+	err = engine.Execute(context.Background(), parsed.Request, kernel.Credential{Secret: "secret"}, writer)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("truncated Chat→Responses stream error=%v", err)
+	}
+	output := writer.Body.String()
+	if primaryCalls.Load() != 1 || backupCalls.Load() != 0 {
+		t.Fatalf("partial Responses output must not fallback: primary=%d backup=%d", primaryCalls.Load(), backupCalls.Load())
+	}
+	if !strings.Contains(output, "event: response.output_text.delta") || !strings.Contains(output, "partial Responses answer") || strings.Contains(output, "event: response.completed") || strings.Contains(output, "fallback must not appear") {
+		t.Fatalf("truncated Responses stream was falsely completed or replaced: %s", output)
+	}
+}
+
 func TestChatRequestReassemblesPromptPlanAtWireBoundary(t *testing.T) {
 	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Role: "system", Text: "policy"}}}, Messages: []normalize.Message{{Role: "user", Content: "hello"}}}
 	prepared, err := (Chat{}).Prepare(context.Background(), request, kernel.Route{BaseURL: "https://provider.test/v1", ExternalModel: "m"}, kernel.Credential{})
