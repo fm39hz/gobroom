@@ -91,6 +91,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
   "scope":{"enum":["model","connection"]},
   "credentialHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
   "credentialPrefix":{"type":"string"},
+  "requestHeaders":{"type":"object","maxProperties":64,"propertyNames":{"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},"additionalProperties":{"type":"string","maxLength":8192}},
   "windows":{"type":"array","maxItems":64,"items":{"type":"object","properties":{
     "name":{"type":"string","minLength":1},
     "itemsPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},

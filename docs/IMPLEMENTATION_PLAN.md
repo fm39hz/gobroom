@@ -139,7 +139,9 @@ live credentials are not required for deterministic acceptance.
    are quota-report capabilities, not a separate generic `usage` operation.
    The shared window contract distinguishes enforced limits from observational
    billing balances; the Vercel `/credits` report is stored as `observe`, not
-   mistaken for a hard cap. Quota endpoint 401/403/429 failures now emit
+   mistaken for a hard cap. Provider-neutral `requestHeaders` binds public
+   protocol metadata, covering the observed Anthropic OAuth usage headers while
+   keeping credential headers in connection auth. Quota endpoint 401/403/429 failures now emit
    sanitized auth/permission/rate-limit codes to daemon logs without poisoning
    inference health; partial `keep_available` report failures are also visible.
    Keep unsupported operations absent rather than routing them to a default.

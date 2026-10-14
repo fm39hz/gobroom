@@ -333,6 +333,7 @@ type HTTPJSONQuotaOptions struct {
 	Scope            QuotaScope              `json:"scope,omitempty"`
 	CredentialHeader string                  `json:"credentialHeader,omitempty"`
 	CredentialPrefix string                  `json:"credentialPrefix,omitempty"`
+	RequestHeaders   map[string]string       `json:"requestHeaders,omitempty"`
 	Windows          []HTTPJSONQuotaWindow   `json:"windows,omitempty"`
 	HeaderWindows    []HTTPHeaderQuotaWindow `json:"headerWindows,omitempty"`
 	Reports          []HTTPJSONQuotaReport   `json:"reports,omitempty"`
@@ -401,6 +402,34 @@ func (o HTTPJSONQuotaOptions) Validate() error {
 	}
 	if strings.ContainsAny(o.CredentialPrefix, "\r\n") {
 		return fmt.Errorf("quota credential prefix must not contain line breaks")
+	}
+	if len(o.RequestHeaders) > 64 {
+		return fmt.Errorf("quota source supports at most 64 configured request headers")
+	}
+	credentialHeader := o.CredentialHeader
+	if credentialHeader == "" {
+		credentialHeader = "Authorization"
+	}
+	seenRequestHeaders := make(map[string]string, len(o.RequestHeaders))
+	for name, value := range o.RequestHeaders {
+		if !validHTTPHeaderName(name) {
+			return fmt.Errorf("quota request header name %q is invalid", name)
+		}
+		switch strings.ToLower(name) {
+		case "authorization", "proxy-authorization", "x-api-key", "api-key", "cookie", "set-cookie":
+			return fmt.Errorf("quota request header %q must come from the connection credential, not manifest options", name)
+		}
+		canonical := strings.ToLower(name)
+		if previous, exists := seenRequestHeaders[canonical]; exists {
+			return fmt.Errorf("quota request headers %q and %q have the same case-insensitive name", previous, name)
+		}
+		seenRequestHeaders[canonical] = name
+		if strings.EqualFold(name, credentialHeader) {
+			return fmt.Errorf("quota request header %q conflicts with credential presentation", name)
+		}
+		if strings.ContainsAny(value, "\r\n") || len(value) > 8192 {
+			return fmt.Errorf("quota request header %q value is invalid or exceeds 8192 bytes", name)
+		}
 	}
 	if o.FailureMode != "" && o.FailureMode != QuotaReportsFailAll && o.FailureMode != QuotaReportsKeepAvailable {
 		return fmt.Errorf("quota report failureMode %q is unsupported", o.FailureMode)

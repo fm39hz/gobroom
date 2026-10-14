@@ -166,7 +166,11 @@ can also compose up to eight report endpoints, each with its own path/query and
 window mappings. `failureMode: "keep_available"` retains successful report
 windows when another endpoint fails; the default is fail-all. Response bodies
 are bounded, and credentials can use a configured header/prefix without
-storing credential material in the manifest. Providers needing currency
+storing credential material in the manifest. `requestHeaders` configures
+non-secret provider protocol headers (for example Anthropic's OAuth beta and
+version headers); authorization, API-key, cookie and proxy-authorization
+headers are reserved for connection credentials and rejected in static
+options. Providers needing currency
 selection, cross-report joins, or different auth per endpoint can register a
 dedicated `QuotaSource` module; the daemon's poller, generation fencing and
 persistence remain shared.

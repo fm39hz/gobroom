@@ -1245,6 +1245,9 @@ func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRe
 	}
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
+	for name, value := range s.Options.RequestHeaders {
+		headers.Set(name, value)
+	}
 	if input.Credential.Secret != "" {
 		header, prefix := s.Options.CredentialHeader, s.Options.CredentialPrefix
 		if header == "" {

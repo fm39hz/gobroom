@@ -1378,6 +1378,10 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(quotaRef, observeQuotaOptions); err != nil {
 		t.Fatalf("typed non-enforcing quota window rejected by registered schema: %v", err)
 	}
+	providerHeadersOptions := json.RawMessage(`{"credentialHeader":"Authorization","credentialPrefix":"Bearer ","requestHeaders":{"anthropic-beta":"oauth-2025-04-20","anthropic-version":"2023-06-01"},"windows":[{"name":"session","usedPercentPath":"/five_hour/utilization"}]}`)
+	if err := snapshot.ValidateOptions(quotaRef, providerHeadersOptions); err != nil {
+		t.Fatalf("typed quota request headers rejected by registered schema: %v", err)
+	}
 	invalidHeaderQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","remainingHeader":"invalid header"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, invalidHeaderQuotaOptions); err == nil {
 		t.Fatal("schema accepted an invalid response-header quota mapping")
@@ -1393,6 +1397,15 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	}
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"windows":[{"name":"balance","remainingPath":"/balance","routingEffect":"ignore"}]}`)); err == nil {
 		t.Fatal("schema accepted an unknown quota routing effect")
+	}
+}
+
+func TestQuotaRequestHeadersCannotEmbedCredentialSecrets(t *testing.T) {
+	options := HTTPJSONQuotaOptions{RequestHeaders: map[string]string{
+		"Authorization": "Bearer manifest-secret",
+	}}
+	if err := options.Validate(); err == nil {
+		t.Fatal("quota source accepted a credential secret embedded in requestHeaders")
 	}
 }
 

@@ -215,6 +215,34 @@ func TestVercelCreditsAreObservableWithoutHardQuotaEnforcement(t *testing.T) {
 	}
 }
 
+func TestHTTPJSONQuotaSourcePresentsOAuthCredentialWithTypedProviderHeaders(t *testing.T) {
+	reset := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	transport := &quotaTransportFixture{body: `{"five_hour":{"utilization":32,"resets_at":"` + reset.Format(time.RFC3339) + `"},"seven_day":{"utilization":81,"resets_at":"` + reset.Add(6*time.Hour).Format(time.RFC3339) + `"}}`}
+	source := HTTPJSONQuotaSource{Options: HTTPJSONQuotaOptions{
+		Scope: QuotaScopeConnection, CredentialHeader: "Authorization", CredentialPrefix: "Bearer ",
+		RequestHeaders: map[string]string{"anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"},
+		Windows: []HTTPJSONQuotaWindow{
+			{Name: "session-5h", UsedPercentPath: "/five_hour/utilization", ResetAtPath: "/five_hour/resets_at"},
+			{Name: "weekly-7d", UsedPercentPath: "/seven_day/utilization", ResetAtPath: "/seven_day/resets_at"},
+		},
+	}}
+	route := kernel.Route{NodeID: "anthropic-oauth", CredentialID: "account", ExternalModel: "claude-opus", BaseURL: "https://api.anthropic.com"}
+	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
+		Credential: kernel.Credential{Type: "oauth2", Secret: "access-token"}, Route: route,
+		Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
+		EndpointOptions: kernel.EndpointOptions{Path: "/api/oauth/usage"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport.request.URL != "https://api.anthropic.com/api/oauth/usage" || transport.request.Headers.Get("Authorization") != "Bearer access-token" || transport.request.Headers.Get("anthropic-beta") != "oauth-2025-04-20" || transport.request.Headers.Get("anthropic-version") != "2023-06-01" {
+		t.Fatalf("typed Anthropic OAuth quota request=%#v", transport.request)
+	}
+	if len(snapshots) != 2 || snapshots[0].ModelRef != "" || snapshots[0].WindowName != "session-5h" || snapshots[0].Used != 32 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 68 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.Equal(reset) {
+		t.Fatalf("Anthropic 5h usage window=%#v", snapshots)
+	}
+}
+
 func TestHTTPJSONQuotaOptionsExpandNestedWindowsWithoutProviderBranches(t *testing.T) {
 	reset := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
 	body := []byte(`{"quotas":{"5h":{"remainingPercentage":60,"fractionReported":true,"resetAt":"` + reset.Format(time.RFC3339) + `"},"weekly":{"remainingPercentage":25,"fractionReported":true},"unreported":{"remainingPercentage":0,"fractionReported":false}}}`)
