@@ -107,6 +107,8 @@ type CapabilityProfile = kernel.CapabilityProfile
 type TokenLimits = kernel.TokenLimits
 type SessionStore = kernel.SessionStore
 type SessionStoreKey = kernel.SessionStoreKey
+type SessionState = kernel.SessionState
+type SignatureProof = kernel.SignatureProof
 
 // ApplyCredentialPresentation applies the selected auth mode's safe static
 // headers, dynamic credential headers and token presentation to an upstream
@@ -120,6 +122,12 @@ func ApplyCredentialPresentation(headers http.Header, credential Credential, pre
 // client-session scope required to isolate opaque provider continuation state.
 func SessionStoreKeyFor(route Route, sessionID string) (SessionStoreKey, error) {
 	return kernel.SessionStoreKeyFor(route, sessionID)
+}
+
+// ValidateSessionState applies the same size, JSON and context-bound signature
+// proof checks used by the built-in session-store implementations.
+func ValidateSessionState(state SessionState) error {
+	return kernel.ValidateSessionState(state)
 }
 
 type Format = normalize.Format

@@ -105,11 +105,8 @@ func (c *Cache) Save(ctx context.Context, route kernel.Route, sessionID string, 
 	if err != nil {
 		return err
 	}
-	if len(state.ResponseID) > 4096 {
-		return fmt.Errorf("provider response ID exceeds 4 KiB")
-	}
-	if len(state.ProviderData) > 64*1024 || len(state.ProviderData) > 0 && !json.Valid(state.ProviderData) {
-		return fmt.Errorf("provider session data must be valid JSON no larger than 64 KiB")
+	if err := kernel.ValidateSessionState(state); err != nil {
+		return err
 	}
 	now := time.Now()
 	cacheExpiry := now.Add(c.ttl)
@@ -186,5 +183,6 @@ func makeKey(route kernel.Route, sessionID string) (key, error) {
 
 func clone(state kernel.SessionState) kernel.SessionState {
 	state.ProviderData = append(json.RawMessage(nil), state.ProviderData...)
+	state.Signatures = append([]kernel.SignatureProof(nil), state.Signatures...)
 	return state
 }

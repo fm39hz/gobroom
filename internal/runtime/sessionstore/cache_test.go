@@ -40,12 +40,22 @@ func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 	}()
 	route := kernel.Route{DefinitionID: "openai-compatible-responses", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "openai-compatible-responses", ContractVersion: 1}, SessionOperationRef: extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}, ExternalModel: "gpt-model", CredentialID: "account"}
 	providerExpiry := time.Now().Add(time.Hour).UTC()
-	state := kernel.SessionState{ResponseID: "resp_1", ProviderData: []byte(`{"opaque":"v"}`), ExpiresAt: providerExpiry}
+	proofRequest := normalize.Request{Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Text: "system"}}}, Messages: []normalize.Message{{Role: "user", Content: "turn"}}, Tools: []normalize.Tool{{Type: "function", Name: "lookup"}}}
+	proofContext, err := kernel.SignatureContextDigest(proofRequest, len(proofRequest.Messages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := kernel.NewSignatureProof("provider-opaque-signature", route.DefinitionRef, proofContext, normalize.ToolCall{ID: "call-1", Type: "function", Name: "lookup", Arguments: map[string]any{"id": 7}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := kernel.SessionState{ResponseID: "resp_1", ProviderData: []byte(`{"opaque":"v"}`), Signatures: []kernel.SignatureProof{proof}, ExpiresAt: providerExpiry}
 	if err := cache.Save(context.Background(), route, "client-session", state); err != nil {
 		t.Fatal(err)
 	}
+	state.Signatures[0].Digest = "mutated-after-save"
 	loaded, found, err := cache.Load(context.Background(), route, "client-session")
-	if err != nil || !found || loaded.ResponseID != state.ResponseID || string(loaded.ProviderData) != string(state.ProviderData) || !loaded.ExpiresAt.Equal(providerExpiry) {
+	if err != nil || !found || loaded.ResponseID != state.ResponseID || string(loaded.ProviderData) != string(state.ProviderData) || !loaded.ExpiresAt.Equal(providerExpiry) || len(loaded.Signatures) != 1 || loaded.Signatures[0] != proof {
 		t.Fatalf("cached=%#v found=%v err=%v", loaded, found, err)
 	}
 	longProviderExpiry := time.Now().Add(4 * time.Hour).UTC()
@@ -83,7 +93,7 @@ func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 		t.Fatalf("reloaded unsupported namespaces into the cache: %#v", reloaded.entries)
 	}
 	stateAfterRestart, found, err := reloaded.Load(context.Background(), route, "client-session")
-	if err != nil || !found || stateAfterRestart.ResponseID != "resp_1" {
+	if err != nil || !found || stateAfterRestart.ResponseID != "resp_1" || len(stateAfterRestart.Signatures) != 1 || stateAfterRestart.Signatures[0] != proof {
 		t.Fatalf("reloaded=%#v found=%v err=%v", stateAfterRestart, found, err)
 	}
 	otherOperationAfterRestart, found, err := reloaded.Load(context.Background(), otherOperation, "client-session")

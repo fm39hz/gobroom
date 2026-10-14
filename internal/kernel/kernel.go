@@ -600,6 +600,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			artifactOutputCounts := make(map[string]int, len(artifactOutputs))
 			var sequence uint64
 			resultFinalized := false
+			signatureContextDigest := ""
+			signatureContextReady := false
 			validateEvent := func(_ context.Context, event ResponseEvent) error {
 				sequence++
 				if event.Kind == EventThinkingSignature || event.Signature != "" || event.SignatureIssuer.ID != "" {
@@ -612,8 +614,17 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					if event.SignatureIssuer != candidate.DefinitionRef {
 						return ErrSignatureIssuerMismatch
 					}
-					if event.Signature != "" {
-						proofs, proofErr := appendSignatureProof(sessionState.Signatures, event.Signature, event.SignatureIssuer)
+					if event.Signature != "" && event.Kind == EventToolCallDelta && event.ToolCallID != "" && event.ToolName != "" && sessionKey != "" && candidate.SessionStoreRef.ID != "" {
+						if !signatureContextReady {
+							digest, digestErr := SignatureContextDigest(candidateRequest, len(candidateRequest.Messages))
+							if digestErr != nil {
+								return fmt.Errorf("could not bind provider signature context")
+							}
+							signatureContextDigest = digest
+							signatureContextReady = true
+						}
+						call := normalize.ToolCall{ID: event.ToolCallID, Type: "function", Name: event.ToolName, Arguments: json.RawMessage(event.ToolArguments)}
+						proofs, proofErr := appendSignatureProof(sessionState.Signatures, event.Signature, event.SignatureIssuer, signatureContextDigest, call)
 						if proofErr != nil {
 							return proofErr
 						}

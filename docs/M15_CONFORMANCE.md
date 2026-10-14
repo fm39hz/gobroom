@@ -121,6 +121,14 @@ serving boundaries, not merely registry acceptance.
 | SG6: replay safety | A safe precommit failure can fallback. `Idempotency-Key` is validated at ingress; provider operation definitions may bind a valid upstream header only when the exact operation declares `scoped_idempotency_key`. `ReplayWithKey` derives a deterministic hash scoped to the exact provider definition, node/endpoint, credential, protocol, model and operation, retries at most once on the same route after ambiguous transport/eligible unknown-effect responses, and refuses cross-issuer fallback. `TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader`, `TestReplayWithKeyNeverFallsBackAcrossIssuerAfterAmbiguousRetry`, `TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch`, `TestProviderOperationBindsOnlyValidIdempotencyHeaderNames` and `TestLoaderBuildsTypedPhysicalAndComboGraph` cover the contract and manifest→snapshot path. An unsafe dispatched operation with ambiguous timeout cannot duplicate an upstream job; no operation switches routes after client commitment. Still missing: real provider idempotency semantics/expiry and async job effect fixtures. |
 | SG7: extension configuration and isolation | Versioned feature/policy/auth/operation schemas drive validation and generic control clients. A bundle includes user definitions/bindings and excludes secrets/session state. Missing compiled dependencies fail atomically. `TestSnapshotReloadDoesNotBlockStreamsAndPinsActiveRequests` holds two requests at their old upstream, atomically publishes a new snapshot, proves a new request sees the new route before either old request is released, then verifies both active requests complete on the old route. `TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream` runs a discovered model through the real daemon/kernel/API path, blocks the upstream SSE, then proves Unix IPC status, snapshot reload and OAuth device start/get/cancel all return while the client stream remains open; the stream completes only after the upstream is released. |
 
+`TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip` now also verifies
+signature proofs are tied to the prompt/tool contract, conversation prefix and
+exact target call: a signature copied into a changed branch or moved to a
+different call is rejected before dispatch, while the same signature on the
+original continuation is accepted. Only the signature digest, issuer, context
+digest and target digest are persisted; the opaque signature remains in the
+client transcript.
+
 `TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack` also proves a
 Responses base64 image is converted to Anthropic's typed `image.source` block
 through the serving kernel; image detail and file-ID inputs that the target

@@ -59,6 +59,26 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 	if err != nil {
 		return err
 	}
+	if err := ValidateSessionState(state); err != nil {
+		return err
+	}
+	ttl := s.TTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	cacheExpiry := time.Now().Add(ttl)
+	if state.ExpiresAt.IsZero() || state.ExpiresAt.After(cacheExpiry) {
+		state.ExpiresAt = cacheExpiry
+	}
+	s.mu.Lock()
+	s.entries[key] = cloneSessionState(state)
+	s.mu.Unlock()
+	return nil
+}
+
+// ValidateSessionState applies the common size and proof contract used by all
+// built-in and external session-store implementations.
+func ValidateSessionState(state SessionState) error {
 	if len(state.ResponseID) > 4096 {
 		return fmt.Errorf("provider response ID exceeds 4 KiB")
 	}
@@ -73,17 +93,6 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 			return err
 		}
 	}
-	ttl := s.TTL
-	if ttl <= 0 {
-		ttl = 24 * time.Hour
-	}
-	cacheExpiry := time.Now().Add(ttl)
-	if state.ExpiresAt.IsZero() || state.ExpiresAt.After(cacheExpiry) {
-		state.ExpiresAt = cacheExpiry
-	}
-	s.mu.Lock()
-	s.entries[key] = cloneSessionState(state)
-	s.mu.Unlock()
 	return nil
 }
 

@@ -26,7 +26,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	}
 	var upstreamCalls atomic.Int32
 	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamCalls.Add(1)
+		callNumber := upstreamCalls.Add(1)
 		if r.Method != http.MethodPost || r.URL.Path != "/v1beta/models/gemini-3-flash:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
 			t.Errorf("upstream target=%s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
@@ -46,17 +46,26 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 			t.Errorf("system instruction missing: %#v", body)
 		}
 		contents, ok := body["contents"].([]any)
-		if !ok || len(contents) != 3 {
+		wantContents := 3
+		if callNumber == 2 {
+			wantContents = 5
+		}
+		if !ok || len(contents) != wantContents {
 			t.Errorf("Gemini contents=%#v", body["contents"])
 		} else {
-			modelTurn, _ := contents[1].(map[string]any)
+			modelIndex, toolIndex := 1, 2
+			wantSignature := "opaque-sig"
+			if callNumber == 2 {
+				modelIndex, toolIndex, wantSignature = 3, 4, "next-sig"
+			}
+			modelTurn, _ := contents[modelIndex].(map[string]any)
 			parts, _ := modelTurn["parts"].([]any)
 			if len(parts) != 1 {
 				t.Errorf("model function-call parts=%#v", parts)
-			} else if call, _ := parts[0].(map[string]any); call["thoughtSignature"] != "opaque-sig" && call["thoughtSignature"] != "next-sig" {
+			} else if call, _ := parts[0].(map[string]any); call["thoughtSignature"] != wantSignature {
 				t.Errorf("tool thought signature not carried upstream: %#v", call)
 			}
-			toolTurn, _ := contents[2].(map[string]any)
+			toolTurn, _ := contents[toolIndex].(map[string]any)
 			toolParts, _ := toolTurn["parts"].([]any)
 			if len(toolParts) != 1 {
 				t.Errorf("function-response parts=%#v", toolParts)
@@ -70,7 +79,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w,
 			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Here is the result.\"}]}}]}\n\n"+
-				"data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"lookup\",\"args\":{\"id\":7}},\"thoughtSignature\":\"next-sig\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":6}}\n\n")
+				"data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"id\":\"next-call\",\"name\":\"lookup\",\"args\":{\"id\":7}},\"thoughtSignature\":\"next-sig\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":6}}\n\n")
 	}))
 	upstream.Listener = listener
 	upstream.Start()
@@ -131,12 +140,17 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	if upstreamCalls.Load() != 0 {
 		t.Fatalf("unattested signature reached upstream: calls=%d", upstreamCalls.Load())
 	}
-	priorProof, err := kernel.NewSignatureProof("opaque-sig", route.DefinitionRef)
+	priorContextDigest, err := kernel.SignatureContextDigest(request.Request, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorCall := request.Request.Messages[1].ToolCalls[0]
+	priorProof, err := kernel.NewSignatureProof("opaque-sig", route.DefinitionRef, priorContextDigest, priorCall)
 	if err != nil {
 		t.Fatal(err)
 	}
 	wrongIssuer := extensions.Ref{Kind: "provider-definition", ID: "other-provider", ContractVersion: 1}
-	wrongProof, err := kernel.NewSignatureProof("opaque-sig", wrongIssuer)
+	wrongProof, err := kernel.NewSignatureProof("opaque-sig", wrongIssuer, priorContextDigest, priorCall)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +182,12 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("session signature state load: ok=%v err=%v", ok, err)
 	}
-	nextProof, err := kernel.NewSignatureProof("next-sig", route.DefinitionRef)
+	responseContextDigest, err := kernel.SignatureContextDigest(request.Request, len(request.Request.Messages))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextCall := normalize.ToolCall{ID: "next-call", Type: "function", Name: "lookup", Arguments: map[string]any{"id": float64(7)}}
+	nextProof, err := kernel.NewSignatureProof("next-sig", route.DefinitionRef, responseContextDigest, nextCall)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +195,26 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 		t.Fatalf("Gemini response signature was not persisted for this issuer: %#v", saved.Signatures)
 	}
 	followUp := normalize.CloneRequest(request.Request)
-	followUp.Messages[1].ToolCalls[0].Signature = "next-sig"
+	followUp.Messages = append(followUp.Messages,
+		normalize.Message{Role: "assistant", ToolCalls: []normalize.ToolCall{{ID: "next-call", Type: "function", Name: "lookup", Arguments: map[string]any{"id": 7}, Signature: "next-sig"}}},
+		normalize.Message{Role: "tool", ToolCallID: "next-call", Content: `{"found":true}`},
+	)
+	wrongBranch := normalize.CloneRequest(followUp)
+	wrongBranch.Messages[0].Content = "A different conversation branch"
+	if err := gateway.Execute(context.Background(), wrongBranch, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) {
+		t.Fatalf("session signature proof crossed into a different conversation branch: %v", err)
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("wrong-branch signature reached upstream: calls=%d", upstreamCalls.Load())
+	}
+	wrongTarget := normalize.CloneRequest(followUp)
+	wrongTarget.Messages[len(wrongTarget.Messages)-2].ToolCalls[0].Arguments = map[string]any{"id": 99}
+	if err := gateway.Execute(context.Background(), wrongTarget, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, httptest.NewRecorder()); !errors.Is(err, kernel.ErrNoRoute) {
+		t.Fatalf("signature proof moved onto a different tool call: %v", err)
+	}
+	if upstreamCalls.Load() != 1 {
+		t.Fatalf("wrong-target signature reached upstream: calls=%d", upstreamCalls.Load())
+	}
 	followUpRecorder := httptest.NewRecorder()
 	if err := gateway.Execute(context.Background(), followUp, kernel.Credential{ConnectionID: "gemini-connection", Secret: "integration-key"}, followUpRecorder); err != nil {
 		t.Fatalf("same-session signature replay was rejected: %v", err)

@@ -210,10 +210,14 @@ the kernel rejects missing or mismatched issuers before rendering, and response
 transforms cannot rewrite that provenance. A renderer may preserve a signature
 only when the response decoder declares the signature event family.
 Opaque tool signatures echoed by clients are untrusted until the selected
-provider's session store contains the matching digest/issuer proof. The raw
-signature is never persisted; a different provider, connection, model or
-operation or client session cannot attest it. Provider and operation contract
-versions are part of that isolation boundary.
+provider's session store contains the matching signature-digest, issuer,
+conversation-context and target-call proof. Context is the normalized
+prompt/tool contract and message prefix before the signed tool-call turn;
+signatures in earlier messages are excluded from that fingerprint. The target
+proof binds the tool-call ID, name and canonical arguments. The raw signature is
+never persisted; a different provider, connection, model, operation, client
+session, conversation branch or tool call cannot attest it. Provider and
+operation contract versions are part of that isolation boundary.
 
 Session-store implementations must derive their namespace with
 `provider.SessionStoreKeyFor` (or the kernel equivalent). The exact isolation
