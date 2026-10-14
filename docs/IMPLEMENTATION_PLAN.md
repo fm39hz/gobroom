@@ -266,10 +266,14 @@ pending.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec,
    loads its manifest and executes a schema-validated request over ordinary
-   IPC/daemon/HTTP boundaries. This leaves kernel graph types, core schema and
-   generic frontend workflow unchanged. Remaining: exercise the full SG1–SG7
-   compatibility, auth, artifact, transform, replay, reload and bundle cases
-   through that module, then run installed CLI/control acceptance.
+   IPC/daemon/HTTP boundaries. It also binds a custom AuthFactory, passes
+   bounded credential AuthContext to an external request codec, and includes a
+   source-derived Qoder COSY fixture that encodes then signs its body bytes and
+   unwraps an SSE envelope through the shared runtime. This leaves kernel graph
+   types, core schema and generic frontend workflow unchanged. Remaining:
+   exercise the full SG1–SG7 compatibility, auth, artifact, transform, replay,
+   reload and bundle cases through that module, then run installed CLI/control
+   acceptance.
 
 Completion of C1–C6 proves runtime architecture closure for the declared
 scope. It does not change M2/M6/M7/M8/M9 feature completeness automatically;
