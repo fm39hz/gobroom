@@ -10,6 +10,17 @@ import (
 	"github.com/fm39hz/gobroom/internal/quota"
 )
 
+type connectionQuotaTestSource struct{ calls int }
+
+func (s *connectionQuotaTestSource) ID() string { return "connection-test" }
+func (s *connectionQuotaTestSource) QuotaScope() provider.QuotaScope {
+	return provider.QuotaScopeConnection
+}
+func (s *connectionQuotaTestSource) Fetch(_ context.Context, request provider.QuotaRequest) ([]quota.Snapshot, error) {
+	s.calls++
+	return []quota.Snapshot{{ProviderNodeID: request.Route.NodeID, ConnectionID: request.Route.CredentialID, WindowName: "account", Source: "test"}}, nil
+}
+
 type testQuotaSource struct{}
 
 func (testQuotaSource) ID() string { return "test" }
@@ -51,5 +62,31 @@ func TestQuotaPollerIsOptIn(t *testing.T) {
 	poller.Run(ctx)
 	if called {
 		t.Fatal("disabled poller should not perform any work")
+	}
+}
+
+func TestQuotaPollerDeduplicatesConnectionScopedSourcesAcrossModels(t *testing.T) {
+	source := &connectionQuotaTestSource{}
+	endpointRef := extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}
+	transportRef := extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}
+	quotaRef := extensions.Ref{Kind: "quota_source", ID: "connection-test", ContractVersion: 1}
+	routes := map[string]kernel.Route{}
+	for _, model := range []string{"model-a", "model-b"} {
+		routes[model] = kernel.Route{ID: model, NodeID: "provider", CredentialID: "connection", ExternalModel: model, QuotaSourceRef: quotaRef, QuotaEndpointRef: endpointRef, QuotaTransportRef: transportRef, Enabled: true}
+	}
+	var snapshots []quota.Snapshot
+	poller := QuotaPoller{
+		Sources:    map[extensions.Ref]provider.QuotaSource{quotaRef: source},
+		Endpoints:  map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
+		Transports: map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
+		Snapshot:   func() kernel.Snapshot { return kernel.Snapshot{Routes: routes} },
+		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
+			return kernel.Credential{Secret: "secret"}, nil
+		},
+		Record: func(snapshot quota.Snapshot) { snapshots = append(snapshots, snapshot) },
+	}
+	poller.poll(context.Background())
+	if source.calls != 1 || len(snapshots) != 1 || snapshots[0].ConnectionID != "connection" || snapshots[0].ModelRef != "" {
+		t.Fatalf("connection-scoped poll calls=%d snapshots=%#v", source.calls, snapshots)
 	}
 }

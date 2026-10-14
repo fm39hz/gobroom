@@ -23,6 +23,14 @@ type QuotaPoller struct {
 	Enabled bool
 }
 
+func quotaRequestKey(route kernel.Route, source provider.QuotaSource) string {
+	key := route.NodeID + "\x00" + route.QuotaSourceRef.Key() + "\x00" + route.CredentialID
+	if provider.QuotaScopeOf(source) == provider.QuotaScopeModel {
+		key += "\x00" + route.ExternalModel
+	}
+	return key
+}
+
 func (p QuotaPoller) Run(ctx context.Context) {
 	if !p.Enabled {
 		return
@@ -57,7 +65,7 @@ func (p QuotaPoller) poll(ctx context.Context) {
 		if source == nil {
 			continue
 		}
-		key := route.QuotaSourceRef.Key() + "\x00" + route.CredentialID + "\x00" + route.ExternalModel
+		key := quotaRequestKey(route, source)
 		if seen[key] {
 			continue
 		}
@@ -83,7 +91,9 @@ func (p QuotaPoller) poll(ctx context.Context) {
 			if snapshot.ConnectionID == "" {
 				snapshot.ConnectionID = route.CredentialID
 			}
-			if snapshot.ModelRef == "" {
+			if provider.QuotaScopeOf(source) == provider.QuotaScopeConnection {
+				snapshot.ModelRef = ""
+			} else if snapshot.ModelRef == "" {
 				snapshot.ModelRef = route.ExternalModel
 			}
 			snapshot.Generation = route.HealthGeneration.ForQuota(snapshot.ConnectionID, snapshot.ModelRef)

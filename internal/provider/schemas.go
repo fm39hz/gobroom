@@ -66,6 +66,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
 	return bindSchemaDocument(quotaSourceOptionsSchemaRef, json.RawMessage(`{
 "type":"object",
 "properties":{
+  "scope":{"enum":["model","connection"]},
   "credentialHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
   "credentialPrefix":{"type":"string"},
   "windows":{"type":"array","maxItems":64,"items":{"type":"object","properties":{

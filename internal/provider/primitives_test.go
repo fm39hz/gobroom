@@ -1085,6 +1085,14 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	if modelBinding.Auth == nil || modelBinding.ModelSource == nil || modelBinding.Endpoint == nil || modelBinding.Transport == nil {
 		t.Fatalf("manifest-bound API-key /models operation was incomplete: %#v", modelBinding)
 	}
+	groqQuota := bindings[RuntimeBindingKey("groq", OperationQuota)]
+	if groqQuota.QuotaSource == nil || groqQuota.EndpointOptions.Path != "/models" {
+		t.Fatalf("Groq manifest did not bind model-endpoint quota extraction: %#v", groqQuota)
+	}
+	configuredGroqQuota, ok := groqQuota.QuotaSource.(HTTPJSONQuotaSource)
+	if !ok || configuredGroqQuota.QuotaScope() != QuotaScopeConnection || len(configuredGroqQuota.Options.HeaderWindows) != 2 || configuredGroqQuota.Options.HeaderWindows[0].Name != "requests" || configuredGroqQuota.Options.HeaderWindows[1].Name != "tokens" {
+		t.Fatalf("Groq quota source options=%#v", groqQuota.QuotaSource)
+	}
 }
 
 type fixtureFeatureEvaluator struct{ accept bool }
@@ -1323,13 +1331,16 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"failureMode":"keep_available"}`)); err == nil {
 		t.Fatal("schema accepted a multi-report failure mode without report endpoints")
 	}
-	headerQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","limitHeader":"x-ratelimit-limit-requests","remainingHeader":"x-ratelimit-remaining-requests","resetHeader":"x-ratelimit-reset-requests"}]}`)
+	headerQuotaOptions := json.RawMessage(`{"scope":"connection","headerWindows":[{"name":"requests","limitHeader":"x-ratelimit-limit-requests","remainingHeader":"x-ratelimit-remaining-requests","resetHeader":"x-ratelimit-reset-requests"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, headerQuotaOptions); err != nil {
 		t.Fatalf("typed response-header quota options rejected by registered schema: %v", err)
 	}
 	invalidHeaderQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","remainingHeader":"invalid header"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, invalidHeaderQuotaOptions); err == nil {
 		t.Fatal("schema accepted an invalid response-header quota mapping")
+	}
+	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"scope":"provider"}`)); err == nil {
+		t.Fatal("schema accepted an unsupported provider-wide credential quota scope")
 	}
 }
 

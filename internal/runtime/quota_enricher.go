@@ -43,7 +43,7 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 	if endpoint == nil || transport == nil {
 		return
 	}
-	key := route.QuotaSourceRef.Key() + "\x00" + route.CredentialID + "\x00" + route.ExternalModel
+	key := quotaRequestKey(route, source)
 	cooldown := q.Cooldown
 	if cooldown <= 0 {
 		cooldown = time.Minute
@@ -105,7 +105,9 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 			if snapshot.ConnectionID == "" {
 				snapshot.ConnectionID = route.CredentialID
 			}
-			if snapshot.ModelRef == "" {
+			if provider.QuotaScopeOf(source) == provider.QuotaScopeConnection {
+				snapshot.ModelRef = ""
+			} else if snapshot.ModelRef == "" {
 				snapshot.ModelRef = route.ExternalModel
 			}
 			snapshot.Generation = route.HealthGeneration.ForQuota(snapshot.ConnectionID, snapshot.ModelRef)

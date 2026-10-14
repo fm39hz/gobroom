@@ -108,7 +108,7 @@ func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
 	headers.Set("X-RateLimit-Reset-Tokens", "7.66s")
 	transport := &quotaTransportFixture{body: `{"data":[]}`, headers: headers}
 	route := kernel.Route{NodeID: "groq", CredentialID: "account", ExternalModel: "llama", BaseURL: "https://api.groq.com/openai/v1"}
-	options := HTTPJSONQuotaOptions{HeaderWindows: []HTTPHeaderQuotaWindow{
+	options := HTTPJSONQuotaOptions{Scope: QuotaScopeConnection, HeaderWindows: []HTTPHeaderQuotaWindow{
 		{Name: "requests", LimitHeader: "x-ratelimit-limit-requests", RemainingHeader: "x-ratelimit-remaining-requests", ResetHeader: "x-ratelimit-reset-requests"},
 		{Name: "tokens", LimitHeader: "x-ratelimit-limit-tokens", RemainingHeader: "x-ratelimit-remaining-tokens", ResetHeader: "x-ratelimit-reset-tokens"},
 	}}
@@ -122,7 +122,7 @@ func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
 	if transport.request.URL != "https://api.groq.com/openai/v1/models" || transport.request.Headers.Get("Authorization") != "Bearer secret" {
 		t.Fatalf("Groq quota request=%#v", transport.request)
 	}
-	if len(snapshots) != 2 || snapshots[0].WindowName != "requests" || snapshots[0].Limit == nil || *snapshots[0].Limit != 30 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 7 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.After(now.Add(2*time.Minute)) || snapshots[1].WindowName != "tokens" || snapshots[1].Remaining == nil || *snapshots[1].Remaining != 0 || snapshots[1].ResetAt == nil || !snapshots[1].ResetAt.After(now) {
+	if len(snapshots) != 2 || snapshots[0].ModelRef != "" || snapshots[0].WindowName != "requests" || snapshots[0].Limit == nil || *snapshots[0].Limit != 30 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 7 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.After(now.Add(2*time.Minute)) || snapshots[1].ModelRef != "" || snapshots[1].WindowName != "tokens" || snapshots[1].Remaining == nil || *snapshots[1].Remaining != 0 || snapshots[1].ResetAt == nil || !snapshots[1].ResetAt.After(now) {
 		t.Fatalf("header quota windows=%#v", snapshots)
 	}
 }

@@ -67,6 +67,26 @@ type QuotaSource interface {
 	Fetch(context.Context, QuotaRequest) ([]quota.Snapshot, error)
 }
 
+type QuotaScope string
+
+const (
+	QuotaScopeModel      QuotaScope = "model"
+	QuotaScopeConnection QuotaScope = "connection"
+)
+
+// ScopedQuotaSource optionally declares the identity shared by its snapshots.
+// Unscoped implementations retain the conservative model scope.
+type ScopedQuotaSource interface {
+	QuotaScope() QuotaScope
+}
+
+func QuotaScopeOf(source QuotaSource) QuotaScope {
+	if scoped, ok := source.(ScopedQuotaSource); ok && scoped.QuotaScope() == QuotaScopeConnection {
+		return QuotaScopeConnection
+	}
+	return QuotaScopeModel
+}
+
 type QuotaSourceFactory func(json.RawMessage) (QuotaSource, error)
 
 type QuotaRequest struct {
@@ -1011,6 +1031,20 @@ type HTTPJSONQuotaSource struct {
 }
 
 func (s HTTPJSONQuotaSource) ID() string { return "http-json-quota" }
+func (s HTTPJSONQuotaSource) QuotaScope() QuotaScope {
+	if s.Options.Scope == "" {
+		return QuotaScopeModel
+	}
+	return s.Options.Scope
+}
+
+func quotaRouteForScope(route kernel.Route, scope QuotaScope) kernel.Route {
+	if scope == QuotaScopeConnection {
+		route.ExternalModel = ""
+	}
+	return route
+}
+
 func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]quota.Snapshot, error) {
 	if input.Endpoint == nil || input.Transport == nil {
 		return nil, fmt.Errorf("quota operation requires endpoint and transport primitives")
@@ -1018,6 +1052,7 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 	if err := s.Options.Validate(); err != nil {
 		return nil, err
 	}
+	quotaRoute := quotaRouteForScope(input.Route, s.QuotaScope())
 	if len(s.Options.Reports) == 0 {
 		body, headers, err := s.fetchQuotaReport(ctx, input, input.EndpointOptions)
 		if err != nil {
@@ -1025,18 +1060,18 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 		}
 		var snapshots []quota.Snapshot
 		if len(s.Options.Windows) > 0 {
-			snapshots, err = DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, s.Options)
+			snapshots, err = DecodeQuotaJSONWithOptions(body, quotaRoute, input.WindowName, s.Options)
 		} else if len(s.Options.HeaderWindows) == 0 {
 			windowName := input.WindowName
 			if windowName == "" {
 				windowName = s.WindowName
 			}
-			snapshots, err = DecodeQuotaJSON(body, input.Route, windowName)
+			snapshots, err = DecodeQuotaJSON(body, quotaRoute, windowName)
 		}
 		if err != nil {
 			return nil, err
 		}
-		headerSnapshots, err := DecodeQuotaHeaders(headers, input.Route, s.Options.HeaderWindows, time.Now())
+		headerSnapshots, err := DecodeQuotaHeaders(headers, quotaRoute, s.Options.HeaderWindows, time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -1066,7 +1101,7 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 			reportOptions.Reports = nil
 			reportOptions.FailureMode = ""
 			reportOptions.Windows = report.Windows
-			snapshotsForReport, decodeErr := DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, reportOptions)
+			snapshotsForReport, decodeErr := DecodeQuotaJSONWithOptions(body, quotaRoute, input.WindowName, reportOptions)
 			if decodeErr != nil {
 				err = decodeErr
 			} else {

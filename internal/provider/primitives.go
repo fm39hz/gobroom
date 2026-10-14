@@ -328,6 +328,7 @@ type OperationBinding struct {
 // JSON quota reports. Providers with non-composable semantics can register a
 // dedicated QuotaSource primitive instead.
 type HTTPJSONQuotaOptions struct {
+	Scope            QuotaScope              `json:"scope,omitempty"`
 	CredentialHeader string                  `json:"credentialHeader,omitempty"`
 	CredentialPrefix string                  `json:"credentialPrefix,omitempty"`
 	Windows          []HTTPJSONQuotaWindow   `json:"windows,omitempty"`
@@ -387,6 +388,9 @@ type HTTPJSONQuotaWindow struct {
 }
 
 func (o HTTPJSONQuotaOptions) Validate() error {
+	if o.Scope != "" && o.Scope != QuotaScopeModel && o.Scope != QuotaScopeConnection {
+		return fmt.Errorf("quota source scope %q is unsupported", o.Scope)
+	}
 	if o.CredentialHeader != "" && !validHTTPHeaderName(o.CredentialHeader) {
 		return fmt.Errorf("quota credential header name is invalid")
 	}

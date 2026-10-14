@@ -96,6 +96,23 @@ func TestProviderModelQuotaGenerationIsStableAcrossConnections(t *testing.T) {
 	}
 }
 
+func TestConnectionScopedQuotaAppliesAcrossModelsOnlyWithinItsConnection(t *testing.T) {
+	gate := NewPolicyGate()
+	routeA := kernel.Route{ID: "route-a", NodeID: "provider", CredentialID: "connection-a", ExternalModel: "model-a", Enabled: true, HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "connection-v1", Model: "model-a-v1"}}
+	routeB := kernel.Route{ID: "route-b", NodeID: "provider", CredentialID: "connection-a", ExternalModel: "model-b", Enabled: true, HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "connection-v1", Model: "model-b-v1"}}
+	otherConnection := kernel.Route{ID: "route-other", NodeID: "provider", CredentialID: "connection-b", ExternalModel: "model-a", Enabled: true, HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "connection-b-v1", Model: "model-other-v1"}}
+	gate.SetGenerations(map[string]kernel.Route{routeA.ID: routeA, routeB.ID: routeB, otherConnection.ID: otherConnection})
+	remaining := float64(0)
+	reset := time.Now().Add(time.Hour)
+	snapshot := quota.Snapshot{ProviderNodeID: "provider", ConnectionID: "connection-a", WindowName: "account-rpm", Remaining: &remaining, ResetAt: &reset, Generation: routeA.HealthGeneration.ForQuota("connection-a", "")}
+	if !gate.TrySetQuota(snapshot) {
+		t.Fatal("matching connection-scoped quota was rejected")
+	}
+	if gate.Usable(routeA, time.Now()) || gate.Usable(routeB, time.Now()) || !gate.Usable(otherConnection, time.Now()) {
+		t.Fatal("connection-scoped quota should gate all models on one connection, but not another connection")
+	}
+}
+
 func TestPolicyGateResolvesQuotaSourcesByFreshnessAndAuthority(t *testing.T) {
 	gate := NewPolicyGate()
 	remainingZero := float64(0)

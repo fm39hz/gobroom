@@ -431,12 +431,38 @@
           "id": "openai-models",
           "contractVersion": 1
         }
+      },
+      "quota": {
+        "endpoint": {
+          "kind": "endpoint",
+          "id": "http-json",
+          "contractVersion": 1
+        },
+        "endpointOptions": {"path": "/models"},
+        "transport": {
+          "kind": "transport",
+          "id": "http",
+          "contractVersion": 1
+        },
+        "quotaSource": {
+          "kind": "quota_source",
+          "id": "http-json-quota",
+          "contractVersion": 1
+        },
+        "quotaSourceOptions": {
+          "scope": "connection",
+          "headerWindows": [
+            {"name": "requests", "limitHeader": "x-ratelimit-limit-requests", "remainingHeader": "x-ratelimit-remaining-requests", "resetHeader": "x-ratelimit-reset-requests"},
+            {"name": "tokens", "limitHeader": "x-ratelimit-limit-tokens", "remainingHeader": "x-ratelimit-remaining-tokens", "resetHeader": "x-ratelimit-reset-tokens"}
+          ]
+        }
       }
     },
     "capabilities": {
       "chat": true,
       "streaming": true,
-      "tools": true
+      "tools": true,
+      "quota": true
     },
     "contractVersion": 1
   },

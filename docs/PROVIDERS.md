@@ -161,6 +161,13 @@ selection, cross-report joins, or different auth per endpoint can register a
 dedicated `QuotaSource` module; the daemon's poller, generation fencing and
 persistence remain shared.
 
+Quota source scope is `model` (the default) or `connection`. Connection-scoped
+reports persist with an empty `modelRef`, gate all models for that credential,
+and are polled/enriched once per source and connection. Use it when the
+upstream report describes the account as a whole; keep model scope when limits
+are model-specific. A custom source can implement `ScopedQuotaSource` to
+request the same polling identity behavior.
+
 ```json
 "quota": {
   "endpoint": {"kind":"endpoint","id":"http-json","contractVersion":1},

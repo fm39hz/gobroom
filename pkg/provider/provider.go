@@ -48,6 +48,8 @@ type HTTPJSONQuotaWindow = core.HTTPJSONQuotaWindow
 type QuotaReportFailureMode = core.QuotaReportFailureMode
 type UsageSource = core.UsageSource
 type QuotaSource = core.QuotaSource
+type QuotaScope = core.QuotaScope
+type ScopedQuotaSource = core.ScopedQuotaSource
 type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
 
@@ -126,6 +128,8 @@ const (
 	OperationQuota            = core.OperationQuota
 	QuotaReportsFailAll       = core.QuotaReportsFailAll
 	QuotaReportsKeepAvailable = core.QuotaReportsKeepAvailable
+	QuotaScopeModel           = core.QuotaScopeModel
+	QuotaScopeConnection      = core.QuotaScopeConnection
 
 	PrimitiveEndpoint        = core.PrimitiveEndpoint
 	PrimitiveTransport       = core.PrimitiveTransport

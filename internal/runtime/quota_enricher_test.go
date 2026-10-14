@@ -19,6 +19,17 @@ type countingQuotaSource struct {
 	release chan struct{}
 }
 
+type connectionCountingQuotaSource struct{ calls int }
+
+func (s *connectionCountingQuotaSource) ID() string { return "connection-counting" }
+func (s *connectionCountingQuotaSource) QuotaScope() provider.QuotaScope {
+	return provider.QuotaScopeConnection
+}
+func (s *connectionCountingQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) ([]quota.Snapshot, error) {
+	s.calls++
+	return []quota.Snapshot{{ProviderNodeID: request.Route.NodeID, ConnectionID: request.Route.CredentialID, WindowName: "account"}}, nil
+}
+
 func (s *countingQuotaSource) ID() string { return "counting" }
 func (s *countingQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) ([]quota.Snapshot, error) {
 	route := request.Route
@@ -119,5 +130,38 @@ func TestOpportunisticQuotaBoundsCooldownKeys(t *testing.T) {
 	defer enricher.mu.Unlock()
 	if len(enricher.last) != 1 {
 		t.Fatalf("cooldown key cache exceeded configured bound: got %d keys", len(enricher.last))
+	}
+}
+
+func TestOpportunisticQuotaCooldownSharesConnectionScopedSourceAcrossModels(t *testing.T) {
+	source := &connectionCountingQuotaSource{}
+	quotaRef := extensions.Ref{Kind: "quota_source", ID: "connection-counting", ContractVersion: 1}
+	endpointRef := extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}
+	transportRef := extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}
+	recorded := make(chan quota.Snapshot, 2)
+	enricher := &OpportunisticQuota{
+		Sources:    map[extensions.Ref]provider.QuotaSource{quotaRef: source},
+		Endpoints:  map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
+		Transports: map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
+		Cooldown:   time.Hour,
+		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
+			return kernel.Credential{Secret: "secret"}, nil
+		},
+		Record: func(snapshot quota.Snapshot) { recorded <- snapshot },
+	}
+	for _, model := range []string{"model-a", "model-b"} {
+		enricher.Trigger(context.Background(), kernel.Route{NodeID: "provider", CredentialID: "connection", ExternalModel: model, QuotaSourceRef: quotaRef, QuotaEndpointRef: endpointRef, QuotaTransportRef: transportRef})
+	}
+	select {
+	case snapshot := <-recorded:
+		if snapshot.ModelRef != "" {
+			t.Fatalf("connection quota snapshot unexpectedly model-scoped: %#v", snapshot)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connection quota enrichment did not complete")
+	}
+	time.Sleep(10 * time.Millisecond)
+	if source.calls != 1 {
+		t.Fatalf("connection-scoped opportunistic source called %d times", source.calls)
 	}
 }
