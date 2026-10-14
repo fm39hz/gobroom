@@ -464,9 +464,10 @@ func mergeHTTPErrorDetails(outer, inner httpErrorDetails) httpErrorDetails {
 	if len(inner.RetryDelayCamel) == 0 || string(inner.RetryDelayCamel) == "null" {
 		inner.RetryDelayCamel = outer.RetryDelayCamel
 	}
-	if len(inner.Details) == 0 {
-		inner.Details = outer.Details
-	}
+	// `details` is a repeated evidence field (for example Google's
+	// RetryInfo entries), not a scalar override. Keep both levels so a nested
+	// provider error cannot erase a usable retry hint from its outer envelope.
+	inner.Details = append(inner.Details, outer.Details...)
 	return inner
 }
 

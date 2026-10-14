@@ -88,6 +88,15 @@ func TestHTTPJSONErrorClassifierMergesRootAndNestedErrorEvidence(t *testing.T) {
 	if arrayOutcome.Cause != kernel.CauseQuotaExhausted || !arrayOutcome.RetryAt.Equal(reset) {
 		t.Fatalf("unrecognized nested error shape discarded root evidence: %#v", arrayOutcome)
 	}
+
+	outerRetry := []byte(`{"type":"rate_limit_error","details":[{"retryDelay":"47s"}],"error":{"message":"temporarily unavailable","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMITED"}]}}`)
+	retryOutcome := (HTTPJSONErrorClassifier{}).ClassifyOutcome(http.StatusTooManyRequests, nil, outerRetry)
+	if retryOutcome.Cause != kernel.CauseRateLimited {
+		t.Fatalf("outer/nested evidence changed rate-limit cause: %#v", retryOutcome)
+	}
+	if remaining := time.Until(retryOutcome.RetryAt); remaining < 46*time.Second || remaining > 48*time.Second {
+		t.Fatalf("outer RetryInfo was discarded by nested details: %s", remaining)
+	}
 }
 
 func TestDecodeModelCatalogSnapshotTracksWhetherAbsenceIsAuthoritative(t *testing.T) {
