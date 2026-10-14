@@ -73,6 +73,23 @@ func TestHTTPJSONErrorClassifierExtractsQuotaResetFromStructuredBody(t *testing.
 	}
 }
 
+func TestHTTPJSONErrorClassifierMergesRootAndNestedErrorEvidence(t *testing.T) {
+	reset := time.Now().Add(3 * time.Minute).UTC().Truncate(time.Second)
+	body := []byte(`{"type":"insufficient_quota","reset_at":"` + reset.Format(time.RFC3339) + `","error":{"message":"balance unavailable"}}`)
+	outcome := (HTTPJSONErrorClassifier{}).ClassifyOutcome(http.StatusConflict, nil, body)
+	if outcome.Class != kernel.ErrorCooldown || outcome.Cause != kernel.CauseQuotaExhausted || outcome.Retry != kernel.RetryAfter || !outcome.RetryAt.Equal(reset) {
+		t.Fatalf("outer quota/reset fields were dropped by nested error object: %#v", outcome)
+	}
+	if len(outcome.Limits) != 1 || outcome.Limits[0].Remaining == nil || *outcome.Limits[0].Remaining != 0 || outcome.Limits[0].ResetAt == nil || !outcome.Limits[0].ResetAt.Equal(reset) {
+		t.Fatalf("merged quota window=%#v", outcome.Limits)
+	}
+	arrayEnvelope := []byte(`{"type":"insufficient_quota","reset_at":"` + reset.Format(time.RFC3339) + `","error":[{"message":"balance unavailable"}]}`)
+	arrayOutcome := (HTTPJSONErrorClassifier{}).ClassifyOutcome(http.StatusPaymentRequired, nil, arrayEnvelope)
+	if arrayOutcome.Cause != kernel.CauseQuotaExhausted || !arrayOutcome.RetryAt.Equal(reset) {
+		t.Fatalf("unrecognized nested error shape discarded root evidence: %#v", arrayOutcome)
+	}
+}
+
 func TestDecodeModelCatalogSnapshotTracksWhetherAbsenceIsAuthoritative(t *testing.T) {
 	complete, err := DecodeModelCatalogSnapshot([]byte(`{"data":[{"id":"a"},{"id":"b"}]}`))
 	if err != nil || !complete.Complete || len(complete.Models) != 2 {

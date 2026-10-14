@@ -194,7 +194,10 @@ reintroduce an older value.
 
 The generic HTTP/JSON classifier recognizes `Retry-After` (delta or
 HTTP-date), common rate-limit headers, and common JSON error-envelope fields
-for quota codes, reset timestamps and retry delays. Typed manifest options can
+for quota codes, reset timestamps and retry delays. Root metadata is merged
+with a nested `error` object field-by-field (nested values win; absent nested
+values retain outer evidence), and an unrecognized nested shape cannot discard
+valid outer reset/code signals. Typed manifest options can
 override JSON pointers, add quota code/type/message signals and name a limit
 window, or declare provider-specific quota HTTP status codes, without changing
 the kernel or duplicating the classifier. Explicit quota evidence on configured

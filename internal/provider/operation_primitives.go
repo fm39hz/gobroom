@@ -345,17 +345,19 @@ func decodeHTTPErrorEvidence(body []byte, options *HTTPJSONErrorClassifierOption
 	if json.Unmarshal(body, &envelope) != nil {
 		return httpErrorEvidence{}
 	}
-	details := httpErrorDetails{Type: envelope.Type, Code: envelope.Code, Status: envelope.Status, Message: envelope.Message}
+	var details httpErrorDetails
+	if json.Unmarshal(body, &details) != nil {
+		return httpErrorEvidence{}
+	}
 	if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 		var object httpErrorDetails
 		if err := json.Unmarshal(envelope.Error, &object); err == nil {
-			details = object
+			details = mergeHTTPErrorDetails(details, object)
 		} else {
 			var message string
-			if json.Unmarshal(envelope.Error, &message) != nil {
-				return httpErrorEvidence{}
+			if json.Unmarshal(envelope.Error, &message) == nil && details.Message == "" {
+				details.Message = message
 			}
-			details.Message = message
 		}
 	}
 	code := strings.ToLower(rawJSONText(details.Code))
@@ -423,6 +425,49 @@ func decodeHTTPErrorEvidence(body []byte, options *HTTPJSONErrorClassifierOption
 		}
 	}
 	return evidence
+}
+
+func mergeHTTPErrorDetails(outer, inner httpErrorDetails) httpErrorDetails {
+	if inner.Type == "" {
+		inner.Type = outer.Type
+	}
+	if len(inner.Code) == 0 || string(inner.Code) == "null" {
+		inner.Code = outer.Code
+	}
+	if inner.Status == "" {
+		inner.Status = outer.Status
+	}
+	if inner.Message == "" {
+		inner.Message = outer.Message
+	}
+	if len(inner.ResetAt) == 0 || string(inner.ResetAt) == "null" {
+		inner.ResetAt = outer.ResetAt
+	}
+	if len(inner.ResetAtCamel) == 0 || string(inner.ResetAtCamel) == "null" {
+		inner.ResetAtCamel = outer.ResetAtCamel
+	}
+	if len(inner.ResetsAt) == 0 || string(inner.ResetsAt) == "null" {
+		inner.ResetsAt = outer.ResetsAt
+	}
+	if len(inner.ResetsAtCamel) == 0 || string(inner.ResetsAtCamel) == "null" {
+		inner.ResetsAtCamel = outer.ResetsAtCamel
+	}
+	if len(inner.RetryAfter) == 0 || string(inner.RetryAfter) == "null" {
+		inner.RetryAfter = outer.RetryAfter
+	}
+	if len(inner.RetryAfterCamel) == 0 || string(inner.RetryAfterCamel) == "null" {
+		inner.RetryAfterCamel = outer.RetryAfterCamel
+	}
+	if len(inner.RetryDelay) == 0 || string(inner.RetryDelay) == "null" {
+		inner.RetryDelay = outer.RetryDelay
+	}
+	if len(inner.RetryDelayCamel) == 0 || string(inner.RetryDelayCamel) == "null" {
+		inner.RetryDelayCamel = outer.RetryDelayCamel
+	}
+	if len(inner.Details) == 0 {
+		inner.Details = outer.Details
+	}
+	return inner
 }
 
 func matchHTTPJSONScopeSignal(options *HTTPJSONErrorClassifierOptions, evidence httpErrorEvidence, cause kernel.OutcomeCause) (kernel.OutcomeScope, bool) {
