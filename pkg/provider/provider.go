@@ -44,6 +44,7 @@ type ModelCatalogEvidence = core.ModelCatalogEvidence
 type StaticModelSourceOptions = core.StaticModelSourceOptions
 type StaticModelCatalogSource = core.StaticModelCatalogSource
 type QuotaRequest = core.QuotaRequest
+type QuotaHTTPError = core.QuotaHTTPError
 type QuotaSnapshot = core.QuotaSnapshot
 type QuotaRoutingEffect = core.QuotaRoutingEffect
 type HTTPJSONQuotaOptions = core.HTTPJSONQuotaOptions
@@ -56,6 +57,8 @@ type QuotaScope = core.QuotaScope
 type ScopedQuotaSource = core.ScopedQuotaSource
 type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
+
+func QuotaFailureCode(err error) string { return core.QuotaFailureCode(err) }
 
 type Ref = extensions.Ref
 type ExtensionFactory = extensions.Factory

@@ -29,6 +29,13 @@ func (testQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) (
 	return []quota.Snapshot{{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: "test", Source: "test"}}, nil
 }
 
+type failingQuotaTestSource struct{ err error }
+
+func (failingQuotaTestSource) ID() string { return "failing-quota" }
+func (s failingQuotaTestSource) Fetch(context.Context, provider.QuotaRequest) ([]quota.Snapshot, error) {
+	return nil, s.err
+}
+
 func TestQuotaPollerResolvesRouteSourceAndRecordsSnapshot(t *testing.T) {
 	got := 0
 	poller := QuotaPoller{
@@ -88,5 +95,34 @@ func TestQuotaPollerDeduplicatesConnectionScopedSourcesAcrossModels(t *testing.T
 	poller.poll(context.Background())
 	if source.calls != 1 || len(snapshots) != 1 || snapshots[0].ConnectionID != "connection" || snapshots[0].ModelRef != "" {
 		t.Fatalf("connection-scoped poll calls=%d snapshots=%#v", source.calls, snapshots)
+	}
+}
+
+func TestQuotaPollerReportsSanitizedProviderFailureWithoutRouteFeedback(t *testing.T) {
+	quotaRef := extensions.Ref{Kind: "quota_source", ID: "failing-quota", ContractVersion: 1}
+	endpointRef := extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}
+	transportRef := extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}
+	var stage, code string
+	marked := false
+	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", Enabled: true, QuotaSourceRef: quotaRef, QuotaEndpointRef: endpointRef, QuotaTransportRef: transportRef}
+	poller := QuotaPoller{
+		Sources:    map[extensions.Ref]provider.QuotaSource{quotaRef: failingQuotaTestSource{err: &provider.QuotaHTTPError{Status: 403}}},
+		Endpoints:  map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
+		Transports: map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
+		Snapshot:   func() kernel.Snapshot { return kernel.Snapshot{Routes: map[string]kernel.Route{route.ID: route}} },
+		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
+			return kernel.Credential{Secret: "key"}, nil
+		},
+		Record: func(quota.Snapshot) { marked = true },
+		OnError: func(gotRoute kernel.Route, gotStage, gotCode string) {
+			if gotRoute.ID != route.ID {
+				t.Errorf("failure was attributed to route %q", gotRoute.ID)
+			}
+			stage, code = gotStage, gotCode
+		},
+	}
+	poller.poll(context.Background())
+	if stage != "fetch" || code != "permission" || marked {
+		t.Fatalf("quota failure stage=%q code=%q routeFeedback=%t", stage, code, marked)
 	}
 }

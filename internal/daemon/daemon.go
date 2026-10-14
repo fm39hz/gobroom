@@ -347,6 +347,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 				d.appendLog("warn", "opportunistic quota snapshot was not queued (queue full or configuration reset in progress)")
 			}
 		},
+		OnError: func(route kernel.Route, stage, code string) {
+			d.appendLog("warn", fmt.Sprintf("quota source failure: provider=%s connection=%s source=%s stage=%s code=%s", route.NodeID, route.CredentialID, route.QuotaSourceRef.ID, stage, code))
+		},
 	}
 	d.policy.SetQuotaEnricher(opportunisticQuota.Trigger)
 	quotaPersistenceDone := make(chan struct{})
@@ -381,6 +384,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 				if !quotaPersistence.Enqueue(resolved) {
 					d.appendLog("warn", "quota poll snapshot was not queued (queue full or configuration reset in progress)")
 				}
+			},
+			OnError: func(route kernel.Route, stage, code string) {
+				d.appendLog("warn", fmt.Sprintf("quota source failure: provider=%s connection=%s source=%s stage=%s code=%s", route.NodeID, route.CredentialID, route.QuotaSourceRef.ID, stage, code))
 			},
 			Enabled: d.config.QuotaPolling,
 		}).Run(ctx)

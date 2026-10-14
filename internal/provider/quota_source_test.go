@@ -97,6 +97,27 @@ func TestHTTPJSONQuotaSourceUsesBoundEndpointTransportAndWindow(t *testing.T) {
 	}
 }
 
+func TestQuotaHTTPFailuresExposeSafeAuthPermissionAndRateLimitCodes(t *testing.T) {
+	route := kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
+	for _, test := range []struct {
+		status int
+		code   string
+	}{
+		{status: http.StatusUnauthorized, code: "auth"},
+		{status: http.StatusForbidden, code: "permission"},
+		{status: http.StatusTooManyRequests, code: "rate_limited"},
+	} {
+		transport := &quotaTransportFixture{body: `{"error":"private-account-detail-secret"}`, status: test.status}
+		_, err := (HTTPJSONQuotaSource{}).Fetch(context.Background(), QuotaRequest{
+			Credential: kernel.Credential{Secret: "key"}, Route: route,
+			Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
+		})
+		if err == nil || QuotaFailureCode(err) != test.code || strings.Contains(err.Error(), "private-account-detail-secret") {
+			t.Fatalf("HTTP %d quota failure code=%q err=%v", test.status, QuotaFailureCode(err), err)
+		}
+	}
+}
+
 func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
 	now := time.Now()
 	headers := make(http.Header)
@@ -324,9 +345,11 @@ func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing
 		keyURL:     {body: keyBody},
 		creditsURL: {status: http.StatusServiceUnavailable, body: `{"error":"temporarily unavailable"}`},
 	}}
+	var reportFailures []string
 	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
 		Credential: kernel.Credential{Secret: "openrouter-key"}, Route: route,
 		Endpoint: binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
+		ReportFailure: func(err error) { reportFailures = append(reportFailures, QuotaFailureCode(err)) },
 	})
 	if err != nil {
 		t.Fatalf("best-effort quota source discarded a successful report: %v", err)
@@ -336,6 +359,9 @@ func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing
 	}
 	if len(snapshots) != 2 || snapshots[0].WindowName != "key-cap" || snapshots[1].WindowName != "daily-usage" {
 		t.Fatalf("partial quota snapshots=%#v", snapshots)
+	}
+	if len(reportFailures) != 1 || reportFailures[0] != "upstream_error" {
+		t.Fatalf("partial report failure was not surfaced safely: %#v", reportFailures)
 	}
 	if snapshots[0].Remaining == nil || *snapshots[0].Remaining != 8 || snapshots[0].Limit == nil || *snapshots[0].Limit != 25 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.Equal(reset) {
 		t.Fatalf("OpenRouter key quota normalization=%#v", snapshots[0])

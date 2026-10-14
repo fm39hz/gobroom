@@ -171,6 +171,12 @@ selection, cross-report joins, or different auth per endpoint can register a
 dedicated `QuotaSource` module; the daemon's poller, generation fencing and
 persistence remain shared.
 
+Quota-source failures are separate from inference health. The HTTP/JSON source
+returns a sanitized status error (401 auth, 403 permission, 429 rate-limit,
+5xx upstream); polling and partial best-effort report failures emit only a
+typed code in daemon logs, never the response body. They do not invalidate a
+connection used for inference.
+
 Each JSON or response-header window also accepts
 `routingEffect: "enforce" | "observe"` (default `enforce`). Observations are
 persisted and visible but cannot exclude a route;

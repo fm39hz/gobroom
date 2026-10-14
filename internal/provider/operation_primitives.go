@@ -133,6 +133,40 @@ type QuotaRequest struct {
 	Transport       kernel.Transport
 	EndpointOptions kernel.EndpointOptions
 	WindowName      string
+	// ReportFailure surfaces a failed leg when the source returns partial data.
+	// Callers should classify the error and must not retain or log its raw text.
+	ReportFailure func(error)
+}
+
+type QuotaHTTPError struct{ Status int }
+
+func (e *QuotaHTTPError) Error() string {
+	return fmt.Sprintf("quota endpoint returned HTTP %d", e.Status)
+}
+
+func QuotaFailureCode(err error) string {
+	var httpError *QuotaHTTPError
+	if errors.As(err, &httpError) {
+		switch {
+		case httpError.Status == http.StatusUnauthorized:
+			return "auth"
+		case httpError.Status == http.StatusForbidden:
+			return "permission"
+		case httpError.Status == http.StatusTooManyRequests:
+			return "rate_limited"
+		case httpError.Status >= http.StatusInternalServerError:
+			return "upstream_error"
+		default:
+			return "http_error"
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "report_error"
 }
 
 // QuotaSnapshot is the normalized public result type for provider quota sources.
@@ -1182,6 +1216,11 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 	if len(failures) > 0 && completedReports == 0 {
 		return nil, errors.Join(failures...)
 	}
+	if input.ReportFailure != nil {
+		for _, failure := range failures {
+			input.ReportFailure(failure)
+		}
+	}
 	seenNames := make(map[string]struct{}, len(snapshots))
 	for _, snapshot := range snapshots {
 		key := strings.ToLower(snapshot.WindowName)
@@ -1225,8 +1264,8 @@ func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRe
 	}
 	defer response.Body.Close()
 	if response.Status >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024))
-		return nil, nil, fmt.Errorf("quota endpoint returned %s: %s", http.StatusText(response.Status), strings.TrimSpace(string(body)))
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 32*1024))
+		return nil, nil, &QuotaHTTPError{Status: response.Status}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxQuotaReportBytes+1))
 	if err != nil {

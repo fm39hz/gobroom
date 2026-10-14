@@ -74,7 +74,7 @@ completeness and drop-in parity remain separate claims.
 | OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | Definition-bound refresh, per-connection locking and persistence exist. Interactive authorization-code/PKCE onboarding and live provider validation remain. |
 | Per-connection proxy settings | Planned | Keep in transport/connection configuration, not kernel routing branches. |
 | Usage history and request detail | Implemented (compact core) | Bounded asynchronous usage events are persisted and exposed through control/CLI/TUI with request class/session/TTFT/throughput. Rich request-detail parity and cost accounting are not claimed. |
-| Provider quota APIs and reset-aware policy | Partial (generic runtime ready) | Generic quota operations, common structured error evidence, typed manifest JSON/header mappings, explicit enforce/observe behavior and reset-aware policy exist. Vercel credits are an observational report; broader provider-report fixtures remain. Polling is opt-in/opportunistic. |
+| Provider quota APIs and reset-aware policy | Partial (generic runtime ready) | Generic quota operations, common structured error evidence, typed manifest JSON/header mappings, explicit enforce/observe behavior and reset-aware policy exist. Vercel credits are observational; HTTP 401/403/429 failures and partial reports are surfaced as sanitized log codes without mutating inference health. Broader provider-report fixtures remain. Polling is opt-in/opportunistic. |
 | Quota/usage only as dashboard data | Not the target | Runtime policy should consume the same state; current coverage is partial. |
 
 ## Secondary product features

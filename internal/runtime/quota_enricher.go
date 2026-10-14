@@ -22,12 +22,19 @@ type OpportunisticQuota struct {
 	Transports      map[extensions.Ref]kernel.Transport
 	Credential      func(context.Context, kernel.Route) (kernel.Credential, error)
 	Record          func(quota.Snapshot)
+	OnError         func(kernel.Route, string, string)
 	Cooldown        time.Duration
 	Timeout         time.Duration
 	MaxCooldownKeys int
 	mu              sync.Mutex
 	last            map[string]time.Time
 	group           singleflight.Group
+}
+
+func (q *OpportunisticQuota) reportFailure(route kernel.Route, stage, code string) {
+	if q.OnError != nil {
+		q.OnError(route, stage, code)
+	}
 }
 
 func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
@@ -92,10 +99,16 @@ func (q *OpportunisticQuota) Trigger(ctx context.Context, route kernel.Route) {
 		defer cancel()
 		credential, err := q.Credential(background, route)
 		if err != nil {
+			q.reportFailure(route, "credential", "credential_error")
 			return nil, err
 		}
-		snapshots, err := source.Fetch(background, provider.QuotaRequest{Credential: credential, Route: route, Endpoint: endpoint, Transport: transport, EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName})
+		snapshots, err := source.Fetch(background, provider.QuotaRequest{
+			Credential: credential, Route: route, Endpoint: endpoint, Transport: transport,
+			EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName,
+			ReportFailure: func(reportErr error) { q.reportFailure(route, "report", provider.QuotaFailureCode(reportErr)) },
+		})
 		if err != nil {
+			q.reportFailure(route, "fetch", provider.QuotaFailureCode(err))
 			return nil, err
 		}
 		for _, snapshot := range snapshots {

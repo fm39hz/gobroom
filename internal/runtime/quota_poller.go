@@ -17,6 +17,7 @@ type QuotaPoller struct {
 	Snapshot   func() kernel.Snapshot
 	Credential func(context.Context, kernel.Route) (kernel.Credential, error)
 	Record     func(quota.Snapshot)
+	OnError    func(kernel.Route, string, string)
 	Interval   time.Duration
 	// Enabled is opt-in. Runtime quota evidence normally comes from real
 	// attempts; polling is reserved for explicitly configured providers.
@@ -29,6 +30,12 @@ func quotaRequestKey(route kernel.Route, source provider.QuotaSource) string {
 		key += "\x00" + route.ExternalModel
 	}
 	return key
+}
+
+func (p QuotaPoller) reportFailure(route kernel.Route, stage, code string) {
+	if p.OnError != nil {
+		p.OnError(route, stage, code)
+	}
 }
 
 func (p QuotaPoller) Run(ctx context.Context) {
@@ -53,7 +60,7 @@ func (p QuotaPoller) Run(ctx context.Context) {
 }
 
 func (p QuotaPoller) poll(ctx context.Context) {
-	if p.Snapshot == nil || p.Credential == nil || p.Record == nil {
+	if ctx.Err() != nil || p.Snapshot == nil || p.Credential == nil || p.Record == nil {
 		return
 	}
 	seen := map[string]bool{}
@@ -63,6 +70,7 @@ func (p QuotaPoller) poll(ctx context.Context) {
 		}
 		source := p.Sources[route.QuotaSourceRef]
 		if source == nil {
+			p.reportFailure(route, "source", "unavailable")
 			continue
 		}
 		key := quotaRequestKey(route, source)
@@ -72,16 +80,27 @@ func (p QuotaPoller) poll(ctx context.Context) {
 		seen[key] = true
 		credential, err := p.Credential(ctx, route)
 		if err != nil {
+			if ctx.Err() == nil {
+				p.reportFailure(route, "credential", "credential_error")
+			}
 			continue
 		}
 		endpoint := p.Endpoints[route.QuotaEndpointRef]
 		transport := p.Transports[route.QuotaTransportRef]
 		if endpoint == nil || transport == nil {
+			p.reportFailure(route, "binding", "unavailable")
 			continue
 		}
 		requestedAt := time.Now()
-		snapshots, err := source.Fetch(ctx, provider.QuotaRequest{Credential: credential, Route: route, Endpoint: endpoint, Transport: transport, EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName})
+		snapshots, err := source.Fetch(ctx, provider.QuotaRequest{
+			Credential: credential, Route: route, Endpoint: endpoint, Transport: transport,
+			EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName,
+			ReportFailure: func(reportErr error) { p.reportFailure(route, "report", provider.QuotaFailureCode(reportErr)) },
+		})
 		if err != nil {
+			if ctx.Err() == nil {
+				p.reportFailure(route, "fetch", provider.QuotaFailureCode(err))
+			}
 			continue
 		}
 		for _, snapshot := range snapshots {
