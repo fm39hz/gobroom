@@ -115,6 +115,21 @@ func TestExternalModuleImplementsQuotaSourceThroughPublicTypes(t *testing.T) {
 	}
 }
 
+func TestExternalModuleCanDeriveExactProviderSessionScope(t *testing.T) {
+	route := provider.Route{
+		CredentialID: "connection-a", ExternalModel: "physical-model",
+		DefinitionRef:       provider.Ref{Kind: "provider-definition", ID: "example-provider", ContractVersion: 2},
+		SessionOperationRef: provider.Ref{Kind: "operation", ID: "chat.generate", ContractVersion: 3},
+	}
+	key, err := provider.SessionStoreKeyFor(route, "client-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key.ConnectionID != route.CredentialID || key.ProviderDefinitionRef != route.DefinitionRef.Key() || key.OperationRef != route.SessionOperationRef.Key() || key.PhysicalModelID != route.ExternalModel || key.ClientSessionID != "client-session" {
+		t.Fatalf("public session scope=%#v", key)
+	}
+}
+
 func TestExternalModuleInterpretsBoundedArtifactAndCompilesRequirement(t *testing.T) {
 	runtime, err := provider.NewRuntimeRegistryWithModules(AudioModule{})
 	if err != nil {

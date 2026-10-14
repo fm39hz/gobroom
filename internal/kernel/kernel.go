@@ -378,6 +378,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.UsageSourceRef = operationBinding.UsageSourceRef
 			candidate.UsageOptions = operationBinding.UsageOptions
 			candidate.SessionStoreRef = operationBinding.SessionStoreRef
+			candidate.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			sessionKey := requestSessionKey(req)
 			var sessionState SessionState
 			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
@@ -401,7 +402,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				candidateRequest = normalize.CloneRequest(candidateRequest)
 				attestToolCallSignatures(&candidateRequest, sessionState.Signatures, candidate.DefinitionRef)
 			}
-			operationRef := extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
+			operationRef := candidate.SessionOperationRef
 			artifactOutputs, _ := k.Operations.ArtifactOutputs(operationRef)
 			if len(artifactOutputs) > 0 && k.ArtifactStore == nil {
 				failureClass, memberErr = ErrorCapability, fmt.Errorf("response artifact body store is unavailable")

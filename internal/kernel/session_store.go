@@ -8,23 +8,27 @@ import (
 	"time"
 )
 
-type sessionStoreKey struct {
-	connectionID string
-	namespace    string
-	modelID      string
-	sessionID    string
+// SessionStoreKey is the complete isolation boundary for opaque provider state.
+// Custom session stores should use this scope rather than keying by client
+// session ID alone.
+type SessionStoreKey struct {
+	ConnectionID          string
+	ProviderDefinitionRef string
+	OperationRef          string
+	PhysicalModelID       string
+	ClientSessionID       string
 }
 
 // MemorySessionStore is the default ephemeral implementation. Daemons can
 // replace this primitive with a bounded durable cache before building routes.
 type MemorySessionStore struct {
 	mu      sync.Mutex
-	entries map[sessionStoreKey]SessionState
+	entries map[SessionStoreKey]SessionState
 	TTL     time.Duration
 }
 
 func NewMemorySessionStore() *MemorySessionStore {
-	return &MemorySessionStore{entries: map[sessionStoreKey]SessionState{}, TTL: 24 * time.Hour}
+	return &MemorySessionStore{entries: map[SessionStoreKey]SessionState{}, TTL: 24 * time.Hour}
 }
 
 func (*MemorySessionStore) ID() string { return "session" }
@@ -33,7 +37,7 @@ func (s *MemorySessionStore) Load(ctx context.Context, route Route, sessionID st
 	if err := ctx.Err(); err != nil {
 		return SessionState{}, false, err
 	}
-	key, err := makeSessionStoreKey(route, sessionID)
+	key, err := SessionStoreKeyFor(route, sessionID)
 	if err != nil {
 		return SessionState{}, false, err
 	}
@@ -51,7 +55,7 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	key, err := makeSessionStoreKey(route, sessionID)
+	key, err := SessionStoreKeyFor(route, sessionID)
 	if err != nil {
 		return err
 	}
@@ -83,11 +87,20 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 	return nil
 }
 
-func makeSessionStoreKey(route Route, sessionID string) (sessionStoreKey, error) {
-	if route.CredentialID == "" || route.DefinitionID == "" || route.ExternalModel == "" || sessionID == "" {
-		return sessionStoreKey{}, fmt.Errorf("connection, provider definition, physical source model and session IDs are required")
+func SessionStoreKeyFor(route Route, sessionID string) (SessionStoreKey, error) {
+	if route.CredentialID == "" || route.ExternalModel == "" || sessionID == "" {
+		return SessionStoreKey{}, fmt.Errorf("connection, physical source model and session IDs are required")
 	}
-	return sessionStoreKey{connectionID: route.CredentialID, namespace: route.DefinitionID, modelID: route.ExternalModel, sessionID: sessionID}, nil
+	if err := route.DefinitionRef.Validate(); err != nil {
+		return SessionStoreKey{}, fmt.Errorf("provider session requires an exact provider definition reference: %w", err)
+	}
+	if route.DefinitionRef.Kind != "provider-definition" {
+		return SessionStoreKey{}, fmt.Errorf("provider session requires a provider-definition reference")
+	}
+	if err := route.SessionOperationRef.Validate(); err != nil || route.SessionOperationRef.Kind != "operation" {
+		return SessionStoreKey{}, fmt.Errorf("provider session requires an exact operation reference")
+	}
+	return SessionStoreKey{ConnectionID: route.CredentialID, ProviderDefinitionRef: route.DefinitionRef.Key(), OperationRef: route.SessionOperationRef.Key(), PhysicalModelID: route.ExternalModel, ClientSessionID: sessionID}, nil
 }
 
 func cloneSessionState(state SessionState) SessionState {

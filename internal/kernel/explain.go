@@ -154,6 +154,7 @@ func (k *Kernel) ExplainCompatibility(ctx context.Context, model string, request
 				candidate.UsageSourceRef = binding.UsageSourceRef
 				candidate.UsageOptions = binding.UsageOptions
 				candidate.SessionStoreRef = binding.SessionStoreRef
+				candidate.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 				receiver := extensions.ArtifactOwner{
 					Domain: "provider", IssuerRef: &candidate.DefinitionRef,
 					ProviderDefinitionID: candidate.DefinitionID, ConnectionID: candidate.CredentialID,

@@ -212,7 +212,14 @@ only when the response decoder declares the signature event family.
 Opaque tool signatures echoed by clients are untrusted until the selected
 provider's session store contains the matching digest/issuer proof. The raw
 signature is never persisted; a different provider, connection, model or
-session cannot attest it.
+operation or client session cannot attest it. Provider and operation contract
+versions are part of that isolation boundary.
+
+Session-store implementations must derive their namespace with
+`provider.SessionStoreKeyFor` (or the kernel equivalent). The exact isolation
+key includes connection ID, provider-definition ref/version, operation
+ref/version, physical upstream model and client session ID. A store must not
+broaden that scope to a shared tool-call ID or client session alone.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

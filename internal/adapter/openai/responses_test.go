@@ -339,11 +339,13 @@ func TestKernelRestoresResponsesContinuityFromClientSession(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(responseBody)), Request: request}, nil
 	})}}
 	sessionStoreRef := extensions.Ref{Kind: "session_store", ID: "responses-session", ContractVersion: 1}
+	providerDefinitionRef := extensions.Ref{Kind: "provider-definition", ID: "openai", ContractVersion: 1}
+	chatOperationRef := extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, DefinitionID: "openai", CredentialID: "account", Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "},
+			ID: "route", Enabled: true, DefinitionID: "openai", DefinitionRef: providerDefinitionRef, SessionOperationRef: chatOperationRef, CredentialID: "account", Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "},
 			BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {
 				ContractVersion: 1, AdapterIDs: []string{"openai-responses"}, SessionStoreRef: sessionStoreRef,

@@ -59,6 +59,7 @@ type Route struct {
 	UsageSourceRef         extensions.Ref
 	UsageOptions           UsageSourceOptions
 	SessionStoreRef        extensions.Ref
+	SessionOperationRef    extensions.Ref `json:"-"` // exact operation selected for this request, not snapshot configuration
 	Profile                CapabilityProfile
 	Limits                 TokenLimits
 	Weight                 int
@@ -565,6 +566,9 @@ type SessionState struct {
 	ExpiresAt    time.Time        `json:"-"`
 }
 
+// SessionStore contains opaque continuation state. Implementations must key
+// entries with SessionStoreKeyFor so state cannot cross connection, exact
+// provider-definition, exact operation, physical-model or client-session scope.
 type SessionStore interface {
 	ID() string
 	Load(context.Context, Route, string) (SessionState, bool, error)

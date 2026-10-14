@@ -288,8 +288,11 @@ Quota operations run only under the configured polling policy or after real
 rate-limit/quota evidence; they do not trigger constant health polling.
 
 The top-level `session` reference selects an optional per-provider session
-store. Session keys are scoped by connection, provider definition, physical
-upstream model and client session ID; provider state is opaque bounded JSON.
+store. Session keys are scoped by connection, exact provider-definition ref,
+exact operation ref, physical upstream model and client session ID; provider
+state is opaque bounded JSON. External session-store implementations should
+derive their keys with the public `provider.SessionStoreKeyFor` helper so all
+five isolation dimensions are preserved.
 The daemon's default
 `session` implementation reads from an in-memory bounded cache and persists
 updates asynchronously to SQLite, so no database access occurs on the request

@@ -106,6 +106,7 @@ type Protocol = kernel.Protocol
 type CapabilityProfile = kernel.CapabilityProfile
 type TokenLimits = kernel.TokenLimits
 type SessionStore = kernel.SessionStore
+type SessionStoreKey = kernel.SessionStoreKey
 
 // ApplyCredentialPresentation applies the selected auth mode's safe static
 // headers, dynamic credential headers and token presentation to an upstream
@@ -113,6 +114,12 @@ type SessionStore = kernel.SessionStore
 // of hardcoding API-key/OAuth branches.
 func ApplyCredentialPresentation(headers http.Header, credential Credential, presentation CredentialPresentation) error {
 	return kernel.ApplyCredentialPresentation(headers, credential, presentation)
+}
+
+// SessionStoreKeyFor returns the exact connection/provider/operation/model/
+// client-session scope required to isolate opaque provider continuation state.
+func SessionStoreKeyFor(route Route, sessionID string) (SessionStoreKey, error) {
+	return kernel.SessionStoreKeyFor(route, sessionID)
 }
 
 type Format = normalize.Format

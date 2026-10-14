@@ -26,6 +26,7 @@ type continuitySessionAdapter struct {
 	plannedPreviousResponse string
 	plannedContinuityFacet  bool
 	previousResponse        string
+	sessionOperationRef     extensions.Ref
 }
 
 func (*continuitySessionAdapter) ID() string { return "continuity-session" }
@@ -36,8 +37,9 @@ func (a *continuitySessionAdapter) PlanCompatibility(input CompatibilityContext)
 	}
 	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 }
-func (a *continuitySessionAdapter) Prepare(_ context.Context, request NormalizedRequest, _ Route, _ Credential) (UpstreamRequest, error) {
+func (a *continuitySessionAdapter) Prepare(_ context.Context, request NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
 	a.previousResponse = request.Continuity.PreviousResponse
+	a.sessionOperationRef = route.SessionOperationRef
 	return UpstreamRequest{Method: http.MethodPost, URL: "test://continuity"}, nil
 }
 func (*continuitySessionAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResponse, error) {
@@ -56,7 +58,9 @@ func (*continuitySessionAdapter) RenderResponse(_ context.Context, _ UpstreamRes
 
 func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	sessionStoreRef := extensions.Ref{Kind: "session_store", ID: "session", ContractVersion: 1}
-	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreRef: sessionStoreRef}}, Protocol: ProtocolOpenAIChat, Enabled: true}
+	providerRef := extensions.Ref{Kind: "provider-definition", ID: "responses-provider", ContractVersion: 1}
+	chatOperationRef := extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}
+	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", DefinitionRef: providerRef, SessionOperationRef: chatOperationRef, ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreRef: sessionStoreRef}}, Protocol: ProtocolOpenAIChat, Enabled: true}
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
 		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
@@ -83,6 +87,9 @@ func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	}
 	if adapter.previousResponse != "response-previous" {
 		t.Fatalf("previous response was not loaded into normalized request: %q", adapter.previousResponse)
+	}
+	if adapter.sessionOperationRef != chatOperationRef {
+		t.Fatalf("adapter did not receive exact operation-scoped session ref: %#v", adapter.sessionOperationRef)
 	}
 	if adapter.plannedPreviousResponse != "response-previous" {
 		t.Fatalf("compatibility admission did not receive loaded continuation state: %q", adapter.plannedPreviousResponse)
@@ -134,7 +141,7 @@ func TestKernelFailsClosedWhenSessionStateCannotBeLoaded(t *testing.T) {
 }
 
 func TestMemorySessionStoreExpiresStateAndCopiesOpaqueData(t *testing.T) {
-	route := Route{DefinitionID: "provider", ExternalModel: "model", CredentialID: "account"}
+	route := Route{DefinitionID: "provider", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "provider", ContractVersion: 1}, SessionOperationRef: extensions.Ref{Kind: "operation", ID: "chat.generate", ContractVersion: 1}, ExternalModel: "model", CredentialID: "account"}
 	store := NewMemorySessionStore()
 	providerExpiry := time.Now().Add(12 * time.Hour)
 	data := json.RawMessage(`{"opaque":"value"}`)
@@ -164,5 +171,20 @@ func TestMemorySessionStoreExpiresStateAndCopiesOpaqueData(t *testing.T) {
 	otherModel.ExternalModel = "different-model"
 	if _, ok, err := store.Load(context.Background(), otherModel, "session"); err != nil || ok {
 		t.Fatalf("session state leaked across physical models: ok=%v err=%v", ok, err)
+	}
+	otherOperation := route
+	otherOperation.SessionOperationRef = extensions.Ref{Kind: "operation", ID: "responses.generate", ContractVersion: 1}
+	if _, ok, err := store.Load(context.Background(), otherOperation, "session"); err != nil || ok {
+		t.Fatalf("session state leaked across provider operations: ok=%v err=%v", ok, err)
+	}
+	otherOperationVersion := route
+	otherOperationVersion.SessionOperationRef.ContractVersion = 2
+	if _, ok, err := store.Load(context.Background(), otherOperationVersion, "session"); err != nil || ok {
+		t.Fatalf("session state leaked across operation contract versions: ok=%v err=%v", ok, err)
+	}
+	otherProviderVersion := route
+	otherProviderVersion.DefinitionRef.ContractVersion = 2
+	if _, ok, err := store.Load(context.Background(), otherProviderVersion, "session"); err != nil || ok {
+		t.Fatalf("session state leaked across provider-definition versions: ok=%v err=%v", ok, err)
 	}
 }

@@ -25,8 +25,9 @@ type key struct {
 }
 
 type sessionNamespace struct {
-	DefinitionID string `json:"definitionId"`
-	ModelID      string `json:"modelId"`
+	DefinitionRef string `json:"definitionRef"`
+	OperationRef  string `json:"operationRef"`
+	ModelID       string `json:"modelId"`
 }
 
 type entry struct {
@@ -62,6 +63,10 @@ func New(repository Repository) (*Cache, error) {
 	now := time.Now()
 	for _, row := range rows {
 		if row.ConnectionID == "" || row.Namespace == "" || row.SessionKey == "" {
+			continue
+		}
+		var namespace sessionNamespace
+		if err := json.Unmarshal([]byte(row.Namespace), &namespace); err != nil || namespace.DefinitionRef == "" || namespace.OperationRef == "" || namespace.ModelID == "" {
 			continue
 		}
 		if !row.State.ExpiresAt.IsZero() && !row.State.ExpiresAt.After(now) {
@@ -165,14 +170,18 @@ func (c *Cache) evictLocked(now time.Time) {
 }
 
 func makeKey(route kernel.Route, sessionID string) (key, error) {
-	if route.CredentialID == "" || route.DefinitionID == "" || route.ExternalModel == "" || sessionID == "" {
-		return key{}, fmt.Errorf("connection, provider definition, physical source model and session IDs are required")
+	if route.CredentialID == "" || route.ExternalModel == "" || sessionID == "" {
+		return key{}, fmt.Errorf("connection, physical source model and session IDs are required")
 	}
-	namespace, err := json.Marshal(sessionNamespace{DefinitionID: route.DefinitionID, ModelID: route.ExternalModel})
+	storeKey, err := kernel.SessionStoreKeyFor(route, sessionID)
+	if err != nil {
+		return key{}, err
+	}
+	namespace, err := json.Marshal(sessionNamespace{DefinitionRef: storeKey.ProviderDefinitionRef, OperationRef: storeKey.OperationRef, ModelID: storeKey.PhysicalModelID})
 	if err != nil {
 		return key{}, fmt.Errorf("encode provider session namespace: %w", err)
 	}
-	return key{connectionID: route.CredentialID, namespace: string(namespace), sessionID: sessionID}, nil
+	return key{connectionID: storeKey.ConnectionID, namespace: string(namespace), sessionID: storeKey.ClientSessionID}, nil
 }
 
 func clone(state kernel.SessionState) kernel.SessionState {
