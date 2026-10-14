@@ -89,8 +89,12 @@ func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 				Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
 				RequestCodec:    PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
 				ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
-				ModelSource:     PrimitiveRef{Kind: PrimitiveModelSource, ID: "openai-models", ContractVersion: 1},
 				ErrorClassifier: PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1},
+			},
+			OperationModels: {
+				Endpoint:    PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:   PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+				ModelSource: PrimitiveRef{Kind: PrimitiveModelSource, ID: "openai-models", ContractVersion: 1},
 			},
 		},
 	})
@@ -535,8 +539,12 @@ func TestBuiltinManifestsBuildExecutableBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.LoadDefinitionDir(filepath.Join("..", "..", "manifests", "builtin")); err != nil {
+	manifest, err := os.ReadFile(filepath.Join("..", "..", "manifests", "builtin", "generic.json"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if string(manifest) != embeddedBuiltinManifest {
+		t.Fatal("embedded built-in provider manifest differs from manifests/builtin/generic.json")
 	}
 	bindings, err := registry.BuildBindings()
 	if err != nil {
@@ -552,6 +560,9 @@ func TestBuiltinManifestsBuildExecutableBindings(t *testing.T) {
 				t.Fatalf("binding missing for %s/%s", definitionID, operation)
 			}
 		}
+	}
+	if _, ok := registry.Primitives.Definition("opencode-go"); !ok {
+		t.Fatal("embedded OpenCode Go provider definition was not loaded by default")
 	}
 }
 
@@ -1061,9 +1072,6 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.LoadDefinitionFile("../../manifests/builtin/generic.json"); err != nil {
-		t.Fatal(err)
-	}
 	bindings, err := registry.BuildBindings()
 	if err != nil {
 		t.Fatal(err)
@@ -1084,6 +1092,28 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	modelBinding := bindings[RuntimeBindingKey("openai", OperationModels)]
 	if modelBinding.Auth == nil || modelBinding.ModelSource == nil || modelBinding.Endpoint == nil || modelBinding.Transport == nil {
 		t.Fatalf("manifest-bound API-key /models operation was incomplete: %#v", modelBinding)
+	}
+	staticModels := bindings[RuntimeBindingKey("opencode-go", OperationModels)]
+	staticCatalog, ok := staticModels.ModelSource.(StaticModelCatalogSource)
+	if !ok || staticModels.Endpoint != nil || staticModels.Transport != nil {
+		t.Fatalf("static model operation unexpectedly requires network primitives: %#v", staticModels)
+	}
+	catalog, err := staticCatalog.ListSnapshot(context.Background(), ModelSourceInput{})
+	firstModel := ""
+	if len(catalog.Models) > 0 {
+		firstModel = catalog.Models[0].ID
+	}
+	if err != nil || !catalog.Complete || len(catalog.Models) != 24 || firstModel != "deepseek-flash" {
+		t.Fatalf("OpenCode Go static model catalog count=%d first=%q complete=%t err=%v", len(catalog.Models), firstModel, catalog.Complete, err)
+	}
+	catalog.Models[0].ID = "mutated-by-caller"
+	catalogAgain, err := staticCatalog.ListSnapshot(context.Background(), ModelSourceInput{})
+	if err != nil || catalogAgain.Models[0].ID != "deepseek-flash" {
+		t.Fatalf("static model source leaked mutable catalog state: %#v err=%v", catalogAgain.Models, err)
+	}
+	opencodeQuota := bindings[RuntimeBindingKey("opencode-go", OperationQuota)]
+	if quotaSource, ok := opencodeQuota.QuotaSource.(HTTPJSONQuotaSource); !ok || quotaSource.QuotaScope() != QuotaScopeConnection || opencodeQuota.EndpointOptions.Path != "/usage" {
+		t.Fatalf("OpenCode Go quota binding=%#v", opencodeQuota)
 	}
 	groqQuota := bindings[RuntimeBindingKey("groq", OperationQuota)]
 	if groqQuota.QuotaSource == nil || groqQuota.EndpointOptions.Path != "/models" {

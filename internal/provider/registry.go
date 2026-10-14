@@ -19,7 +19,7 @@ var Profiles = map[string]Profile{
 	"openrouter":  {ID: "openrouter", DisplayName: "OpenRouter", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "api_key"},
 	"openai_chat": {ID: "openai_chat", DisplayName: "OpenAI-compatible Chat", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "api_key"},
 	"responses":   {ID: "responses", DisplayName: "OpenAI-compatible Responses", Protocol: "openai_responses", ModelsPath: "/models", AuthMode: "api_key"},
-	"opencode-go": {ID: "opencode-go", DisplayName: "OpenCode Go", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "api_key", Aliases: []string{"ocg"}},
+	"opencode-go": {ID: "opencode-go", DisplayName: "OpenCode Go", Protocol: "openai_chat", BaseURL: "https://opencode.ai/zen/go/v1", AuthMode: "api_key", Aliases: []string{"ocg"}},
 	"opencode":    {ID: "opencode", DisplayName: "OpenCode Free", Protocol: "openai_chat", ModelsPath: "/models", AuthMode: "none", Aliases: []string{"oc"}},
 	"gemini":      {ID: "gemini", DisplayName: "Google Gemini", Protocol: "gemini", ModelsPath: "/v1beta/models", AuthMode: "api_key"},
 }

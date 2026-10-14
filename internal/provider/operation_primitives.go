@@ -19,10 +19,39 @@ import (
 )
 
 type ModelDescriptor struct {
-	ID          string
-	DisplayName string
-	Profile     kernel.CapabilityProfile
-	Metadata    map[string]any
+	ID          string                   `json:"id"`
+	DisplayName string                   `json:"displayName,omitempty"`
+	Profile     kernel.CapabilityProfile `json:"profile,omitempty"`
+	Metadata    map[string]any           `json:"metadata,omitempty"`
+}
+
+type StaticModelSourceOptions struct {
+	Models []ModelDescriptor `json:"models"`
+}
+
+func (o StaticModelSourceOptions) Validate() error {
+	if len(o.Models) == 0 || len(o.Models) > 2048 {
+		return fmt.Errorf("static model source requires between 1 and 2048 models")
+	}
+	seen := make(map[string]struct{}, len(o.Models))
+	for index, model := range o.Models {
+		if model.ID == "" || strings.TrimSpace(model.ID) != model.ID {
+			return fmt.Errorf("static model %d requires a non-empty trimmed ID", index)
+		}
+		if strings.TrimSpace(model.DisplayName) != model.DisplayName {
+			return fmt.Errorf("static model %q display name must be trimmed", model.ID)
+		}
+		if _, duplicate := seen[model.ID]; duplicate {
+			return fmt.Errorf("static model ID %q is duplicated", model.ID)
+		}
+		seen[model.ID] = struct{}{}
+	}
+	return nil
+}
+
+type StaticModelCatalogSource interface {
+	ModelCatalogSnapshotSource
+	StaticCatalog() bool
 }
 
 // ModelCatalogSnapshot states whether the returned list is authoritative for
@@ -795,11 +824,28 @@ func parseRetryAfter(value string, now time.Time) time.Time {
 	return time.Time{}
 }
 
-type StaticModelSource struct{}
+type StaticModelSource struct{ Models []ModelDescriptor }
 
-func (StaticModelSource) ID() string { return "static-models" }
-func (StaticModelSource) List(_ context.Context, _ ModelSourceInput) ([]ModelDescriptor, error) {
-	return nil, nil
+func (StaticModelSource) ID() string            { return "static-models" }
+func (s StaticModelSource) StaticCatalog() bool { return true }
+func (s StaticModelSource) List(_ context.Context, _ ModelSourceInput) ([]ModelDescriptor, error) {
+	return cloneModelDescriptors(s.Models)
+}
+func (s StaticModelSource) ListSnapshot(_ context.Context, _ ModelSourceInput) (ModelCatalogSnapshot, error) {
+	models, err := cloneModelDescriptors(s.Models)
+	return ModelCatalogSnapshot{Models: models, Complete: err == nil}, err
+}
+
+func cloneModelDescriptors(models []ModelDescriptor) ([]ModelDescriptor, error) {
+	encoded, err := json.Marshal(models)
+	if err != nil {
+		return nil, fmt.Errorf("clone static model catalog: %w", err)
+	}
+	var cloned []ModelDescriptor
+	if err := json.Unmarshal(encoded, &cloned); err != nil {
+		return nil, fmt.Errorf("decode cloned static model catalog: %w", err)
+	}
+	return cloned, nil
 }
 
 type OpenAIModelSource struct{}

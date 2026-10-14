@@ -467,6 +467,78 @@
     "contractVersion": 1
   },
   {
+    "id": "opencode-go",
+    "version": "builtin-generic-1",
+    "displayName": "OpenCode Go",
+    "aliases": ["opencode-go", "ocg"],
+    "auth": {
+      "kind": "auth",
+      "id": "static-secret",
+      "contractVersion": 1
+    },
+    "defaults": {
+      "baseUrl": "https://opencode.ai/zen/go/v1",
+      "format": "openai"
+    },
+    "operations": {
+      "chat": {
+        "protocol": "openai_chat",
+        "task": {"kind": "operation", "id": "chat.generate", "contractVersion": 1},
+        "providerFormat": "openai",
+        "endpoint": {"kind": "endpoint", "id": "http-json", "contractVersion": 1},
+        "endpointOptions": {"path": "/chat/completions"},
+        "transport": {"kind": "transport", "id": "http", "contractVersion": 1},
+        "requestCodec": {"kind": "request_codec", "id": "openai-chat-json", "contractVersion": 1},
+        "responseDecoder": {"kind": "response_decoder", "id": "openai-sse", "contractVersion": 1},
+        "usageSource": {"kind": "usage_source", "id": "http-header-usage", "contractVersion": 1},
+        "errorClassifier": {"kind": "error_classifier", "id": "http-json", "contractVersion": 1}
+      },
+      "models": {
+        "modelSource": {"kind": "model_source", "id": "static-models", "contractVersion": 1},
+        "modelSourceOptions": {
+          "models": [
+            {"id":"deepseek-flash","displayName":"DeepSeek V4.1 Flash"},
+            {"id":"glm-5.3-flash","displayName":"GLM 5.3 Flash (Vision)"},
+            {"id":"glm-5.3","displayName":"GLM 5.3"},
+            {"id":"glm-5.2","displayName":"GLM 5.2"},
+            {"id":"glm-5.1","displayName":"GLM 5.1"},
+            {"id":"kimi-k2.7-code","displayName":"Kimi K2.7 Code"},
+            {"id":"kimi-k2.6","displayName":"Kimi K2.6"},
+            {"id":"kimi-k3","displayName":"Kimi K3"},
+            {"id":"deepseek-v4-pro","displayName":"DeepSeek V4 Pro"},
+            {"id":"deepseek-v4-flash","displayName":"DeepSeek V4 Flash"},
+            {"id":"deepseek-v4-flash-vision-exp","displayName":"DeepSeek V4 Flash Vision (Exp)"},
+            {"id":"longcat-2.0","displayName":"LongCat 2.0"},
+            {"id":"mimo-v2.5","displayName":"MiMo V2.5"},
+            {"id":"mimo-v2.5-pro","displayName":"MiMo V2.5 Pro"},
+            {"id":"minimax-m3","displayName":"MiniMax M3"},
+            {"id":"minimax-m2.7","displayName":"MiniMax M2.7"},
+            {"id":"minimax-m2.5","displayName":"MiniMax M2.5"},
+            {"id":"qwen3.8-max","displayName":"Qwen 3.8 Max"},
+            {"id":"qwen3.8-flash","displayName":"Qwen 3.8 Flash"},
+            {"id":"qwen3.7-max","displayName":"Qwen 3.7 Max"},
+            {"id":"qwen3.7-plus","displayName":"Qwen 3.7 Plus"},
+            {"id":"qwen3.6-plus","displayName":"Qwen 3.6 Plus"},
+            {"id":"hy4-preview","displayName":"Hy4 Preview"},
+            {"id":"hy3","displayName":"Hy3"}
+          ]
+        }
+      },
+      "quota": {
+        "endpoint": {"kind": "endpoint", "id": "http-json", "contractVersion": 1},
+        "endpointOptions": {"path": "/usage"},
+        "transport": {"kind": "transport", "id": "http", "contractVersion": 1},
+        "quotaSource": {"kind": "quota_source", "id": "http-json-quota", "contractVersion": 1},
+        "quotaSourceOptions": {
+          "scope": "connection",
+          "windows": [{"itemsPath":"/usage","usedPercentPath":"/percent","resetAtPath":"/resetsAt"}]
+        }
+      }
+    },
+    "capabilities": {"chat": true, "streaming": true, "quota": true},
+    "contractVersion": 1
+  },
+  {
     "id": "mistral",
     "version": "builtin-generic-1",
     "displayName": "Mistral",

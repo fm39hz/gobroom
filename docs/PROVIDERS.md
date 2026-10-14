@@ -135,6 +135,13 @@ silently dropped. For example, `{"payloadFields":[{"property":"language","field"
 Providers may share any primitive. A provider definition composes them; it
 does not copy their implementation.
 
+Model discovery can be endpoint-backed or a manifest-owned static catalog.
+`static-models` accepts a schema-validated `modelSourceOptions.models` array and
+does not bind fake endpoint/transport primitives. Review and import remain
+connection-scoped user actions; the source does not claim to test the
+connection. This covers providers whose published model inventory is shipped
+with their registry rather than exposed by a `/models` endpoint.
+
 The generic `http-json` classifier understands common status classes,
 Retry-After delta/date, standard rate-limit headers and common JSON quota/reset
 fields. Its rich outcome contract is preserved through runtime binding, so

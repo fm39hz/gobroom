@@ -391,8 +391,21 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, nodeID)
 	}
 	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, provider.OperationModels)]
-	if !ok || binding.ModelSource == nil || binding.Endpoint == nil {
+	if !ok || binding.ModelSource == nil {
 		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("provider definition %q does not provide model discovery", node.DefinitionID)
+	}
+	if static, isStatic := binding.ModelSource.(provider.StaticModelCatalogSource); isStatic && static.StaticCatalog() {
+		if test {
+			return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("model source %q is a static catalog and cannot test connection health", binding.ModelSource.ID())
+		}
+		catalog, err := static.ListSnapshot(ctx, provider.ModelSourceInput{})
+		if err != nil {
+			return store.ProviderNode{}, "static catalog", provider.ModelCatalogSnapshot{}, err
+		}
+		return node, "static catalog", catalog, nil
+	}
+	if binding.Endpoint == nil || binding.Transport == nil {
+		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("model source %q requires endpoint and transport primitives", binding.ModelSource.ID())
 	}
 	endpoint, err := binding.Endpoint.Resolve(node.BaseURL, node.ModelsPath, binding.EndpointOptions)
 	if err != nil {
@@ -434,6 +447,9 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 }
 
 func endpointSummary(raw string) string {
+	if raw == "static catalog" {
+		return "static model catalog"
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return "configured model-list endpoint"
@@ -467,6 +483,10 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 	if err != nil {
 		return Result{}, err
 	}
+	evidenceSource := "models_endpoint"
+	if endpoint == "static catalog" {
+		evidenceSource = "static_model_catalog"
+	}
 	modelsToImport, err := selectModels(catalog.Models, selectedIDs)
 	if err != nil {
 		return Result{}, err
@@ -474,11 +494,11 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 	for _, model := range modelsToImport {
 		id := model.ID
 		routeID := "route_" + hash(nodeID+"\x00"+id)
-		raw := model.Metadata
-		if raw == nil {
-			raw = map[string]any{}
+		raw := make(map[string]any, len(model.Metadata)+1)
+		for key, value := range model.Metadata {
+			raw[key] = value
 		}
-		raw["source"] = "models_endpoint"
+		raw["source"] = evidenceSource
 		if err := s.Store.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: nodeID, Kind: "discovered", ExternalID: id, DisplayName: model.DisplayName, Profile: model.Profile, Raw: raw}); err != nil {
 			return Result{}, err
 		}
@@ -487,7 +507,7 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 	for _, model := range catalog.Models {
 		externalIDs = append(externalIDs, model.ID)
 	}
-	if err := s.Store.RecordConnectionModelSnapshot(connectionID, node.ID, externalIDs, catalog.Complete, "models_endpoint"); err != nil {
+	if err := s.Store.RecordConnectionModelSnapshot(connectionID, node.ID, externalIDs, catalog.Complete, evidenceSource); err != nil {
 		return Result{}, err
 	}
 	if err := s.Store.ClearInvalidModelHealth(connectionID, externalIDs); err != nil {

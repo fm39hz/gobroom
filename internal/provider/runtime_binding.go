@@ -216,9 +216,14 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	var err error
 	var modelSource ModelSource
 	if binding.ModelSource.ID != "" {
-		modelSource, err = bindPrimitiveAs[ModelSource](b, binding.ModelSource)
+		modelSource, err = bindPrimitiveAsOptions[ModelSource](b, binding.ModelSource, binding.ModelSourceOptions)
 		if err != nil {
 			return RuntimeBinding{}, fmt.Errorf("resolve model source %q: %w", binding.ModelSource.ID, err)
+		}
+		if operation == OperationModels && binding.Endpoint.ID == "" {
+			if _, static := modelSource.(StaticModelCatalogSource); !static {
+				return RuntimeBinding{}, fmt.Errorf("model source %q does not provide a static catalog and requires an endpoint", binding.ModelSource.ID)
+			}
 		}
 	}
 	var sessionStore kernel.SessionStore
@@ -296,13 +301,17 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	if err != nil {
 		return RuntimeBinding{}, fmt.Errorf("encode endpoint options: %w", err)
 	}
-	endpoint, err := bindPrimitiveAsOptions[kernel.Endpoint](b, binding.Endpoint, endpointOptionsJSON)
-	if err != nil {
-		return RuntimeBinding{}, fmt.Errorf("resolve endpoint %q: %w", binding.Endpoint.ID, err)
-	}
-	transport, err := bindPrimitiveAs[kernel.Transport](b, binding.Transport)
-	if err != nil {
-		return RuntimeBinding{}, fmt.Errorf("resolve transport %q: %w", binding.Transport.ID, err)
+	var endpoint kernel.Endpoint
+	var transport kernel.Transport
+	if binding.Endpoint.ID != "" {
+		endpoint, err = bindPrimitiveAsOptions[kernel.Endpoint](b, binding.Endpoint, endpointOptionsJSON)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve endpoint %q: %w", binding.Endpoint.ID, err)
+		}
+		transport, err = bindPrimitiveAs[kernel.Transport](b, binding.Transport)
+		if err != nil {
+			return RuntimeBinding{}, fmt.Errorf("resolve transport %q: %w", binding.Transport.ID, err)
+		}
 	}
 	taskRef := extensions.Ref{}
 	if binding.TaskRef != nil {

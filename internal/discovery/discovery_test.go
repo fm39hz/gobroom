@@ -306,9 +306,8 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "static-catalog", Version: "1", DisplayName: "Static catalog",
 		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationModels: {
-			Endpoint:    provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
-			Transport:   provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
-			ModelSource: provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "static-models", ContractVersion: 1},
+			ModelSource:        provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "static-models", ContractVersion: 1},
+			ModelSourceOptions: json.RawMessage(`{"models":[{"id":"model-a","displayName":"Model A"},{"id":"model-b"}]}`),
 		}},
 	}
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
@@ -326,8 +325,21 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (Service{Store: s, Bindings: bindings}).TestConnection(context.Background(), node.ID, connection.ID); err == nil || !strings.Contains(err.Error(), "does not provide an active endpoint test") {
+	service := Service{Store: s, Bindings: bindings}
+	if _, err := service.TestConnection(context.Background(), node.ID, connection.ID); err == nil || !strings.Contains(err.Error(), "static catalog") {
 		t.Fatalf("static catalog produced a false-positive endpoint test: %v", err)
+	}
+	preview, err := service.PreviewConnectionModels(context.Background(), node.ID, connection.ID)
+	if err != nil || preview.Endpoint != "static model catalog" || preview.ModelsFound != 2 || !preview.Complete || preview.Models[0].ID != "model-a" {
+		t.Fatalf("static model preview=%#v err=%v", preview, err)
+	}
+	result, err := service.ImportConnectionModels(context.Background(), node.ID, connection.ID, []string{"model-a"})
+	if err != nil || result.Models != 1 || result.Available != 2 {
+		t.Fatalf("selected static model import=%#v err=%v", result, err)
+	}
+	models, err := s.Models()
+	if err != nil || len(models) != 1 || models[0].ExternalID != "model-a" {
+		t.Fatalf("static catalog import evidence=%#v err=%v", models, err)
 	}
 }
 

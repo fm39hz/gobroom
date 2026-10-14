@@ -10,11 +10,33 @@ import (
 
 var (
 	endpointOptionsSchemaRef    = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.endpoint-options", ContractVersion: 1}
+	staticModelSourceSchemaRef  = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.static-model-source-options", ContractVersion: 1}
 	usageOptionsSchemaRef       = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.usage-options", ContractVersion: 1}
 	quotaSourceOptionsSchemaRef = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.http-json-quota-options", ContractVersion: 1}
 	errorOptionsSchemaRef       = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.http-json-error-options", ContractVersion: 1}
 	oauthOptionsSchemaRef       = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.auth.oauth2-options", ContractVersion: 1}
 )
+
+func staticModelSourceOptionsSchema() (json.RawMessage, error) {
+	return bindSchemaDocument(staticModelSourceSchemaRef, json.RawMessage(`{
+"type":"object",
+"required":["models"],
+"properties":{"models":{"type":"array","minItems":1,"maxItems":2048,"items":{
+  "type":"object","required":["id"],"properties":{
+    "id":{"type":"string","minLength":1,"maxLength":512},
+    "displayName":{"type":"string","maxLength":512},
+    "profile":{"type":"object","maxProperties":128,"additionalProperties":{"type":"object","properties":{
+      "state":{"enum":["unknown","unsupported","native","emulated","conditional"]},
+      "formats":{"type":"array","maxItems":32,"items":{"type":"string","minLength":1}},
+      "maxItems":{"type":"integer","minimum":0},
+      "constraints":{"type":"object"}
+    },"required":["state"],"additionalProperties":false}},
+    "metadata":{"type":"object","maxProperties":128,"additionalProperties":true}
+  },"additionalProperties":false
+}}},
+"additionalProperties":false
+}`))
+}
 
 const schemaDraft2020 = "https://json-schema.org/draft/2020-12/schema"
 

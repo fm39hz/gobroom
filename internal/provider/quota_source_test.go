@@ -326,9 +326,6 @@ func TestDeepSeekQuotaManifestAggregatesCurrencyBalanceAvailability(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := registry.LoadDefinitionFile("../../manifests/builtin/generic.json"); err != nil {
-		t.Fatal(err)
-	}
 	bindings, err := registry.BuildBindings()
 	if err != nil {
 		t.Fatal(err)
@@ -374,9 +371,6 @@ func TestDeepSeekQuotaManifestAggregatesCurrencyBalanceAvailability(t *testing.T
 func TestDeepSeekQuotaManifestAggregatesAlternativeCurrencyBalances(t *testing.T) {
 	registry, err := NewRuntimeRegistry()
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := registry.LoadDefinitionFile("../../manifests/builtin/generic.json"); err != nil {
 		t.Fatal(err)
 	}
 	bindings, err := registry.BuildBindings()

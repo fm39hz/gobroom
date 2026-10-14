@@ -315,6 +315,7 @@ type OperationBinding struct {
 	RequestCodecOptions    json.RawMessage           `json:"requestCodecOptions,omitempty"`
 	ResponseDecoder        PrimitiveRef              `json:"responseDecoder,omitempty"`
 	ModelSource            PrimitiveRef              `json:"modelSource,omitempty"`
+	ModelSourceOptions     json.RawMessage           `json:"modelSourceOptions,omitempty"`
 	UsageSource            PrimitiveRef              `json:"usageSource,omitempty"`
 	UsageOptions           kernel.UsageSourceOptions `json:"usageOptions,omitempty"`
 	QuotaSource            PrimitiveRef              `json:"quotaSource,omitempty"`
@@ -764,6 +765,10 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 	if err != nil {
 		return nil, err
 	}
+	staticModelsSchema, err := staticModelSourceOptionsSchema()
+	if err != nil {
+		return nil, err
+	}
 	for _, authID := range []string{"static-secret", "none"} {
 		if err := runtime.registerAuthImplementation(authID, 1); err != nil {
 			return nil, err
@@ -782,7 +787,21 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 	registrations = append(registrations, runtime.RegisterRequestCodec(requestCodec), runtime.RegisterResponseDecoder(responseDecoder))
 	registrations = append(registrations,
 		runtime.RegisterSessionStore(kernel.NewMemorySessionStore()),
-		runtime.RegisterModelSource(OpenAIModelSource{}), runtime.RegisterModelSource(AnthropicModelSource{}), runtime.RegisterModelSource(StaticModelSource{}),
+		runtime.RegisterModelSource(OpenAIModelSource{}), runtime.RegisterModelSource(AnthropicModelSource{}),
+		runtime.RegisterModelSourceFactory("static-models", 1, staticModelSourceSchemaRef, staticModelsSchema, func(raw json.RawMessage) (ModelSource, error) {
+			var options StaticModelSourceOptions
+			if err := json.Unmarshal(raw, &options); err != nil {
+				return nil, fmt.Errorf("decode static model source options: %w", err)
+			}
+			if err := options.Validate(); err != nil {
+				return nil, err
+			}
+			models, err := cloneModelDescriptors(options.Models)
+			if err != nil {
+				return nil, err
+			}
+			return StaticModelSource{Models: models}, nil
+		}),
 		runtime.RegisterUsageSource(HTTPHeaderUsageSource{}),
 		runtime.RegisterErrorClassifier(HTTPJSONErrorClassifier{}),
 		runtime.RegisterQuotaSource(NoopQuotaSource{}),
@@ -824,6 +843,9 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 		if err := module.Register(runtime); err != nil {
 			return nil, fmt.Errorf("register runtime module %q: %w", id, err)
 		}
+	}
+	if err := runtime.loadEmbeddedBuiltinDefinitions(); err != nil {
+		return nil, err
 	}
 	return runtime, nil
 }
@@ -1239,6 +1261,38 @@ func (r *RuntimeRegistry) RegisterModelSourceVersion(source ModelSource, contrac
 		return err
 	}
 	r.modelSources[ref] = source
+	return nil
+}
+
+func (r *RuntimeRegistry) RegisterModelSourceFactory(id string, contractVersion uint64, schemaRef extensions.Ref, schema json.RawMessage, factory func(json.RawMessage) (ModelSource, error)) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if id == "" || contractVersion == 0 || factory == nil {
+		return fmt.Errorf("model source factory requires an ID, positive contract version and factory")
+	}
+	if !r.Primitives.hasPrimitive(PrimitiveRef{Kind: PrimitiveModelSource, ID: id, ContractVersion: contractVersion}) {
+		if err := r.RegisterPrimitiveOptionsSchema(PrimitiveModelSource, id, contractVersion, schemaRef, schema); err != nil {
+			return err
+		}
+	}
+	ref := extensions.Ref{Kind: string(PrimitiveModelSource), ID: id, ContractVersion: contractVersion}
+	if _, exists := r.modelSources[ref]; exists {
+		return fmt.Errorf("model source %q is already registered", ref.Key())
+	}
+	if err := r.RegisterPrimitiveImplementation(PrimitiveModelSource, id, contractVersion, func(raw json.RawMessage) (any, error) {
+		source, err := factory(raw)
+		if err != nil {
+			return nil, err
+		}
+		if source == nil || source.ID() != id {
+			return nil, fmt.Errorf("model source factory for %q returned a mismatched implementation", id)
+		}
+		return source, nil
+	}); err != nil {
+		return err
+	}
+	r.modelSources[ref] = nil
 	return nil
 }
 
@@ -1660,6 +1714,7 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	operationBindings := make(map[Operation]OperationBinding, len(def.Operations))
 	for operation, binding := range def.Operations {
 		binding.RequestCodecOptions = append(json.RawMessage(nil), binding.RequestCodecOptions...)
+		binding.ModelSourceOptions = append(json.RawMessage(nil), binding.ModelSourceOptions...)
 		binding.QuotaSourceOptions = append(json.RawMessage(nil), binding.QuotaSourceOptions...)
 		operationBindings[operation] = binding
 	}
@@ -1677,7 +1732,14 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		return fmt.Errorf("provider %q references unknown session store %q", def.ID, def.Session.ID)
 	}
 	for operation, binding := range def.Operations {
-		if operation == "" || binding.Endpoint.ID == "" || binding.Transport.ID == "" {
+		if operation == "" {
+			return fmt.Errorf("provider %q has incomplete %q operation binding", def.ID, operation)
+		}
+		if operation == OperationModels {
+			if binding.ModelSource.ID == "" || (binding.Endpoint.ID == "") != (binding.Transport.ID == "") {
+				return fmt.Errorf("provider %q has incomplete %q model-source binding", def.ID, operation)
+			}
+		} else if binding.Endpoint.ID == "" || binding.Transport.ID == "" {
 			return fmt.Errorf("provider %q has incomplete %q operation binding", def.ID, operation)
 		}
 		if binding.IdempotencyHeader != "" && !validIdempotencyHeaderName(binding.IdempotencyHeader) {
@@ -1698,6 +1760,12 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		}
 		if binding.RequestCodec.ID == "" && len(binding.RequestCodecOptions) > 0 {
 			return fmt.Errorf("provider %q %q requestCodecOptions requires a requestCodec", def.ID, operation)
+		}
+		if binding.ModelSource.ID == "" && len(binding.ModelSourceOptions) > 0 {
+			return fmt.Errorf("provider %q %q modelSourceOptions requires a modelSource", def.ID, operation)
+		}
+		if operation != OperationModels && binding.ModelSource.ID != "" {
+			return fmt.Errorf("provider %q modelSource must be bound to the models operation", def.ID)
 		}
 		if binding.TaskRef == nil {
 			if requestResponseOperation {

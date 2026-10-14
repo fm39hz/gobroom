@@ -29,7 +29,7 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 		{PrimitiveAuth, []string{"static-secret", "none"}},
 		{PrimitiveRequestCodec, []string{"openai-chat-json", "openai-responses-json", "anthropic-messages-json", "gemini-json"}},
 		{PrimitiveResponseDecoder, []string{"openai-sse", "openai-responses-sse", "anthropic-sse", "gemini-json"}},
-		{PrimitiveModelSource, []string{"openai-models", "anthropic-models", "static-models"}},
+		{PrimitiveModelSource, []string{"openai-models", "anthropic-models"}},
 		{PrimitiveSessionStore, []string{"session"}},
 	}
 	for _, group := range primitives {
@@ -46,6 +46,7 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 		schema func() (json.RawMessage, error)
 	}{
 		{PrimitiveEndpoint, "http-json", endpointOptionsSchemaRef, endpointOptionsSchema},
+		{PrimitiveModelSource, "static-models", staticModelSourceSchemaRef, staticModelSourceOptionsSchema},
 		{PrimitiveUsageSource, "http-header-usage", usageOptionsSchemaRef, usageOptionsSchema},
 		{PrimitiveQuotaSource, "http-json-quota", quotaSourceOptionsSchemaRef, quotaSourceOptionsSchema},
 		{PrimitiveErrorClassifier, "http-json", errorOptionsSchemaRef, httpJSONErrorOptionsSchema},
