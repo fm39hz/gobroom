@@ -123,7 +123,6 @@ const (
 	OperationImage            = core.OperationImage
 	OperationAudio            = core.OperationAudio
 	OperationVideo            = core.OperationVideo
-	OperationUsage            = core.OperationUsage
 	OperationQuota            = core.OperationQuota
 	QuotaReportsFailAll       = core.QuotaReportsFailAll
 	QuotaReportsKeepAvailable = core.QuotaReportsKeepAvailable

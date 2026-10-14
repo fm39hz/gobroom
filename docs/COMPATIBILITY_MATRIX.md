@@ -49,7 +49,7 @@ completeness and drop-in parity remain separate claims.
 | Round-robin and sticky limits | Implemented (core policies) | Strategy state and concurrent scheduler behavior have tests; exact parity for all 9router precedence combinations remains unverified. |
 | Account selection, exclusion and preferred account (`open-sse/services/auth.js`, `accountFallback.js`) | Partial | Connection affinity, health/quota gating and preferred-connection paths exist; provider-specific exclusions and precedence need fixtures. |
 | Cooldown and `Retry-After` | Implemented (common evidence path; provider coverage partial) | Rich classifier outcomes now survive runtime registry wiring. Common Retry-After delta/date and rate headers affect health; provider-specific classifier precedence still needs fixture coverage. |
-| Quota affects candidate eligibility | Implemented (common + manifest-configurable evidence; provider coverage partial) | Structured quota/reset evidence produces zero-remaining windows; manifests bind JSON pointers, quota signals, scope and named windows without kernel changes. A daemon restart fixture proves quota and rate windows persist and gate the route; usage-report operations and broader provider fixtures remain. |
+| Quota affects candidate eligibility | Implemented (common + manifest-configurable evidence; provider coverage partial) | Structured quota/reset evidence produces zero-remaining windows; manifests bind JSON pointers, response-header mappings, quota signals, scope and named windows without kernel changes. A daemon restart fixture proves quota and rate windows persist and gate the route; broader provider-report fixtures remain. |
 | No switch after response bytes are sent | Implemented (kernel boundary) | Response commitment prevents retry/switch after output begins; broaden end-to-end coverage across adapters. |
 
 ## Protocol normalization and streaming
@@ -74,7 +74,7 @@ completeness and drop-in parity remain separate claims.
 | OAuth lifecycle, proactive refresh and refresh-on-401 | Partial | Definition-bound refresh, per-connection locking and persistence exist. Interactive authorization-code/PKCE onboarding and live provider validation remain. |
 | Per-connection proxy settings | Planned | Keep in transport/connection configuration, not kernel routing branches. |
 | Usage history and request detail | Implemented (compact core) | Bounded asynchronous usage events are persisted and exposed through control/CLI/TUI with request class/session/TTFT/throughput. Rich request-detail parity and cost accounting are not claimed. |
-| Provider quota APIs and reset-aware policy | Partial (generic runtime ready) | Generic quota operations, common structured error evidence, typed manifest JSON paths/signals and reset-aware policy exist; usage-report operations and broader provider fixtures remain. Polling is opt-in/opportunistic. |
+| Provider quota APIs and reset-aware policy | Partial (generic runtime ready) | Generic quota operations, common structured error evidence, typed manifest JSON/header mappings and reset-aware policy exist; broader provider-report fixtures remain. Polling is opt-in/opportunistic. |
 | Quota/usage only as dashboard data | Not the target | Runtime policy should consume the same state; current coverage is partial. |
 
 ## Secondary product features

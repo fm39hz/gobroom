@@ -38,7 +38,6 @@ const (
 	OperationImage      Operation = "image"
 	OperationAudio      Operation = "audio"
 	OperationVideo      Operation = "video"
-	OperationUsage      Operation = "usage"
 	OperationQuota      Operation = "quota"
 )
 
@@ -329,11 +328,21 @@ type OperationBinding struct {
 // JSON quota reports. Providers with non-composable semantics can register a
 // dedicated QuotaSource primitive instead.
 type HTTPJSONQuotaOptions struct {
-	CredentialHeader string                 `json:"credentialHeader,omitempty"`
-	CredentialPrefix string                 `json:"credentialPrefix,omitempty"`
-	Windows          []HTTPJSONQuotaWindow  `json:"windows,omitempty"`
-	Reports          []HTTPJSONQuotaReport  `json:"reports,omitempty"`
-	FailureMode      QuotaReportFailureMode `json:"failureMode,omitempty"`
+	CredentialHeader string                  `json:"credentialHeader,omitempty"`
+	CredentialPrefix string                  `json:"credentialPrefix,omitempty"`
+	Windows          []HTTPJSONQuotaWindow   `json:"windows,omitempty"`
+	HeaderWindows    []HTTPHeaderQuotaWindow `json:"headerWindows,omitempty"`
+	Reports          []HTTPJSONQuotaReport   `json:"reports,omitempty"`
+	FailureMode      QuotaReportFailureMode  `json:"failureMode,omitempty"`
+}
+
+// HTTPHeaderQuotaWindow maps one response-header set into a normalized quota window.
+type HTTPHeaderQuotaWindow struct {
+	Name            string `json:"name"`
+	LimitHeader     string `json:"limitHeader,omitempty"`
+	UsedHeader      string `json:"usedHeader,omitempty"`
+	RemainingHeader string `json:"remainingHeader,omitempty"`
+	ResetHeader     string `json:"resetHeader,omitempty"`
 }
 
 type QuotaReportFailureMode string
@@ -390,8 +399,30 @@ func (o HTTPJSONQuotaOptions) Validate() error {
 	if o.FailureMode != "" && len(o.Reports) == 0 {
 		return fmt.Errorf("quota report failureMode requires report endpoints")
 	}
-	if len(o.Windows) > 0 && len(o.Reports) > 0 {
+	if (len(o.Windows) > 0 || len(o.HeaderWindows) > 0) && len(o.Reports) > 0 {
 		return fmt.Errorf("quota source cannot combine source-level windows with report endpoints")
+	}
+	if len(o.HeaderWindows) > 64 {
+		return fmt.Errorf("quota source supports at most 64 header windows")
+	}
+	seenHeaderWindows := make(map[string]struct{}, len(o.HeaderWindows))
+	for i, window := range o.HeaderWindows {
+		if strings.TrimSpace(window.Name) == "" {
+			return fmt.Errorf("quota header window %d requires a name", i)
+		}
+		key := strings.ToLower(strings.TrimSpace(window.Name))
+		if _, exists := seenHeaderWindows[key]; exists {
+			return fmt.Errorf("quota header window name %q is duplicated", window.Name)
+		}
+		seenHeaderWindows[key] = struct{}{}
+		if window.LimitHeader == "" && window.UsedHeader == "" && window.RemainingHeader == "" && window.ResetHeader == "" {
+			return fmt.Errorf("quota header window %q has no measurable headers", window.Name)
+		}
+		for _, header := range []string{window.LimitHeader, window.UsedHeader, window.RemainingHeader, window.ResetHeader} {
+			if header != "" && !validHTTPHeaderName(header) {
+				return fmt.Errorf("quota header window %q has invalid header name %q", window.Name, header)
+			}
+		}
 	}
 	if err := validateHTTPJSONQuotaWindows(o.Windows); err != nil {
 		return err

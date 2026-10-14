@@ -1323,6 +1323,14 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"failureMode":"keep_available"}`)); err == nil {
 		t.Fatal("schema accepted a multi-report failure mode without report endpoints")
 	}
+	headerQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","limitHeader":"x-ratelimit-limit-requests","remainingHeader":"x-ratelimit-remaining-requests","resetHeader":"x-ratelimit-reset-requests"}]}`)
+	if err := snapshot.ValidateOptions(quotaRef, headerQuotaOptions); err != nil {
+		t.Fatalf("typed response-header quota options rejected by registered schema: %v", err)
+	}
+	invalidHeaderQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","remainingHeader":"invalid header"}]}`)
+	if err := snapshot.ValidateOptions(quotaRef, invalidHeaderQuotaOptions); err == nil {
+		t.Fatal("schema accepted an invalid response-header quota mapping")
+	}
 }
 
 func TestRuntimeRegistryContributesVersionedFeatureEvaluatorsToSharedCatalog(t *testing.T) {

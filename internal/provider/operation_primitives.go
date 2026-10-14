@@ -1019,18 +1019,40 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 		return nil, err
 	}
 	if len(s.Options.Reports) == 0 {
-		body, err := s.fetchQuotaReport(ctx, input, input.EndpointOptions)
+		body, headers, err := s.fetchQuotaReport(ctx, input, input.EndpointOptions)
 		if err != nil {
 			return nil, err
 		}
+		var snapshots []quota.Snapshot
 		if len(s.Options.Windows) > 0 {
-			return DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, s.Options)
+			snapshots, err = DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, s.Options)
+		} else if len(s.Options.HeaderWindows) == 0 {
+			windowName := input.WindowName
+			if windowName == "" {
+				windowName = s.WindowName
+			}
+			snapshots, err = DecodeQuotaJSON(body, input.Route, windowName)
 		}
-		windowName := input.WindowName
-		if windowName == "" {
-			windowName = s.WindowName
+		if err != nil {
+			return nil, err
 		}
-		return DecodeQuotaJSON(body, input.Route, windowName)
+		headerSnapshots, err := DecodeQuotaHeaders(headers, input.Route, s.Options.HeaderWindows, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		if len(snapshots)+len(headerSnapshots) > 128 {
+			return nil, fmt.Errorf("quota report exceeds 128 normalized windows")
+		}
+		seenNames := make(map[string]struct{}, len(snapshots)+len(headerSnapshots))
+		for _, snapshot := range append(snapshots, headerSnapshots...) {
+			key := strings.ToLower(snapshot.WindowName)
+			if _, duplicate := seenNames[key]; duplicate {
+				return nil, fmt.Errorf("quota report produced duplicate window name %q", snapshot.WindowName)
+			}
+			seenNames[key] = struct{}{}
+		}
+		snapshots = append(snapshots, headerSnapshots...)
+		return snapshots, nil
 	}
 
 	var snapshots []quota.Snapshot
@@ -1038,7 +1060,7 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 	completedReports := 0
 	for index, report := range s.Options.Reports {
 		endpointOptions := mergeQuotaEndpointOptions(input.EndpointOptions, report.EndpointOptions)
-		body, err := s.fetchQuotaReport(ctx, input, endpointOptions)
+		body, _, err := s.fetchQuotaReport(ctx, input, endpointOptions)
 		if err == nil {
 			reportOptions := s.Options
 			reportOptions.Reports = nil
@@ -1078,14 +1100,14 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 
 const maxQuotaReportBytes = 1 << 20
 
-func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRequest, options kernel.EndpointOptions) ([]byte, error) {
+func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRequest, options kernel.EndpointOptions) ([]byte, http.Header, error) {
 	path := s.Path
 	if path == "" {
 		path = "/usage"
 	}
 	endpointURL, err := input.Endpoint.Resolve(input.Route.BaseURL, path, options)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
@@ -1101,24 +1123,55 @@ func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRe
 	}
 	response, err := input.Transport.Execute(ctx, kernel.UpstreamRequest{Method: http.MethodGet, URL: endpointURL, Headers: headers})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if response.Body == nil {
-		return nil, fmt.Errorf("quota endpoint returned no response body")
+		return nil, nil, fmt.Errorf("quota endpoint returned no response body")
 	}
 	defer response.Body.Close()
 	if response.Status >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024))
-		return nil, fmt.Errorf("quota endpoint returned %s: %s", http.StatusText(response.Status), strings.TrimSpace(string(body)))
+		return nil, nil, fmt.Errorf("quota endpoint returned %s: %s", http.StatusText(response.Status), strings.TrimSpace(string(body)))
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxQuotaReportBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(body) > maxQuotaReportBytes {
-		return nil, fmt.Errorf("quota response exceeds %d-byte limit", maxQuotaReportBytes)
+		return nil, nil, fmt.Errorf("quota response exceeds %d-byte limit", maxQuotaReportBytes)
 	}
-	return body, nil
+	return body, response.Headers, nil
+}
+
+func DecodeQuotaHeaders(headers http.Header, route kernel.Route, mappings []HTTPHeaderQuotaWindow, now time.Time) ([]quota.Snapshot, error) {
+	if len(mappings) > 64 {
+		return nil, fmt.Errorf("quota source supports at most 64 header windows")
+	}
+	snapshots := make([]quota.Snapshot, 0, len(mappings))
+	for _, mapping := range mappings {
+		var limit, used, remaining *float64
+		if value := headers.Get(mapping.LimitHeader); mapping.LimitHeader != "" && value != "" {
+			limit = parseHeaderLimitValue(value)
+		}
+		if value := headers.Get(mapping.UsedHeader); mapping.UsedHeader != "" && value != "" {
+			used = parseHeaderLimitValue(value)
+		}
+		if value := headers.Get(mapping.RemainingHeader); mapping.RemainingHeader != "" && value != "" {
+			remaining = parseHeaderLimitValue(value)
+		}
+		var resetAt *time.Time
+		if value := headers.Get(mapping.ResetHeader); mapping.ResetHeader != "" && value != "" {
+			parsed := parseHeaderReset(value, now)
+			if !parsed.IsZero() && parsed.After(now) {
+				resetAt = &parsed
+			}
+		}
+		if limit == nil && used == nil && remaining == nil && resetAt == nil {
+			continue
+		}
+		snapshots = append(snapshots, quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: mapping.Name, Used: valueOrZero(used), Limit: limit, Remaining: remaining, ResetAt: resetAt, Source: "http-header-quota"})
+	}
+	return snapshots, nil
 }
 
 func mergeQuotaEndpointOptions(base, override kernel.EndpointOptions) kernel.EndpointOptions {

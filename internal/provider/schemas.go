@@ -89,6 +89,13 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
   },"anyOf":[{"required":["name"]},{"required":["namePath"]},{"required":["itemsPath"]}],
   "dependentRequired":{"aggregation":["aggregationValuePath","itemsPath","name"],"aggregationValuePath":["aggregation"],"aggregationStatusPath":["aggregationStatusValues"],"aggregationStatusValues":["aggregationStatusPath"],"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},
   "additionalProperties":false}},
+  "headerWindows":{"type":"array","maxItems":64,"items":{"type":"object","required":["name"],"properties":{
+    "name":{"type":"string","minLength":1},
+    "limitHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+    "usedHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+    "remainingHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+    "resetHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"}
+  },"anyOf":[{"required":["limitHeader"]},{"required":["usedHeader"]},{"required":["remainingHeader"]},{"required":["resetHeader"]}],"additionalProperties":false}},
   "reports":{"type":"array","maxItems":8,"items":{"type":"object","required":["windows"],"properties":{
     "endpointOptions":{"type":"object","properties":{"path":{"type":"string"},"query":{"type":"object","additionalProperties":{"type":"string"}}},"anyOf":[{"required":["path"]},{"required":["query"]}],"additionalProperties":false},
     "windows":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{

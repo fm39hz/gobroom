@@ -18,6 +18,7 @@ type quotaTransportFixture struct {
 	request kernel.UpstreamRequest
 	body    string
 	status  int
+	headers http.Header
 }
 
 type quotaReportFixture struct {
@@ -55,8 +56,12 @@ func (t *quotaTransportFixture) Execute(_ context.Context, request kernel.Upstre
 	if status == 0 {
 		status = http.StatusOK
 	}
+	headers := t.headers
+	if headers == nil {
+		headers = make(http.Header)
+	}
 	return kernel.UpstreamResponse{
-		Status: status, Headers: make(http.Header),
+		Status: status, Headers: headers,
 		Body: io.NopCloser(strings.NewReader(body)),
 	}, nil
 }
@@ -89,6 +94,36 @@ func TestHTTPJSONQuotaSourceUsesBoundEndpointTransportAndWindow(t *testing.T) {
 	}
 	if authTransport.request.Headers.Get("Authorization") != "Bearer token" {
 		t.Fatalf("explicit Authorization header lost the default bearer scheme: %#v", authTransport.request.Headers)
+	}
+}
+
+func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
+	now := time.Now()
+	headers := make(http.Header)
+	headers.Set("X-RateLimit-Limit-Requests", "30")
+	headers.Set("X-RateLimit-Remaining-Requests", "7")
+	headers.Set("X-RateLimit-Reset-Requests", "2m59.56s")
+	headers.Set("X-RateLimit-Limit-Tokens", "6000")
+	headers.Set("X-RateLimit-Remaining-Tokens", "0")
+	headers.Set("X-RateLimit-Reset-Tokens", "7.66s")
+	transport := &quotaTransportFixture{body: `{"data":[]}`, headers: headers}
+	route := kernel.Route{NodeID: "groq", CredentialID: "account", ExternalModel: "llama", BaseURL: "https://api.groq.com/openai/v1"}
+	options := HTTPJSONQuotaOptions{HeaderWindows: []HTTPHeaderQuotaWindow{
+		{Name: "requests", LimitHeader: "x-ratelimit-limit-requests", RemainingHeader: "x-ratelimit-remaining-requests", ResetHeader: "x-ratelimit-reset-requests"},
+		{Name: "tokens", LimitHeader: "x-ratelimit-limit-tokens", RemainingHeader: "x-ratelimit-remaining-tokens", ResetHeader: "x-ratelimit-reset-tokens"},
+	}}
+	snapshots, err := (HTTPJSONQuotaSource{Options: options}).Fetch(context.Background(), QuotaRequest{
+		Credential: kernel.Credential{Secret: "secret"}, Route: route, Endpoint: kernel.HTTPJSONEndpoint{},
+		Transport: transport, EndpointOptions: kernel.EndpointOptions{Path: "/models"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport.request.URL != "https://api.groq.com/openai/v1/models" || transport.request.Headers.Get("Authorization") != "Bearer secret" {
+		t.Fatalf("Groq quota request=%#v", transport.request)
+	}
+	if len(snapshots) != 2 || snapshots[0].WindowName != "requests" || snapshots[0].Limit == nil || *snapshots[0].Limit != 30 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 7 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.After(now.Add(2*time.Minute)) || snapshots[1].WindowName != "tokens" || snapshots[1].Remaining == nil || *snapshots[1].Remaining != 0 || snapshots[1].ResetAt == nil || !snapshots[1].ResetAt.After(now) {
+		t.Fatalf("header quota windows=%#v", snapshots)
 	}
 }
 
