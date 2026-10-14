@@ -200,8 +200,10 @@ values retain outer evidence); repeated `details` evidence is combined across
 both levels. An unrecognized nested shape cannot discard valid outer reset,
 code or retry signals. Typed manifest options can
 override JSON pointers, add quota code/type/message signals and name a limit
-window, or declare provider-specific quota HTTP status codes, without changing
-the kernel or duplicating the classifier. Explicit quota evidence on configured
+window, map multiple independent quota windows from provider-specific response
+headers (`limitHeaders`, with absolute or relative reset values), or declare
+provider-specific quota HTTP status codes, without changing the kernel or
+duplicating the classifier. Explicit quota evidence on configured
 4xx statuses overrides generic auth/conflict classification; ordinary
 401/403/404/408/409/429/5xx behavior remains distinct and its coarse class
 matches the richer cause. Ordered `scopeSignals` can map normalized

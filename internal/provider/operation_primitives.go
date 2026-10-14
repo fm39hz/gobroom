@@ -141,6 +141,7 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 	options.QuotaStatuses = cloneStrings(options.QuotaStatuses)
 	options.QuotaHTTPStatuses = append([]int(nil), options.QuotaHTTPStatuses...)
 	options.QuotaMessageTokens = cloneStrings(options.QuotaMessageTokens)
+	options.LimitHeaders = append([]HTTPHeaderLimitSignal(nil), options.LimitHeaders...)
 	options.ScopeSignals = append([]HTTPJSONScopeSignal(nil), options.ScopeSignals...)
 	for index := range options.ScopeSignals {
 		signal := &options.ScopeSignals[index]
@@ -185,6 +186,78 @@ func isQuotaHTTPStatus(status int, options *HTTPJSONErrorClassifierOptions) bool
 		}
 	}
 	return false
+}
+
+func extractHeaderLimitWindows(headers http.Header, options *HTTPJSONErrorClassifierOptions, now time.Time) ([]kernel.LimitWindow, time.Time) {
+	if options == nil || len(options.LimitHeaders) == 0 {
+		return nil, time.Time{}
+	}
+	windows := make([]kernel.LimitWindow, 0, len(options.LimitHeaders))
+	var latestReset time.Time
+	for _, signal := range options.LimitHeaders {
+		window := kernel.LimitWindow{Name: signal.Name, Kind: signal.Kind, Source: kernel.EvidenceResponseHeader}
+		observed := false
+		for _, item := range []struct {
+			header string
+			target **float64
+		}{{signal.LimitHeader, &window.Limit}, {signal.UsedHeader, &window.Used}, {signal.RemainingHeader, &window.Remaining}} {
+			if item.header == "" {
+				continue
+			}
+			if value := headers.Get(item.header); value != "" {
+				if parsed := parseHeaderLimitValue(value); parsed != nil {
+					*item.target = parsed
+					observed = true
+				}
+			}
+		}
+		if signal.ResetHeader != "" {
+			if raw := headers.Get(signal.ResetHeader); raw != "" {
+				reset := parseHeaderReset(raw, now)
+				if reset.After(now) {
+					window.ResetAt = &reset
+					observed = true
+					if reset.After(latestReset) {
+						latestReset = reset
+					}
+				}
+			}
+		}
+		if observed {
+			windows = append(windows, window)
+		}
+	}
+	return windows, latestReset
+}
+
+func parseHeaderLimitValue(value string) *float64 {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil
+	}
+	return &parsed
+}
+
+func parseHeaderReset(value string, now time.Time) time.Time {
+	value = strings.TrimSpace(value)
+	if at, err := time.Parse(time.RFC3339Nano, value); err == nil && at.After(now) {
+		return at
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return at
+	}
+	if epoch, err := strconv.ParseInt(value, 10, 64); err == nil && epoch > 0 {
+		var at time.Time
+		if epoch > 100000000000 {
+			at = time.UnixMilli(epoch)
+		} else {
+			at = time.Unix(epoch, 0)
+		}
+		if at.After(now) {
+			return at
+		}
+	}
+	return parseRetryAfter(value, now)
 }
 
 // ClassifyOutcome adds provider-neutral evidence that the coarse class
@@ -256,7 +329,12 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	}
 	now := time.Now()
 	headerRetryAt := parseRetryAfter(headers.Get("Retry-After"), now)
-	headerResetAt := parseResetTimestamp(json.RawMessage(headers.Get("X-RateLimit-Reset")))
+	rateLimitResetAt := parseHeaderReset(headers.Get("X-RateLimit-Reset"), now)
+	headerResetAt := rateLimitResetAt
+	configuredLimitWindows, configuredHeaderResetAt := extractHeaderLimitWindows(headers, c.Options, now)
+	if configuredHeaderResetAt.After(headerResetAt) {
+		headerResetAt = configuredHeaderResetAt
+	}
 	if outcome.Retry != kernel.RetryNever {
 		switch {
 		case errorEvidence.ResetAt.After(now):
@@ -272,16 +350,20 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	if headerRetryAt.After(now) || headerResetAt.After(now) {
 		outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
 	}
-	remaining, remainingErr := strconv.ParseFloat(headers.Get("X-RateLimit-Remaining"), 64)
-	if remainingErr == nil || !headerResetAt.IsZero() {
+	remaining := parseHeaderLimitValue(headers.Get("X-RateLimit-Remaining"))
+	if remaining != nil || !rateLimitResetAt.IsZero() {
 		window := kernel.LimitWindow{Name: "rate_limit", Kind: "requests", Source: kernel.EvidenceResponseHeader}
-		if remainingErr == nil {
-			window.Remaining = &remaining
-		}
-		if !headerResetAt.IsZero() {
-			window.ResetAt = &headerResetAt
+		window.Remaining = remaining
+		if !rateLimitResetAt.IsZero() {
+			window.ResetAt = &rateLimitResetAt
 		}
 		outcome.Limits = append(outcome.Limits, window)
+		if len(outcome.Evidence) == 0 || outcome.Evidence[len(outcome.Evidence)-1] != kernel.EvidenceResponseHeader {
+			outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
+		}
+	}
+	if len(configuredLimitWindows) > 0 {
+		outcome.Limits = append(outcome.Limits, configuredLimitWindows...)
 		if len(outcome.Evidence) == 0 || outcome.Evidence[len(outcome.Evidence)-1] != kernel.EvidenceResponseHeader {
 			outcome.Evidence = append(outcome.Evidence, kernel.EvidenceResponseHeader)
 		}

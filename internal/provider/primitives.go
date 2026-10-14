@@ -72,30 +72,42 @@ type ErrorClassifierOptions struct {
 }
 
 type HTTPJSONErrorClassifierOptions struct {
-	DefaultScope        kernel.OutcomeScope   `json:"defaultScope,omitempty"`
-	AuthScope           kernel.OutcomeScope   `json:"authScope,omitempty"`
-	QuotaScope          kernel.OutcomeScope   `json:"quotaScope,omitempty"`
-	RateLimitScope      kernel.OutcomeScope   `json:"rateLimitScope,omitempty"`
-	CapacityScope       kernel.OutcomeScope   `json:"capacityScope,omitempty"`
-	CodePath            string                `json:"codePath,omitempty"`
-	TypePath            string                `json:"typePath,omitempty"`
-	StatusPath          string                `json:"statusPath,omitempty"`
-	MessagePath         string                `json:"messagePath,omitempty"`
-	ResetAtPath         string                `json:"resetAtPath,omitempty"`
-	RetryAfterPath      string                `json:"retryAfterPath,omitempty"`
-	RetryDelayPath      string                `json:"retryDelayPath,omitempty"`
-	WindowNamePath      string                `json:"windowNamePath,omitempty"`
-	WindowLimitPath     string                `json:"windowLimitPath,omitempty"`
-	WindowUsedPath      string                `json:"windowUsedPath,omitempty"`
-	WindowRemainingPath string                `json:"windowRemainingPath,omitempty"`
-	QuotaWindowName     string                `json:"quotaWindowName,omitempty"`
-	QuotaWindowKind     string                `json:"quotaWindowKind,omitempty"`
-	QuotaCodes          []string              `json:"quotaCodes,omitempty"`
-	QuotaTypes          []string              `json:"quotaTypes,omitempty"`
-	QuotaStatuses       []string              `json:"quotaStatuses,omitempty"`
-	QuotaHTTPStatuses   []int                 `json:"quotaHTTPStatuses,omitempty"`
-	QuotaMessageTokens  []string              `json:"quotaMessageTokens,omitempty"`
-	ScopeSignals        []HTTPJSONScopeSignal `json:"scopeSignals,omitempty"`
+	DefaultScope        kernel.OutcomeScope     `json:"defaultScope,omitempty"`
+	AuthScope           kernel.OutcomeScope     `json:"authScope,omitempty"`
+	QuotaScope          kernel.OutcomeScope     `json:"quotaScope,omitempty"`
+	RateLimitScope      kernel.OutcomeScope     `json:"rateLimitScope,omitempty"`
+	CapacityScope       kernel.OutcomeScope     `json:"capacityScope,omitempty"`
+	CodePath            string                  `json:"codePath,omitempty"`
+	TypePath            string                  `json:"typePath,omitempty"`
+	StatusPath          string                  `json:"statusPath,omitempty"`
+	MessagePath         string                  `json:"messagePath,omitempty"`
+	ResetAtPath         string                  `json:"resetAtPath,omitempty"`
+	RetryAfterPath      string                  `json:"retryAfterPath,omitempty"`
+	RetryDelayPath      string                  `json:"retryDelayPath,omitempty"`
+	WindowNamePath      string                  `json:"windowNamePath,omitempty"`
+	WindowLimitPath     string                  `json:"windowLimitPath,omitempty"`
+	WindowUsedPath      string                  `json:"windowUsedPath,omitempty"`
+	WindowRemainingPath string                  `json:"windowRemainingPath,omitempty"`
+	QuotaWindowName     string                  `json:"quotaWindowName,omitempty"`
+	QuotaWindowKind     string                  `json:"quotaWindowKind,omitempty"`
+	QuotaCodes          []string                `json:"quotaCodes,omitempty"`
+	QuotaTypes          []string                `json:"quotaTypes,omitempty"`
+	QuotaStatuses       []string                `json:"quotaStatuses,omitempty"`
+	QuotaHTTPStatuses   []int                   `json:"quotaHTTPStatuses,omitempty"`
+	QuotaMessageTokens  []string                `json:"quotaMessageTokens,omitempty"`
+	ScopeSignals        []HTTPJSONScopeSignal   `json:"scopeSignals,omitempty"`
+	LimitHeaders        []HTTPHeaderLimitSignal `json:"limitHeaders,omitempty"`
+}
+
+// HTTPHeaderLimitSignal extracts one independent limit window from response
+// headers. ResetHeader accepts an absolute timestamp or a relative duration.
+type HTTPHeaderLimitSignal struct {
+	Name            string `json:"name"`
+	Kind            string `json:"kind,omitempty"`
+	LimitHeader     string `json:"limitHeader,omitempty"`
+	UsedHeader      string `json:"usedHeader,omitempty"`
+	RemainingHeader string `json:"remainingHeader,omitempty"`
+	ResetHeader     string `json:"resetHeader,omitempty"`
 }
 
 // HTTPJSONScopeSignal maps an exact structured error pattern to a routing
@@ -124,7 +136,7 @@ func (o ErrorClassifierOptions) Empty() bool {
 }
 
 func (o HTTPJSONErrorClassifierOptions) Empty() bool {
-	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0 && len(o.ScopeSignals) == 0
+	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0 && len(o.ScopeSignals) == 0 && len(o.LimitHeaders) == 0
 }
 
 func (o HTTPJSONErrorClassifierOptions) Validate() error {
@@ -152,6 +164,36 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 			if strings.TrimSpace(value) == "" {
 				return fmt.Errorf("error classifier match values must not be empty")
 			}
+		}
+	}
+	seenLimitNames := make(map[string]struct{}, len(o.LimitHeaders))
+	for index, signal := range o.LimitHeaders {
+		if strings.TrimSpace(signal.Name) == "" {
+			return fmt.Errorf("error classifier limit header signal %d requires a window name", index)
+		}
+		if signal.Name != strings.TrimSpace(signal.Name) {
+			return fmt.Errorf("error classifier limit header signal %d window name must be trimmed", index)
+		}
+		windowKey := strings.ToLower(signal.Name)
+		if _, duplicate := seenLimitNames[windowKey]; duplicate {
+			return fmt.Errorf("error classifier limit header window %q is duplicated", signal.Name)
+		}
+		seenLimitNames[windowKey] = struct{}{}
+		configured := 0
+		for _, item := range []struct{ field, name string }{
+			{"limitHeader", signal.LimitHeader}, {"usedHeader", signal.UsedHeader},
+			{"remainingHeader", signal.RemainingHeader}, {"resetHeader", signal.ResetHeader},
+		} {
+			if item.name == "" {
+				continue
+			}
+			if !validHTTPHeaderName(item.name) {
+				return fmt.Errorf("error classifier limit header signal %q has invalid %s", signal.Name, item.field)
+			}
+			configured++
+		}
+		if configured == 0 {
+			return fmt.Errorf("error classifier limit header signal %q has no headers", signal.Name)
 		}
 	}
 	for index, signal := range o.ScopeSignals {
@@ -198,6 +240,24 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 		seenQuotaHTTPStatuses[status] = struct{}{}
 	}
 	return nil
+}
+
+func validHTTPHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for index := 0; index < len(name); index++ {
+		character := name[index]
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' {
+			continue
+		}
+		switch character {
+		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validOutcomeCause(cause kernel.OutcomeCause) bool {

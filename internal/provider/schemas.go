@@ -90,6 +90,16 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
     "quotaStatuses":{"type":"array","items":{"type":"string","minLength":1}},
     "quotaHTTPStatuses":{"type":"array","uniqueItems":true,"items":{"type":"integer","minimum":400,"maximum":599}},
     "quotaMessageTokens":{"type":"array","items":{"type":"string","minLength":1}},
+    "limitHeaders":{"type":"array","items":{"type":"object","required":["name"],"anyOf":[
+      {"required":["limitHeader"]},{"required":["usedHeader"]},{"required":["remainingHeader"]},{"required":["resetHeader"]}
+    ],"properties":{
+      "name":{"type":"string","minLength":1},
+      "kind":{"type":"string"},
+      "limitHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+      "usedHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+      "remainingHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+      "resetHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"}
+    },"additionalProperties":false}},
     "scopeSignals":{"type":"array","items":{"type":"object","required":["scope"],"properties":{
       "cause":{"enum":["request_invalid","capability_mismatch","model_not_found","auth","permission","quota_exhausted","rate_limited","capacity","overloaded","timeout","network","protocol","stream_failure","unknown"]},
       "codes":{"type":"array","items":{"type":"string","minLength":1}},

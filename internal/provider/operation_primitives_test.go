@@ -148,6 +148,43 @@ func TestHTTPJSONErrorClassifierKeeps429RateLimitAndRetryAfterHeader(t *testing.
 	}
 }
 
+func TestHTTPJSONErrorClassifierExtractsConfiguredLimitHeaderWindows(t *testing.T) {
+	options := ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{LimitHeaders: []HTTPHeaderLimitSignal{
+		{Name: "requests", Kind: "requests", LimitHeader: "x-provider-request-limit", RemainingHeader: "x-provider-request-remaining", ResetHeader: "x-provider-request-reset"},
+		{Name: "tokens", Kind: "tokens", UsedHeader: "x-provider-token-used", RemainingHeader: "x-provider-token-remaining", ResetHeader: "x-provider-token-reset"},
+	}}}
+	classifier, err := (HTTPJSONErrorClassifier{}).WithOptions(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenReset := time.Now().Add(4 * time.Minute).UTC().Truncate(time.Second)
+	headers := make(http.Header)
+	headers.Set("X-Provider-Request-Limit", "120")
+	headers.Set("X-Provider-Request-Remaining", "0")
+	headers.Set("X-Provider-Request-Reset", "2m")
+	headers.Set("X-Provider-Token-Used", "9000")
+	headers.Set("X-Provider-Token-Remaining", "1000")
+	headers.Set("X-Provider-Token-Reset", tokenReset.Format(time.RFC3339))
+	headers.Set("X-RateLimit-Remaining", "NaN")
+	outcome := classifier.(HTTPJSONErrorClassifier).ClassifyOutcome(http.StatusTooManyRequests, headers, []byte(`{"error":{"message":"too many requests"}}`))
+	if outcome.Cause != kernel.CauseRateLimited || outcome.RetryAt.Sub(tokenReset) < -time.Second || outcome.RetryAt.Sub(tokenReset) > time.Second {
+		t.Fatalf("configured header reset did not drive typed cooldown: %#v want=%s", outcome, tokenReset)
+	}
+	if len(outcome.Limits) != 2 {
+		t.Fatalf("configured independent windows not retained: %#v", outcome.Limits)
+	}
+	requestWindow, tokenWindow := outcome.Limits[0], outcome.Limits[1]
+	if requestWindow.Name != "requests" || requestWindow.Kind != "requests" || requestWindow.Limit == nil || *requestWindow.Limit != 120 || requestWindow.Remaining == nil || *requestWindow.Remaining != 0 || requestWindow.ResetAt == nil {
+		t.Fatalf("request limit window=%#v", requestWindow)
+	}
+	if tokenWindow.Name != "tokens" || tokenWindow.Kind != "tokens" || tokenWindow.Used == nil || *tokenWindow.Used != 9000 || tokenWindow.Remaining == nil || *tokenWindow.Remaining != 1000 || tokenWindow.ResetAt == nil || !tokenWindow.ResetAt.Equal(tokenReset) {
+		t.Fatalf("token limit window=%#v", tokenWindow)
+	}
+	if _, err := (HTTPJSONErrorClassifier{}).WithOptions(ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{LimitHeaders: []HTTPHeaderLimitSignal{{Name: "requests", RemainingHeader: "bad header"}}}}); err == nil {
+		t.Fatal("invalid configured HTTP header name was accepted")
+	}
+}
+
 func TestHTTPJSONErrorClassifierUsesRateLimitResetAndDeterministicDeadlinePrecedence(t *testing.T) {
 	classifier := HTTPJSONErrorClassifier{}
 	resetHeader := time.Now().Add(5 * time.Minute).UTC().Truncate(time.Second)

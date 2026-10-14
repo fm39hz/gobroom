@@ -390,6 +390,7 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 				CodePath: "/failure/reason", MessagePath: "/failure/explanation", ResetAtPath: "/failure/reopens_at",
 				WindowNamePath: "/failure/window", WindowLimitPath: "/failure/budget", WindowUsedPath: "/failure/spent", WindowRemainingPath: "/failure/left",
 				QuotaWindowKind: "tokens", QuotaCodes: []string{"BALANCE_EMPTY"}, QuotaHTTPStatuses: []int{409}, QuotaMessageTokens: []string{"credits exhausted"},
+				LimitHeaders: []HTTPHeaderLimitSignal{{Name: "requests", Kind: "requests", LimitHeader: "x-request-limit", RemainingHeader: "x-request-remaining", ResetHeader: "x-request-reset"}},
 				ScopeSignals: []HTTPJSONScopeSignal{{Cause: kernel.CauseQuotaExhausted, Codes: []string{"BALANCE_EMPTY"}, Scope: kernel.ScopeConnection}},
 			}},
 		}},
@@ -424,13 +425,29 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 	}
 	reset := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Second)
 	body := []byte(`{"failure":{"reason":"BALANCE_EMPTY","explanation":"monthly credits exhausted","reopens_at":"` + reset.Format(time.RFC3339) + `","window":"weekly","budget":1000,"spent":1000,"left":0}}`)
-	outcome := classifier.ClassifyOutcome(http.StatusTooManyRequests, nil, body)
-	if outcome.Cause != kernel.CauseQuotaExhausted || outcome.Scope != kernel.ScopeConnection || outcome.RetryAt.IsZero() || len(outcome.Limits) != 1 {
+	headers := make(http.Header)
+	headers.Set("x-request-limit", "60")
+	headers.Set("x-request-remaining", "2")
+	headers.Set("x-request-reset", "90s")
+	outcome := classifier.ClassifyOutcome(http.StatusTooManyRequests, headers, body)
+	if outcome.Cause != kernel.CauseQuotaExhausted || outcome.Scope != kernel.ScopeConnection || outcome.RetryAt.IsZero() || len(outcome.Limits) != 2 {
 		t.Fatalf("configured error outcome=%#v", outcome)
 	}
-	window := outcome.Limits[0]
-	if window.Name != "weekly" || window.Kind != "tokens" || window.Limit == nil || *window.Limit != 1000 || window.Used == nil || *window.Used != 1000 || window.Remaining == nil || *window.Remaining != 0 || window.ResetAt == nil || !window.ResetAt.Equal(reset) {
-		t.Fatalf("configured named limit window=%#v", window)
+	var quotaWindow, headerWindow *kernel.LimitWindow
+	for index := range outcome.Limits {
+		window := &outcome.Limits[index]
+		switch window.Name {
+		case "weekly":
+			quotaWindow = window
+		case "requests":
+			headerWindow = window
+		}
+	}
+	if quotaWindow == nil || quotaWindow.Kind != "tokens" || quotaWindow.Limit == nil || *quotaWindow.Limit != 1000 || quotaWindow.Used == nil || *quotaWindow.Used != 1000 || quotaWindow.Remaining == nil || *quotaWindow.Remaining != 0 || quotaWindow.ResetAt == nil || !quotaWindow.ResetAt.Equal(reset) {
+		t.Fatalf("configured named limit window=%#v", quotaWindow)
+	}
+	if headerWindow == nil || headerWindow.Kind != "requests" || headerWindow.Limit == nil || *headerWindow.Limit != 60 || headerWindow.Remaining == nil || *headerWindow.Remaining != 2 || headerWindow.ResetAt == nil {
+		t.Fatalf("manifest-bound response header window=%#v", headerWindow)
 	}
 	conflict := classifier.ClassifyOutcome(http.StatusConflict, nil, body)
 	if conflict.Class != kernel.ErrorCooldown || conflict.Cause != kernel.CauseQuotaExhausted {
@@ -1264,6 +1281,30 @@ func TestRuntimeRegistryStoresStrategyImplementationsByExactVersion(t *testing.T
 	}
 	if err := snapshot.ValidateOptions(builtinRef, json.RawMessage(`{"stickyLimit":0}`)); err == nil {
 		t.Fatal("strategy options below schema minimum were accepted")
+	}
+}
+
+func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := json.RawMessage(`{"httpJson":{"limitHeaders":[{"name":"requests","kind":"requests","limitHeader":"x-limit","remainingHeader":"x-remaining","resetHeader":"x-reset"}]}}`)
+	classifierRef := extensionRef(PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1})
+	if err := snapshot.ValidateOptions(classifierRef, options); err != nil {
+		t.Fatalf("typed limit header options rejected by registered schema: %v", err)
+	}
+	invalid := json.RawMessage(`{"httpJson":{"limitHeaders":[{"name":"requests","remainingHeader":"bad header"}]}}`)
+	if err := snapshot.ValidateOptions(classifierRef, invalid); err == nil {
+		t.Fatal("schema accepted an invalid configured header name")
+	}
+	missingHeader := json.RawMessage(`{"httpJson":{"limitHeaders":[{"name":"requests"}]}}`)
+	if err := snapshot.ValidateOptions(classifierRef, missingHeader); err == nil {
+		t.Fatal("schema accepted a limit window without any header mapping")
 	}
 }
 
