@@ -91,13 +91,15 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
     "quotaHTTPStatuses":{"type":"array","uniqueItems":true,"items":{"type":"integer","minimum":400,"maximum":599}},
     "quotaMessageTokens":{"type":"array","items":{"type":"string","minLength":1}},
     "limitHeaders":{"type":"array","items":{"type":"object","required":["name"],"anyOf":[
-      {"required":["limitHeader"]},{"required":["usedHeader"]},{"required":["remainingHeader"]},{"required":["resetHeader"]}
-    ],"properties":{
+      {"required":["limitHeader"]},{"required":["usedHeader"]},{"required":["remainingHeader"]},{"required":["exhaustedStatusHeader"]},{"required":["resetHeader"]}
+    ],"dependentRequired":{"exhaustedStatusHeader":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusHeader"]},"properties":{
       "name":{"type":"string","minLength":1},
       "kind":{"type":"string"},
       "limitHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
       "usedHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
       "remainingHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+      "exhaustedStatusHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+      "exhaustedStatusValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
       "resetHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"}
     },"additionalProperties":false}},
     "scopeSignals":{"type":"array","items":{"type":"object","required":["scope"],"properties":{

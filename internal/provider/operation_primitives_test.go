@@ -157,6 +157,7 @@ func TestHTTPJSONErrorClassifierExtractsConfiguredLimitHeaderWindows(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	requestReset := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
 	tokenReset := time.Now().Add(4 * time.Minute).UTC().Truncate(time.Second)
 	headers := make(http.Header)
 	headers.Set("X-Provider-Request-Limit", "120")
@@ -167,8 +168,8 @@ func TestHTTPJSONErrorClassifierExtractsConfiguredLimitHeaderWindows(t *testing.
 	headers.Set("X-Provider-Token-Reset", tokenReset.Format(time.RFC3339))
 	headers.Set("X-RateLimit-Remaining", "NaN")
 	outcome := classifier.(HTTPJSONErrorClassifier).ClassifyOutcome(http.StatusTooManyRequests, headers, []byte(`{"error":{"message":"too many requests"}}`))
-	if outcome.Cause != kernel.CauseRateLimited || outcome.RetryAt.Sub(tokenReset) < -time.Second || outcome.RetryAt.Sub(tokenReset) > time.Second {
-		t.Fatalf("configured header reset did not drive typed cooldown: %#v want=%s", outcome, tokenReset)
+	if outcome.Cause != kernel.CauseRateLimited || outcome.RetryAt.Sub(requestReset) < -time.Second || outcome.RetryAt.Sub(requestReset) > time.Second {
+		t.Fatalf("a non-exhausted token window extended the request cooldown: %#v want=%s", outcome, requestReset)
 	}
 	if len(outcome.Limits) != 2 {
 		t.Fatalf("configured independent windows not retained: %#v", outcome.Limits)
@@ -182,6 +183,48 @@ func TestHTTPJSONErrorClassifierExtractsConfiguredLimitHeaderWindows(t *testing.
 	}
 	if _, err := (HTTPJSONErrorClassifier{}).WithOptions(ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{LimitHeaders: []HTTPHeaderLimitSignal{{Name: "requests", RemainingHeader: "bad header"}}}}); err == nil {
 		t.Fatal("invalid configured HTTP header name was accepted")
+	}
+}
+
+func TestParseHeaderResetUsesObservedAbsoluteAndRelativeForms(t *testing.T) {
+	now := time.Unix(1_787_000_000, 0).UTC()
+	for _, fixture := range []struct {
+		value string
+		want  time.Time
+	}{
+		{value: "1787000000.5", want: time.Unix(1_787_000_000, 500_000_000).UTC()},
+		{value: "1787000000500", want: time.UnixMilli(1_787_000_000_500).UTC()},
+		{value: "6m0s", want: now.Add(6 * time.Minute)},
+		{value: "180", want: now.Add(3 * time.Minute)},
+	} {
+		if got := parseHeaderReset(fixture.value, now); !got.Equal(fixture.want) {
+			t.Errorf("parseHeaderReset(%q)=%s want=%s", fixture.value, got, fixture.want)
+		}
+	}
+}
+
+func TestHTTPJSONErrorClassifierUsesResetOnlyForRejectedStatusWindow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	fiveHourReset := now.Add(5 * time.Hour)
+	sevenDayReset := now.Add(7 * 24 * time.Hour)
+	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{LimitHeaders: []HTTPHeaderLimitSignal{
+		{Name: "5h", Kind: "requests", ExhaustedStatusHeader: "anthropic-ratelimit-unified-5h-status", ExhaustedStatusValues: []string{"rejected"}, ResetHeader: "anthropic-ratelimit-unified-5h-reset"},
+		{Name: "7d", Kind: "requests", ExhaustedStatusHeader: "anthropic-ratelimit-unified-7d-status", ExhaustedStatusValues: []string{"rejected"}, ResetHeader: "anthropic-ratelimit-unified-7d-reset"},
+	}}}
+	headers := make(http.Header)
+	headers.Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
+	headers.Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(fiveHourReset.Unix(), 10))
+	headers.Set("Anthropic-Ratelimit-Unified-7d-Status", "allowed")
+	headers.Set("Anthropic-Ratelimit-Unified-7d-Reset", strconv.FormatInt(sevenDayReset.Unix(), 10))
+	outcome := classifier.ClassifyOutcome(http.StatusTooManyRequests, headers, []byte(`{"error":{"message":"rate limited"}}`))
+	if outcome.RetryAt.Sub(fiveHourReset) < -time.Second || outcome.RetryAt.Sub(fiveHourReset) > time.Second {
+		t.Fatalf("allowed 7d window reset incorrectly extended 5h rejection cooldown: %#v", outcome)
+	}
+	if len(outcome.Limits) != 2 || outcome.Limits[0].Name != "5h" || outcome.Limits[0].Remaining == nil || *outcome.Limits[0].Remaining != 0 || outcome.Limits[0].ResetAt == nil || !outcome.Limits[0].ResetAt.Equal(fiveHourReset) {
+		t.Fatalf("rejected status window was not normalized into exhausted quota evidence: %#v", outcome.Limits)
+	}
+	if outcome.Limits[1].Name != "7d" || outcome.Limits[1].Remaining != nil || outcome.Limits[1].ResetAt == nil || !outcome.Limits[1].ResetAt.Equal(sevenDayReset) {
+		t.Fatalf("allowed status window evidence was not preserved without marking it exhausted: %#v", outcome.Limits[1])
 	}
 }
 

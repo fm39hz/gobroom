@@ -142,6 +142,9 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 	options.QuotaHTTPStatuses = append([]int(nil), options.QuotaHTTPStatuses...)
 	options.QuotaMessageTokens = cloneStrings(options.QuotaMessageTokens)
 	options.LimitHeaders = append([]HTTPHeaderLimitSignal(nil), options.LimitHeaders...)
+	for index := range options.LimitHeaders {
+		options.LimitHeaders[index].ExhaustedStatusValues = cloneStrings(options.LimitHeaders[index].ExhaustedStatusValues)
+	}
 	options.ScopeSignals = append([]HTTPJSONScopeSignal(nil), options.ScopeSignals...)
 	for index := range options.ScopeSignals {
 		signal := &options.ScopeSignals[index]
@@ -197,17 +200,33 @@ func extractHeaderLimitWindows(headers http.Header, options *HTTPJSONErrorClassi
 	for _, signal := range options.LimitHeaders {
 		window := kernel.LimitWindow{Name: signal.Name, Kind: signal.Kind, Source: kernel.EvidenceResponseHeader}
 		observed := false
+		remainingProvided := false
 		for _, item := range []struct {
-			header string
-			target **float64
-		}{{signal.LimitHeader, &window.Limit}, {signal.UsedHeader, &window.Used}, {signal.RemainingHeader, &window.Remaining}} {
+			header    string
+			target    **float64
+			remaining bool
+		}{{signal.LimitHeader, &window.Limit, false}, {signal.UsedHeader, &window.Used, false}, {signal.RemainingHeader, &window.Remaining, true}} {
 			if item.header == "" {
 				continue
 			}
 			if value := headers.Get(item.header); value != "" {
+				if item.remaining {
+					remainingProvided = true
+				}
 				if parsed := parseHeaderLimitValue(value); parsed != nil {
 					*item.target = parsed
 					observed = true
+				}
+			}
+		}
+		exhausted := window.Remaining != nil && *window.Remaining <= 0
+		if signal.ExhaustedStatusHeader != "" {
+			if status := headers.Get(signal.ExhaustedStatusHeader); status != "" {
+				observed = true
+				if matchesAny(status, signal.ExhaustedStatusValues) {
+					zero := float64(0)
+					window.Remaining = &zero
+					exhausted = true
 				}
 			}
 		}
@@ -217,7 +236,8 @@ func extractHeaderLimitWindows(headers http.Header, options *HTTPJSONErrorClassi
 				if reset.After(now) {
 					window.ResetAt = &reset
 					observed = true
-					if reset.After(latestReset) {
+					resetIsApplicable := exhausted || (!remainingProvided && signal.ExhaustedStatusHeader == "")
+					if resetIsApplicable && reset.After(latestReset) {
 						latestReset = reset
 					}
 				}
@@ -246,12 +266,16 @@ func parseHeaderReset(value string, now time.Time) time.Time {
 	if at, err := http.ParseTime(value); err == nil && at.After(now) {
 		return at
 	}
-	if epoch, err := strconv.ParseInt(value, 10, 64); err == nil && epoch > 0 {
+	if numeric, err := strconv.ParseFloat(value, 64); err == nil && numeric > 0 && !math.IsNaN(numeric) && !math.IsInf(numeric, 0) {
+		whole, fractional := math.Modf(numeric)
 		var at time.Time
-		if epoch > 100000000000 {
-			at = time.UnixMilli(epoch)
-		} else {
-			at = time.Unix(epoch, 0)
+		switch {
+		case numeric > 10000000000 && numeric <= 100000000000000:
+			at = time.UnixMilli(int64(whole)).Add(time.Duration(fractional * float64(time.Millisecond)))
+		case numeric > 1000000000 && numeric <= 10000000000:
+			at = time.Unix(int64(whole), int64(fractional*float64(time.Second)))
+		case numeric <= 1000000000:
+			at = now.Add(time.Duration(numeric * float64(time.Second)))
 		}
 		if at.After(now) {
 			return at

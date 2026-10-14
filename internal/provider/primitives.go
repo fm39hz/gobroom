@@ -102,12 +102,14 @@ type HTTPJSONErrorClassifierOptions struct {
 // HTTPHeaderLimitSignal extracts one independent limit window from response
 // headers. ResetHeader accepts an absolute timestamp or a relative duration.
 type HTTPHeaderLimitSignal struct {
-	Name            string `json:"name"`
-	Kind            string `json:"kind,omitempty"`
-	LimitHeader     string `json:"limitHeader,omitempty"`
-	UsedHeader      string `json:"usedHeader,omitempty"`
-	RemainingHeader string `json:"remainingHeader,omitempty"`
-	ResetHeader     string `json:"resetHeader,omitempty"`
+	Name                  string   `json:"name"`
+	Kind                  string   `json:"kind,omitempty"`
+	LimitHeader           string   `json:"limitHeader,omitempty"`
+	UsedHeader            string   `json:"usedHeader,omitempty"`
+	RemainingHeader       string   `json:"remainingHeader,omitempty"`
+	ExhaustedStatusHeader string   `json:"exhaustedStatusHeader,omitempty"`
+	ExhaustedStatusValues []string `json:"exhaustedStatusValues,omitempty"`
+	ResetHeader           string   `json:"resetHeader,omitempty"`
 }
 
 // HTTPJSONScopeSignal maps an exact structured error pattern to a routing
@@ -180,9 +182,12 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 		}
 		seenLimitNames[windowKey] = struct{}{}
 		configured := 0
+		if (signal.ExhaustedStatusHeader == "") != (len(signal.ExhaustedStatusValues) == 0) {
+			return fmt.Errorf("error classifier limit header window %q must configure both exhausted status header and values", signal.Name)
+		}
 		for _, item := range []struct{ field, name string }{
 			{"limitHeader", signal.LimitHeader}, {"usedHeader", signal.UsedHeader},
-			{"remainingHeader", signal.RemainingHeader}, {"resetHeader", signal.ResetHeader},
+			{"remainingHeader", signal.RemainingHeader}, {"exhaustedStatusHeader", signal.ExhaustedStatusHeader}, {"resetHeader", signal.ResetHeader},
 		} {
 			if item.name == "" {
 				continue
@@ -191,6 +196,11 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 				return fmt.Errorf("error classifier limit header signal %q has invalid %s", signal.Name, item.field)
 			}
 			configured++
+		}
+		for _, value := range signal.ExhaustedStatusValues {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("error classifier limit header window %q has an empty exhausted status value", signal.Name)
+			}
 		}
 		if configured == 0 {
 			return fmt.Errorf("error classifier limit header signal %q has no headers", signal.Name)

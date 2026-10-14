@@ -1306,6 +1306,14 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(classifierRef, missingHeader); err == nil {
 		t.Fatal("schema accepted a limit window without any header mapping")
 	}
+	statusWindow := json.RawMessage(`{"httpJson":{"limitHeaders":[{"name":"five-hour","exhaustedStatusHeader":"anthropic-ratelimit-unified-5h-status","exhaustedStatusValues":["rejected"],"resetHeader":"anthropic-ratelimit-unified-5h-reset"}]}}`)
+	if err := snapshot.ValidateOptions(classifierRef, statusWindow); err != nil {
+		t.Fatalf("status-based typed window rejected by schema: %v", err)
+	}
+	statusWithoutValues := json.RawMessage(`{"httpJson":{"limitHeaders":[{"name":"five-hour","exhaustedStatusHeader":"x-status","resetHeader":"x-reset"}]}}`)
+	if err := snapshot.ValidateOptions(classifierRef, statusWithoutValues); err == nil {
+		t.Fatal("schema accepted a status header without configured exhausted values")
+	}
 }
 
 func TestRuntimeRegistryContributesVersionedFeatureEvaluatorsToSharedCatalog(t *testing.T) {

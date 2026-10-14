@@ -1153,10 +1153,12 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 			t.Errorf("upstream path=%q", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Remaining", "9")
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset.Unix(), 10))
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Status", "rejected")
+		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", strconv.FormatInt(reset.Unix(), 10))
 		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"fault":{"reason":"PLAN_DRAINED","explanation":"weekly budget exhausted","reopens_at":"` + reset.Format(time.RFC3339) + `","period":"weekly","limit":50,"consumed":50,"remaining":0}}`))
+		_, _ = w.Write([]byte(`{"fault":{"reason":"PLAN_DRAINED","explanation":"weekly budget exhausted","reopens_at":"` + reset.Format(time.RFC3339) + `","period":"weekly","limit":50,"consumed":25,"remaining":25}}`))
 	}))
 	upstream.Listener = listener
 	upstream.Start()
@@ -1182,6 +1184,7 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 				CodePath:   "/fault/reason", MessagePath: "/fault/explanation", ResetAtPath: "/fault/reopens_at",
 				WindowNamePath: "/fault/period", WindowLimitPath: "/fault/limit", WindowUsedPath: "/fault/consumed", WindowRemainingPath: "/fault/remaining",
 				QuotaWindowKind: "requests", QuotaCodes: []string{"PLAN_DRAINED"}, QuotaMessageTokens: []string{"budget exhausted"},
+				LimitHeaders: []provider.HTTPHeaderLimitSignal{{Name: "request-burst", Kind: "requests", ExhaustedStatusHeader: "Anthropic-Ratelimit-Unified-5h-Status", ExhaustedStatusValues: []string{"rejected"}, ResetHeader: "Anthropic-Ratelimit-Unified-5h-Reset"}},
 			}},
 		}, provider.OperationModels: {
 			Endpoint:    provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -1282,6 +1285,7 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 	}
 	var saved quota.Snapshot
 	var sawHeaderWindow bool
+	var savedConfiguredHeader quota.Snapshot
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		snapshots, loadErr := first.store.QuotaSnapshots()
@@ -1295,14 +1299,20 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 			if snapshot.WindowName == "rate_limit" {
 				sawHeaderWindow = true
 			}
+			if snapshot.WindowName == "request-burst" {
+				savedConfiguredHeader = snapshot
+			}
 		}
-		if saved.WindowName != "" && sawHeaderWindow {
+		if saved.WindowName != "" && sawHeaderWindow && savedConfiguredHeader.WindowName != "" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if saved.Remaining == nil || *saved.Remaining != 0 || saved.ResetAt == nil || !saved.ResetAt.Equal(reset) || saved.WindowName != "weekly" || !sawHeaderWindow {
+	if saved.Remaining == nil || *saved.Remaining != 25 || saved.ResetAt == nil || !saved.ResetAt.Equal(reset) || saved.WindowName != "weekly" || !sawHeaderWindow {
 		t.Fatalf("daemon did not persist configured quota evidence: %#v", saved)
+	}
+	if savedConfiguredHeader.Remaining == nil || *savedConfiguredHeader.Remaining != 0 || savedConfiguredHeader.ResetAt == nil || !savedConfiguredHeader.ResetAt.Equal(reset) {
+		t.Fatalf("daemon did not persist configured response-header window: %#v", savedConfiguredHeader)
 	}
 	if err := first.Stop(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1328,7 +1338,7 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 		t.Fatalf("passive health cause/scope was not restored: %#v", healthState)
 	}
 	if second.policy.Usable(route, time.Now()) {
-		t.Fatal("persisted exhausted quota should block the route after daemon restart")
+		t.Fatal("persisted exhausted configured response-header window should block the route after daemon restart")
 	}
 	if !second.policy.Usable(route, reset.Add(time.Second)) {
 		t.Fatal("persisted route should become eligible after reset without health polling")
