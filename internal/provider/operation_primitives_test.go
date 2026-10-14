@@ -282,4 +282,33 @@ func TestHTTPJSONErrorClassifierAppliesOrderedTypedScopeSignals(t *testing.T) {
 	if _, err := (HTTPJSONErrorClassifier{}).WithOptions(ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{ScopeSignals: []HTTPJSONScopeSignal{{Scope: kernel.ScopeProvider}}}}); err == nil {
 		t.Fatal("unconditional scope signal was accepted")
 	}
+
+	fieldClassifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{
+		ScopeSignals: []HTTPJSONScopeSignal{{
+			Cause: kernel.CauseOverloaded,
+			Fields: []HTTPJSONFieldMatch{
+				{Path: "/error/details/owner", Contains: []string{"account"}},
+				{Path: "/error/details/region", Equals: []string{"EU-WEST"}},
+			},
+			Scope: kernel.ScopeConnection,
+		}},
+	}}
+	fieldBody := []byte(`{"error":{"message":"resource conflict","details":{"owner":"organization/account-7","region":"eu-west"}}}`)
+	fieldOutcome := fieldClassifier.ClassifyOutcome(http.StatusConflict, nil, fieldBody)
+	if fieldOutcome.Cause != kernel.CauseOverloaded || fieldOutcome.Scope != kernel.ScopeConnection {
+		t.Fatalf("provider-specific JSON fields did not map to typed connection scope: %#v", fieldOutcome)
+	}
+
+	options := ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{ScopeSignals: []HTTPJSONScopeSignal{{
+		Fields: []HTTPJSONFieldMatch{{Path: "/error/details/owner", Equals: []string{"organization/account-7"}}}, Scope: kernel.ScopeProvider,
+	}}}}
+	bound, err := (HTTPJSONErrorClassifier{}).WithOptions(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.HTTPJSON.ScopeSignals[0].Fields[0].Equals[0] = "changed"
+	boundOutcome := bound.(HTTPJSONErrorClassifier).ClassifyOutcome(http.StatusConflict, nil, fieldBody)
+	if boundOutcome.Scope != kernel.ScopeProvider {
+		t.Fatalf("bound classifier retained mutable caller-owned matcher slices: %#v", boundOutcome)
+	}
 }

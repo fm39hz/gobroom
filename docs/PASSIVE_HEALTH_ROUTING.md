@@ -204,10 +204,12 @@ window, or declare provider-specific quota HTTP status codes, without changing
 the kernel or duplicating the classifier. Explicit quota evidence on configured
 4xx statuses overrides generic auth/conflict classification; ordinary
 401/403/404/408/409/429/5xx behavior remains distinct and its coarse class
-matches the richer cause. Ordered `scopeSignals` can map exact code/type/status/
-message evidence to a typed breaker scope; the first matching rule wins, then
-cause-specific and default scopes apply. Unknown signals retain the conservative
-route scope. The runtime registry preserves `ClassifyOutcome`;
+matches the richer cause. Ordered `scopeSignals` can map normalized
+code/type/status/message evidence or provider-specific JSON Pointer field
+matchers to a typed breaker scope. Values within a field matcher are
+alternatives; multiple field matchers are conjunctive; the first matching rule
+wins, then cause-specific and default scopes apply. Unknown signals retain the
+conservative route scope. The runtime registry preserves `ClassifyOutcome`;
 tests prove evidence reaches route eligibility and expires at reset. Shapes requiring transformations beyond
 these common options still need a reusable extractor primitive, not a
 provider-name branch in the kernel.

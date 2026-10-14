@@ -96,6 +96,11 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
       "types":{"type":"array","items":{"type":"string","minLength":1}},
       "statuses":{"type":"array","items":{"type":"string","minLength":1}},
       "messageTokens":{"type":"array","items":{"type":"string","minLength":1}},
+      "fields":{"type":"array","items":{"type":"object","required":["path"],"properties":{
+        "path":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+        "equals":{"type":"array","items":{"type":"string","minLength":1}},
+        "contains":{"type":"array","items":{"type":"string","minLength":1}}
+      },"additionalProperties":false}},
       "scope":{"enum":["request","route","route_connection","connection","provider"]}
     },"additionalProperties":false}}
   },

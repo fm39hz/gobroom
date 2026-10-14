@@ -101,12 +101,22 @@ type HTTPJSONErrorClassifierOptions struct {
 // HTTPJSONScopeSignal maps an exact structured error pattern to a routing
 // scope. Signals are checked in declaration order; the first match wins.
 type HTTPJSONScopeSignal struct {
-	Cause         kernel.OutcomeCause `json:"cause,omitempty"`
-	Codes         []string            `json:"codes,omitempty"`
-	Types         []string            `json:"types,omitempty"`
-	Statuses      []string            `json:"statuses,omitempty"`
-	MessageTokens []string            `json:"messageTokens,omitempty"`
-	Scope         kernel.OutcomeScope `json:"scope"`
+	Cause         kernel.OutcomeCause  `json:"cause,omitempty"`
+	Codes         []string             `json:"codes,omitempty"`
+	Types         []string             `json:"types,omitempty"`
+	Statuses      []string             `json:"statuses,omitempty"`
+	MessageTokens []string             `json:"messageTokens,omitempty"`
+	Fields        []HTTPJSONFieldMatch `json:"fields,omitempty"`
+	Scope         kernel.OutcomeScope  `json:"scope"`
+}
+
+// HTTPJSONFieldMatch matches a provider-specific JSON Pointer field. Values
+// within a matcher are alternatives; separate matchers on one scope signal
+// are conjunctive. Matching is case-insensitive after trimming whitespace.
+type HTTPJSONFieldMatch struct {
+	Path     string   `json:"path"`
+	Equals   []string `json:"equals,omitempty"`
+	Contains []string `json:"contains,omitempty"`
 }
 
 func (o ErrorClassifierOptions) Empty() bool {
@@ -151,13 +161,28 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 		if signal.Cause != "" && !validOutcomeCause(signal.Cause) {
 			return fmt.Errorf("error classifier scope signal %d has unsupported cause %q", index, signal.Cause)
 		}
-		if len(signal.Codes)+len(signal.Types)+len(signal.Statuses)+len(signal.MessageTokens) == 0 {
+		if len(signal.Codes)+len(signal.Types)+len(signal.Statuses)+len(signal.MessageTokens)+len(signal.Fields) == 0 {
 			return fmt.Errorf("error classifier scope signal %d has no matching evidence", index)
 		}
 		for _, values := range [][]string{signal.Codes, signal.Types, signal.Statuses, signal.MessageTokens} {
 			for _, value := range values {
 				if strings.TrimSpace(value) == "" {
 					return fmt.Errorf("error classifier scope signal %d has an empty matcher", index)
+				}
+			}
+		}
+		for fieldIndex, field := range signal.Fields {
+			if !validJSONPointer(field.Path) {
+				return fmt.Errorf("error classifier scope signal %d field matcher %d must have a valid absolute JSON pointer", index, fieldIndex)
+			}
+			if len(field.Equals)+len(field.Contains) == 0 {
+				return fmt.Errorf("error classifier scope signal %d field matcher %d has no values", index, fieldIndex)
+			}
+			for _, values := range [][]string{field.Equals, field.Contains} {
+				for _, value := range values {
+					if strings.TrimSpace(value) == "" {
+						return fmt.Errorf("error classifier scope signal %d field matcher %d has an empty value", index, fieldIndex)
+					}
 				}
 			}
 		}

@@ -130,8 +130,31 @@ func (HTTPJSONErrorClassifier) WithOptions(options ErrorClassifierOptions) (Erro
 	if err := options.HTTPJSON.Validate(); err != nil {
 		return nil, err
 	}
-	copy := *options.HTTPJSON
+	copy := cloneHTTPJSONErrorClassifierOptions(*options.HTTPJSON)
 	return HTTPJSONErrorClassifier{Options: &copy}, nil
+}
+
+func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions) HTTPJSONErrorClassifierOptions {
+	cloneStrings := func(values []string) []string { return append([]string(nil), values...) }
+	options.QuotaCodes = cloneStrings(options.QuotaCodes)
+	options.QuotaTypes = cloneStrings(options.QuotaTypes)
+	options.QuotaStatuses = cloneStrings(options.QuotaStatuses)
+	options.QuotaHTTPStatuses = append([]int(nil), options.QuotaHTTPStatuses...)
+	options.QuotaMessageTokens = cloneStrings(options.QuotaMessageTokens)
+	options.ScopeSignals = append([]HTTPJSONScopeSignal(nil), options.ScopeSignals...)
+	for index := range options.ScopeSignals {
+		signal := &options.ScopeSignals[index]
+		signal.Codes = cloneStrings(signal.Codes)
+		signal.Types = cloneStrings(signal.Types)
+		signal.Statuses = cloneStrings(signal.Statuses)
+		signal.MessageTokens = cloneStrings(signal.MessageTokens)
+		signal.Fields = append([]HTTPJSONFieldMatch(nil), signal.Fields...)
+		for fieldIndex := range signal.Fields {
+			signal.Fields[fieldIndex].Equals = cloneStrings(signal.Fields[fieldIndex].Equals)
+			signal.Fields[fieldIndex].Contains = cloneStrings(signal.Fields[fieldIndex].Contains)
+		}
+	}
+	return options
 }
 func (c HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorClass {
 	quotaEvidence := decodeHTTPErrorEvidence(body, c.Options).QuotaExhausted
@@ -228,7 +251,7 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	if outcome.Cause == kernel.CauseAuth && (c.Options == nil || c.Options.DefaultScope == "") && outcome.Scope == kernel.ScopeRoute {
 		outcome.Scope = kernel.ScopeConnection
 	}
-	if scope, matched := matchHTTPJSONScopeSignal(c.Options, errorEvidence, outcome.Cause); matched {
+	if scope, matched := matchHTTPJSONScopeSignal(c.Options, errorEvidence, outcome.Cause, body); matched {
 		outcome.Scope = scope
 	}
 	now := time.Now()
@@ -471,7 +494,7 @@ func mergeHTTPErrorDetails(outer, inner httpErrorDetails) httpErrorDetails {
 	return inner
 }
 
-func matchHTTPJSONScopeSignal(options *HTTPJSONErrorClassifierOptions, evidence httpErrorEvidence, cause kernel.OutcomeCause) (kernel.OutcomeScope, bool) {
+func matchHTTPJSONScopeSignal(options *HTTPJSONErrorClassifierOptions, evidence httpErrorEvidence, cause kernel.OutcomeCause, body []byte) (kernel.OutcomeScope, bool) {
 	if options == nil {
 		return "", false
 	}
@@ -491,9 +514,30 @@ func matchHTTPJSONScopeSignal(options *HTTPJSONErrorClassifierOptions, evidence 
 		if len(signal.MessageTokens) > 0 && !containsAny(evidence.Message, signal.MessageTokens...) {
 			continue
 		}
+		fieldsMatch := true
+		for _, field := range signal.Fields {
+			value := pointerText(body, field.Path)
+			if !matchesAny(value, field.Equals) && !matchesAnyContains(value, field.Contains) {
+				fieldsMatch = false
+				break
+			}
+		}
+		if !fieldsMatch {
+			continue
+		}
 		return signal.Scope, true
 	}
 	return "", false
+}
+
+func matchesAnyContains(value string, tokens []string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, token := range tokens {
+		if strings.Contains(value, strings.ToLower(strings.TrimSpace(token))) {
+			return true
+		}
+	}
+	return false
 }
 
 func rawJSONText(raw json.RawMessage) string {
