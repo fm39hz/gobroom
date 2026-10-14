@@ -469,6 +469,68 @@ fails; client success and upstream success are distinct outcomes.
 
 ## 5. Auth driver and interactive session
 
+Authentication is selected per connection, not fixed on the provider node. A
+provider definition declares one or more named credential modes; each mode
+binds an exact Auth primitive/options contract and an explicit credential
+presentation contract. The definition also names a default mode for setup UX,
+but that default is not a restriction on subsequently added connections:
+
+```json
+{
+  "defaultCredentialType": "api_key",
+  "authModes": [
+    {
+      "credentialType": "api_key",
+      "auth": { "kind": "auth", "id": "static-secret", "contractVersion": 1 },
+      "presentation": { "header": "Authorization", "prefix": "Bearer " }
+    },
+    {
+      "credentialType": "oauth2",
+      "auth": { "kind": "auth", "id": "oauth2", "contractVersion": 1 },
+      "authOptions": { "oauth": { "clientId": "…", "authUrl": "…", "tokenUrl": "…" } },
+      "presentation": {
+        "header": "Authorization", "prefix": "Bearer ",
+        "headers": { "anthropic-beta": "oauth-2025-04-20" }
+      }
+    }
+  ]
+}
+```
+
+The exact JSON field names are an implementation contract to freeze before
+provider-manifest conversion; the invariants are normative. A connection's
+`credentialType` selects both the auth flow and how its resolved credential is
+presented. The route snapshot binds that selection once, so refresh, usage,
+quota, inference and health-generation fingerprints all refer to the same
+connection mode. Validation rejects an undeclared mode. Empty credentials are
+accepted only when that selected auth flow advertises the matching interactive
+bootstrap capability. The provider-node default exists only to preselect a
+mode in setup forms; it must never reject another declared mode.
+
+Credential presentation is declarative and applied at a shared request
+boundary after protocol encoding. Provider adapters must not branch on
+`api_key` versus `oauth2`, nor hardcode an auth header when a route declares a
+presentation. The presentation contract supports a token header/prefix and
+non-secret static protocol headers; it cannot contain secret values. More
+complex request signing remains an Auth primitive's typed `Apply` capability,
+not provider-specific kernel logic. The same resolved credential mode is
+passed to quota/usage requests; an explicitly configured per-report credential
+header may override the default presentation where the provider API requires
+it.
+
+TUI/CLI catalogs expose the available modes, safe labels and per-mode setup
+schemas/capabilities, never auth options or secrets. A connection form selects
+one mode first, then renders only that mode's fields and authorization actions.
+Discovered models remain attached to their actual connection, so two modes of
+one provider can have different catalogs, entitlements, health and priority.
+
+The current implementation has not yet reached this contract: provider nodes
+still constrain all connections to one `auth_mode`, provider definitions bind
+one auth flow, and protocol adapters currently choose their header statically.
+M7 remains incomplete until selection and presentation cross the whole
+provider-definition → connection → immutable route → request path and are
+covered by dual-mode fake-upstream tests.
+
 Credential use and interactive setup are related contracts with separate
 lifecycles:
 
