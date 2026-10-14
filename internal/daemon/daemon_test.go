@@ -95,6 +95,22 @@ func (callbackOAuthFixture) ExchangeAuthorizationCode(_ context.Context, code, v
 	return kernel.Credential{Type: "oauth2", Secret: "loopback-access", RefreshToken: "loopback-refresh"}, nil
 }
 
+type blockingCallbackOAuthFixture struct {
+	callbackOAuthFixture
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (f *blockingCallbackOAuthFixture) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (kernel.Credential, error) {
+	close(f.entered)
+	select {
+	case <-f.release:
+		return kernel.Credential{Type: "oauth2", Secret: "stale-issued-access", RefreshToken: "stale-issued-refresh"}, nil
+	case <-ctx.Done():
+		return kernel.Credential{}, ctx.Err()
+	}
+}
+
 type serializedDeviceAuthFixture struct {
 	started chan struct{}
 	release chan struct{}
@@ -743,6 +759,67 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.authorization.cancel", Params: map[string]any{"sessionID": third.SessionID}})
 	if !cancelled.OK {
 		t.Fatalf("cancel authorization: %s", cancelled.Error)
+	}
+}
+
+func TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/oauth-credential-generation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "OAuth", Prefix: "oauth", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "oauth", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "oauth2", Secret: "credential-generation-old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flow := &blockingCallbackOAuthFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://identity.test/oauth/callback"}, entered: make(chan struct{}), release: make(chan struct{})}
+	d := &Daemon{
+		store: s, server: api.NewServer(s),
+		providerAuthFlowIDs: map[string]map[string]string{"oauth": {"oauth2": "oauth:oauth2"}},
+		authFlows:           map[string]provider.AuthFlow{"oauth:oauth2": flow},
+	}
+	challenge, err := d.startAuthorization(connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(challenge.AuthorizationURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := parsed.Query().Get("state")
+	callback := "https://identity.test/oauth/callback?code=approved&state=" + url.QueryEscape(state)
+	completed := make(chan error, 1)
+	var releaseOnce sync.Once
+	releaseExchange := func() { releaseOnce.Do(func() { close(flow.release) }) }
+	defer releaseExchange()
+	go func() {
+		_, completeErr := d.completeAuthorization(context.Background(), challenge.SessionID, state, "approved", callback)
+		completed <- completeErr
+	}()
+	select {
+	case <-flow.entered:
+	case <-time.After(time.Second):
+		t.Fatal("authorization exchange did not reach its controlled in-flight point")
+	}
+	if _, err := s.UpdateConnection(store.UpdateConnectionInput{ID: connection.ID, Secret: "credential-generation-new"}); err != nil {
+		releaseExchange()
+		t.Fatal(err)
+	}
+	releaseExchange()
+	if err := <-completed; err == nil {
+		t.Fatal("stale OAuth exchange succeeded after the connection credential changed")
+	}
+	stored, ok := s.ConnectionCredentialByID(connection.ID)
+	if !ok || stored.Secret != "credential-generation-new" {
+		t.Fatalf("newer connection credential was overwritten: stored=%#v ok=%v", stored, ok)
+	}
+	status, err := d.authorizationStatus(challenge.SessionID)
+	if err != nil || status.Status != "failed" {
+		t.Fatalf("stale authorization terminal state=%#v err=%v", status, err)
 	}
 }
 

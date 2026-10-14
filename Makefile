@@ -101,7 +101,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/adapter/openai -run '^(TestAnthropicMessagesRequestMapsToOpenAIResponsesFromTypedIR|TestAnthropicThinkingBudgetIsRejectedByResponsesBeforeEncoding|TestAnthropicEffortRouteRequiresSignedThinkingEgress|TestKernelExcludesOpenAIResponsesRouteForAnthropicThinkingBudgetBeforeDispatch)$$' -count=1
 	go test ./internal/store -run '^TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential$$' -count=1
 
-	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1
+	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1
 	go test ./internal/daemon -run '^(TestLoopbackCallbackAddressRejectsNonLocalAndInvalidRedirects|TestOAuthCallbackTargetMatchesExactRegisteredPathAndQuery)$$' -count=1
 	go test ./internal/daemon -run '^TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow$$' -count=1
 
