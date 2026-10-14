@@ -19,6 +19,11 @@ type AudioModule struct{}
 func (AudioModule) ID() string { return "example.audio" }
 
 func (AudioModule) Register(runtime *provider.RuntimeRegistry) error {
+	if err := runtime.RegisterAuthFactory("example-audio-auth", func(provider.AuthOptions) (provider.AuthFlow, error) {
+		return exampleAudioAuth{}, nil
+	}); err != nil {
+		return err
+	}
 	task := provider.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
 	if err := runtime.Primitives.Operations.RegisterRawPayload(task, "Audio transcription", "Transcribe an audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1},"language":{"type":"string"}},"required":["audio_url"],"additionalProperties":false}`), provider.ReplayNever); err != nil {
 		return err
@@ -33,6 +38,24 @@ func (AudioModule) Register(runtime *provider.RuntimeRegistry) error {
 		return err
 	}
 	return runtime.RegisterQuotaSource(audioQuotaSource{})
+}
+
+// exampleAudioAuth demonstrates that an out-of-tree Auth primitive can
+// derive request-codec context from its own connection credential state.
+type exampleAudioAuth struct{}
+
+func (exampleAudioAuth) ID() string { return "example-audio-auth" }
+func (exampleAudioAuth) SetupSchema() provider.SetupSchema {
+	return provider.SetupSchema{Fields: []provider.SetupField{{Name: "secret", Type: "string", Required: true, Secret: true}}}
+}
+func (exampleAudioAuth) Resolve(_ context.Context, input provider.AuthInput) (provider.Credential, error) {
+	if input.Secret == "" {
+		return provider.Credential{}, fmt.Errorf("account secret is required")
+	}
+	return provider.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret, AuthContext: provider.AuthContext{"userId": "user:" + input.Secret}}, nil
+}
+func (exampleAudioAuth) Refresh(_ context.Context, credential provider.Credential) (provider.Credential, error) {
+	return credential, nil
 }
 
 // audioQuotaSource demonstrates that the public QuotaSource contract can be
