@@ -42,7 +42,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 8
+	bundle.Version = 9
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +122,7 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 8 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+	if bundle.Version != 9 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
 		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
@@ -177,8 +177,8 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 8 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
-		t.Fatalf("connection assignment was not exported in bundle v8: %#v", bundle.Models)
+	if bundle.Version != 9 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
+		t.Fatalf("connection assignment was not exported in bundle v9: %#v", bundle.Models)
 	}
 	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
 		t.Fatalf("custom assignment bundle validation: %v", err)
@@ -225,7 +225,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 8 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-a"}) || !reflect.DeepEqual(bundle.Models[0].ConnectionAssignments, []store.ModelConnectionAssignment{{ConnectionID: "conn-a", Source: store.ModelAssignmentStaticCatalog}}) {
+	if bundle.Version != 9 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-a"}) || !reflect.DeepEqual(bundle.Models[0].ConnectionAssignments, []store.ModelConnectionAssignment{{ConnectionID: "conn-a", Source: store.ModelAssignmentStaticCatalog}}) {
 		t.Fatalf("static assignment bundle=%#v", bundle.Models)
 	}
 	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
@@ -446,7 +446,7 @@ func TestBundlePreservesSideBySideProviderDefinitionVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 8 || len(bundle.ProviderDefinitions) != 2 || bundle.ProviderDefinitions[0].ContractVersion != 1 || bundle.ProviderDefinitions[1].ContractVersion != 2 {
+	if bundle.Version != 9 || len(bundle.ProviderDefinitions) != 2 || bundle.ProviderDefinitions[0].ContractVersion != 1 || bundle.ProviderDefinitions[1].ContractVersion != 2 {
 		t.Fatalf("bundle did not preserve deterministic side-by-side provider contracts: %#v", bundle.ProviderDefinitions)
 	}
 	if err := ValidateBundleWithStrategies(bundle, strategies); err != nil {

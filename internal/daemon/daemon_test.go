@@ -443,7 +443,7 @@ func TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart(t *test
 		t.Fatal(err)
 	}
 	bundle := controlplane.ConfigBundle{
-		Version: 8, Dependencies: dependencies,
+		Version: 9, Dependencies: dependencies,
 		Providers:           []store.ProviderNode{{ID: "portable-node", Name: "Portable", Prefix: "portable", BaseURL: "https://provider.test/v1", Protocol: string(kernel.ProtocolOpenAIChat), DefinitionID: definition.ID, DefinitionContractVersion: definition.ContractVersion, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}},
 		ProviderDefinitions: []provider.ProviderDefinition{definition},
 	}
@@ -1680,7 +1680,7 @@ func TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch(t *testing.T
 
 func TestDaemonCompositionRootRegistersStaticProviderModule(t *testing.T) {
 	operationRef := extensions.Ref{Kind: "operation", ID: "fixture.audio.inspect", ContractVersion: 1}
-	module := provider.RuntimeModuleFunc{Name: "fixture.audio", Init: func(runtime *provider.RuntimeRegistry) error {
+	module := provider.RuntimeModuleFunc{Name: "fixture.audio", Version: "test-1", HostContractVersion: provider.RuntimeModuleHostContractVersion, Init: func(runtime *provider.RuntimeRegistry) error {
 		if err := runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio inspection", "Inspect an audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
 			return err
 		}

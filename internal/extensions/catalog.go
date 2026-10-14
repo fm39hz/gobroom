@@ -20,10 +20,37 @@ import (
 )
 
 const (
-	SchemaKind = "schema"
-	schemaHost = "schemas.gobroom.invalid"
-	draft2020  = "https://json-schema.org/draft/2020-12/schema"
+	SchemaKind            = "schema"
+	schemaHost            = "schemas.gobroom.invalid"
+	draft2020             = "https://json-schema.org/draft/2020-12/schema"
+	DependencyLockVersion = 2
 )
+
+// ModuleRef pins a statically linked implementation module and the host
+// contract it was built against. Version is deliberately opaque: GoBroom
+// compares it exactly and does not invent semver compatibility semantics.
+type ModuleRef struct {
+	ID                  string `json:"id"`
+	Version             string `json:"version"`
+	HostContractVersion uint64 `json:"hostContractVersion"`
+}
+
+func (r ModuleRef) Validate() error {
+	if strings.TrimSpace(r.ID) == "" || r.ID != strings.TrimSpace(r.ID) || strings.ContainsAny(r.ID, "\x00\r\n") {
+		return fmt.Errorf("module reference requires a trimmed, non-empty ID")
+	}
+	if strings.TrimSpace(r.Version) == "" || r.Version != strings.TrimSpace(r.Version) || strings.ContainsAny(r.Version, "\x00\r\n") {
+		return fmt.Errorf("module %q requires a trimmed, non-empty exact version", r.ID)
+	}
+	if r.HostContractVersion == 0 {
+		return fmt.Errorf("module %q requires a positive host contract version", r.ID)
+	}
+	return nil
+}
+
+func (r ModuleRef) Key() string {
+	return r.ID + "@" + r.Version + "/host-" + fmt.Sprint(r.HostContractVersion)
+}
 
 // Ref selects one exact contract. Contract versions are positive integers;
 // resolving a missing version never falls back to another version.
@@ -91,6 +118,7 @@ type ArtifactInterpreterBinding struct {
 
 type Descriptor struct {
 	Ref                   Ref                          `json:"ref"`
+	Module                *ModuleRef                   `json:"module,omitempty"`
 	ImplementationVersion string                       `json:"implementationVersion"`
 	DisplayName           string                       `json:"displayName"`
 	Description           string                       `json:"description"`
@@ -131,6 +159,7 @@ type DependencyLock struct {
 	Roots      []Ref          `json:"roots"`
 	Extensions []ExtensionPin `json:"extensions"`
 	Schemas    []SchemaPin    `json:"schemas"`
+	Modules    []ModuleRef    `json:"modules"`
 }
 
 type ExtensionPin struct {
@@ -157,10 +186,54 @@ type Catalog struct {
 	registrations map[Ref]registration
 	frozen        bool
 	snapshot      *Snapshot
+	activeModule  *ModuleRef
 }
 
 func NewCatalog() *Catalog {
 	return &Catalog{schemas: map[Ref]Schema{}, registrations: map[Ref]registration{}}
+}
+
+// RegisterModule scopes ownership metadata to one synchronous registration
+// callback. The callback is intentionally not a dynamic loader: callers must
+// already have linked the module into the process.
+func (c *Catalog) RegisterModule(module ModuleRef, register func() error) error {
+	if c == nil || register == nil {
+		return fmt.Errorf("extension catalog and module registration callback are required")
+	}
+	if err := module.Validate(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	if c.frozen {
+		c.mu.Unlock()
+		return fmt.Errorf("extension catalog is frozen")
+	}
+	if c.activeModule != nil {
+		c.mu.Unlock()
+		return fmt.Errorf("nested module registration is not supported")
+	}
+	c.activeModule = &module
+	c.mu.Unlock()
+	err := register()
+	c.mu.Lock()
+	c.activeModule = nil
+	c.mu.Unlock()
+	return err
+}
+
+func (c *Catalog) bindModule(descriptor Descriptor) (Descriptor, error) {
+	if c.activeModule == nil {
+		if descriptor.Module != nil {
+			return Descriptor{}, fmt.Errorf("extension %q cannot declare module ownership outside module registration", descriptor.Ref.Key())
+		}
+		return descriptor, nil
+	}
+	if descriptor.Module != nil && *descriptor.Module != *c.activeModule {
+		return Descriptor{}, fmt.Errorf("extension %q cannot override active module ownership", descriptor.Ref.Key())
+	}
+	module := *c.activeModule
+	descriptor.Module = &module
+	return descriptor, nil
 }
 
 // BindSchemaDocument attaches the registry's immutable resource URI and the
@@ -236,10 +309,6 @@ func (c *Catalog) Register(descriptor Descriptor, factory Factory) error {
 	if factory == nil {
 		return fmt.Errorf("extension factory is required")
 	}
-	prepared, err := prepareDescriptor(descriptor)
-	if err != nil {
-		return err
-	}
 	if c == nil {
 		return fmt.Errorf("extension catalog is nil")
 	}
@@ -247,6 +316,14 @@ func (c *Catalog) Register(descriptor Descriptor, factory Factory) error {
 	defer c.mu.Unlock()
 	if c.frozen {
 		return fmt.Errorf("extension catalog is frozen")
+	}
+	owned, err := c.bindModule(descriptor)
+	if err != nil {
+		return err
+	}
+	prepared, err := prepareDescriptor(owned)
+	if err != nil {
+		return err
 	}
 	if _, exists := c.registrations[prepared.Ref]; exists {
 		return fmt.Errorf("extension %q is already registered", prepared.Ref.Key())
@@ -256,10 +333,6 @@ func (c *Catalog) Register(descriptor Descriptor, factory Factory) error {
 }
 
 func (c *Catalog) RegisterDescriptor(descriptor Descriptor) error {
-	prepared, err := prepareDescriptor(descriptor)
-	if err != nil {
-		return err
-	}
 	if c == nil {
 		return fmt.Errorf("extension catalog is nil")
 	}
@@ -267,6 +340,14 @@ func (c *Catalog) RegisterDescriptor(descriptor Descriptor) error {
 	defer c.mu.Unlock()
 	if c.frozen {
 		return fmt.Errorf("extension catalog is frozen")
+	}
+	owned, err := c.bindModule(descriptor)
+	if err != nil {
+		return err
+	}
+	prepared, err := prepareDescriptor(owned)
+	if err != nil {
+		return err
 	}
 	if _, exists := c.registrations[prepared.Ref]; exists {
 		return fmt.Errorf("extension %q is already registered", prepared.Ref.Key())
@@ -278,6 +359,11 @@ func (c *Catalog) RegisterDescriptor(descriptor Descriptor) error {
 func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	if err := descriptor.Ref.Validate(); err != nil {
 		return Descriptor{}, err
+	}
+	if descriptor.Module != nil {
+		if err := descriptor.Module.Validate(); err != nil {
+			return Descriptor{}, fmt.Errorf("extension %q module: %w", descriptor.Ref.Key(), err)
+		}
 	}
 	if descriptor.Ref.Kind == SchemaKind {
 		return Descriptor{}, fmt.Errorf("schema descriptors must use RegisterSchema")
@@ -479,9 +565,10 @@ func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
 	if s == nil {
 		return DependencyLock{}, fmt.Errorf("extension snapshot is nil")
 	}
-	lock := DependencyLock{Version: 1}
+	lock := DependencyLock{Version: DependencyLockVersion}
 	extensionsSeen := map[Ref]bool{}
 	schemasSeen := map[Ref]bool{}
+	modulesSeen := map[ModuleRef]bool{}
 	var addRef func(Ref) error
 	var addSchema func(Ref) error
 	addSchema = func(ref Ref) error {
@@ -523,6 +610,10 @@ func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
 			Ref: ref, ImplementationVersion: item.descriptor.ImplementationVersion,
 			DescriptorSHA256: hex.EncodeToString(descriptorDigest[:]),
 		})
+		if item.descriptor.Module != nil && !modulesSeen[*item.descriptor.Module] {
+			modulesSeen[*item.descriptor.Module] = true
+			lock.Modules = append(lock.Modules, *item.descriptor.Module)
+		}
 		for _, schemaRef := range []*Ref{item.descriptor.OptionsSchemaRef, item.descriptor.InputSchemaRef, item.descriptor.ResultSchemaRef} {
 			if schemaRef != nil {
 				if err := addSchema(*schemaRef); err != nil {
@@ -569,13 +660,14 @@ func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
 	}
 	sort.Slice(lock.Extensions, func(i, j int) bool { return lock.Extensions[i].Ref.Key() < lock.Extensions[j].Ref.Key() })
 	sort.Slice(lock.Schemas, func(i, j int) bool { return lock.Schemas[i].Ref.Key() < lock.Schemas[j].Ref.Key() })
+	sort.Slice(lock.Modules, func(i, j int) bool { return lock.Modules[i].Key() < lock.Modules[j].Key() })
 	return lock, nil
 }
 
 // ValidateDependencyLock verifies exact implementation descriptors and schema
 // digests, then recomputes the closure so omitted transitive dependencies fail.
 func (s *Snapshot) ValidateDependencyLock(lock DependencyLock) error {
-	if lock.Version != 1 {
+	if lock.Version != DependencyLockVersion {
 		return fmt.Errorf("unsupported extension dependency lock version %d", lock.Version)
 	}
 	expected, err := s.LockDependencies(lock.Roots)
@@ -1040,6 +1132,10 @@ func validateBounds(descriptor Descriptor) error {
 }
 
 func cloneDescriptor(descriptor Descriptor) Descriptor {
+	if descriptor.Module != nil {
+		copy := *descriptor.Module
+		descriptor.Module = &copy
+	}
 	descriptor.Dependencies = append([]Ref(nil), descriptor.Dependencies...)
 	descriptor.SemanticContracts = append([]Ref(nil), descriptor.SemanticContracts...)
 	descriptor.ArtifactInputs = append([]ArtifactInput(nil), descriptor.ArtifactInputs...)

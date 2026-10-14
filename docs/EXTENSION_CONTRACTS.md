@@ -29,6 +29,16 @@ may register implementations and descriptors; adding one must not edit the
 kernel's model types, provider dispatch, storage columns or generic frontend
 workflow. Built-in and user definitions resolve through the same catalog.
 
+Each linked module declares an opaque, exact build version and a positive
+GoBroom host-contract version. GoBroom does not infer semver compatibility:
+the pair is compared exactly. Descriptors registered during module setup carry
+that owner, and a dependency lock pins only modules reachable from its exact
+extension roots. Bundle validation therefore rejects a missing module build
+or host contract before configuration is applied. Module code remains
+statically linked; this pin records the required implementation, it does not
+download, dynamically load or distribute executable code. Module registration
+is synchronous startup composition, not a concurrent hot-plug API.
+
 The public Go authoring surface is `github.com/fm39hz/gobroom/pkg/provider`;
 custom binaries host statically linked modules with
 `github.com/fm39hz/gobroom/pkg/daemon.NewWithProviderModules`. Modules register
@@ -36,8 +46,8 @@ implementation code once, while ordinary provider definitions remain separate
 JSON manifests that reference exact primitive/task versions. This is a
 compile-time extension model, not runtime `plugin.so` loading or a remote code
 execution mechanism. The external-module example and its daemon-hosting test
-are tracked in M15 conformance; a published module distribution/versioning
-policy remains open.
+are tracked in M15 conformance; module resolution/distribution remains a
+separate concern from exact dependency pinning.
 
 Catalog compilation happens off the serving path. Schemas, factories,
 dependency resolution and plan templates are prepared once per snapshot.
@@ -330,7 +340,7 @@ The compatibility planner admits a lossy mapping only when every reported loss
 ID is granted and not denied, and durable usage records retain the resulting
 fidelity plus each loss's requested/effective values, semantic paths and
 granting model-node sources. The server ceiling is exposed through the
-`compatibility loss-ceiling` CLI and portable config bundle v8, and its changes
+`compatibility loss-ceiling` CLI and portable config bundle v9, and its changes
 participate in bundle dry-run diff. Safe provider definitions are embedded in
 v6; opaque or potentially sensitive definitions remain external exact module
 dependencies and are never copied into the secret-free bundle.

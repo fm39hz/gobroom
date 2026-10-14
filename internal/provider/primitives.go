@@ -684,16 +684,22 @@ type RuntimeRegistry struct {
 // composition root; manifests bind their exact contracts without adding
 // provider-specific branches to the kernel or daemon request path.
 type RuntimeModule interface {
-	ID() string
+	ModuleDescriptor() extensions.ModuleRef
 	Register(*RuntimeRegistry) error
 }
 
+const RuntimeModuleHostContractVersion uint64 = 1
+
 type RuntimeModuleFunc struct {
-	Name string
-	Init func(*RuntimeRegistry) error
+	Name                string
+	Version             string
+	HostContractVersion uint64
+	Init                func(*RuntimeRegistry) error
 }
 
-func (m RuntimeModuleFunc) ID() string { return m.Name }
+func (m RuntimeModuleFunc) ModuleDescriptor() extensions.ModuleRef {
+	return extensions.ModuleRef{ID: m.Name, Version: m.Version, HostContractVersion: m.HostContractVersion}
+}
 func (m RuntimeModuleFunc) Register(registry *RuntimeRegistry) error {
 	if m.Init == nil {
 		return fmt.Errorf("runtime module %q has no registration function", m.Name)
@@ -875,21 +881,24 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 			return nil, registrationErr
 		}
 	}
-	seenModules := make(map[string]bool, len(modules))
+	seenModules := make(map[extensions.ModuleRef]bool, len(modules))
 	for _, module := range modules {
 		if module == nil {
 			return nil, fmt.Errorf("runtime module must not be nil")
 		}
-		id := strings.TrimSpace(module.ID())
-		if id == "" || id != module.ID() {
-			return nil, fmt.Errorf("runtime module ID must be non-empty and trimmed")
+		moduleRef := module.ModuleDescriptor()
+		if err := moduleRef.Validate(); err != nil {
+			return nil, err
 		}
-		if seenModules[id] {
-			return nil, fmt.Errorf("runtime module %q is registered more than once", id)
+		if moduleRef.HostContractVersion != RuntimeModuleHostContractVersion {
+			return nil, fmt.Errorf("runtime module %q requires unsupported host contract %d (supported: %d)", moduleRef.Key(), moduleRef.HostContractVersion, RuntimeModuleHostContractVersion)
 		}
-		seenModules[id] = true
-		if err := module.Register(runtime); err != nil {
-			return nil, fmt.Errorf("register runtime module %q: %w", id, err)
+		if seenModules[moduleRef] {
+			return nil, fmt.Errorf("runtime module %q is registered more than once", moduleRef.Key())
+		}
+		seenModules[moduleRef] = true
+		if err := runtime.Primitives.catalog.RegisterModule(moduleRef, func() error { return module.Register(runtime) }); err != nil {
+			return nil, fmt.Errorf("register runtime module %q: %w", moduleRef.Key(), err)
 		}
 	}
 	if err := runtime.loadEmbeddedBuiltinDefinitions(); err != nil {

@@ -16,7 +16,9 @@ import (
 // credentials, manifests, model graph and daemon lifecycle.
 type AudioModule struct{}
 
-func (AudioModule) ID() string { return "example.audio" }
+func (AudioModule) ModuleDescriptor() provider.ModuleRef {
+	return provider.ModuleRef{ID: "example.audio", Version: "1.0.0", HostContractVersion: provider.RuntimeModuleHostContractVersion}
+}
 
 func (AudioModule) Register(runtime *provider.RuntimeRegistry) error {
 	if err := runtime.RegisterAuthFactory("example-audio-auth", func(provider.AuthOptions) (provider.AuthFlow, error) {

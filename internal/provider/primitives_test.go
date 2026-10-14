@@ -307,7 +307,7 @@ func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 
 func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *testing.T) {
 	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
-	module := RuntimeModuleFunc{Name: "fixture.audio", Init: func(runtime *RuntimeRegistry) error {
+	module := RuntimeModuleFunc{Name: "fixture.audio", Version: "test-1", HostContractVersion: RuntimeModuleHostContractVersion, Init: func(runtime *RuntimeRegistry) error {
 		return runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio transcription", "Transcribe a declared audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1},"language":{"type":"string"}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever)
 	}}
 	runtime, err := NewRuntimeRegistryWithModules(module)
@@ -337,6 +337,18 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 	}
 	if err := runtime.LoadDefinitionFile(manifestPath); err != nil {
 		t.Fatal(err)
+	}
+	snapshot, err := runtime.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := snapshot.LockDependencies([]extensions.Ref{operationRef})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantModule := extensions.ModuleRef{ID: "fixture.audio", Version: "test-1", HostContractVersion: RuntimeModuleHostContractVersion}
+	if len(lock.Modules) != 1 || lock.Modules[0] != wantModule {
+		t.Fatalf("operation dependency did not pin its owning static module: %#v", lock.Modules)
 	}
 	bindings, err := runtime.BuildBindings()
 	if err != nil {
@@ -373,6 +385,13 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 	}
 	if len(metadata) == 0 {
 		t.Fatal("provider catalog omitted manifest-bound module definition")
+	}
+}
+
+func TestRuntimeRejectsUnsupportedProviderModuleHostContract(t *testing.T) {
+	module := RuntimeModuleFunc{Name: "fixture.unsupported-host", Version: "build-a", HostContractVersion: RuntimeModuleHostContractVersion + 1, Init: func(*RuntimeRegistry) error { return nil }}
+	if _, err := NewRuntimeRegistryWithModules(module); err == nil || !strings.Contains(err.Error(), "unsupported host contract") {
+		t.Fatalf("unsupported module host contract was accepted: %v", err)
 	}
 }
 

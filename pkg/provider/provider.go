@@ -19,6 +19,7 @@ import (
 
 type RuntimeModule = core.RuntimeModule
 type RuntimeModuleFunc = core.RuntimeModuleFunc
+type ModuleRef = extensions.ModuleRef
 type RuntimeRegistry = core.RuntimeRegistry
 type RuntimeBinding = core.RuntimeBinding
 type PrimitiveRegistry = core.PrimitiveRegistry
@@ -28,6 +29,9 @@ type OperationBinding = core.OperationBinding
 type PrimitiveKind = core.PrimitiveKind
 type PrimitiveRef = core.PrimitiveRef
 type CapabilitySet = core.CapabilitySet
+
+const RuntimeModuleHostContractVersion = core.RuntimeModuleHostContractVersion
+
 type OAuthFlowOptions = core.OAuthFlowOptions
 type AuthOptions = core.AuthOptions
 type AuthModeDefinition = core.AuthModeDefinition

@@ -145,6 +145,73 @@ func TestCatalogPinsSchemaAndModuleVersionsAndValidatesBeforeFactory(t *testing.
 	}
 }
 
+func TestDependencyLockPinsOnlyReachableStaticModulesAndHostContracts(t *testing.T) {
+	catalog := NewCatalog()
+	moduleV1 := ModuleRef{ID: "vendor.codec", Version: "build-2026.10.1", HostContractVersion: 1}
+	moduleV2 := ModuleRef{ID: "vendor.codec", Version: "build-2026.10.2", HostContractVersion: 2}
+	codecV1 := ref("request-codec", "vendor.codec.chat", 1)
+	codecV2 := ref("request-codec", "vendor.codec.chat", 2)
+	register := func(module ModuleRef, extension Ref) {
+		t.Helper()
+		if err := catalog.RegisterModule(module, func() error {
+			return catalog.Register(Descriptor{Ref: extension, ImplementationVersion: "1", DisplayName: "Codec", Description: "fixture"}, func(json.RawMessage) (any, error) { return struct{}{}, nil })
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	register(moduleV1, codecV1)
+	register(moduleV2, codecV2)
+	snapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := snapshot.LockDependencies([]Ref{codecV2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lock.Version != DependencyLockVersion || len(lock.Modules) != 1 || lock.Modules[0] != moduleV2 {
+		t.Fatalf("dependency lock did not pin only exact reachable module: %#v", lock)
+	}
+	if err := snapshot.ValidateDependencyLock(lock); err != nil {
+		t.Fatalf("valid module pin rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(*DependencyLock){
+		"version":       func(lock *DependencyLock) { lock.Modules[0].Version = "build-2026.10.1" },
+		"host contract": func(lock *DependencyLock) { lock.Modules[0].HostContractVersion++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			modified := lock
+			modified.Modules = append([]ModuleRef(nil), lock.Modules...)
+			mutate(&modified)
+			if err := snapshot.ValidateDependencyLock(modified); err == nil {
+				t.Fatal("mismatched exact module pin was accepted")
+			}
+		})
+	}
+}
+
+func TestModuleOwnershipCannotBeSpoofedOrRegisteredNested(t *testing.T) {
+	catalog := NewCatalog()
+	module := ModuleRef{ID: "vendor.codec", Version: "1", HostContractVersion: 1}
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{name: "spoofed outside module", call: func() error {
+			return catalog.Register(Descriptor{Ref: ref("codec", "spoof", 1), Module: &module, ImplementationVersion: "1", DisplayName: "x", Description: "y"}, func(json.RawMessage) (any, error) { return nil, nil })
+		}},
+		{name: "nested module", call: func() error {
+			return catalog.RegisterModule(module, func() error { return catalog.RegisterModule(module, func() error { return nil }) })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(); err == nil {
+				t.Fatal("invalid module ownership was accepted")
+			}
+		})
+	}
+}
+
 func TestCatalogRejectsRemoteSchemaReferencesDuringFreeze(t *testing.T) {
 	catalog := NewCatalog()
 	schemaRef := ref(SchemaKind, "vendor.example.remote-ref", 1)

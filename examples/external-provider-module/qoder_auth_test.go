@@ -73,7 +73,9 @@ func (qoderFixtureAuth) Refresh(_ context.Context, credential provider.Credentia
 
 type qoderFixtureModule struct{}
 
-func (qoderFixtureModule) ID() string { return "example.qoder-signing-fixture" }
+func (qoderFixtureModule) ModuleDescriptor() provider.ModuleRef {
+	return provider.ModuleRef{ID: "example.qoder-signing-fixture", Version: "1.0.0", HostContractVersion: provider.RuntimeModuleHostContractVersion}
+}
 func (qoderFixtureModule) Register(runtime *provider.RuntimeRegistry) error {
 	if err := runtime.RegisterAuthFactory("example.qoder-auth", func(provider.AuthOptions) (provider.AuthFlow, error) {
 		return qoderFixtureAuth{}, nil

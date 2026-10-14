@@ -97,7 +97,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 8, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	bundle := ConfigBundle{Version: 9, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
 	if catalog != nil {
 		providerDefinitions := make(map[extensions.Ref]provider.ProviderDefinition)
 		for _, item := range providers {
@@ -154,7 +154,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 		if len(roots) > 0 {
 			return ConfigBundle{}, fmt.Errorf("extension catalog is required to export dependencies")
 		}
-		bundle.Dependencies = extensions.DependencyLock{Version: 1}
+		bundle.Dependencies = extensions.DependencyLock{Version: extensions.DependencyLockVersion}
 	} else {
 		bundle.Dependencies, err = catalog.LockDependencies(roots)
 		if err != nil {
@@ -165,10 +165,10 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 8 {
+	if bundle.Version != 9 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
-	if bundle.Dependencies.Version != 1 {
+	if bundle.Dependencies.Version != extensions.DependencyLockVersion {
 		return fmt.Errorf("unsupported or missing extension dependency lock version %d", bundle.Dependencies.Version)
 	}
 	if !sameExtensionRefs(bundle.Dependencies.Roots, bundleDependencyRoots(bundle)) {
