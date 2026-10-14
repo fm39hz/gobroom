@@ -149,6 +149,9 @@ The `http-json-quota` source accepts per-binding `quotaSourceOptions`. A
 manifest can map multiple named windows from one quota report by JSON Pointer,
 including object-map windows, arrays with a `namePath`, remaining percentages,
 reset timestamps, exhausted statuses and explicitly unreported windows. It
+also supports an `any_positive` aggregation over a selected array/object plus
+an explicit root status gate. The generic DeepSeek manifest fixture uses this
+to model “available when any reported currency balance is positive.” It
 can also compose up to eight report endpoints, each with its own path/query and
 window mappings. `failureMode: "keep_available"` retains successful report
 windows when another endpoint fails; the default is fail-all. Response bodies

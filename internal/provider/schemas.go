@@ -71,6 +71,10 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
   "windows":{"type":"array","maxItems":64,"items":{"type":"object","properties":{
     "name":{"type":"string","minLength":1},
     "itemsPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "aggregation":{"enum":["any_positive"]},
+    "aggregationValuePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "aggregationStatusPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "aggregationStatusValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
     "namePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "usedPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
@@ -83,13 +87,17 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
     "ignoreWhenPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "ignoreWhenValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
   },"anyOf":[{"required":["name"]},{"required":["namePath"]},{"required":["itemsPath"]}],
-  "dependentRequired":{"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},
+  "dependentRequired":{"aggregation":["aggregationValuePath","itemsPath","name"],"aggregationValuePath":["aggregation"],"aggregationStatusPath":["aggregationStatusValues"],"aggregationStatusValues":["aggregationStatusPath"],"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},
   "additionalProperties":false}},
   "reports":{"type":"array","maxItems":8,"items":{"type":"object","required":["windows"],"properties":{
     "endpointOptions":{"type":"object","properties":{"path":{"type":"string"},"query":{"type":"object","additionalProperties":{"type":"string"}}},"anyOf":[{"required":["path"]},{"required":["query"]}],"additionalProperties":false},
     "windows":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{
       "name":{"type":"string","minLength":1},
       "itemsPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+      "aggregation":{"enum":["any_positive"]},
+      "aggregationValuePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+      "aggregationStatusPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+      "aggregationStatusValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
       "namePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "usedPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
@@ -102,7 +110,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
       "ignoreWhenPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "ignoreWhenValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
     },"anyOf":[{"required":["name"]},{"required":["namePath"]},{"required":["itemsPath"]}],
-    "dependentRequired":{"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},"additionalProperties":false}}
+    "dependentRequired":{"aggregation":["aggregationValuePath","itemsPath","name"],"aggregationValuePath":["aggregation"],"aggregationStatusPath":["aggregationStatusValues"],"aggregationStatusValues":["aggregationStatusPath"],"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},"additionalProperties":false}}
   },"additionalProperties":false}},
   "failureMode":{"enum":["fail_all","keep_available"]}
 },

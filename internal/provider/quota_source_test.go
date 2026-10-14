@@ -258,3 +258,100 @@ func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing
 		t.Fatalf("successful multi-report normalization: snapshots=%#v err=%v", snapshots, err)
 	}
 }
+
+func TestDeepSeekQuotaManifestAggregatesCurrencyBalanceAvailability(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.LoadDefinitionFile("../../manifests/builtin/generic.json"); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := registry.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := bindings[RuntimeBindingKey("deepseek", OperationQuota)]
+	if binding.QuotaSource == nil || binding.EndpointOptions.Path != "/user/balance" {
+		t.Fatalf("DeepSeek quota binding=%#v", binding)
+	}
+	source := registry.QuotaSourcesForBindings(bindings)[binding.QuotaSourceRef]
+	transport := &quotaTransportFixture{}
+	request := QuotaRequest{
+		Credential: kernel.Credential{Secret: "deepseek-key"},
+		Route:      kernel.Route{NodeID: "deepseek", CredentialID: "account", ExternalModel: "deepseek-chat", BaseURL: "https://api.deepseek.com"},
+		Endpoint:   binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
+	}
+	for _, fixture := range []struct {
+		name      string
+		body      string
+		remaining float64
+		count     int
+	}{
+		{name: "USD zero but CNY positive", body: `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"0.00"},{"currency":"CNY","total_balance":"100.00"}]}`, remaining: 1, count: 1},
+		{name: "all currencies exhausted", body: `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"0.00"},{"currency":"CNY","total_balance":"0.00"}]}`, remaining: 0, count: 1},
+		{name: "provider unavailable overrides positive balance", body: `{"is_available":false,"balance_infos":[{"currency":"USD","total_balance":"50.00"}]}`, remaining: 0, count: 1},
+		{name: "no balance rows is unknown", body: `{"is_available":true,"balance_infos":[]}`, count: 0},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			transport.body = fixture.body
+			snapshots, err := source.Fetch(context.Background(), request)
+			if err != nil || len(snapshots) != fixture.count {
+				t.Fatalf("DeepSeek quota snapshots=%#v err=%v", snapshots, err)
+			}
+			if transport.request.URL != "https://api.deepseek.com/user/balance" || transport.request.Headers.Get("Authorization") != "Bearer deepseek-key" {
+				t.Fatalf("DeepSeek quota request=%#v", transport.request)
+			}
+			if fixture.count > 0 && (snapshots[0].WindowName != "balance-availability" || snapshots[0].Remaining == nil || *snapshots[0].Remaining != fixture.remaining) {
+				t.Fatalf("DeepSeek availability snapshot=%#v", snapshots[0])
+			}
+		})
+	}
+}
+
+func TestDeepSeekQuotaManifestAggregatesAlternativeCurrencyBalances(t *testing.T) {
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.LoadDefinitionFile("../../manifests/builtin/generic.json"); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := registry.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := bindings[RuntimeBindingKey("deepseek", OperationQuota)]
+	if binding.QuotaSource == nil || binding.EndpointOptions.Path != "/user/balance" {
+		t.Fatalf("DeepSeek quota binding=%#v", binding)
+	}
+	source := registry.QuotaSourcesForBindings(bindings)[binding.QuotaSourceRef]
+	transport := &quotaTransportFixture{}
+	request := QuotaRequest{
+		Credential: kernel.Credential{Secret: "deepseek-key"},
+		Route:      kernel.Route{NodeID: "deepseek", CredentialID: "account", ExternalModel: "deepseek-chat", BaseURL: "https://api.deepseek.com"},
+		Endpoint:   binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
+	}
+	for _, fixture := range []struct {
+		name      string
+		body      string
+		remaining float64
+		wantCount int
+	}{
+		{name: "USD zero but CNY positive", body: `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"0.00"},{"currency":"CNY","total_balance":"100.00"}]}`, remaining: 1, wantCount: 1},
+		{name: "all currencies exhausted", body: `{"is_available":true,"balance_infos":[{"currency":"USD","total_balance":"0.00"},{"currency":"CNY","total_balance":"0.00"}]}`, remaining: 0, wantCount: 1},
+		{name: "provider unavailable overrides positive balance", body: `{"is_available":false,"balance_infos":[{"currency":"USD","total_balance":"50.00"}]}`, remaining: 0, wantCount: 1},
+		{name: "no balance rows is unknown", body: `{"is_available":true,"balance_infos":[]}`, wantCount: 0},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			transport.body = fixture.body
+			snapshots, err := source.Fetch(context.Background(), request)
+			if err != nil || len(snapshots) != fixture.wantCount {
+				t.Fatalf("DeepSeek quota snapshots=%#v err=%v", snapshots, err)
+			}
+			if fixture.wantCount == 1 && (snapshots[0].WindowName != "balance-availability" || snapshots[0].Remaining == nil || *snapshots[0].Remaining != fixture.remaining) {
+				t.Fatalf("DeepSeek availability snapshot=%#v", snapshots[0])
+			}
+		})
+	}
+}

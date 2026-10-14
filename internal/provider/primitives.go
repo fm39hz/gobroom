@@ -352,22 +352,29 @@ type HTTPJSONQuotaReport struct {
 }
 
 // HTTPJSONQuotaWindow maps either one named object or each item under
-// ItemsPath into a separate normalized quota snapshot. For object maps, the
-// object key is used as the window name unless NamePath is configured.
+// ItemsPath into normalized quota snapshots. For object maps, the object key
+// is used as the window name unless NamePath is configured. The any_positive
+// aggregation emits one binary availability window when at least one item
+// has a positive AggregationValuePath; an optional status gate can override
+// that result using the root report object.
 type HTTPJSONQuotaWindow struct {
-	Name                   string   `json:"name,omitempty"`
-	ItemsPath              string   `json:"itemsPath,omitempty"`
-	NamePath               string   `json:"namePath,omitempty"`
-	UsedPath               string   `json:"usedPath,omitempty"`
-	LimitPath              string   `json:"limitPath,omitempty"`
-	RemainingPath          string   `json:"remainingPath,omitempty"`
-	RemainingFromLimitUsed bool     `json:"remainingFromLimitUsed,omitempty"`
-	RemainingPercentPath   string   `json:"remainingPercentPath,omitempty"`
-	ResetAtPath            string   `json:"resetAtPath,omitempty"`
-	ExhaustedStatusPath    string   `json:"exhaustedStatusPath,omitempty"`
-	ExhaustedStatusValues  []string `json:"exhaustedStatusValues,omitempty"`
-	IgnoreWhenPath         string   `json:"ignoreWhenPath,omitempty"`
-	IgnoreWhenValues       []string `json:"ignoreWhenValues,omitempty"`
+	Name                    string   `json:"name,omitempty"`
+	ItemsPath               string   `json:"itemsPath,omitempty"`
+	Aggregation             string   `json:"aggregation,omitempty"`
+	AggregationValuePath    string   `json:"aggregationValuePath,omitempty"`
+	AggregationStatusPath   string   `json:"aggregationStatusPath,omitempty"`
+	AggregationStatusValues []string `json:"aggregationStatusValues,omitempty"`
+	NamePath                string   `json:"namePath,omitempty"`
+	UsedPath                string   `json:"usedPath,omitempty"`
+	LimitPath               string   `json:"limitPath,omitempty"`
+	RemainingPath           string   `json:"remainingPath,omitempty"`
+	RemainingFromLimitUsed  bool     `json:"remainingFromLimitUsed,omitempty"`
+	RemainingPercentPath    string   `json:"remainingPercentPath,omitempty"`
+	ResetAtPath             string   `json:"resetAtPath,omitempty"`
+	ExhaustedStatusPath     string   `json:"exhaustedStatusPath,omitempty"`
+	ExhaustedStatusValues   []string `json:"exhaustedStatusValues,omitempty"`
+	IgnoreWhenPath          string   `json:"ignoreWhenPath,omitempty"`
+	IgnoreWhenValues        []string `json:"ignoreWhenValues,omitempty"`
 }
 
 func (o HTTPJSONQuotaOptions) Validate() error {
@@ -418,11 +425,12 @@ func validateHTTPJSONQuotaWindows(windows []HTTPJSONQuotaWindow) error {
 		if window.ItemsPath == "" && strings.TrimSpace(window.Name) == "" && window.NamePath == "" {
 			return fmt.Errorf("quota window %d requires a name, namePath or itemsPath", index)
 		}
-		if window.ItemsPath != "" && window.Name != "" {
+		if window.ItemsPath != "" && window.Name != "" && window.Aggregation != "any_positive" {
 			return fmt.Errorf("quota window %d cannot combine a static name with itemsPath", index)
 		}
 		for _, item := range []struct{ field, path string }{
-			{"itemsPath", window.ItemsPath}, {"namePath", window.NamePath}, {"usedPath", window.UsedPath},
+			{"itemsPath", window.ItemsPath}, {"aggregationValuePath", window.AggregationValuePath},
+			{"aggregationStatusPath", window.AggregationStatusPath}, {"namePath", window.NamePath}, {"usedPath", window.UsedPath},
 			{"limitPath", window.LimitPath}, {"remainingPath", window.RemainingPath},
 			{"remainingPercentPath", window.RemainingPercentPath}, {"resetAtPath", window.ResetAtPath},
 			{"exhaustedStatusPath", window.ExhaustedStatusPath}, {"ignoreWhenPath", window.IgnoreWhenPath},
@@ -437,16 +445,32 @@ func validateHTTPJSONQuotaWindows(windows []HTTPJSONQuotaWindow) error {
 		if (window.IgnoreWhenPath == "") != (len(window.IgnoreWhenValues) == 0) {
 			return fmt.Errorf("quota window %d must configure ignore path and values together", index)
 		}
+		if window.Aggregation != "" && window.Aggregation != "any_positive" {
+			return fmt.Errorf("quota window %d aggregation %q is unsupported", index, window.Aggregation)
+		}
+		if window.Aggregation == "any_positive" {
+			if window.ItemsPath == "" || window.Name == "" || window.NamePath != "" || window.AggregationValuePath == "" {
+				return fmt.Errorf("quota window %d any_positive aggregation requires name, itemsPath and aggregationValuePath", index)
+			}
+			if (window.AggregationStatusPath == "") != (len(window.AggregationStatusValues) == 0) {
+				return fmt.Errorf("quota window %d aggregation status path and values must be configured together", index)
+			}
+			if window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "" || window.RemainingPercentPath != "" || window.ExhaustedStatusPath != "" {
+				return fmt.Errorf("quota window %d any_positive aggregation cannot combine scalar quota fields", index)
+			}
+		} else if window.AggregationValuePath != "" || window.AggregationStatusPath != "" || len(window.AggregationStatusValues) > 0 {
+			return fmt.Errorf("quota window %d aggregation fields require aggregation=any_positive", index)
+		}
 		if window.RemainingPercentPath != "" && (window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "") {
 			return fmt.Errorf("quota window %d cannot combine remainingPercentPath with absolute amount paths", index)
 		}
 		if window.RemainingFromLimitUsed && (window.UsedPath == "" || window.LimitPath == "" || window.RemainingPath != "" || window.RemainingPercentPath != "") {
 			return fmt.Errorf("quota window %d remainingFromLimitUsed requires limitPath and usedPath only", index)
 		}
-		if window.UsedPath == "" && window.LimitPath == "" && window.RemainingPath == "" && window.RemainingPercentPath == "" && window.ResetAtPath == "" && window.ExhaustedStatusPath == "" {
+		if window.Aggregation == "" && window.UsedPath == "" && window.LimitPath == "" && window.RemainingPath == "" && window.RemainingPercentPath == "" && window.ResetAtPath == "" && window.ExhaustedStatusPath == "" {
 			return fmt.Errorf("quota window %d has no measurable fields", index)
 		}
-		for _, values := range [][]string{window.ExhaustedStatusValues, window.IgnoreWhenValues} {
+		for _, values := range [][]string{window.ExhaustedStatusValues, window.IgnoreWhenValues, window.AggregationStatusValues} {
 			for _, value := range values {
 				if strings.TrimSpace(value) == "" {
 					return fmt.Errorf("quota window %d has an empty status matcher", index)

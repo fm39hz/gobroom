@@ -235,6 +235,34 @@
           "id": "openai-models",
           "contractVersion": 1
         }
+      },
+      "quota": {
+        "endpoint": {
+          "kind": "endpoint",
+          "id": "http-json",
+          "contractVersion": 1
+        },
+        "endpointOptions": {"path": "/user/balance"},
+        "transport": {
+          "kind": "transport",
+          "id": "http",
+          "contractVersion": 1
+        },
+        "quotaSource": {
+          "kind": "quota_source",
+          "id": "http-json-quota",
+          "contractVersion": 1
+        },
+        "quotaSourceOptions": {
+          "windows": [{
+            "name": "balance-availability",
+            "itemsPath": "/balance_infos",
+            "aggregation": "any_positive",
+            "aggregationValuePath": "/total_balance",
+            "aggregationStatusPath": "/is_available",
+            "aggregationStatusValues": ["true"]
+          }]
+        }
       }
     },
     "capabilities": {
@@ -242,7 +270,8 @@
       "messages": true,
       "streaming": true,
       "tools": true,
-      "thinking": true
+      "thinking": true,
+      "quota": true
     },
     "contractVersion": 1
   },

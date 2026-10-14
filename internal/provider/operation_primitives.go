@@ -1175,6 +1175,39 @@ func DecodeQuotaJSONWithOptions(data []byte, route kernel.Route, defaultWindow s
 		if err != nil {
 			return nil, fmt.Errorf("decode quota window %q rows: %w", mapping.Name, err)
 		}
+		if mapping.Aggregation == "any_positive" {
+			if len(rows) == 0 {
+				continue
+			}
+			available := false
+			for _, row := range rows {
+				value := parseJSONFloat(pointerValue(row.raw, mapping.AggregationValuePath))
+				if value != nil && *value > 0 {
+					available = true
+					break
+				}
+			}
+			if mapping.AggregationStatusPath != "" && !matchesAny(pointerText(data, mapping.AggregationStatusPath), mapping.AggregationStatusValues) {
+				available = false
+			}
+			used, remaining := 1.0, 0.0
+			if available {
+				used, remaining = 0, 1
+			}
+			if _, duplicate := seenWindows[strings.ToLower(mapping.Name)]; duplicate {
+				return nil, fmt.Errorf("quota report contains duplicate window name %q", mapping.Name)
+			}
+			seenWindows[strings.ToLower(mapping.Name)] = struct{}{}
+			if len(snapshots) >= 128 {
+				return nil, fmt.Errorf("quota report exceeds 128 normalized windows")
+			}
+			snapshots = append(snapshots, quota.Snapshot{
+				ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID,
+				ModelRef: route.ExternalModel, WindowName: mapping.Name, Used: used,
+				Limit: floatPointer(1), Remaining: floatPointer(remaining), Source: "http-json-quota",
+			})
+			continue
+		}
 		for _, row := range rows {
 			if len(mapping.IgnoreWhenValues) > 0 && matchesAny(pointerText(row.raw, mapping.IgnoreWhenPath), mapping.IgnoreWhenValues) {
 				continue
