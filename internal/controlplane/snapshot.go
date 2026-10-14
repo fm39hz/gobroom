@@ -104,8 +104,12 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 			}
 		}
 		quotaBinding := l.Bindings[provider.RuntimeBindingKey(row.DefinitionID, provider.OperationQuota)]
-		providerGeneration := combineHealthGeneration(row.ProviderGeneration, binding.DefinitionRef.Key(), binding.ErrorClassifierRef.Key(), binding.AuthFlowID)
-		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: binding.AuthFlowID, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType, HealthGeneration: kernel.RouteHealthGeneration{Provider: providerGeneration, Connection: row.ConnectionGeneration, Model: row.ModelGeneration}})
+		authMode, authModeExists := binding.AuthModes[row.CredentialType]
+		if !authModeExists || authMode.Flow == nil || authMode.FlowID == "" {
+			return kernel.Snapshot{}, fmt.Errorf("provider definition %q does not bind credential type %q", row.DefinitionID, row.CredentialType)
+		}
+		providerGeneration := combineHealthGeneration(row.ProviderGeneration, binding.DefinitionRef.Key(), binding.ErrorClassifierRef.Key(), authMode.FlowID)
+		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: authMode.FlowID, CredentialPresentation: authMode.Presentation, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType, HealthGeneration: kernel.RouteHealthGeneration{Provider: providerGeneration, Connection: row.ConnectionGeneration, Model: row.ModelGeneration}})
 		baseID := row.ID
 		if at := strings.IndexByte(baseID, '@'); at >= 0 {
 			baseID = baseID[:at]

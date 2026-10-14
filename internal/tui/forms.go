@@ -39,6 +39,9 @@ type formState struct {
 	providerPreset     string
 	authSchema         []provider.SetupField
 	hasAuthSchema      bool
+	connectionNode     providerNode
+	authModes          []provider.AuthModeMetadata
+	authModeIndex      int
 	transformOptions   map[string]transformOptionSpec
 	operationChoices   []provider.OperationMetadata
 }
@@ -307,17 +310,72 @@ func newConnectionFormWithMetadata(node providerNode, catalog []provider.Definit
 		if definition.ID != node.DefinitionID {
 			continue
 		}
-		fields := []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "selected provider"}, {key: "name", label: "Name", placeholder: "personal key"}, {key: "credentialType", label: "Credential type", placeholder: credentialType}}
-		for _, field := range definition.Auth.SetupSchema.Fields {
-			fields = append(fields, fieldSpec{key: "auth:" + field.Name, label: field.Name, placeholder: field.Description, secret: field.Secret, authName: field.Name})
+		modeIndex := -1
+		for index := range definition.AuthModes {
+			if definition.AuthModes[index].CredentialType == credentialType {
+				modeIndex = index
+				break
+			}
 		}
-		fields = append(fields, fieldSpec{key: "priority", label: "Priority", placeholder: "100"})
-		form := buildForm("Add connection", "connections.create", fields, values)
-		form.authSchema = append([]provider.SetupField(nil), definition.Auth.SetupSchema.Fields...)
-		form.hasAuthSchema = true
-		return form
+		if modeIndex < 0 {
+			for index := range definition.AuthModes {
+				if definition.AuthModes[index].CredentialType == definition.DefaultCredentialType {
+					modeIndex = index
+					break
+				}
+			}
+		}
+		if modeIndex >= 0 {
+			return newConnectionModeForm(node, definition.AuthModes, modeIndex, values)
+		}
+		return buildForm("Add connection", "connections.create", connectionFields(), values)
 	}
 	return buildForm("Add connection", "connections.create", connectionFields(), values)
+}
+
+func newConnectionModeForm(node providerNode, modes []provider.AuthModeMetadata, modeIndex int, values map[string]string) *formState {
+	mode := modes[modeIndex]
+	values["providerNodeID"] = node.ID
+	values["credentialType"] = mode.CredentialType
+	if values["priority"] == "" {
+		values["priority"] = "100"
+	}
+	fields := []fieldSpec{{key: "providerNodeID", label: "Provider node ID", placeholder: "selected provider"}, {key: "name", label: "Name", placeholder: "account name"}, {key: "credentialType", label: "Credential type · ctrl+o cycles", placeholder: mode.CredentialType}}
+	for _, field := range mode.SetupSchema.Fields {
+		fields = append(fields, fieldSpec{key: "auth:" + field.Name, label: field.Name, placeholder: field.Description, secret: field.Secret, authName: field.Name})
+	}
+	fields = append(fields, fieldSpec{key: "priority", label: "Priority", placeholder: "100"})
+	form := buildForm("Add connection", "connections.create", fields, values)
+	form.connectionNode = node
+	form.authModes = append([]provider.AuthModeMetadata(nil), modes...)
+	form.authModeIndex = modeIndex
+	form.authSchema = append([]provider.SetupField(nil), mode.SetupSchema.Fields...)
+	form.hasAuthSchema = true
+	return form
+}
+
+func (f *formState) cycleConnectionAuthMode() {
+	if f == nil || len(f.authModes) < 2 {
+		return
+	}
+	values := make(map[string]string, len(f.fields))
+	activeKey := ""
+	if f.active >= 0 && f.active < len(f.fields) {
+		activeKey = f.fields[f.active].key
+	}
+	for index, field := range f.fields {
+		if field.authName == "" && field.key != "credentialType" {
+			values[field.key] = f.inputs[index].Value()
+		}
+	}
+	replacement := newConnectionModeForm(f.connectionNode, f.authModes, (f.authModeIndex+1)%len(f.authModes), values)
+	for index := range replacement.fields {
+		if replacement.fields[index].key == activeKey {
+			replacement.focus(index)
+			break
+		}
+	}
+	*f = *replacement
 }
 
 func physicalModelFields() []fieldSpec {
@@ -433,6 +491,10 @@ func (f *formState) Update(msg tea.Msg) (*formState, tea.Cmd, bool, map[string]a
 	keyMsg, isKey := msg.(tea.KeyPressMsg)
 	if isKey {
 		key := keyMsg.String()
+		if key == "ctrl+o" && f.method == "connections.create" && len(f.authModes) > 1 {
+			f.cycleConnectionAuthMode()
+			return f, nil, false, nil, nil
+		}
 		if key == "ctrl+p" && f.method == "providers.create" {
 			f.cycleProviderPreset()
 			return f, nil, false, nil, nil
@@ -733,6 +795,9 @@ func (f *formState) Params() (map[string]any, error) {
 	}
 	if f.method == "connections.create" {
 		credentialType, _ := params["credentialType"].(string)
+		if len(f.authModes) > 0 && (f.authModeIndex < 0 || f.authModeIndex >= len(f.authModes) || credentialType != f.authModes[f.authModeIndex].CredentialType) {
+			return nil, fmt.Errorf("use ctrl+o to select one of the provider's declared credential types")
+		}
 		if f.hasAuthSchema {
 			for _, field := range f.authSchema {
 				if field.Required && authValues[field.Name] == "" {

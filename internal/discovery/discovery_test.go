@@ -304,7 +304,7 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "static-catalog", Version: "1", DisplayName: "Static catalog",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationModels: {
 			ModelSource:        provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "static-models", ContractVersion: 1},
 			ModelSourceOptions: json.RawMessage(`{"models":[{"id":"model-a","displayName":"Model A"},{"id":"model-b"}]}`),
@@ -420,7 +420,7 @@ func TestInferenceProbeWorksWithoutModelListOperationAndDoesNotImport(t *testing
 	}
 	adapter := openai.NewAdapter()
 	task := *provider.OperationRef(normalize.OperationChatGenerate, 1)
-	binding := provider.RuntimeBinding{DefinitionID: "inference-only", Operation: provider.OperationChat, TaskRef: task, Protocol: kernel.ProtocolOpenAIChat, ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{}}
+	binding := provider.RuntimeBinding{DefinitionID: "inference-only", Operation: provider.OperationChat, TaskRef: task, Protocol: kernel.ProtocolOpenAIChat, ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}}}
 	service := Service{Store: state, Bindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey("inference-only", provider.OperationChat): binding}}
 	result, err := service.TestInference(context.Background(), connection.ID, "manual/model-x")
 	if err != nil {
@@ -509,7 +509,7 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 	binding := provider.RuntimeBinding{
 		DefinitionID: node.DefinitionID, Operation: provider.OperationAudio, TaskRef: operationRef,
 		Protocol: kernel.Protocol(node.Protocol), ProviderFormat: normalize.Format("vendor-audio"),
-		AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{},
+		AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}}},
 	}
 	service := Service{
 		Store: state, Bindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(node.DefinitionID, provider.OperationAudio): binding},

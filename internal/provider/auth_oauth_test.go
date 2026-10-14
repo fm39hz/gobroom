@@ -106,8 +106,8 @@ func TestDefinitionBoundOAuthFlowRefreshesWithConnectionSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "bound-oauth", Version: "1", DisplayName: "Bound OAuth",
-		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
-		AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "http://" + listener.Addr().String()}},
+		DefaultCredentialType: "oauth2",
+		AuthModes:             []AuthModeDefinition{{CredentialType: "oauth2", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "http://" + listener.Addr().String()}}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
 			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -130,15 +130,15 @@ func TestDefinitionBoundOAuthFlowRefreshesWithConnectionSecrets(t *testing.T) {
 	}
 	binding := bindings[RuntimeBindingKey("bound-oauth", OperationChat)]
 	flows := registry.AuthFlowsForBindings(bindings)
-	if flow := flows[AuthBindingKey("bound-oauth", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1})]; flow == nil || flow.ID() != "oauth2" {
+	if flow := flows[AuthBindingKey("bound-oauth", "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1})]; flow == nil || flow.ID() != "oauth2" {
 		t.Fatalf("definition-specific OAuth flow was not published to the daemon runtime: %#v", flow)
 	}
 	state := `{"access_token":"old-access","refresh_token":"refresh","client_secret":"connection-secret","expires_at":"2000-01-01T00:00:00Z"}`
-	credential, err := binding.Auth.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: state})
+	credential, err := binding.AuthModes["oauth2"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: state})
 	if err != nil {
 		t.Fatal(err)
 	}
-	refreshed, err := binding.Auth.Refresh(context.Background(), credential)
+	refreshed, err := binding.AuthModes["oauth2"].Flow.Refresh(context.Background(), credential)
 	if err != nil {
 		t.Fatal(err)
 	}

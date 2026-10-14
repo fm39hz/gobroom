@@ -15,25 +15,27 @@ import (
 // defaults, endpoint query values and request-codec options remain external
 // module data because their sensitivity cannot be proven by the shared schema.
 func ProviderDefinitionPortable(definition ProviderDefinition) (bool, string) {
-	if len(definition.AuthOptions.Options) > 0 {
-		return false, "authOptions.options is opaque and must remain in the installed manifest"
+	for _, mode := range definition.AuthModes {
+		if len(mode.AuthOptions.Options) > 0 {
+			return false, fmt.Sprintf("auth mode %q options are opaque and must remain in the installed manifest", mode.CredentialType)
+		}
+		if mode.AuthOptions.OAuth != nil {
+			for _, item := range []struct{ name, raw string }{
+				{name: "authUrl", raw: mode.AuthOptions.OAuth.AuthURL}, {name: "tokenUrl", raw: mode.AuthOptions.OAuth.TokenURL},
+				{name: "deviceAuthUrl", raw: mode.AuthOptions.OAuth.DeviceAuthURL}, {name: "redirectUrl", raw: mode.AuthOptions.OAuth.RedirectURL},
+			} {
+				if item.raw == "" {
+					continue
+				}
+				parsed, err := url.Parse(item.raw)
+				if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+					return false, fmt.Sprintf("auth mode %q OAuth %s may contain non-portable credential material", mode.CredentialType, item.name)
+				}
+			}
+		}
 	}
 	if len(definition.Defaults) > 0 {
 		return false, "provider defaults are opaque and must remain in the installed manifest"
-	}
-	if definition.AuthOptions.OAuth != nil {
-		for _, item := range []struct{ name, raw string }{
-			{name: "authUrl", raw: definition.AuthOptions.OAuth.AuthURL}, {name: "tokenUrl", raw: definition.AuthOptions.OAuth.TokenURL},
-			{name: "deviceAuthUrl", raw: definition.AuthOptions.OAuth.DeviceAuthURL}, {name: "redirectUrl", raw: definition.AuthOptions.OAuth.RedirectURL},
-		} {
-			if item.raw == "" {
-				continue
-			}
-			parsed, err := url.Parse(item.raw)
-			if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-				return false, fmt.Sprintf("OAuth %s may contain non-portable credential material", item.name)
-			}
-		}
 	}
 	for operation, binding := range definition.Operations {
 		if len(binding.RequestCodecOptions) > 0 {

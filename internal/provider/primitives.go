@@ -599,19 +599,29 @@ type AuthOptions struct {
 	Options json.RawMessage   `json:"options,omitempty"`
 }
 
+// AuthModeDefinition binds one connection credential type to an exact auth
+// primitive and its provider wire presentation so adapters never branch on
+// credential-type names.
+type AuthModeDefinition struct {
+	CredentialType string                        `json:"credentialType"`
+	Auth           PrimitiveRef                  `json:"auth"`
+	AuthOptions    AuthOptions                   `json:"authOptions,omitempty"`
+	Presentation   kernel.CredentialPresentation `json:"presentation"`
+}
+
 type ProviderDefinition struct {
-	ContractVersion uint64                         `json:"contractVersion"`
-	ID              string                         `json:"id"`
-	Version         string                         `json:"version"`
-	DisplayName     string                         `json:"displayName"`
-	Aliases         []string                       `json:"aliases,omitempty"`
-	Operations      map[Operation]OperationBinding `json:"operations"`
-	Auth            PrimitiveRef                   `json:"auth"`
-	AuthOptions     AuthOptions                    `json:"authOptions,omitempty"`
-	Session         PrimitiveRef                   `json:"session,omitempty"`
-	Extensions      []PrimitiveRef                 `json:"extensions,omitempty"`
-	Capabilities    CapabilitySet                  `json:"capabilities"`
-	Defaults        map[string]any                 `json:"defaults,omitempty"`
+	ContractVersion       uint64                         `json:"contractVersion"`
+	ID                    string                         `json:"id"`
+	Version               string                         `json:"version"`
+	DisplayName           string                         `json:"displayName"`
+	Aliases               []string                       `json:"aliases,omitempty"`
+	Operations            map[Operation]OperationBinding `json:"operations"`
+	DefaultCredentialType string                         `json:"defaultCredentialType"`
+	AuthModes             []AuthModeDefinition           `json:"authModes"`
+	Session               PrimitiveRef                   `json:"session,omitempty"`
+	Extensions            []PrimitiveRef                 `json:"extensions,omitempty"`
+	Capabilities          CapabilitySet                  `json:"capabilities"`
+	Defaults              map[string]any                 `json:"defaults,omitempty"`
 }
 
 func DecodeProviderDefinitionJSON(data []byte) (ProviderDefinition, error) {
@@ -1564,8 +1574,10 @@ func (r *RuntimeRegistry) AdaptersForBindings(bindings map[string]RuntimeBinding
 func (r *RuntimeRegistry) AuthFlowsForBindings(bindings map[string]RuntimeBinding) map[string]AuthFlow {
 	result := make(map[string]AuthFlow, len(bindings))
 	for _, binding := range bindings {
-		if binding.Auth != nil {
-			result[binding.AuthFlowID] = binding.Auth
+		for _, mode := range binding.AuthModes {
+			if mode.Flow != nil {
+				result[mode.FlowID] = mode.Flow
+			}
 		}
 	}
 	return result
@@ -1577,26 +1589,24 @@ func (r *RuntimeRegistry) DefaultCredentialTypes() map[string]string {
 		return result
 	}
 	for _, definition := range r.Primitives.Definitions() {
-		if definition.Auth.ID == "" {
-			continue
+		if definition.DefaultCredentialType != "" {
+			result[definition.ID] = definition.DefaultCredentialType
 		}
-		credentialType := definition.Auth.ID
-		if credentialType == "static-secret" {
-			credentialType = "api_key"
-		}
-		result[definition.ID] = credentialType
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) AuthFlowIDsByDefinition() map[string]string {
-	result := make(map[string]string)
+func (r *RuntimeRegistry) AuthFlowIDsByDefinition() map[string]map[string]string {
+	result := make(map[string]map[string]string)
 	if r == nil || r.Primitives == nil {
 		return result
 	}
 	for _, definition := range r.Primitives.Definitions() {
-		if definition.Auth.ID != "" {
-			result[definition.ID] = AuthBindingKey(definition.ID, definition.Auth)
+		for _, mode := range definition.AuthModes {
+			if result[definition.ID] == nil {
+				result[definition.ID] = make(map[string]string, len(definition.AuthModes))
+			}
+			result[definition.ID][mode.CredentialType] = AuthBindingKey(definition.ID, mode.CredentialType, mode.Auth)
 		}
 	}
 	return result
@@ -1757,14 +1767,34 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		operationBindings[operation] = binding
 	}
 	def.Operations = operationBindings
-	if def.Auth.ID == "" {
-		return fmt.Errorf("provider %q must bind an auth primitive explicitly (use %q when no credential is needed)", def.ID, "none")
+	if len(def.AuthModes) == 0 {
+		return fmt.Errorf("provider %q must declare at least one auth mode (use none when no credential is needed)", def.ID)
 	}
-	if err := validatePrimitiveRef(def.Auth); err != nil {
-		return fmt.Errorf("provider %q auth reference: %w", def.ID, err)
+	seenCredentialTypes := make(map[string]struct{}, len(def.AuthModes))
+	defaultCredentialTypeFound := false
+	for index, mode := range def.AuthModes {
+		if mode.CredentialType == "" || mode.CredentialType != strings.TrimSpace(mode.CredentialType) {
+			return fmt.Errorf("provider %q auth mode %d requires a trimmed credentialType", def.ID, index)
+		}
+		if _, duplicate := seenCredentialTypes[mode.CredentialType]; duplicate {
+			return fmt.Errorf("provider %q declares duplicate credential type %q", def.ID, mode.CredentialType)
+		}
+		seenCredentialTypes[mode.CredentialType] = struct{}{}
+		if mode.CredentialType == def.DefaultCredentialType {
+			defaultCredentialTypeFound = true
+		}
+		if err := validatePrimitiveRef(mode.Auth); err != nil {
+			return fmt.Errorf("provider %q auth mode %q reference: %w", def.ID, mode.CredentialType, err)
+		}
+		if mode.Auth.Kind != PrimitiveAuth || !r.hasPrimitive(mode.Auth) {
+			return fmt.Errorf("provider %q auth mode %q references unknown auth primitive %q", def.ID, mode.CredentialType, mode.Auth.ID)
+		}
+		if err := mode.Presentation.Validate(); err != nil {
+			return fmt.Errorf("provider %q auth mode %q presentation: %w", def.ID, mode.CredentialType, err)
+		}
 	}
-	if !r.hasPrimitive(def.Auth) {
-		return fmt.Errorf("provider %q references unknown auth primitive %q", def.ID, def.Auth.ID)
+	if !defaultCredentialTypeFound {
+		return fmt.Errorf("provider %q defaultCredentialType %q is not one of its declared auth modes", def.ID, def.DefaultCredentialType)
 	}
 	if def.Session.ID != "" && !r.hasPrimitive(def.Session) {
 		return fmt.Errorf("provider %q references unknown session store %q", def.ID, def.Session.ID)
@@ -1849,7 +1879,10 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 			return fmt.Errorf("provider %q references unknown extension %q", def.ID, extension.ID)
 		}
 	}
-	dependencies := map[extensions.Ref]struct{}{extensionRef(def.Auth): {}}
+	dependencies := make(map[extensions.Ref]struct{}, len(def.AuthModes)+len(def.Extensions)+len(def.Operations)*4+1)
+	for _, mode := range def.AuthModes {
+		dependencies[extensionRef(mode.Auth)] = struct{}{}
+	}
 	if def.Session.ID != "" {
 		dependencies[extensionRef(def.Session)] = struct{}{}
 	}

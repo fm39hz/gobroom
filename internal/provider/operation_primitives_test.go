@@ -41,7 +41,7 @@ func TestAnthropicModelSourcePaginatesWithAPIKeyHeaders(t *testing.T) {
 	server.Listener = listener
 	server.Start()
 	defer server.Close()
-	snapshot, err := (AnthropicModelSource{}).ListSnapshot(t.Context(), ModelSourceInput{URL: server.URL, Credential: kernel.Credential{Secret: "anthropic-secret"}, Client: server.Client()})
+	snapshot, err := (AnthropicModelSource{}).ListSnapshot(t.Context(), ModelSourceInput{URL: server.URL, Credential: kernel.Credential{Secret: "anthropic-secret"}, Presentation: kernel.CredentialPresentation{Header: "x-api-key"}, Client: server.Client()})
 	if err != nil {
 		t.Fatal(err)
 	}

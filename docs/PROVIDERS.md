@@ -306,21 +306,34 @@ are authoritative over body-derived values; absent/unparseable headers leave
 the codec's values intact. Usage sources must be bounded and passive—no
 separate health/quota polling belongs in request completion.
 
-OAuth is bound to a provider definition, while token material stays with the
-connection:
+Credential behavior is declared per connection mode, while token material
+stays with the connection. The provider-node `defaultCredentialType` only
+preselects setup UX; each connection chooses one declared mode:
 
 ```json
 {
-  "auth": {"kind": "auth", "id": "oauth2"},
-  "authOptions": {
-    "oauth": {
-      "clientId": "public-client-id",
-      "authUrl": "https://login.example/authorize",
-      "tokenUrl": "https://login.example/token",
-      "deviceAuthUrl": "https://login.example/device/code",
-      "scopes": ["models.read"]
+  "defaultCredentialType": "api_key",
+  "authModes": [
+    {
+      "credentialType": "api_key",
+      "auth": {"kind": "auth", "id": "static-secret", "contractVersion": 1},
+      "presentation": {"header": "Authorization", "prefix": "Bearer "}
+    },
+    {
+      "credentialType": "oauth2",
+      "auth": {"kind": "auth", "id": "oauth2", "contractVersion": 1},
+      "authOptions": {
+        "oauth": {
+          "clientId": "public-client-id",
+          "authUrl": "https://login.example/authorize",
+          "tokenUrl": "https://login.example/token",
+          "deviceAuthUrl": "https://login.example/device/code",
+          "scopes": ["models.read"]
+        }
+      },
+      "presentation": {"header": "Authorization", "prefix": "Bearer "}
     }
-  }
+  ]
 }
 ```
 

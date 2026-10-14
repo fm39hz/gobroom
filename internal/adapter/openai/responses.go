@@ -278,9 +278,8 @@ func (a Responses) Prepare(_ context.Context, request kernel.NormalizedRequest, 
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	secret := credential.Secret
-	if secret != "" {
-		headers.Set("Authorization", "Bearer "+secret)
+	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
+		return kernel.UpstreamRequest{}, err
 	}
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
 }

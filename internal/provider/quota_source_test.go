@@ -68,7 +68,7 @@ func (t *quotaTransportFixture) Execute(_ context.Context, request kernel.Upstre
 
 func TestHTTPJSONQuotaSourceUsesBoundEndpointTransportAndWindow(t *testing.T) {
 	transport := &quotaTransportFixture{}
-	route := kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
 	snapshots, err := (HTTPJSONQuotaSource{}).Fetch(context.Background(), QuotaRequest{
 		Credential: kernel.Credential{Secret: "token"}, Route: route,
 		Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
@@ -98,7 +98,7 @@ func TestHTTPJSONQuotaSourceUsesBoundEndpointTransportAndWindow(t *testing.T) {
 }
 
 func TestQuotaHTTPFailuresExposeSafeAuthPermissionAndRateLimitCodes(t *testing.T) {
-	route := kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
 	for _, test := range []struct {
 		status int
 		code   string
@@ -128,7 +128,7 @@ func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
 	headers.Set("X-RateLimit-Remaining-Tokens", "0")
 	headers.Set("X-RateLimit-Reset-Tokens", "7.66s")
 	transport := &quotaTransportFixture{body: `{"data":[]}`, headers: headers}
-	route := kernel.Route{NodeID: "groq", CredentialID: "account", ExternalModel: "llama", BaseURL: "https://api.groq.com/openai/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "groq", CredentialID: "account", ExternalModel: "llama", BaseURL: "https://api.groq.com/openai/v1"}
 	options := HTTPJSONQuotaOptions{Scope: QuotaScopeConnection, HeaderWindows: []HTTPHeaderQuotaWindow{
 		{Name: "requests", LimitHeader: "x-ratelimit-limit-requests", RemainingHeader: "x-ratelimit-remaining-requests", ResetHeader: "x-ratelimit-reset-requests"},
 		{Name: "tokens", LimitHeader: "x-ratelimit-limit-tokens", RemainingHeader: "x-ratelimit-remaining-tokens", ResetHeader: "x-ratelimit-reset-tokens"},
@@ -152,7 +152,7 @@ func TestHTTPHeaderQuotaSupportsNonEnforcingBillingWindows(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set("X-Credit-Balance", "0")
 	transport := &quotaTransportFixture{body: `{}`, headers: headers}
-	route := kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
 	source := HTTPJSONQuotaSource{Options: HTTPJSONQuotaOptions{HeaderWindows: []HTTPHeaderQuotaWindow{{
 		Name: "billing-balance", RemainingHeader: "x-credit-balance", RoutingEffect: QuotaRoutingObserve,
 	}}}}
@@ -169,7 +169,7 @@ func TestHTTPJSONQuotaSourceMapsOpenCodeGoUsedPercentWindows(t *testing.T) {
 	reset := time.Now().Add(90 * time.Minute).UTC().Truncate(time.Second)
 	body := `{"usage":{"rolling":{"percent":34.5,"resetsAt":"` + reset.Format(time.RFC3339) + `"},"weekly":{"percent":"105"},"monthly":{"label":"no numeric quota"}}}`
 	transport := &quotaTransportFixture{body: body}
-	route := kernel.Route{NodeID: "opencode-go", CredentialID: "account", ExternalModel: "deepseek-v4-flash", BaseURL: "https://opencode.ai/zen/go/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "opencode-go", CredentialID: "account", ExternalModel: "deepseek-v4-flash", BaseURL: "https://opencode.ai/zen/go/v1"}
 	source := HTTPJSONQuotaSource{Options: HTTPJSONQuotaOptions{Scope: QuotaScopeConnection, Windows: []HTTPJSONQuotaWindow{{
 		ItemsPath: "/usage", UsedPercentPath: "/percent", ResetAtPath: "/resetsAt",
 	}}}}
@@ -198,7 +198,7 @@ func TestVercelCreditsAreObservableWithoutHardQuotaEnforcement(t *testing.T) {
 		{Name: "balance-usd", RemainingPath: "/balance", RoutingEffect: QuotaRoutingObserve},
 		{Name: "spend-usd", UsedPath: "/total_used", RoutingEffect: QuotaRoutingObserve},
 	}}}
-	route := kernel.Route{NodeID: "vercel-ai-gateway", CredentialID: "account", ExternalModel: "provider/model", BaseURL: "https://ai-gateway.vercel.sh/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "vercel-ai-gateway", CredentialID: "account", ExternalModel: "provider/model", BaseURL: "https://ai-gateway.vercel.sh/v1"}
 	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
 		Credential: kernel.Credential{Secret: "key"}, Route: route,
 		Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
@@ -226,7 +226,7 @@ func TestHTTPJSONQuotaSourcePresentsOAuthCredentialWithTypedProviderHeaders(t *t
 			{Name: "weekly-7d", UsedPercentPath: "/seven_day/utilization", ResetAtPath: "/seven_day/resets_at"},
 		},
 	}}
-	route := kernel.Route{NodeID: "anthropic-oauth", CredentialID: "account", ExternalModel: "claude-opus", BaseURL: "https://api.anthropic.com"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "anthropic-oauth", CredentialID: "account", ExternalModel: "claude-opus", BaseURL: "https://api.anthropic.com"}
 	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
 		Credential: kernel.Credential{Type: "oauth2", Secret: "access-token"}, Route: route,
 		Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
@@ -250,7 +250,7 @@ func TestHTTPJSONQuotaOptionsExpandNestedWindowsWithoutProviderBranches(t *testi
 		ItemsPath: "/quotas", RemainingPercentPath: "/remainingPercentage", ResetAtPath: "/resetAt",
 		IgnoreWhenPath: "/fractionReported", IgnoreWhenValues: []string{"false"},
 	}}}
-	route := kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "provider", CredentialID: "account", ExternalModel: "model"}
 	snapshots, err := DecodeQuotaJSONWithOptions(body, route, "", options)
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestManifestBindsTypedQuotaWindowOptionsAndCredentialHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "configured-quota", Version: "1", DisplayName: "Configured quota source",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationQuota: {
 			Endpoint:           PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
 			Transport:          PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -301,7 +301,7 @@ func TestManifestBindsTypedQuotaWindowOptionsAndCredentialHeader(t *testing.T) {
 	resolved := registry.QuotaSourcesForBindings(bindings)[binding.QuotaSourceRef]
 	snapshots, err := resolved.Fetch(context.Background(), QuotaRequest{
 		Credential: kernel.Credential{Secret: "fixture-key"},
-		Route:      kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"},
+		Route:      kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "x-api-key"}, NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"},
 		Endpoint:   binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
 	})
 	if err != nil {
@@ -335,7 +335,7 @@ func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "openrouter-report-fixture", Version: "1", DisplayName: "OpenRouter quota reports",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationQuota: {
 			Endpoint:           PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
 			Transport:          PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -368,7 +368,7 @@ func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing
 	if !ok || len(configuredSource.Options.Reports) != 2 || configuredSource.Options.FailureMode != QuotaReportsKeepAvailable {
 		t.Fatalf("manifest quota source options were not bound: %#v", source)
 	}
-	route := kernel.Route{NodeID: "openrouter", CredentialID: "account", ExternalModel: "model", BaseURL: "https://openrouter.test/api/v1"}
+	route := kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "openrouter", CredentialID: "account", ExternalModel: "model", BaseURL: "https://openrouter.test/api/v1"}
 	transport := &multiQuotaTransportFixture{responses: map[string]quotaReportFixture{
 		keyURL:     {body: keyBody},
 		creditsURL: {status: http.StatusServiceUnavailable, body: `{"error":"temporarily unavailable"}`},
@@ -432,7 +432,7 @@ func TestDeepSeekQuotaManifestAggregatesCurrencyBalanceAvailability(t *testing.T
 	transport := &quotaTransportFixture{}
 	request := QuotaRequest{
 		Credential: kernel.Credential{Secret: "deepseek-key"},
-		Route:      kernel.Route{NodeID: "deepseek", CredentialID: "account", ExternalModel: "deepseek-chat", BaseURL: "https://api.deepseek.com"},
+		Route:      kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "deepseek", CredentialID: "account", ExternalModel: "deepseek-chat", BaseURL: "https://api.deepseek.com"},
 		Endpoint:   binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
 	}
 	for _, fixture := range []struct {
@@ -479,7 +479,7 @@ func TestDeepSeekQuotaManifestAggregatesAlternativeCurrencyBalances(t *testing.T
 	transport := &quotaTransportFixture{}
 	request := QuotaRequest{
 		Credential: kernel.Credential{Secret: "deepseek-key"},
-		Route:      kernel.Route{NodeID: "deepseek", CredentialID: "account", ExternalModel: "deepseek-chat", BaseURL: "https://api.deepseek.com"},
+		Route:      kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, NodeID: "deepseek", CredentialID: "account", ExternalModel: "deepseek-chat", BaseURL: "https://api.deepseek.com"},
 		Endpoint:   binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
 	}
 	for _, fixture := range []struct {

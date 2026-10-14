@@ -656,9 +656,8 @@ func (a Messages) PrepareWithCompatibility(_ context.Context, request kernel.Nor
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("anthropic-version", "2023-06-01")
-	secret := credential.Secret
-	if secret != "" {
-		headers.Set("x-api-key", secret)
+	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
+		return kernel.UpstreamRequest{}, err
 	}
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
 }

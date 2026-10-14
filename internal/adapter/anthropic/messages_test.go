@@ -159,7 +159,7 @@ func TestKernelAppliesOnlyApprovedAnthropicReasoningBudgetLossToWire(t *testing.
 				Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}, LossPolicy: policy,
 			}},
 			Routes: []kernel.Route{{
-				ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, BaseURL: "https://provider.test/v1", ExternalModel: "claude-model",
+				ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, CredentialPresentation: kernel.CredentialPresentation{Header: "x-api-key"}, BaseURL: "https://provider.test/v1", ExternalModel: "claude-model",
 				OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"anthropic-messages"}}},
 			}},
 		}, 1)
@@ -274,7 +274,7 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, BaseURL: "https://provider.test/v1", ExternalModel: "claude-physical",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolAnthropic, CredentialPresentation: kernel.CredentialPresentation{Header: "x-api-key"}, BaseURL: "https://provider.test/v1", ExternalModel: "claude-physical",
 			Profile: kernel.CapabilityProfile{
 				kernel.CapabilityTools:  {State: kernel.SupportNative},
 				kernel.CapabilityVision: {State: kernel.SupportNative},

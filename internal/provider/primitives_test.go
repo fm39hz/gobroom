@@ -79,9 +79,9 @@ func (schemaBoundRequestTransform) Apply(context.Context, *kernel.NormalizedRequ
 func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 	r := testPrimitiveRegistry()
 	err := r.RegisterDefinition(ProviderDefinition{ContractVersion: 1, ID: "openai-compatible",
-		Version:     "1",
-		DisplayName: "OpenAI-compatible",
-		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Version:               "1",
+		DisplayName:           "OpenAI-compatible",
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[Operation]OperationBinding{
 			OperationChat: {
 				TaskRef:         OperationRef(normalize.OperationChatGenerate, 1),
@@ -206,7 +206,7 @@ func TestPrimitiveRegistryRejectsUnknownPrimitiveAndDuplicateDefinition(t *testi
 		t.Fatal("expected unknown primitive error")
 	}
 	r = testPrimitiveRegistry()
-	definition := ProviderDefinition{ContractVersion: 1, ID: "same", Version: "1", DisplayName: "Same", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Operations: map[Operation]OperationBinding{OperationChat: {TaskRef: OperationRef(normalize.OperationChatGenerate, 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}}}}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "same", Version: "1", DisplayName: "Same", DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}}, Operations: map[Operation]OperationBinding{OperationChat: {TaskRef: OperationRef(normalize.OperationChatGenerate, 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}}}}
 	if err := r.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestRuntimeRegistryRejectsNilCodecImplementation(t *testing.T) {
 
 func TestProviderDefinitionJSONBindingRoundTripsTypedContract(t *testing.T) {
 	r := testPrimitiveRegistry()
-	definition := ProviderDefinition{ContractVersion: 1, ID: "json-provider", Version: "1", DisplayName: "JSON Provider", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Operations: map[Operation]OperationBinding{OperationChat: {TaskRef: OperationRef(normalize.OperationChatGenerate, 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}}}}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "json-provider", Version: "1", DisplayName: "JSON Provider", DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}}, Operations: map[Operation]OperationBinding{OperationChat: {TaskRef: OperationRef(normalize.OperationChatGenerate, 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}}}}
 	data, err := EncodeProviderDefinitionJSON(definition)
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +246,7 @@ func TestProviderDefinitionJSONBindingRoundTripsTypedContract(t *testing.T) {
 
 func TestProviderDefinitionPortabilityRequiresSecretsAndOpaqueOptionsToStayExternal(t *testing.T) {
 	base := ProviderDefinition{ContractVersion: 1, ID: "portable", Version: "1", DisplayName: "Portable",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
 			Transport:       PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -262,7 +262,7 @@ func TestProviderDefinitionPortabilityRequiresSecretsAndOpaqueOptionsToStayExter
 		mutate func(*ProviderDefinition)
 	}{
 		{"auth options", func(definition *ProviderDefinition) {
-			definition.AuthOptions.Options = json.RawMessage(`{"client_secret":"secret"}`)
+			definition.AuthModes[0].AuthOptions.Options = json.RawMessage(`{"client_secret":"secret"}`)
 		}},
 		{"defaults", func(definition *ProviderDefinition) { definition.Defaults = map[string]any{"apiKey": "secret"} }},
 		{"request codec options", func(definition *ProviderDefinition) {
@@ -276,7 +276,7 @@ func TestProviderDefinitionPortabilityRequiresSecretsAndOpaqueOptionsToStayExter
 			definition.Operations[OperationChat] = binding
 		}},
 		{"oauth URL query", func(definition *ProviderDefinition) {
-			definition.AuthOptions.OAuth = &OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth?client_secret=secret", TokenURL: "https://identity.test/token"}
+			definition.AuthModes[0].AuthOptions.OAuth = &OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth?client_secret=secret", TokenURL: "https://identity.test/token"}
 		}},
 	}
 	for _, test := range cases {
@@ -296,7 +296,7 @@ func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"contractVersion":1,"id":"external-chat","version":"1","displayName":"External Chat","auth":{"kind":"auth","id":"static-secret","contractVersion":1},"operations":{"chat":{"task":{"kind":"operation","id":"chat.generate","contractVersion":1},"endpoint":{"kind":"endpoint","id":"http-json","contractVersion":1},"transport":{"kind":"transport","id":"http","contractVersion":1},"requestCodec":{"kind":"request_codec","id":"openai-chat-json","contractVersion":1},"responseDecoder":{"kind":"response_decoder","id":"openai-sse","contractVersion":1},"errorClassifier":{"kind":"error_classifier","id":"http-json","contractVersion":1}}}}`)
+	data := []byte(`{"contractVersion":1,"id":"external-chat","version":"1","displayName":"External Chat","defaultCredentialType":"api_key","authModes":[{"credentialType":"api_key","auth":{"kind":"auth","id":"static-secret","contractVersion":1}}],"operations":{"chat":{"task":{"kind":"operation","id":"chat.generate","contractVersion":1},"endpoint":{"kind":"endpoint","id":"http-json","contractVersion":1},"transport":{"kind":"transport","id":"http","contractVersion":1},"requestCodec":{"kind":"request_codec","id":"openai-chat-json","contractVersion":1},"responseDecoder":{"kind":"response_decoder","id":"openai-sse","contractVersion":1},"errorClassifier":{"kind":"error_classifier","id":"http-json","contractVersion":1}}}}`)
 	if err := runtime.LoadDefinitionJSON(data); err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 	}
 	definition := ProviderDefinition{
 		ContractVersion: 1, ID: "fixture-audio-provider", Version: "1", DisplayName: "Fixture Audio Provider",
-		Auth:         PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Capabilities: CapabilitySet{AudioInput: true},
 		Operations: map[Operation]OperationBinding{OperationAudio: {
 			Protocol: "fixture_audio", TaskRef: &operationRef, ProviderFormat: "multipart-json",
@@ -356,7 +356,7 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 		t.Fatal(err)
 	}
 	request.OperationPayload = prepared.InputPayload
-	upstream, err := binding.Adapter.Prepare(context.Background(), request, kernel.Route{BaseURL: "https://audio.test/v1"}, kernel.Credential{Secret: "module-secret"})
+	upstream, err := binding.Adapter.Prepare(context.Background(), request, kernel.Route{BaseURL: "https://audio.test/v1", CredentialPresentation: binding.AuthModes["api_key"].Presentation}, kernel.Credential{Secret: "module-secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "custom-errors", Version: "1", DisplayName: "Custom error envelope",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:         OperationRef(normalize.OperationChatGenerate, 1),
 			Endpoint:        PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -465,7 +465,7 @@ func TestManifestRejectsInvalidErrorEvidencePointer(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "bad-error-path", Version: "1", DisplayName: "Bad error path",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:                OperationRef(normalize.OperationChatGenerate, 1),
 			Endpoint:               PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -507,7 +507,7 @@ func TestPrimitiveReferencesRequireTheExactContractVersion(t *testing.T) {
 		}
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "versioned-provider", Version: "1", DisplayName: "Versioned provider",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			Endpoint:  PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json"},
 			Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -585,7 +585,7 @@ func TestRuntimeBindingBuilderBuildsComposedOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.AdapterID != "openai-compatible-chat:chat" || binding.Adapter == nil || binding.Auth == nil || binding.AuthFlowID != AuthBindingKey("openai-compatible-chat", PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || binding.EndpointID != "http-json" || binding.TransportID != "http" || binding.RequestCodecID != "openai-chat-json" || binding.ResponseDecoderID != "openai-sse" {
+	if binding.AdapterID != "openai-compatible-chat:chat" || binding.Adapter == nil || binding.AuthModes["api_key"].Flow == nil || binding.AuthModes["api_key"].FlowID != AuthBindingKey("openai-compatible-chat", "api_key", PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || binding.EndpointID != "http-json" || binding.TransportID != "http" || binding.RequestCodecID != "openai-chat-json" || binding.ResponseDecoderID != "openai-sse" {
 		t.Fatalf("binding=%#v", binding)
 	}
 	if binding.ErrorClassifier == nil || binding.ErrorClassifierID != "http-json" {
@@ -638,8 +638,8 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "oauth-provider", Version: "1", DisplayName: "OAuth provider",
-		Auth:        PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
-		AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token", DeviceAuthURL: "https://oauth.test/device", Scopes: []string{"models.read"}}},
+		DefaultCredentialType: "oauth2",
+		AuthModes:             []AuthModeDefinition{{CredentialType: "oauth2", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "public-client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token", DeviceAuthURL: "https://oauth.test/device", Scopes: []string{"models.read"}}}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
 			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -653,14 +653,14 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Auth == nil || binding.Auth.ID() != "oauth2" || binding.AuthFlowID != AuthBindingKey("oauth-provider", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
+	if binding.AuthModes["oauth2"].Flow == nil || binding.AuthModes["oauth2"].Flow.ID() != "oauth2" || binding.AuthModes["oauth2"].FlowID != AuthBindingKey("oauth-provider", "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
 		t.Fatalf("auth binding=%#v", binding)
 	}
-	if oauth, ok := binding.Auth.(OAuthAuth); !ok || oauth.Config.DeviceAuthURL != "https://oauth.test/device" {
-		t.Fatalf("device authorization endpoint did not bind from provider definition: %#v", binding.Auth)
+	if oauth, ok := binding.AuthModes["oauth2"].Flow.(OAuthAuth); !ok || oauth.Config.DeviceAuthURL != "https://oauth.test/device" {
+		t.Fatalf("device authorization endpoint did not bind from provider definition: %#v", binding.AuthModes["oauth2"].Flow)
 	}
 	state := []byte(`{"access_token":"access","refresh_token":"refresh","client_secret":"per-connection-secret"}`)
-	credential, err := binding.Auth.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: string(state)})
+	credential, err := binding.AuthModes["oauth2"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: string(state)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,10 +675,10 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "catalog-oauth", Version: "2", DisplayName: "Catalog OAuth", Aliases: []string{"co"},
-		Auth:         PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
-		AuthOptions:  AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "not-returned", AuthURL: "https://auth.test", TokenURL: "https://token.test", DeviceAuthURL: "https://auth.test/device"}, Options: json.RawMessage(`{"client_secret":"not-returned"}`)},
-		Defaults:     map[string]any{"apiKey": "not-returned", "baseUrl": "https://upstream.test"},
-		Capabilities: CapabilitySet{Chat: true, Streaming: true},
+		DefaultCredentialType: "oauth2",
+		AuthModes:             []AuthModeDefinition{{CredentialType: "oauth2", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "not-returned", AuthURL: "https://auth.test", TokenURL: "https://token.test", DeviceAuthURL: "https://auth.test/device"}, Options: json.RawMessage(`{"client_secret":"not-returned"}`)}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
+		Defaults:              map[string]any{"apiKey": "not-returned", "baseUrl": "https://upstream.test"},
+		Capabilities:          CapabilitySet{Chat: true, Streaming: true},
 		Operations: map[Operation]OperationBinding{
 			OperationChat: {Protocol: kernel.Protocol("vendor.chat.v1"), TaskRef: OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.Format("vendor-wire"), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1}},
 		},
@@ -702,13 +702,13 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 			break
 		}
 	}
-	if got == nil || got.Auth.ID != "oauth2" || len(got.Auth.SetupSchema.Fields) == 0 || len(got.Operations) != 1 {
+	if got == nil || len(got.AuthModes) != 1 || got.AuthModes[0].ID != "oauth2" || len(got.AuthModes[0].SetupSchema.Fields) == 0 || len(got.Operations) != 1 {
 		t.Fatalf("generic provider setup metadata missing: %#v", got)
 	}
-	if !got.Auth.DeviceAuthorization || got.Auth.AuthorizationCode {
-		t.Fatalf("interactive auth capabilities=%#v", got.Auth)
+	if !got.AuthModes[0].DeviceAuthorization || got.AuthModes[0].AuthorizationCode {
+		t.Fatalf("interactive auth capabilities=%#v", got.AuthModes[0])
 	}
-	for _, field := range got.Auth.SetupSchema.Fields {
+	for _, field := range got.AuthModes[0].SetupSchema.Fields {
 		if field.Name == "access_token" && field.Required {
 			t.Fatal("interactive OAuth token should be optional during connection creation")
 		}
@@ -810,7 +810,7 @@ func TestProviderMustDeclareNoAuthExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "public-provider", Version: "1", DisplayName: "Public provider",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1},
+		DefaultCredentialType: "none", AuthModes: []AuthModeDefinition{{CredentialType: "none", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:  OperationRef(normalize.OperationChatGenerate, 1),
 			Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
@@ -825,10 +825,10 @@ func TestProviderMustDeclareNoAuthExplicitly(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := bindings[RuntimeBindingKey(definition.ID, OperationChat)]
-	if binding.AuthFlowID != AuthBindingKey("public-provider", PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}) || binding.Auth == nil {
+	if binding.AuthModes["none"].FlowID != AuthBindingKey("public-provider", "none", PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}) || binding.AuthModes["none"].Flow == nil {
 		t.Fatalf("no-auth binding=%#v", binding)
 	}
-	credential, err := binding.Auth.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "none"})
+	credential, err := binding.AuthModes["none"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "none"})
 	if err != nil || credential.Secret != "" {
 		t.Fatalf("no-auth credential=%#v err=%v", credential, err)
 	}
@@ -976,7 +976,7 @@ func TestRuntimeBindingExecutesSelectedEndpointAndCodecs(t *testing.T) {
 		}
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "composed-test", Version: "1", DisplayName: "Composed test",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			TaskRef:         OperationRef(normalize.OperationChatGenerate, 1),
 			ProviderFormat:  "test-native",
@@ -1056,7 +1056,7 @@ func TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch(t *te
 	); err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{ContractVersion: 1, ID: "media-extension", Version: "1", DisplayName: "Media extension", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Operations: map[Operation]OperationBinding{
+	definition := ProviderDefinition{ContractVersion: 1, ID: "media-extension", Version: "1", DisplayName: "Media extension", DefaultCredentialType: "api_key", AuthModes: []AuthModeDefinition{{CredentialType: "api_key", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}}, Operations: map[Operation]OperationBinding{
 		operation: {Protocol: kernel.Protocol("vendor.audio.v1"), TaskRef: OperationRef(normalize.Operation(operation), 1), Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: endpoint.ID(), ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: transport.ID(), ContractVersion: 1}, RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "test-request", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "test-response", ContractVersion: 1}},
 	}}
 	manifest, err := EncodeProviderDefinitionJSON(definition)
@@ -1098,7 +1098,7 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 		}
 	}
 	modelBinding := bindings[RuntimeBindingKey("openai", OperationModels)]
-	if modelBinding.Auth == nil || modelBinding.ModelSource == nil || modelBinding.Endpoint == nil || modelBinding.Transport == nil {
+	if modelBinding.AuthModes["api_key"].Flow == nil || modelBinding.ModelSource == nil || modelBinding.Endpoint == nil || modelBinding.Transport == nil {
 		t.Fatalf("manifest-bound API-key /models operation was incomplete: %#v", modelBinding)
 	}
 	staticModels := bindings[RuntimeBindingKey("opencode-go", OperationModels)]
@@ -1219,7 +1219,7 @@ func TestVersionedPrimitiveRefsSelectExactAdapterComponents(t *testing.T) {
 	}
 	definition := ProviderDefinition{
 		ContractVersion: 1, ID: definitionID, Version: "1", DisplayName: "Versioned primitive fixture",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1},
+		DefaultCredentialType: "none", AuthModes: []AuthModeDefinition{{CredentialType: "none", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{OperationChat: {
 			Protocol: kernel.ProtocolOpenAIChat, TaskRef: OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.FormatOpenAIChat,
 			Endpoint: ref(PrimitiveEndpoint, "versioned-endpoint"), Transport: ref(PrimitiveTransport, "versioned-transport"),

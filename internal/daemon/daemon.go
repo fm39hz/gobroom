@@ -66,7 +66,7 @@ type Daemon struct {
 	extensionCatalog    extensions.CatalogView
 	authFlows           map[string]provider.AuthFlow
 	providerAuthModes   map[string]string
-	providerAuthFlowIDs map[string]string
+	providerAuthFlowIDs map[string]map[string]string
 	sessionCache        *sessionruntime.Cache
 	policy              *runtimehealth.PolicyGate
 	quotaPersistence    *runtimehealth.QuotaSnapshotQueue
@@ -1156,7 +1156,9 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := decodeParams(request.Params, &input); err != nil {
 			return fail(request, err.Error())
 		}
-		d.applyProviderDefaults(&input)
+		if err := d.applyProviderDefaults(&input); err != nil {
+			return fail(request, err.Error())
+		}
 		if err := d.validatePrefix(input.Prefix, input.DefinitionID, input.Protocol); err != nil {
 			return fail(request, err.Error())
 		}
@@ -1184,6 +1186,13 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			if credentialType := d.providerAuthModes[input.DefinitionID]; credentialType != "" {
 				input.AuthMode = credentialType
 			}
+		}
+		definitionID := input.DefinitionID
+		if definitionID == "" {
+			definitionID = previousProvider.DefinitionID
+		}
+		if input.AuthMode != "" && d.authFlowID(definitionID, input.AuthMode) == "" {
+			return fail(request, fmt.Sprintf("provider definition %q does not declare default credential type %q", definitionID, input.AuthMode))
 		}
 		if input.Prefix != "" {
 			if err := d.validatePrefixUpdate(input.ID, input.Prefix, input.DefinitionID); err != nil {
@@ -1375,18 +1384,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if existing == nil {
 			return fail(request, fmt.Sprintf("connection %q not found", input.ID))
 		}
-		resetHealth := input.Secret != "" || (input.CredentialType != "" && input.CredentialType != existing.CredentialType) || (input.Enabled != nil && *input.Enabled != existing.Enabled)
+		credentialTypeChanged := input.CredentialType != "" && input.CredentialType != existing.CredentialType
+		resetHealth := input.Secret != "" || credentialTypeChanged || (input.Enabled != nil && *input.Enabled != existing.Enabled)
 		if input.CredentialType == "" {
 			input.CredentialType = existing.CredentialType
 		}
-		node, err := d.store.ProviderNode(existing.ProviderNodeID)
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		if input.CredentialType != node.AuthMode {
-			return fail(request, fmt.Sprintf("credential type %q does not match provider auth mode %q", input.CredentialType, node.AuthMode))
-		}
-		if input.Secret != "" {
+		if input.Secret != "" || credentialTypeChanged {
 			if err := d.validateConnectionSecret(ctx, existing.ProviderNodeID, input.CredentialType, input.Secret); err != nil {
 				return fail(request, err.Error())
 			}
@@ -1676,13 +1679,21 @@ func (d *Daemon) runtimeWithProviderDefinitions(extra []provider.ProviderDefinit
 	return runtimeRegistry, strategies, nil
 }
 
-func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) {
+func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) error {
 	if input.DefinitionID == "" {
 		input.DefinitionID = store.DefaultDefinitionForProtocol(input.Protocol)
 	}
 	if input.AuthMode == "" {
 		input.AuthMode = d.providerAuthModes[input.DefinitionID]
 	}
+	if input.AuthMode == "" || d.authFlowID(input.DefinitionID, input.AuthMode) == "" {
+		return fmt.Errorf("provider definition %q does not declare default credential type %q", input.DefinitionID, input.AuthMode)
+	}
+	return nil
+}
+
+func (d *Daemon) authFlowID(definitionID, credentialType string) string {
+	return d.providerAuthFlowIDs[definitionID][credentialType]
 }
 
 func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, credentialType, secret string) error {
@@ -1693,16 +1704,13 @@ func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, c
 	if node.ID == "" {
 		return fmt.Errorf("provider node %q not found", providerNodeID)
 	}
-	if credentialType != node.AuthMode {
-		return fmt.Errorf("credential type %q does not match provider auth mode %q", credentialType, node.AuthMode)
-	}
-	if credentialType == "none" && secret != "" {
-		return fmt.Errorf("provider auth mode none does not accept credential secret")
-	}
-	flowID := d.providerAuthFlowIDs[node.DefinitionID]
+	flowID := d.authFlowID(node.DefinitionID, credentialType)
 	flow, ok := d.authFlows[flowID]
 	if flowID == "" || !ok {
-		return fmt.Errorf("auth flow for provider definition %q is unavailable", node.DefinitionID)
+		return fmt.Errorf("provider definition %q does not declare credential type %q", node.DefinitionID, credentialType)
+	}
+	if credentialType == "none" && secret != "" {
+		return fmt.Errorf("credential type none does not accept credential secret")
 	}
 	if strings.TrimSpace(secret) == "" {
 		authorizationCode, deviceAuthorization := provider.InteractiveAuthModes(flow)

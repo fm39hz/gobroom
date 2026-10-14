@@ -6,11 +6,6 @@
     "aliases": [
       "openai"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.openai.com/v1",
       "modelsPath": "/models",
@@ -79,7 +74,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "openrouter",
@@ -88,11 +98,6 @@
     "aliases": [
       "openrouter"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://openrouter.ai/api/v1",
       "modelsPath": "/models",
@@ -161,7 +166,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "deepseek",
@@ -170,11 +190,6 @@
     "aliases": [
       "deepseek"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.deepseek.com",
       "modelsPath": "/models"
@@ -242,7 +257,9 @@
           "id": "http-json",
           "contractVersion": 1
         },
-        "endpointOptions": {"path": "/user/balance"},
+        "endpointOptions": {
+          "path": "/user/balance"
+        },
         "transport": {
           "kind": "transport",
           "id": "http",
@@ -254,14 +271,18 @@
           "contractVersion": 1
         },
         "quotaSourceOptions": {
-          "windows": [{
-            "name": "balance-availability",
-            "itemsPath": "/balance_infos",
-            "aggregation": "any_positive",
-            "aggregationValuePath": "/total_balance",
-            "aggregationStatusPath": "/is_available",
-            "aggregationStatusValues": ["true"]
-          }]
+          "windows": [
+            {
+              "name": "balance-availability",
+              "itemsPath": "/balance_infos",
+              "aggregation": "any_positive",
+              "aggregationValuePath": "/total_balance",
+              "aggregationStatusPath": "/is_available",
+              "aggregationStatusValues": [
+                "true"
+              ]
+            }
+          ]
         }
       }
     },
@@ -273,7 +294,22 @@
       "thinking": true,
       "quota": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "anthropic",
@@ -282,11 +318,6 @@
     "aliases": [
       "anthropic"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.anthropic.com/v1",
       "modelsPath": "/models",
@@ -356,7 +387,21 @@
       "tools": true,
       "thinking": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "x-api-key"
+        }
+      }
+    ]
   },
   {
     "id": "groq",
@@ -365,11 +410,6 @@
     "aliases": [
       "groq"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.groq.com/openai/v1",
       "modelsPath": "/models",
@@ -438,7 +478,9 @@
           "id": "http-json",
           "contractVersion": 1
         },
-        "endpointOptions": {"path": "/models"},
+        "endpointOptions": {
+          "path": "/models"
+        },
         "transport": {
           "kind": "transport",
           "id": "http",
@@ -452,8 +494,18 @@
         "quotaSourceOptions": {
           "scope": "connection",
           "headerWindows": [
-            {"name": "requests", "limitHeader": "x-ratelimit-limit-requests", "remainingHeader": "x-ratelimit-remaining-requests", "resetHeader": "x-ratelimit-reset-requests"},
-            {"name": "tokens", "limitHeader": "x-ratelimit-limit-tokens", "remainingHeader": "x-ratelimit-remaining-tokens", "resetHeader": "x-ratelimit-reset-tokens"}
+            {
+              "name": "requests",
+              "limitHeader": "x-ratelimit-limit-requests",
+              "remainingHeader": "x-ratelimit-remaining-requests",
+              "resetHeader": "x-ratelimit-reset-requests"
+            },
+            {
+              "name": "tokens",
+              "limitHeader": "x-ratelimit-limit-tokens",
+              "remainingHeader": "x-ratelimit-remaining-tokens",
+              "resetHeader": "x-ratelimit-reset-tokens"
+            }
           ]
         }
       }
@@ -464,18 +516,31 @@
       "tools": true,
       "quota": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "opencode-go",
     "version": "builtin-generic-1",
     "displayName": "OpenCode Go",
-    "aliases": ["opencode-go", "ocg"],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
+    "aliases": [
+      "opencode-go",
+      "ocg"
+    ],
     "defaults": {
       "baseUrl": "https://opencode.ai/zen/go/v1",
       "format": "openai"
@@ -483,60 +548,205 @@
     "operations": {
       "chat": {
         "protocol": "openai_chat",
-        "task": {"kind": "operation", "id": "chat.generate", "contractVersion": 1},
+        "task": {
+          "kind": "operation",
+          "id": "chat.generate",
+          "contractVersion": 1
+        },
         "providerFormat": "openai",
-        "endpoint": {"kind": "endpoint", "id": "http-json", "contractVersion": 1},
-        "endpointOptions": {"path": "/chat/completions"},
-        "transport": {"kind": "transport", "id": "http", "contractVersion": 1},
-        "requestCodec": {"kind": "request_codec", "id": "openai-chat-json", "contractVersion": 1},
-        "responseDecoder": {"kind": "response_decoder", "id": "openai-sse", "contractVersion": 1},
-        "usageSource": {"kind": "usage_source", "id": "http-header-usage", "contractVersion": 1},
-        "errorClassifier": {"kind": "error_classifier", "id": "http-json", "contractVersion": 1}
+        "endpoint": {
+          "kind": "endpoint",
+          "id": "http-json",
+          "contractVersion": 1
+        },
+        "endpointOptions": {
+          "path": "/chat/completions"
+        },
+        "transport": {
+          "kind": "transport",
+          "id": "http",
+          "contractVersion": 1
+        },
+        "requestCodec": {
+          "kind": "request_codec",
+          "id": "openai-chat-json",
+          "contractVersion": 1
+        },
+        "responseDecoder": {
+          "kind": "response_decoder",
+          "id": "openai-sse",
+          "contractVersion": 1
+        },
+        "usageSource": {
+          "kind": "usage_source",
+          "id": "http-header-usage",
+          "contractVersion": 1
+        },
+        "errorClassifier": {
+          "kind": "error_classifier",
+          "id": "http-json",
+          "contractVersion": 1
+        }
       },
       "models": {
-        "modelSource": {"kind": "model_source", "id": "static-models", "contractVersion": 1},
+        "modelSource": {
+          "kind": "model_source",
+          "id": "static-models",
+          "contractVersion": 1
+        },
         "modelSourceOptions": {
           "models": [
-            {"id":"deepseek-flash","displayName":"DeepSeek V4.1 Flash"},
-            {"id":"glm-5.3-flash","displayName":"GLM 5.3 Flash (Vision)"},
-            {"id":"glm-5.3","displayName":"GLM 5.3"},
-            {"id":"glm-5.2","displayName":"GLM 5.2"},
-            {"id":"glm-5.1","displayName":"GLM 5.1"},
-            {"id":"kimi-k2.7-code","displayName":"Kimi K2.7 Code"},
-            {"id":"kimi-k2.6","displayName":"Kimi K2.6"},
-            {"id":"kimi-k3","displayName":"Kimi K3"},
-            {"id":"deepseek-v4-pro","displayName":"DeepSeek V4 Pro"},
-            {"id":"deepseek-v4-flash","displayName":"DeepSeek V4 Flash"},
-            {"id":"deepseek-v4-flash-vision-exp","displayName":"DeepSeek V4 Flash Vision (Exp)"},
-            {"id":"longcat-2.0","displayName":"LongCat 2.0"},
-            {"id":"mimo-v2.5","displayName":"MiMo V2.5"},
-            {"id":"mimo-v2.5-pro","displayName":"MiMo V2.5 Pro"},
-            {"id":"minimax-m3","displayName":"MiniMax M3"},
-            {"id":"minimax-m2.7","displayName":"MiniMax M2.7"},
-            {"id":"minimax-m2.5","displayName":"MiniMax M2.5"},
-            {"id":"qwen3.8-max","displayName":"Qwen 3.8 Max"},
-            {"id":"qwen3.8-flash","displayName":"Qwen 3.8 Flash"},
-            {"id":"qwen3.7-max","displayName":"Qwen 3.7 Max"},
-            {"id":"qwen3.7-plus","displayName":"Qwen 3.7 Plus"},
-            {"id":"qwen3.6-plus","displayName":"Qwen 3.6 Plus"},
-            {"id":"hy4-preview","displayName":"Hy4 Preview"},
-            {"id":"hy3","displayName":"Hy3"}
+            {
+              "id": "deepseek-flash",
+              "displayName": "DeepSeek V4.1 Flash"
+            },
+            {
+              "id": "glm-5.3-flash",
+              "displayName": "GLM 5.3 Flash (Vision)"
+            },
+            {
+              "id": "glm-5.3",
+              "displayName": "GLM 5.3"
+            },
+            {
+              "id": "glm-5.2",
+              "displayName": "GLM 5.2"
+            },
+            {
+              "id": "glm-5.1",
+              "displayName": "GLM 5.1"
+            },
+            {
+              "id": "kimi-k2.7-code",
+              "displayName": "Kimi K2.7 Code"
+            },
+            {
+              "id": "kimi-k2.6",
+              "displayName": "Kimi K2.6"
+            },
+            {
+              "id": "kimi-k3",
+              "displayName": "Kimi K3"
+            },
+            {
+              "id": "deepseek-v4-pro",
+              "displayName": "DeepSeek V4 Pro"
+            },
+            {
+              "id": "deepseek-v4-flash",
+              "displayName": "DeepSeek V4 Flash"
+            },
+            {
+              "id": "deepseek-v4-flash-vision-exp",
+              "displayName": "DeepSeek V4 Flash Vision (Exp)"
+            },
+            {
+              "id": "longcat-2.0",
+              "displayName": "LongCat 2.0"
+            },
+            {
+              "id": "mimo-v2.5",
+              "displayName": "MiMo V2.5"
+            },
+            {
+              "id": "mimo-v2.5-pro",
+              "displayName": "MiMo V2.5 Pro"
+            },
+            {
+              "id": "minimax-m3",
+              "displayName": "MiniMax M3"
+            },
+            {
+              "id": "minimax-m2.7",
+              "displayName": "MiniMax M2.7"
+            },
+            {
+              "id": "minimax-m2.5",
+              "displayName": "MiniMax M2.5"
+            },
+            {
+              "id": "qwen3.8-max",
+              "displayName": "Qwen 3.8 Max"
+            },
+            {
+              "id": "qwen3.8-flash",
+              "displayName": "Qwen 3.8 Flash"
+            },
+            {
+              "id": "qwen3.7-max",
+              "displayName": "Qwen 3.7 Max"
+            },
+            {
+              "id": "qwen3.7-plus",
+              "displayName": "Qwen 3.7 Plus"
+            },
+            {
+              "id": "qwen3.6-plus",
+              "displayName": "Qwen 3.6 Plus"
+            },
+            {
+              "id": "hy4-preview",
+              "displayName": "Hy4 Preview"
+            },
+            {
+              "id": "hy3",
+              "displayName": "Hy3"
+            }
           ]
         }
       },
       "quota": {
-        "endpoint": {"kind": "endpoint", "id": "http-json", "contractVersion": 1},
-        "endpointOptions": {"path": "/usage"},
-        "transport": {"kind": "transport", "id": "http", "contractVersion": 1},
-        "quotaSource": {"kind": "quota_source", "id": "http-json-quota", "contractVersion": 1},
+        "endpoint": {
+          "kind": "endpoint",
+          "id": "http-json",
+          "contractVersion": 1
+        },
+        "endpointOptions": {
+          "path": "/usage"
+        },
+        "transport": {
+          "kind": "transport",
+          "id": "http",
+          "contractVersion": 1
+        },
+        "quotaSource": {
+          "kind": "quota_source",
+          "id": "http-json-quota",
+          "contractVersion": 1
+        },
         "quotaSourceOptions": {
           "scope": "connection",
-          "windows": [{"itemsPath":"/usage","usedPercentPath":"/percent","resetAtPath":"/resetsAt"}]
+          "windows": [
+            {
+              "itemsPath": "/usage",
+              "usedPercentPath": "/percent",
+              "resetAtPath": "/resetsAt"
+            }
+          ]
         }
       }
     },
-    "capabilities": {"chat": true, "streaming": true, "quota": true},
-    "contractVersion": 1
+    "capabilities": {
+      "chat": true,
+      "streaming": true,
+      "quota": true
+    },
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "mistral",
@@ -545,11 +755,6 @@
     "aliases": [
       "mistral"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.mistral.ai/v1",
       "modelsPath": "/models",
@@ -618,7 +823,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "together",
@@ -627,11 +847,6 @@
     "aliases": [
       "together"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.together.xyz/v1",
       "modelsPath": "/models",
@@ -700,7 +915,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "fireworks",
@@ -709,11 +939,6 @@
     "aliases": [
       "fireworks"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.fireworks.ai/inference/v1",
       "modelsPath": "/models",
@@ -782,7 +1007,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "cerebras",
@@ -791,11 +1031,6 @@
     "aliases": [
       "cerebras"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.cerebras.ai/v1",
       "modelsPath": "/models",
@@ -864,7 +1099,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "nvidia",
@@ -873,11 +1123,6 @@
     "aliases": [
       "nvidia"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "modelsPath": "/models",
@@ -946,7 +1191,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "siliconflow",
@@ -955,11 +1215,6 @@
     "aliases": [
       "siliconflow"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.siliconflow.com/v1",
       "modelsPath": "/models",
@@ -1028,7 +1283,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "glm",
@@ -1037,11 +1307,6 @@
     "aliases": [
       "glm"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.z.ai/api/anthropic/v1",
       "modelsPath": "/models",
@@ -1094,7 +1359,21 @@
       "tools": true,
       "thinking": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "x-api-key"
+        }
+      }
+    ]
   },
   {
     "id": "glm-cn",
@@ -1103,11 +1382,6 @@
     "aliases": [
       "glm-cn"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
       "modelsPath": "/models",
@@ -1177,7 +1451,22 @@
       "tools": true,
       "thinking": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "perplexity-agent",
@@ -1186,11 +1475,6 @@
     "aliases": [
       "perplexity-agent"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.perplexity.ai/v1",
       "modelsPath": "/models",
@@ -1259,7 +1543,22 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "vercel-ai-gateway",
@@ -1268,11 +1567,6 @@
     "aliases": [
       "vercel-ai-gateway"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://ai-gateway.vercel.sh/v1",
       "modelsPath": "/models",
@@ -1336,15 +1630,37 @@
         }
       },
       "quota": {
-        "endpoint": {"kind":"endpoint","id":"http-json","contractVersion":1},
-        "endpointOptions": {"path":"/credits"},
-        "transport": {"kind":"transport","id":"http","contractVersion":1},
-        "quotaSource": {"kind":"quota_source","id":"http-json-quota","contractVersion":1},
+        "endpoint": {
+          "kind": "endpoint",
+          "id": "http-json",
+          "contractVersion": 1
+        },
+        "endpointOptions": {
+          "path": "/credits"
+        },
+        "transport": {
+          "kind": "transport",
+          "id": "http",
+          "contractVersion": 1
+        },
+        "quotaSource": {
+          "kind": "quota_source",
+          "id": "http-json-quota",
+          "contractVersion": 1
+        },
         "quotaSourceOptions": {
           "scope": "connection",
           "windows": [
-            {"name":"balance-usd","remainingPath":"/balance","routingEffect":"observe"},
-            {"name":"spend-usd","usedPath":"/total_used","routingEffect":"observe"}
+            {
+              "name": "balance-usd",
+              "remainingPath": "/balance",
+              "routingEffect": "observe"
+            },
+            {
+              "name": "spend-usd",
+              "usedPath": "/total_used",
+              "routingEffect": "observe"
+            }
           ]
         }
       }
@@ -1355,7 +1671,22 @@
       "tools": true,
       "quota": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   },
   {
     "id": "tokenrouter",
@@ -1364,11 +1695,6 @@
     "aliases": [
       "tokenrouter"
     ],
-    "auth": {
-      "kind": "auth",
-      "id": "static-secret",
-      "contractVersion": 1
-    },
     "defaults": {
       "baseUrl": "https://api.tokenrouter.com/v1",
       "modelsPath": "/models",
@@ -1437,6 +1763,21 @@
       "streaming": true,
       "tools": true
     },
-    "contractVersion": 1
+    "contractVersion": 1,
+    "defaultCredentialType": "api_key",
+    "authModes": [
+      {
+        "credentialType": "api_key",
+        "auth": {
+          "kind": "auth",
+          "id": "static-secret",
+          "contractVersion": 1
+        },
+        "presentation": {
+          "header": "Authorization",
+          "prefix": "Bearer "
+        }
+      }
+    ]
   }
 ]

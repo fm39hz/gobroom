@@ -17,7 +17,7 @@ import (
 
 func TestPrepareMapsReasoningToGeminiThinkingConfig(t *testing.T) {
 	request := normalize.Request{SourceFormat: normalize.FormatOpenAIChat, Stream: false, Messages: []normalize.Message{{Role: "user", Content: "hello"}}, Raw: map[string]any{"max_tokens": float64(123)}, Thinking: normalize.ThinkingIntent{Mode: "budget", BudgetTokens: 512}}
-	prepared, err := (Gemini{}).Prepare(context.Background(), request, kernel.Route{ID: "r", BaseURL: "https://gemini.test", ExternalModel: "gemini-2"}, kernel.Credential{Secret: "key"})
+	prepared, err := (Gemini{}).Prepare(context.Background(), request, kernel.Route{ID: "r", BaseURL: "https://gemini.test", ExternalModel: "gemini-2", CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}}, kernel.Credential{Secret: "key"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -430,6 +430,7 @@ func (s *Store) UpdateConnection(input UpdateConnectionInput) (ConnectionRecord,
 	if input.Name != "" {
 		current.Name = input.Name
 	}
+	credentialTypeChanged := input.CredentialType != "" && input.CredentialType != current.CredentialType
 	if input.CredentialType != "" {
 		current.CredentialType = input.CredentialType
 	}
@@ -441,7 +442,7 @@ func (s *Store) UpdateConnection(input UpdateConnectionInput) (ConnectionRecord,
 	}
 	query := `UPDATE connections SET name=?,credential_type=?,priority=?,enabled=?,updated_at=CURRENT_TIMESTAMP`
 	args := []any{current.Name, current.CredentialType, current.Priority, boolInt(current.Enabled)}
-	if input.Secret != "" {
+	if input.Secret != "" || credentialTypeChanged {
 		query += `,secret_ref=?`
 		args = append(args, input.Secret)
 	}

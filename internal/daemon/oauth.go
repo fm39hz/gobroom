@@ -72,7 +72,7 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 	if err != nil {
 		return authorizationChallenge{}, err
 	}
-	flowID := d.providerAuthFlowIDs[node.DefinitionID]
+	flowID := d.authFlowID(node.DefinitionID, connection.Type)
 	flow, ok := d.authFlows[flowID]
 	if flowID == "" || !ok {
 		return authorizationChallenge{}, fmt.Errorf("auth flow for provider definition %q is unavailable", node.DefinitionID)

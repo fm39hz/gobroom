@@ -71,10 +71,11 @@ const (
 )
 
 type ModelSourceInput struct {
-	URL        string
-	Credential kernel.Credential
-	Client     *http.Client
-	Headers    http.Header
+	URL          string
+	Credential   kernel.Credential
+	Presentation kernel.CredentialPresentation
+	Client       *http.Client
+	Headers      http.Header
 }
 
 type ModelSource interface {
@@ -949,7 +950,9 @@ func (AnthropicModelSource) ListSnapshot(ctx context.Context, input ModelSourceI
 			}
 		}
 		req.Header.Set("Accept", "application/json")
-		req.Header.Set("x-api-key", input.Credential.Secret)
+		if err := kernel.ApplyCredentialPresentation(req.Header, input.Credential, input.Presentation); err != nil {
+			return ModelCatalogSnapshot{}, err
+		}
 		req.Header.Set("anthropic-version", "2023-06-01")
 		response, err := client.Do(req)
 		if err != nil {
@@ -1017,8 +1020,8 @@ func (OpenAIModelSource) ListSnapshot(ctx context.Context, input ModelSourceInpu
 		}
 	}
 	req.Header.Set("Accept", "application/json")
-	if input.Credential.Secret != "" {
-		req.Header.Set("Authorization", "Bearer "+input.Credential.Secret)
+	if err := kernel.ApplyCredentialPresentation(req.Header, input.Credential, input.Presentation); err != nil {
+		return ModelCatalogSnapshot{}, err
 	}
 	client := input.Client
 	if client == nil {
@@ -1245,18 +1248,22 @@ func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRe
 	}
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
+	for name, value := range input.Route.CredentialPresentation.Headers {
+		headers.Set(name, value)
+	}
 	for name, value := range s.Options.RequestHeaders {
 		headers.Set(name, value)
 	}
-	if input.Credential.Secret != "" {
-		header, prefix := s.Options.CredentialHeader, s.Options.CredentialPrefix
-		if header == "" {
-			header = "Authorization"
+	presentation := input.Route.CredentialPresentation
+	if s.Options.CredentialHeader != "" {
+		presentation.Header = s.Options.CredentialHeader
+		presentation.Prefix = s.Options.CredentialPrefix
+		if presentation.Prefix == "" && strings.EqualFold(presentation.Header, "Authorization") {
+			presentation.Prefix = "Bearer "
 		}
-		if prefix == "" && strings.EqualFold(header, "Authorization") {
-			prefix = "Bearer "
-		}
-		headers.Set(header, prefix+input.Credential.Secret)
+	}
+	if err := kernel.ApplyCredentialPresentation(headers, input.Credential, presentation); err != nil {
+		return nil, nil, err
 	}
 	response, err := input.Transport.Execute(ctx, kernel.UpstreamRequest{Method: http.MethodGet, URL: endpointURL, Headers: headers})
 	if err != nil {

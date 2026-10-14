@@ -497,8 +497,7 @@ but that default is not a restriction on subsequently added connections:
 }
 ```
 
-The exact JSON field names are an implementation contract to freeze before
-provider-manifest conversion; the invariants are normative. A connection's
+These JSON field names are the version-1 provider-definition contract. A connection's
 `credentialType` selects both the auth flow and how its resolved credential is
 presented. The route snapshot binds that selection once, so refresh, usage,
 quota, inference and health-generation fingerprints all refer to the same
@@ -516,7 +515,8 @@ complex request signing remains an Auth primitive's typed `Apply` capability,
 not provider-specific kernel logic. The same resolved credential mode is
 passed to quota/usage requests; an explicitly configured per-report credential
 header may override the default presentation where the provider API requires
-it.
+it. Credential headers are data carried by the selected auth mode; static
+presentation headers reject credential-bearing/reserved names.
 
 TUI/CLI catalogs expose the available modes, safe labels and per-mode setup
 schemas/capabilities, never auth options or secrets. A connection form selects
@@ -524,12 +524,16 @@ one mode first, then renders only that mode's fields and authorization actions.
 Discovered models remain attached to their actual connection, so two modes of
 one provider can have different catalogs, entitlements, health and priority.
 
-The current implementation has not yet reached this contract: provider nodes
-still constrain all connections to one `auth_mode`, provider definitions bind
-one auth flow, and protocol adapters currently choose their header statically.
-M7 remains incomplete until selection and presentation cross the whole
-provider-definition → connection → immutable route → request path and are
-covered by dual-mode fake-upstream tests.
+The current implementation binds each definition's `authModes` in the runtime
+catalog, routes by the connection's `credentialType`, carries the selected
+presentation into the immutable route, and applies it through shared helpers
+for chat adapters, model discovery and quota requests. CLI/TUI catalogs expose
+per-mode setup metadata; the TUI `ctrl+o` cycles the selected mode and rebuilds
+the mode-specific fields. Empty credentials are accepted only for a selected
+mode with an advertised interactive flow. Dual-mode snapshot and setup-form
+fixtures cover selection. Remaining M7 work is the broader live-provider and
+OAuth lifecycle acceptance matrix, plus implementing a generic signed-request
+Apply extension before claiming non-header auth schemes are covered.
 
 Credential use and interactive setup are related contracts with separate
 lifecycles:

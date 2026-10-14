@@ -521,8 +521,8 @@ func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	if credential.Secret != "" {
-		headers.Set("x-goog-api-key", credential.Secret)
+	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
+		return kernel.UpstreamRequest{}, err
 	}
 	return kernel.UpstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: bytes.NewReader(data)}, nil
 }

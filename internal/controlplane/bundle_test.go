@@ -313,7 +313,7 @@ func TestBundleEmbedsOnlySecretFreeProviderDefinitionsAndPersistsThem(t *testing
 		t.Fatal(err)
 	}
 	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "bundle-portable", Version: "1", DisplayName: "Portable provider",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
 			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef("chat.generate", 1), ProviderFormat: "openai",
 			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -328,8 +328,8 @@ func TestBundleEmbedsOnlySecretFreeProviderDefinitionsAndPersistsThem(t *testing
 	external := definition
 	external.ID = "bundle-external"
 	external.DisplayName = "External provider"
-	external.Auth = provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}
-	external.AuthOptions = provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth?client_secret=bundle-secret-marker", TokenURL: "https://identity.test/token"}}
+	external.DefaultCredentialType = "oauth2"
+	external.AuthModes = []provider.AuthModeDefinition{{CredentialType: "oauth2", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth?client_secret=bundle-secret-marker", TokenURL: "https://identity.test/token"}}}}
 	if err := registry.Primitives.RegisterDefinition(external); err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestBundleRejectsProviderDefinitionPayloadDifferentFromPinnedDescriptor(t *
 	}
 	definition := provider.ProviderDefinition{
 		ContractVersion: 1, ID: "pinned-chat", Version: "1", DisplayName: "Pinned chat",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
 			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef("chat.generate", 1), ProviderFormat: "openai",
 			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},

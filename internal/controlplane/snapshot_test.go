@@ -21,6 +21,7 @@ func TestLoaderBuildsTypedPhysicalAndComboGraph(t *testing.T) {
 INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix) VALUES('node-a','A','http://a','openai_chat','manifest-selected-provider','a');
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:a','node-a','discovered','model-a','Model A');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority) VALUES('account-a','node-a','A1','api_key','secret-a',1);
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority) VALUES('account-b','node-a','A2','oauth2','oauth-secret',2);
 INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix) VALUES('node-media','Media','http://media','vendor.audio.v1','manifest-selected-provider','media');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority) VALUES('media-account','node-media','Media account','api_key','media-secret',1);
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:audio','node-media','custom','transcribe-v1','Transcribe V1');
@@ -29,6 +30,9 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 		t.Fatal(err)
 	}
 	if err := s.RecordConnectionModelSnapshot("account-a", "node-a", []string{"model-a"}, true, "models_endpoint"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordConnectionModelSnapshot("account-b", "node-a", []string{"model-a"}, true, "models_endpoint"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.UpsertPhysicalModel(store.PhysicalModel{Name: "model-a", Sources: []store.RouteReference{{RouteID: "route:a"}}, Policy: store.StrategySpec{Ref: kernel.StrategyRef("ordered-fallback", 1)}, LossPolicy: kernel.LossPolicy{Allow: []string{"reasoning.clamped"}}, Enabled: true}); err != nil {
@@ -49,7 +53,10 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 		t.Fatal(err)
 	}
 	if err := registry.Primitives.RegisterDefinition(provider.ProviderDefinition{ContractVersion: 1, ID: "manifest-selected-provider", Version: "1", DisplayName: "Manifest selected",
-		Auth:    provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{
+			{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}},
+			{CredentialType: "oauth2", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}},
+		},
 		Session: provider.PrimitiveRef{Kind: provider.PrimitiveSessionStore, ID: "session", ContractVersion: 1},
 		Operations: map[provider.Operation]provider.OperationBinding{
 			provider.OperationChat: {
@@ -108,8 +115,12 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 		t.Fatalf("physical node=%#v", physical)
 	}
 	route := snapshot.Routes["route:a@account-a"]
-	if route.OperationBindings["chat.generate"].ContractVersion != 1 || len(route.OperationBindings["chat.generate"].AdapterIDs) != 1 || route.OperationBindings["chat.generate"].AdapterIDs[0] != "manifest-selected-provider:chat" || route.AuthFlowID != provider.AuthBindingKey("manifest-selected-provider", provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || route.SessionStoreRef != (extensions.Ref{Kind: string(provider.PrimitiveSessionStore), ID: "session", ContractVersion: 1}) || route.ErrorClassifierRef != provider.RuntimeErrorClassifierRef("manifest-selected-provider", provider.OperationChat, provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}) || route.UsageSourceRef != (extensions.Ref{Kind: string(provider.PrimitiveUsageSource), ID: "http-header-usage", ContractVersion: 1}) || route.UsageOptions.InputTokensHeader != "X-Input-Count" || route.QuotaSourceRef != (extensions.Ref{Kind: string(provider.PrimitiveQuotaSource), ID: "http-json-quota", ContractVersion: 1}) || route.QuotaEndpointRef != (extensions.Ref{Kind: string(provider.PrimitiveEndpoint), ID: "http-json", ContractVersion: 1}) || route.QuotaTransportRef != (extensions.Ref{Kind: string(provider.PrimitiveTransport), ID: "http", ContractVersion: 1}) || route.QuotaEndpointOptions.Path != "/account/quota" || route.QuotaWindowName != "account" {
+	if route.OperationBindings["chat.generate"].ContractVersion != 1 || len(route.OperationBindings["chat.generate"].AdapterIDs) != 1 || route.OperationBindings["chat.generate"].AdapterIDs[0] != "manifest-selected-provider:chat" || route.AuthFlowID != provider.AuthBindingKey("manifest-selected-provider", "api_key", provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || route.SessionStoreRef != (extensions.Ref{Kind: string(provider.PrimitiveSessionStore), ID: "session", ContractVersion: 1}) || route.ErrorClassifierRef != provider.RuntimeErrorClassifierRef("manifest-selected-provider", provider.OperationChat, provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}) || route.UsageSourceRef != (extensions.Ref{Kind: string(provider.PrimitiveUsageSource), ID: "http-header-usage", ContractVersion: 1}) || route.UsageOptions.InputTokensHeader != "X-Input-Count" || route.QuotaSourceRef != (extensions.Ref{Kind: string(provider.PrimitiveQuotaSource), ID: "http-json-quota", ContractVersion: 1}) || route.QuotaEndpointRef != (extensions.Ref{Kind: string(provider.PrimitiveEndpoint), ID: "http-json", ContractVersion: 1}) || route.QuotaTransportRef != (extensions.Ref{Kind: string(provider.PrimitiveTransport), ID: "http", ContractVersion: 1}) || route.QuotaEndpointOptions.Path != "/account/quota" || route.QuotaWindowName != "account" {
 		t.Fatalf("route did not use provider runtime binding: %#v", route)
+	}
+	oauthRoute := snapshot.Routes["route:a@account-b"]
+	if oauthRoute.CredentialType != "oauth2" || oauthRoute.AuthFlowID != provider.AuthBindingKey("manifest-selected-provider", "oauth2", provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) || oauthRoute.CredentialPresentation.Header != "Authorization" || oauthRoute.CredentialPresentation.Prefix != "Bearer " {
+		t.Fatalf("connection credential type did not select its declared auth mode: %#v", oauthRoute)
 	}
 	mediaRoute := snapshot.Routes["route:audio@media-account"]
 	mediaBinding := mediaRoute.OperationBindings["audio.transcribe.v1"]

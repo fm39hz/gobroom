@@ -171,8 +171,12 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 	}
 	operation := provider.Operation(operationID)
 	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, operation)]
-	if !ok || binding.Adapter == nil || binding.Auth == nil || binding.TaskRef.Kind != "operation" || binding.TaskRef.ContractVersion == 0 {
+	if !ok || binding.Adapter == nil || binding.TaskRef.Kind != "operation" || binding.TaskRef.ContractVersion == 0 {
 		return OperationTestResult{}, fmt.Errorf("provider definition %q has no executable binding for operation %q", node.DefinitionID, operationID)
+	}
+	authMode, authModeExists := binding.AuthModes[selected.CredentialType]
+	if !authModeExists || authMode.Flow == nil {
+		return OperationTestResult{}, fmt.Errorf("provider definition %q does not bind credential type %q", node.DefinitionID, selected.CredentialType)
 	}
 	if binding.TaskRef.ID == string(normalize.OperationChatGenerate) {
 		return OperationTestResult{}, fmt.Errorf("chat generation probes must use the bounded test-inference operation")
@@ -190,7 +194,7 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 	request.OperationPayload = prepared.InputPayload
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(prepared.ResourceBounds.DeadlineMillis)*time.Millisecond)
 	defer cancel()
-	resolvedCredential, err := binding.Auth.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
 	if err != nil {
 		return OperationTestResult{}, fmt.Errorf("resolve operation-probe credential: %w", err)
 	}
@@ -199,7 +203,8 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 		ID: connectionID + ":operation-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
 		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
 		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
-		Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+		CredentialPresentation: authMode.Presentation,
+		Enabled:                true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
 			task: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
 		},
 	}
@@ -281,7 +286,7 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	var binding provider.RuntimeBinding
 	for _, operation := range []provider.Operation{provider.OperationChat, provider.OperationResponses, provider.OperationMessages} {
 		candidate, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, operation)]
-		if ok && candidate.Adapter != nil && candidate.Auth != nil && candidate.Protocol == kernel.Protocol(node.Protocol) && candidate.TaskRef.ID == string(normalize.OperationChatGenerate) {
+		if ok && candidate.Adapter != nil && candidate.Protocol == kernel.Protocol(node.Protocol) && candidate.TaskRef.ID == string(normalize.OperationChatGenerate) {
 			binding = candidate
 			break
 		}
@@ -289,7 +294,11 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	if binding.Adapter == nil {
 		return InferenceTestResult{}, fmt.Errorf("provider definition %q has no compatible inference operation for a connection probe", node.DefinitionID)
 	}
-	resolvedCredential, err := binding.Auth.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	authMode, authModeExists := binding.AuthModes[credential.Type]
+	if !authModeExists || authMode.Flow == nil {
+		return InferenceTestResult{}, fmt.Errorf("provider definition %q does not bind credential type %q", node.DefinitionID, credential.Type)
+	}
+	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
 	if err != nil {
 		return InferenceTestResult{}, fmt.Errorf("resolve inference credential: %w", err)
 	}
@@ -311,7 +320,8 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 		ID: connectionID + ":inference-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
 		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
 		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
-		Enabled: true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
+		CredentialPresentation: authMode.Presentation,
+		Enabled:                true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
 			request.Operation: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
 		},
 	}
@@ -446,14 +456,15 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	if !found {
 		return fetchedModelCatalog{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
 	}
-	if binding.Auth == nil {
-		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q has no auth flow for model discovery", node.DefinitionID)
+	authMode, authModeExists := binding.AuthModes[credential.Type]
+	if !authModeExists || authMode.Flow == nil {
+		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q does not bind credential type %q for model discovery", node.DefinitionID, credential.Type)
 	}
-	resolvedCredential, err := binding.Auth.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
 	if err != nil {
 		return fetchedModelCatalog{}, fmt.Errorf("resolve discovery credential: %w", err)
 	}
-	input := provider.ModelSourceInput{URL: endpoint, Credential: resolvedCredential, Client: s.Client}
+	input := provider.ModelSourceInput{URL: endpoint, Credential: resolvedCredential, Presentation: authMode.Presentation, Client: s.Client}
 	var catalog provider.ModelCatalogSnapshot
 	if test {
 		if tester, ok := binding.ModelSource.(provider.ConnectionTestModelCatalogSnapshotSource); ok {

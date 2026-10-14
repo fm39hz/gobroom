@@ -114,6 +114,14 @@ func TestConnectionsAreManagedWithoutExposingSecrets(t *testing.T) {
 	if !ok || primary.ID != item.ID || primary.Secret != "do-not-return" {
 		t.Fatalf("provider credential=%#v ok=%v", primary, ok)
 	}
+	updated, err := s.UpdateConnection(UpdateConnectionInput{ID: item.ID, CredentialType: "oauth2"})
+	if err != nil || updated.CredentialType != "oauth2" {
+		t.Fatalf("change credential type=%#v err=%v", updated, err)
+	}
+	credential, ok = s.ConnectionCredentialByID(item.ID)
+	if !ok || credential.Type != "oauth2" || credential.Secret != "" {
+		t.Fatalf("switching auth mode retained the previous mode's secret: %#v ok=%v", credential, ok)
+	}
 	if err := s.DeleteConnection(item.ID); err != nil {
 		t.Fatal(err)
 	}

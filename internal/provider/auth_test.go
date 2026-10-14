@@ -112,7 +112,7 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 	}); err != nil {
 		t.Fatal(err)
 	}
-	definition := ProviderDefinition{ContractVersion: 1, ID: "media-oauth", Version: "1", DisplayName: "Media OAuth", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: deviceAuthID, ContractVersion: 1}, AuthOptions: AuthOptions{Options: json.RawMessage(`{"issuer":"login.example"}`)}, Operations: map[Operation]OperationBinding{Operation(operationID): {
+	definition := ProviderDefinition{ContractVersion: 1, ID: "media-oauth", Version: "1", DisplayName: "Media OAuth", DefaultCredentialType: "oauth-device", AuthModes: []AuthModeDefinition{{CredentialType: "oauth-device", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: deviceAuthID, ContractVersion: 1}, AuthOptions: AuthOptions{Options: json.RawMessage(`{"issuer":"login.example"}`)}}}, Operations: map[Operation]OperationBinding{Operation(operationID): {
 		Protocol: kernel.Protocol("vendor.audio.v1"), TaskRef: OperationRef(operationID, 1),
 		Endpoint: PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
 		RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
@@ -124,7 +124,7 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	credential, err := binding.Auth.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth-device", Secret: "access-token"})
+	credential, err := binding.AuthModes["oauth-device"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth-device", Secret: "access-token"})
 	if err != nil || credential.Secret != "access-token" || credential.ClientID != "login.example" {
 		t.Fatalf("provider auth extension credential=%#v err=%v", credential, err)
 	}

@@ -50,7 +50,7 @@ func (nativeChatRequestTransform) Apply(_ context.Context, request *kernel.Norma
 func TestChatAdapterForwardsAndPassthroughsSSE(t *testing.T) {
 	adapter := NewAdapter()
 	request := normalize.Request{Model: "public", SourceFormat: normalize.FormatOpenAIChat, Stream: true, Raw: map[string]any{"model": "public", "messages": []any{map[string]any{"role": "user", "content": "hi"}}}}
-	route := kernel.Route{ID: "route:test", BaseURL: "https://provider.example/v1", ExternalModel: "upstream-model", Enabled: true}
+	route := kernel.Route{ID: "route:test", BaseURL: "https://provider.example/v1", ExternalModel: "upstream-model", Enabled: true, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}
 	prepared, err := adapter.Prepare(context.Background(), request, route, kernel.Credential{Secret: "secret"})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestKernelPreservesNativeChatSSEWithoutTransforms(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "upstream-physical-model",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "upstream-physical-model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
 		}},
 	}, 1)
@@ -175,7 +175,7 @@ func TestKernelRunsAnthropicMessagesThroughOpenAIChatAndBack(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "physical-model",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "physical-model",
 			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
 		}},
@@ -241,7 +241,7 @@ func TestKernelRejectsMissingClientRendererBeforeDispatch(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "physical-model",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "physical-model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
 		}},
 	}, 1)
@@ -292,7 +292,7 @@ func TestKernelStreamsInterleavedToolLifecycleToAnthropicClient(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "tools", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "physical-tools",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "physical-tools",
 			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
 		}},
@@ -347,7 +347,7 @@ func TestKernelRejectsIncompleteToolIdentityWithoutSuccessfulStreamEnd(t *testin
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "model",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
 		}},
 	}, 1)
@@ -401,8 +401,8 @@ func TestKernelInterruptedCrossProtocolStreamStaysIncompleteAndDoesNotFallback(t
 			{Kind: kernel.MemberRoute, ID: "backup", Fidelity: kernel.FidelityExact},
 		}}},
 		Routes: []kernel.Route{
-			{ID: "primary", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://primary.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
-			{ID: "backup", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://backup.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+			{ID: "primary", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://primary.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+			{ID: "backup", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://backup.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
 		},
 	}, 1)
 	if err != nil {
@@ -474,7 +474,7 @@ func TestKernelMapsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "chat-physical",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "chat-physical",
 			Profile: kernel.CapabilityProfile{
 				kernel.CapabilityTools:  {State: kernel.SupportNative},
 				kernel.CapabilityVision: {State: kernel.SupportNative},
@@ -571,7 +571,7 @@ func TestKernelStreamsResponsesIngressThroughOpenAIChatAndBack(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://provider.test/v1", ExternalModel: "chat-physical",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "chat-physical",
 			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-chat"}}},
 		}},
@@ -639,8 +639,8 @@ func TestKernelInterruptedChatProviderResponsesStreamDoesNotCompleteOrFallback(t
 			{Kind: kernel.MemberRoute, ID: "backup", Fidelity: kernel.FidelityExact},
 		}}},
 		Routes: []kernel.Route{
-			{ID: "primary", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://primary.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
-			{ID: "backup", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, BaseURL: "https://backup.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+			{ID: "primary", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://primary.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
+			{ID: "backup", Enabled: true, Protocol: kernel.ProtocolOpenAIChat, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://backup.test/v1", ExternalModel: "model", OperationBindings: operationBinding},
 		},
 	}, 1)
 	if err != nil {
@@ -1068,7 +1068,7 @@ func TestAnthropicMessagesRequestMapsToOpenAIChatFromTypedIR(t *testing.T) {
 	if !plan.Supported || plan.Fidelity != kernel.FidelityTranslated {
 		t.Fatalf("representable Anthropic request was not admitted: %#v", plan)
 	}
-	route := kernel.Route{ID: "openai-route", BaseURL: "https://provider.test/v1", ExternalModel: "upstream-model", Enabled: true}
+	route := kernel.Route{ID: "openai-route", BaseURL: "https://provider.test/v1", ExternalModel: "upstream-model", Enabled: true, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}
 	prepared, err := composed.Prepare(context.Background(), parsed.Request, route, kernel.Credential{Secret: "credential"})
 	if err != nil {
 		t.Fatal(err)

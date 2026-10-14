@@ -20,8 +20,8 @@ func audioManifest() provider.ProviderDefinition {
 	task := provider.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
 	return provider.ProviderDefinition{
 		ContractVersion: 1, ID: "example-audio", Version: "1", DisplayName: "Example Audio",
-		Capabilities: provider.CapabilitySet{AudioInput: true},
-		Auth:         provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Capabilities:          provider.CapabilitySet{AudioInput: true},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: provider.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationAudio: {
 			Protocol: "example_audio", TaskRef: &task, ProviderFormat: "example-audio-json",
 			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},

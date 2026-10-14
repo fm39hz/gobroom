@@ -550,7 +550,7 @@ func TestProviderDefinitionMetadataIsAvailableThroughGenericControlAPI(t *testin
 		t.Fatal("provider definition metadata was not exposed")
 	}
 	for _, definition := range response.Definitions {
-		if definition.ID == "openai-compatible-chat" && definition.Auth.ID == "static-secret" && len(definition.Auth.SetupSchema.Fields) == 1 {
+		if definition.ID == "openai-compatible-chat" && len(definition.AuthModes) == 1 && definition.AuthModes[0].ID == "static-secret" && len(definition.AuthModes[0].SetupSchema.Fields) == 1 {
 			return
 		}
 	}

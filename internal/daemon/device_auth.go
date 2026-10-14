@@ -38,7 +38,7 @@ func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID stri
 	if err != nil {
 		return deviceAuthorizationView{}, err
 	}
-	flowID := d.providerAuthFlowIDs[node.DefinitionID]
+	flowID := d.authFlowID(node.DefinitionID, connection.Type)
 	flow, ok := d.authFlows[flowID]
 	if flowID == "" || !ok {
 		return deviceAuthorizationView{}, fmt.Errorf("auth flow for provider definition %q is unavailable", node.DefinitionID)

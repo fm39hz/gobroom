@@ -137,7 +137,8 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := registry.BuildBindings(); err != nil {
+	runtimeBindings, err := registry.BuildBindings()
+	if err != nil {
 		t.Fatal(err)
 	}
 	extensionCatalog, err := registry.ExtensionCatalog()
@@ -152,7 +153,7 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog, strategyCatalog: strategyCatalog, strategyDefinitions: strategyCatalog.Definitions(), extensionCatalog: extensionCatalog}
+	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: registry, providerCatalog: providerCatalog, strategyCatalog: strategyCatalog, strategyDefinitions: strategyCatalog.Definitions(), extensionCatalog: extensionCatalog, authFlows: registry.AuthFlowsForBindings(runtimeBindings), providerAuthModes: registry.DefaultCredentialTypes(), providerAuthFlowIDs: registry.AuthFlowIDsByDefinition()}
 	response := d.handleIPC(nil, IPCRequest{ID: "1", Method: "providers.create", Params: map[string]any{"name": "G4F", "prefix": "g4f", "baseUrl": "https://example.test/v1", "protocol": "openai_chat"}})
 	if !response.OK {
 		t.Fatal(response.Error)
@@ -203,7 +204,7 @@ func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
 	var foundOpenAI bool
 	for _, definition := range providerDefinitions {
 		if definition.ID == "openai-compatible-chat" {
-			foundOpenAI = definition.Auth.ID == "static-secret" && len(definition.Auth.SetupSchema.Fields) == 1
+			foundOpenAI = len(definition.AuthModes) == 1 && definition.AuthModes[0].ID == "static-secret" && len(definition.AuthModes[0].SetupSchema.Fields) == 1
 		}
 	}
 	if !foundOpenAI {
@@ -329,7 +330,7 @@ func TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart(t *test
 	d := &Daemon{store: s, server: api.NewServer(s), providerRegistry: activeRuntime, strategyCatalog: activeStrategies}
 	definition := provider.ProviderDefinition{
 		ContractVersion: 1, ID: "portable-custom-chat", Version: "1", DisplayName: "Portable custom chat",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
 			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.FormatOpenAIChat,
 			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -406,7 +407,7 @@ func TestDaemonLoadsPortableProviderDefinitionFromStoreBeforeRuntimeBinding(t *t
 	defer s.Close()
 	definition := provider.ProviderDefinition{
 		ContractVersion: 1, ID: "portable-startup-chat", Version: "1", DisplayName: "Portable startup chat",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
 			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef(normalize.OperationChatGenerate, 1), ProviderFormat: normalize.FormatOpenAIChat,
 			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -539,7 +540,7 @@ func TestProviderCreationDefaultsConnectionAuthFromDefinition(t *testing.T) {
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
 		providerAuthModes:   map[string]string{"oauth-provider": "oauth2"},
-		providerAuthFlowIDs: map[string]string{"oauth-provider": "oauth-provider:oauth2"},
+		providerAuthFlowIDs: map[string]map[string]string{"oauth-provider": {"oauth2": "oauth-provider:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{
 			"oauth-provider:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token"}},
 		},
@@ -573,21 +574,29 @@ func TestConnectionCanBeCreatedWithoutTokenOnlyForInteractiveOAuth(t *testing.T)
 		t.Fatal(err)
 	}
 	defer s.Close()
-	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Device OAuth", Prefix: "device", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "device-oauth", AuthMode: "oauth2"})
+	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Dual-auth provider", Prefix: "device", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "device-oauth", AuthMode: "api_key"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := &Daemon{store: s,
-		providerAuthFlowIDs: map[string]string{"device-oauth": "device-oauth:oauth2", "token-only": "token-only:oauth2"},
+		providerAuthFlowIDs: map[string]map[string]string{"device-oauth": {"api_key": "device-oauth:api_key", "oauth2": "device-oauth:oauth2"}, "token-only": {"oauth2": "token-only:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{
-			"device-oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token", DeviceAuthURL: "https://identity.test/device"}},
-			"token-only:oauth2":   provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}},
+			"device-oauth:api_key": provider.StaticSecretAuth{},
+			"device-oauth:oauth2":  provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token", DeviceAuthURL: "https://identity.test/device"}},
+			"token-only:oauth2":    provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}},
 		},
+	}
+	if err := d.validateConnectionSecret(context.Background(), node.ID, "api_key", "platform-key"); err != nil {
+		t.Fatalf("API-key connection should be accepted beside OAuth: %v", err)
+	}
+	apiConnection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "platform key", CredentialType: "api_key", Secret: "platform-key"})
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := d.validateConnectionSecret(context.Background(), node.ID, "oauth2", ""); err != nil {
 		t.Fatalf("interactive OAuth should permit an uninitialized connection: %v", err)
 	}
-	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "new account", CredentialType: "oauth2"})
+	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "new OAuth account", CredentialType: "oauth2"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -596,6 +605,9 @@ func TestConnectionCanBeCreatedWithoutTokenOnlyForInteractiveOAuth(t *testing.T)
 	}
 	if err := d.validateConnectionSecret(context.Background(), node.ID, "oauth2", ""); err != nil {
 		t.Fatalf("empty OAuth secret changed validation outcome after persist: %v", err)
+	}
+	if err := d.validateConnectionSecret(context.Background(), node.ID, "api_key", "platform-key"); err != nil || apiConnection.ID == connection.ID {
+		t.Fatalf("dual auth connection modes were not independently retained: api=%#v oauth=%#v err=%v", apiConnection, connection, err)
 	}
 	tokenOnlyNode, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Token-only OAuth", Prefix: "token-only", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "token-only", AuthMode: "oauth2"})
 	if err != nil {
@@ -655,7 +667,7 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	}
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
-		providerAuthFlowIDs: map[string]string{"oauth": "oauth:oauth2"},
+		providerAuthFlowIDs: map[string]map[string]string{"oauth": {"oauth2": "oauth:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{"oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
 			ClientID: "client", AuthURL: "https://identity.test/authorize", TokenURL: "https://identity.test/token",
 			RedirectURL: "https://identity.test/oauth/callback", Scopes: []string{"models.read"},
@@ -743,7 +755,7 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	}
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
-		providerAuthFlowIDs: map[string]string{"loopback-oauth": "loopback-oauth:auth"},
+		providerAuthFlowIDs: map[string]map[string]string{"loopback-oauth": {"oauth2": "loopback-oauth:auth"}},
 		authFlows:           map[string]provider.AuthFlow{"loopback-oauth:auth": callbackOAuthFixture{redirectURL: redirectURL}},
 	}
 	started := d.handleIPC(context.Background(), IPCRequest{ID: "start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
@@ -844,7 +856,7 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 	defer stop()
 	d := &Daemon{
 		store: s, server: api.NewServer(s), runCtx: rootCtx,
-		providerAuthFlowIDs: map[string]string{"device-oauth": "device-oauth:oauth2"},
+		providerAuthFlowIDs: map[string]map[string]string{"device-oauth": {"oauth2": "device-oauth:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{"device-oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
 			ClientID: "device-client", DeviceAuthURL: "https://identity.test/device", TokenURL: "https://identity.test/token",
 		}}},
@@ -913,7 +925,7 @@ func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *test
 	flow := &serializedDeviceAuthFixture{started: make(chan struct{}, 2), release: make(chan struct{})}
 	d := &Daemon{
 		store: s, server: api.NewServer(s), runCtx: rootCtx,
-		providerAuthFlowIDs: map[string]string{"device-oauth": "device-oauth:fixture"},
+		providerAuthFlowIDs: map[string]map[string]string{"device-oauth": {"oauth2": "device-oauth:fixture"}},
 		authFlows:           map[string]provider.AuthFlow{"device-oauth:fixture": flow},
 	}
 	firstDone := make(chan IPCResponse, 1)
@@ -1070,7 +1082,7 @@ func TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation(t *testing.T) {
 	binding := provider.RuntimeBinding{
 		DefinitionID: "inference-only", Operation: provider.OperationChat,
 		TaskRef: *provider.OperationRef(normalize.OperationChatGenerate, 1), Protocol: kernel.ProtocolOpenAIChat,
-		ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{},
+		ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 	}
 	d := &Daemon{store: state, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionID, binding.Operation): binding}}
 	response := d.handleIPC(context.Background(), IPCRequest{ID: "probe", Method: "connections.test_inference", Params: map[string]any{"connectionID": connection.ID, "modelID": "manual/model-x"}})
@@ -1113,7 +1125,7 @@ func TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch(t *testing.T
 	adapter := daemonExplainAdapter{attempts: &adapterCalls}
 	binding := provider.RuntimeBinding{
 		DefinitionID: node.DefinitionID, Operation: provider.OperationAudio, TaskRef: operationRef,
-		Protocol: kernel.Protocol(node.Protocol), AdapterID: adapter.ID(), Adapter: adapter, Auth: provider.StaticSecretAuth{},
+		Protocol: kernel.Protocol(node.Protocol), AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 	}
 	d := &Daemon{store: state, providerRegistry: runtimeRegistry, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(node.DefinitionID, provider.OperationAudio): binding}}
 	response := d.handleIPC(context.Background(), IPCRequest{
@@ -1133,8 +1145,8 @@ func TestDaemonCompositionRootRegistersStaticProviderModule(t *testing.T) {
 		}
 		return runtime.Primitives.RegisterDefinition(provider.ProviderDefinition{
 			ContractVersion: 1, ID: "fixture-audio-provider", Version: "1", DisplayName: "Fixture Audio Provider",
-			Capabilities: provider.CapabilitySet{AudioInput: true},
-			Auth:         provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+			Capabilities:          provider.CapabilitySet{AudioInput: true},
+			DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 			Operations: map[provider.Operation]provider.OperationBinding{provider.OperationAudio: {
 				Protocol: "fixture_audio", TaskRef: &operationRef, ProviderFormat: "multipart-json",
 				Endpoint:            provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -1209,7 +1221,7 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 		t.Fatal(err)
 	}
 	definition := provider.ProviderDefinition{ContractVersion: 1, ID: "quota-fixture", Version: "1", DisplayName: "Quota fixture",
-		Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
 			Protocol:        kernel.ProtocolOpenAIChat,
 			TaskRef:         provider.OperationRef("chat.generate", 1),
@@ -1277,7 +1289,7 @@ func TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart(t *testing.T
 	var cataloguedFixture bool
 	for _, definition := range providerDefinitions {
 		if definition.ID == "quota-fixture" {
-			cataloguedFixture = len(definition.Operations) == 2 && definition.Auth.ID == "static-secret"
+			cataloguedFixture = len(definition.Operations) == 2 && len(definition.AuthModes) == 1 && definition.AuthModes[0].ID == "static-secret"
 		}
 	}
 	if !cataloguedFixture {

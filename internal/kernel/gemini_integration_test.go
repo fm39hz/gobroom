@@ -87,7 +87,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	profile := kernel.CapabilityProfile{
 		kernel.CapabilityTools: {State: kernel.SupportNative},
 	}
-	route := kernel.Route{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}, SessionStoreRef: binding.SessionStoreRef}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}
+	route := kernel.Route{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}, SessionStoreRef: binding.SessionStoreRef}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "assistant-role", TargetRef: "assistant-role"}},
 		Routes:       []kernel.Route{route},
@@ -263,7 +263,7 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 		Routes: []kernel.Route{{
 			ID: "gemini-route", NodeID: "gemini-node", DefinitionID: "gemini",
 			DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1},
-			Protocol:      kernel.ProtocolGemini, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection",
+			Protocol:      kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection",
 			Profile: kernel.CapabilityProfile{
 				kernel.CapabilityTools:  {State: kernel.SupportNative},
 				kernel.CapabilityVision: {State: kernel.SupportNative},
@@ -362,7 +362,7 @@ func TestGeminiRuntimeBindingPropagatesRequestCancellation(t *testing.T) {
 	}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
-		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-model", Enabled: true}},
+		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-model", Enabled: true}},
 		Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini:model", Fidelity: kernel.FidelityExact}}}},
 	}, 1)
 	if err != nil {
@@ -430,7 +430,7 @@ func TestGeminiRuntimeBindingTranslatesNonStreamingTextCompletion(t *testing.T) 
 	}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
-		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-flash", Enabled: true}},
+		Routes:       []kernel.Route{{ID: "gemini:model", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-flash", Enabled: true}},
 		Nodes:        []kernel.ModelNode{{ID: "role", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini:model", Fidelity: kernel.FidelityExact}}}},
 	}, 1)
 	if err != nil {
@@ -492,8 +492,8 @@ func newGeminiFallbackGateway(t *testing.T, baseURL string, stream bool) (*kerne
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "role", TargetRef: "role"}},
 		Routes: []kernel.Route{
-			{ID: "route:limited", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "limited", Enabled: true},
-			{ID: "route:healthy", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "healthy", Enabled: true},
+			{ID: "route:limited", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "limited", Enabled: true},
+			{ID: "route:healthy", NodeID: "gemini", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, Protocol: kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}}}, BaseURL: baseURL + "/v1beta", ExternalModel: "healthy", Enabled: true},
 		},
 		Nodes: []kernel.ModelNode{
 			{ID: "physical-limited", Kind: kernel.ModelPhysical, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route:limited", Fidelity: kernel.FidelityExact}}},

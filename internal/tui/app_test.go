@@ -307,11 +307,11 @@ func TestOAuthProviderConnectionFormDefaultsCredentialTypeFromAuthMode(t *testin
 
 func TestConnectionFormUsesProviderAuthSetupSchema(t *testing.T) {
 	catalog := []provider.DefinitionMetadata{{
-		ID: "oauth-device", Auth: provider.AuthMetadata{ID: "device-oauth", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
+		ID: "oauth-device", AuthModes: []provider.AuthModeMetadata{{CredentialType: "oauth2", ID: "device-oauth", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
 			{Name: "access_token", Type: "string", Required: true, Secret: true},
 			{Name: "refresh_token", Type: "string", Secret: true},
 			{Name: "expires_at", Type: "datetime"},
-		}}},
+		}}}},
 	}}
 	form := newConnectionFormWithMetadata(providerNode{ID: "node-oauth", DefinitionID: "oauth-device", AuthMode: "oauth2"}, catalog)
 	for index, field := range form.fields {
@@ -352,10 +352,10 @@ func TestConnectionFormUsesProviderAuthSetupSchema(t *testing.T) {
 
 func TestInteractiveOAuthConnectionFormAllowsDeferredAuthorization(t *testing.T) {
 	catalog := []provider.DefinitionMetadata{{
-		ID: "oauth-device", Auth: provider.AuthMetadata{ID: "oauth2", DeviceAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
+		ID: "oauth-device", AuthModes: []provider.AuthModeMetadata{{CredentialType: "oauth2", ID: "oauth2", DeviceAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
 			{Name: "access_token", Type: "string", Secret: true},
 			{Name: "refresh_token", Type: "string", Secret: true},
-		}}},
+		}}}},
 	}}
 	form := newConnectionFormWithMetadata(providerNode{ID: "node-oauth", DefinitionID: "oauth-device", AuthMode: "oauth2"}, catalog)
 	for index, field := range form.fields {
@@ -369,6 +369,56 @@ func TestInteractiveOAuthConnectionFormAllowsDeferredAuthorization(t *testing.T)
 	}
 	if secret, ok := params["secret"].(string); !ok || secret != "" {
 		t.Fatalf("empty interactive credential should be sent as empty, got %#v", params["secret"])
+	}
+}
+
+func TestConnectionFormCyclesAuthModesAndRebuildsFields(t *testing.T) {
+	catalog := []provider.DefinitionMetadata{{
+		ID: "dual-auth", DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeMetadata{
+			{CredentialType: "api_key", ID: "static-secret", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "secret", Type: "string", Required: true, Secret: true}}}},
+			{CredentialType: "oauth2", ID: "oauth2", DeviceAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "access_token", Type: "string", Secret: true}}}},
+		},
+	}}
+	form := newConnectionFormWithMetadata(providerNode{ID: "node-dual", DefinitionID: "dual-auth", AuthMode: "api_key"}, catalog)
+	modeKey, foundModeKey := false, false
+	for _, field := range form.fields {
+		if field.key == "auth:secret" {
+			modeKey = true
+		}
+	}
+	for index, field := range form.fields {
+		if field.key == "name" {
+			form.inputs[index].SetValue("account")
+		}
+		if field.key == "credentialType" {
+			foundModeKey = true
+		}
+	}
+	if !modeKey || !foundModeKey {
+		t.Fatalf("default API-key mode fields missing: %#v", form.fields)
+	}
+	_, _, _, _, err := form.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if form.authModeIndex != 1 || form.inputs[2].Value() != "oauth2" {
+		t.Fatalf("auth mode did not cycle to OAuth: index=%d fields=%#v", form.authModeIndex, form.fields)
+	}
+	accessTokenField := false
+	for _, field := range form.fields {
+		if field.key == "auth:secret" {
+			t.Fatalf("API-key setup fields leaked into OAuth form: %#v", form.fields)
+		}
+		if field.key == "auth:access_token" {
+			accessTokenField = true
+		}
+	}
+	if !accessTokenField {
+		t.Fatalf("OAuth setup field missing after mode switch: %#v", form.fields)
+	}
+	params, err := form.Params()
+	if err != nil || params["credentialType"] != "oauth2" || params["secret"] != "" {
+		t.Fatalf("selected OAuth mode did not submit deferred credential: params=%#v err=%v", params, err)
 	}
 }
 

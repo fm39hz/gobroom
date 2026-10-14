@@ -215,7 +215,7 @@ func TestKernelPreservesNativeResponsesJSONWithoutTransforms(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, BaseURL: "https://provider.test/v1", ExternalModel: "upstream-physical-model",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "upstream-physical-model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}}},
 		}},
 	}, 1)
@@ -251,7 +251,7 @@ func TestKernelRendersResponsesJSONItemsAsAnthropicToolUseBlocks(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
 			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}}},
 		}},
@@ -343,7 +343,7 @@ func TestKernelRestoresResponsesContinuityFromClientSession(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, DefinitionID: "openai", CredentialID: "account", Protocol: kernel.ProtocolOpenAIResponses,
+			ID: "route", Enabled: true, DefinitionID: "openai", CredentialID: "account", Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "},
 			BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {
 				ContractVersion: 1, AdapterIDs: []string{"openai-responses"}, SessionStoreRef: sessionStoreRef,
@@ -408,7 +408,7 @@ func TestKernelMapsOpenAIChatRequestThroughResponsesAndBack(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, BaseURL: "https://provider.test/v1", ExternalModel: "responses-physical",
+			ID: "route", Enabled: true, Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, BaseURL: "https://provider.test/v1", ExternalModel: "responses-physical",
 			Profile:           kernel.CapabilityProfile{kernel.CapabilityTools: {State: kernel.SupportNative}},
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"openai-responses"}}},
 		}},

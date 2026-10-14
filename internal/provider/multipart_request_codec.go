@@ -143,7 +143,7 @@ func (c *MultipartRequestCodec) DescribeCompatibility(input kernel.Compatibility
 	return result
 }
 
-func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, _ kernel.Credential) (kernel.UpstreamRequest, error) {
+func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	if c == nil || ctx == nil || request.Model == "" {
 		return kernel.UpstreamRequest{}, fmt.Errorf("multipart codec requires a context and model")
 	}
@@ -185,6 +185,12 @@ func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.Norm
 	form := multipart.NewWriter(writer)
 	headers := make(http.Header)
 	headers.Set("Content-Type", form.FormDataContentType())
+	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
+		for _, lease := range leases {
+			_ = lease.Close()
+		}
+		return kernel.UpstreamRequest{}, err
+	}
 	stopCancellation := context.AfterFunc(ctx, func() { _ = writer.CloseWithError(ctx.Err()) })
 	go func() {
 		err := writeMultipartOperation(ctx, form, request, model, c.options, c.artifactFields, leases)

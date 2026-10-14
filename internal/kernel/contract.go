@@ -40,32 +40,33 @@ type PublicModel struct {
 }
 
 type Route struct {
-	ID                   string
-	NodeID               string
-	DisplayPrefix        string
-	ExternalModel        string
-	Protocol             Protocol
-	OperationBindings    map[normalize.Operation]RouteOperationBinding
-	DefinitionID         string
-	DefinitionRef        extensions.Ref
-	AuthFlowID           string
-	ErrorClassifierRef   extensions.Ref
-	QuotaSourceRef       extensions.Ref
-	QuotaEndpointRef     extensions.Ref
-	QuotaTransportRef    extensions.Ref
-	QuotaEndpointOptions EndpointOptions
-	QuotaWindowName      string
-	UsageSourceRef       extensions.Ref
-	UsageOptions         UsageSourceOptions
-	SessionStoreRef      extensions.Ref
-	Profile              CapabilityProfile
-	Limits               TokenLimits
-	Weight               int
-	Enabled              bool
-	BaseURL              string
-	CredentialID         string
-	CredentialType       string
-	HealthGeneration     RouteHealthGeneration `json:"-"`
+	ID                     string
+	NodeID                 string
+	DisplayPrefix          string
+	ExternalModel          string
+	Protocol               Protocol
+	OperationBindings      map[normalize.Operation]RouteOperationBinding
+	DefinitionID           string
+	DefinitionRef          extensions.Ref
+	AuthFlowID             string
+	ErrorClassifierRef     extensions.Ref
+	QuotaSourceRef         extensions.Ref
+	QuotaEndpointRef       extensions.Ref
+	QuotaTransportRef      extensions.Ref
+	QuotaEndpointOptions   EndpointOptions
+	QuotaWindowName        string
+	UsageSourceRef         extensions.Ref
+	UsageOptions           UsageSourceOptions
+	SessionStoreRef        extensions.Ref
+	Profile                CapabilityProfile
+	Limits                 TokenLimits
+	Weight                 int
+	Enabled                bool
+	BaseURL                string
+	CredentialID           string
+	CredentialType         string
+	CredentialPresentation CredentialPresentation
+	HealthGeneration       RouteHealthGeneration `json:"-"`
 }
 
 type RouteHealthGeneration struct {

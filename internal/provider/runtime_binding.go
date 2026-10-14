@@ -35,8 +35,7 @@ type RuntimeBinding struct {
 	ResponseDecoderID   string
 	AdapterID           string
 	Adapter             kernel.ProviderAdapter
-	AuthFlowID          string
-	Auth                AuthFlow
+	AuthModes           map[string]BoundAuthMode
 	ModelSourceID       string
 	ModelSource         ModelSource
 	UsageSourceID       string
@@ -61,21 +60,29 @@ type RuntimeBinding struct {
 // options and arbitrary defaults while exposing the schemas needed to build
 // generic setup forms.
 type DefinitionMetadata struct {
-	ContractVersion uint64              `json:"contractVersion"`
-	ID              string              `json:"id"`
-	Version         string              `json:"version"`
-	DisplayName     string              `json:"displayName"`
-	Aliases         []string            `json:"aliases,omitempty"`
-	Capabilities    CapabilitySet       `json:"capabilities"`
-	Auth            AuthMetadata        `json:"auth"`
-	Operations      []OperationMetadata `json:"operations"`
+	ContractVersion       uint64              `json:"contractVersion"`
+	ID                    string              `json:"id"`
+	Version               string              `json:"version"`
+	DisplayName           string              `json:"displayName"`
+	Aliases               []string            `json:"aliases,omitempty"`
+	Capabilities          CapabilitySet       `json:"capabilities"`
+	DefaultCredentialType string              `json:"defaultCredentialType"`
+	AuthModes             []AuthModeMetadata  `json:"authModes"`
+	Operations            []OperationMetadata `json:"operations"`
 }
 
-type AuthMetadata struct {
+type AuthModeMetadata struct {
+	CredentialType      string      `json:"credentialType"`
 	ID                  string      `json:"id"`
 	SetupSchema         SetupSchema `json:"setupSchema"`
 	AuthorizationCode   bool        `json:"authorizationCode,omitempty"`
 	DeviceAuthorization bool        `json:"deviceAuthorization,omitempty"`
+}
+
+type BoundAuthMode struct {
+	FlowID       string
+	Flow         AuthFlow
+	Presentation kernel.CredentialPresentation
 }
 
 type OperationMetadata struct {
@@ -97,28 +104,31 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].ID < definitions[j].ID })
 	result := make([]DefinitionMetadata, 0, len(definitions))
 	for _, definition := range definitions {
-		flow, err := r.Auth.Build(extensionRef(definition.Auth), definition.AuthOptions)
-		if err != nil {
-			return nil, fmt.Errorf("provider %q auth metadata: %w", definition.ID, err)
-		}
-		authMetadata := AuthMetadata{ID: flow.ID(), SetupSchema: flow.SetupSchema()}
-		authMetadata.AuthorizationCode, authMetadata.DeviceAuthorization = InteractiveAuthModes(flow)
-		if authMetadata.AuthorizationCode || authMetadata.DeviceAuthorization {
-			for i := range authMetadata.SetupSchema.Fields {
-				if authMetadata.SetupSchema.Fields[i].Name == "access_token" || authMetadata.SetupSchema.Fields[i].Name == "secret" {
-					authMetadata.SetupSchema.Fields[i].Required = false
-				}
-			}
-		}
 		item := DefinitionMetadata{
 			ContractVersion: definition.ContractVersion,
 			ID:              definition.ID, Version: definition.Version,
-			DisplayName:  definition.DisplayName,
-			Aliases:      append([]string(nil), definition.Aliases...),
-			Capabilities: definition.Capabilities,
-			Auth:         authMetadata,
+			DisplayName:           definition.DisplayName,
+			Aliases:               append([]string(nil), definition.Aliases...),
+			Capabilities:          definition.Capabilities,
+			DefaultCredentialType: definition.DefaultCredentialType,
 		}
-		item.Auth.SetupSchema.Fields = append([]SetupField(nil), item.Auth.SetupSchema.Fields...)
+		for _, mode := range definition.AuthModes {
+			flow, err := r.Auth.Build(extensionRef(mode.Auth), mode.AuthOptions)
+			if err != nil {
+				return nil, fmt.Errorf("provider %q auth mode %q metadata: %w", definition.ID, mode.CredentialType, err)
+			}
+			metadata := AuthModeMetadata{CredentialType: mode.CredentialType, ID: flow.ID(), SetupSchema: flow.SetupSchema()}
+			metadata.AuthorizationCode, metadata.DeviceAuthorization = InteractiveAuthModes(flow)
+			if metadata.AuthorizationCode || metadata.DeviceAuthorization {
+				for i := range metadata.SetupSchema.Fields {
+					if metadata.SetupSchema.Fields[i].Name == "access_token" || metadata.SetupSchema.Fields[i].Name == "secret" {
+						metadata.SetupSchema.Fields[i].Required = false
+					}
+				}
+			}
+			metadata.SetupSchema.Fields = append([]SetupField(nil), metadata.SetupSchema.Fields...)
+			item.AuthModes = append(item.AuthModes, metadata)
+		}
 		operations := make([]string, 0, len(definition.Operations))
 		for operation := range definition.Operations {
 			operations = append(operations, string(operation))
@@ -211,18 +221,18 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	if !ok {
 		return RuntimeBinding{}, fmt.Errorf("provider %q has no %q operation", definitionID, operation)
 	}
-	var auth AuthFlow
-	authFlowID := ""
-	if definition.Auth.ID != "" {
-		authOptions, err := json.Marshal(definition.AuthOptions)
+	authModes := make(map[string]BoundAuthMode, len(definition.AuthModes))
+	for _, mode := range definition.AuthModes {
+		authOptions, err := json.Marshal(mode.AuthOptions)
 		if err != nil {
-			return RuntimeBinding{}, fmt.Errorf("encode auth options for %q: %w", definition.Auth.ID, err)
+			return RuntimeBinding{}, fmt.Errorf("encode auth options for %q: %w", mode.Auth.ID, err)
 		}
-		auth, err = bindPrimitiveAsOptions[AuthFlow](b, definition.Auth, authOptions)
+		flow, err := bindPrimitiveAsOptions[AuthFlow](b, mode.Auth, authOptions)
 		if err != nil {
-			return RuntimeBinding{}, fmt.Errorf("bind auth flow %q: %w", definition.Auth.ID, err)
+			return RuntimeBinding{}, fmt.Errorf("bind auth flow %q: %w", mode.Auth.ID, err)
 		}
-		authFlowID = AuthBindingKey(definition.ID, definition.Auth)
+		flowID := AuthBindingKey(definition.ID, mode.CredentialType, mode.Auth)
+		authModes[mode.CredentialType] = BoundAuthMode{FlowID: flowID, Flow: flow, Presentation: mode.Presentation}
 	}
 	var err error
 	var modelSource ModelSource
@@ -330,7 +340,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	} else if binding.RequestCodec.ID != "" {
 		return RuntimeBinding{}, fmt.Errorf("provider %q %q inference binding requires a semantic task ref", definitionID, operation)
 	}
-	result := RuntimeBinding{DefinitionID: definitionID, DefinitionRef: ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation: operation, TaskRef: taskRef, IdempotencyHeader: binding.IdempotencyHeader, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, EndpointRef: extensionRef(binding.Endpoint), Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, TransportRef: extensionRef(binding.Transport), Transport: transport, RequestCodecID: binding.RequestCodec.ID, RequestCodecOptions: append(json.RawMessage(nil), binding.RequestCodecOptions...), ResponseDecoderID: binding.ResponseDecoder.ID, AuthFlowID: authFlowID, Auth: auth, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageSourceRef: usageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStoreRef: sessionStoreRef, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifierRef: errorClassifierRef, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSourceRef: quotaSourceRef, QuotaEndpointRef: extensionRef(binding.Endpoint), QuotaTransportRef: extensionRef(binding.Transport), QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
+	result := RuntimeBinding{DefinitionID: definitionID, DefinitionRef: ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation: operation, TaskRef: taskRef, IdempotencyHeader: binding.IdempotencyHeader, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, EndpointRef: extensionRef(binding.Endpoint), Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, TransportRef: extensionRef(binding.Transport), Transport: transport, RequestCodecID: binding.RequestCodec.ID, RequestCodecOptions: append(json.RawMessage(nil), binding.RequestCodecOptions...), ResponseDecoderID: binding.ResponseDecoder.ID, AuthModes: authModes, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageSourceRef: usageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStoreRef: sessionStoreRef, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifierRef: errorClassifierRef, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSourceRef: quotaSourceRef, QuotaEndpointRef: extensionRef(binding.Endpoint), QuotaTransportRef: extensionRef(binding.Transport), QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
 	if binding.RequestCodec.ID == "" && binding.ResponseDecoder.ID == "" {
 		return result, nil
 	}
@@ -392,11 +402,11 @@ func runtimeQuotaSourceRef(definitionID string, operation Operation, primitive P
 	return extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: RuntimeBindingKey(definitionID, operation) + ":quota:" + primitive.ID, ContractVersion: primitive.ContractVersion}
 }
 
-func AuthBindingKey(definitionID string, auth PrimitiveRef) string {
-	if definitionID == "" || auth.ID == "" || auth.ContractVersion == 0 {
+func AuthBindingKey(definitionID, credentialType string, auth PrimitiveRef) string {
+	if definitionID == "" || credentialType == "" || auth.ID == "" || auth.ContractVersion == 0 {
 		return ""
 	}
-	return definitionID + ":" + extensionRef(auth).Key()
+	return definitionID + ":" + credentialType + ":" + extensionRef(auth).Key()
 }
 
 func (r *RuntimeRegistry) BuildBindings() (map[string]RuntimeBinding, error) {

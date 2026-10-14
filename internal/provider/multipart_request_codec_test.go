@@ -189,7 +189,7 @@ func TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions(t *testing.T
 	badBinding.RequestCodecOptions = json.RawMessage(`{"modelField":"model","payloadField":"metadata","artifacts":[{"role":"wrong-role","field":"file"}]}`)
 	definition := ProviderDefinition{
 		ContractVersion: 1, ID: "multipart-manifest-provider", Version: "1", DisplayName: "Multipart manifest provider",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1},
+		DefaultCredentialType: "none", AuthModes: []AuthModeDefinition{{CredentialType: "none", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{
 			Operation("audio.transcribe"):     validBinding,
 			Operation("audio.transcribe.bad"): badBinding,
@@ -271,7 +271,7 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 	codecOptions := json.RawMessage(`{"modelField":"model","payloadFields":[{"property":"language","field":"language","required":true}],"artifacts":[{"role":"source-audio","field":"file","fileName":"source.wav"}]}`)
 	providerDefinition := ProviderDefinition{
 		ContractVersion: 1, ID: "multipart-e2e-provider", Version: "1", DisplayName: "Multipart E2E",
-		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1},
+		DefaultCredentialType: "none", AuthModes: []AuthModeDefinition{{CredentialType: "none", Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}}},
 		Operations: map[Operation]OperationBinding{Operation("audio.transcribe.e2e"): {
 			Protocol: kernel.ProtocolOpenAIChat, TaskRef: &operationRef, ProviderFormat: normalize.FormatOpenAIChat,
 			Endpoint:     PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
