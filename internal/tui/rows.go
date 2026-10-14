@@ -14,6 +14,7 @@ import (
 
 type providerNode struct {
 	ID, Name, BaseURL, Protocol, DefinitionID, Prefix, ModelsPath, AuthMode string
+	DefinitionContractVersion                                               uint64 `json:"definitionContractVersion"`
 	Enabled                                                                 bool
 }
 
@@ -315,7 +316,7 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			if !value.Enabled {
 				state = "disabled"
 			}
-			detail := fmt.Sprintf("Provider\n\nName       %s\nPrefix     %s\nProtocol   %s\nEndpoint   %s\nModels     %s\nDefinition %s\nAuth       %s\nState      %s\n\nNode ID\n%s", value.Name, value.Prefix, value.Protocol, value.BaseURL, value.ModelsPath, value.DefinitionID, value.AuthMode, state, value.ID)
+			detail := fmt.Sprintf("Provider\n\nName       %s\nPrefix     %s\nProtocol   %s\nEndpoint   %s\nModels     %s\nDefinition %s@%d\nAuth       %s\nState      %s\n\nNode ID\n%s", value.Name, value.Prefix, value.Protocol, value.BaseURL, value.ModelsPath, value.DefinitionID, value.DefinitionContractVersion, value.AuthMode, state, value.ID)
 			entries = append(entries, entry{key: value.ID, title: value.Name, summary: fmt.Sprintf("%s  ·  %s  ·  %s", value.Prefix, value.Protocol, state), detail: detail, parentID: value.ID, payload: value})
 		}
 		return entries, nil

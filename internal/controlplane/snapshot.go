@@ -70,7 +70,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	}
 	for _, row := range routeRows {
 		protocol := kernel.Protocol(row.Protocol)
-		definitionRef := provider.ProviderDefinitionRef(row.DefinitionID, 1)
+		definitionRef := row.DefinitionRef()
 		routeBindings := provider.RuntimeBindingsForProtocol(l.Bindings, definitionRef, protocol)
 		if l.Bindings != nil && len(routeBindings) == 0 {
 			return kernel.Snapshot{}, fmt.Errorf("provider definition %q has no inference operation for protocol %q", row.DefinitionID, protocol)

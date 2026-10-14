@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/quota"
 	_ "modernc.org/sqlite"
@@ -59,7 +60,7 @@ func (s *Store) Migrate() error {
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS provider_nodes (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, base_url TEXT NOT NULL,
-  protocol TEXT NOT NULL, definition_id TEXT NOT NULL DEFAULT '', prefix TEXT NOT NULL DEFAULT '', models_path TEXT NOT NULL DEFAULT '/models',
+  protocol TEXT NOT NULL, definition_id TEXT NOT NULL DEFAULT '', definition_contract_version INTEGER NOT NULL DEFAULT 1, prefix TEXT NOT NULL DEFAULT '', models_path TEXT NOT NULL DEFAULT '/models',
   auth_mode TEXT NOT NULL DEFAULT 'api_key', enabled INTEGER NOT NULL DEFAULT 1,
   config_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -224,6 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	// Additive migration for databases created before prefix became a first-class field.
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN prefix TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN definition_contract_version INTEGER NOT NULL DEFAULT 1`)
 	_, _ = s.DB.Exec(`ALTER TABLE connections ADD COLUMN email TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN estimated_cost REAL NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN request_class TEXT NOT NULL DEFAULT ''`)
@@ -280,7 +282,12 @@ func (s *Store) migrateCustomModelAssignments() error {
 
 type ProviderNode struct {
 	ID, Name, BaseURL, Protocol, DefinitionID, Prefix, ModelsPath, AuthMode string
+	DefinitionContractVersion                                               uint64 `json:"definitionContractVersion"`
 	Enabled                                                                 bool
+}
+
+func (n ProviderNode) DefinitionRef() extensions.Ref {
+	return extensions.Ref{Kind: "provider-definition", ID: n.DefinitionID, ContractVersion: n.DefinitionContractVersion}
 }
 
 type ConnectionRecord struct {
@@ -301,7 +308,7 @@ type UpdateConnectionInput struct {
 }
 
 func (s *Store) ProviderNodes() ([]ProviderNode, error) {
-	rows, err := s.DB.Query(`SELECT id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode,enabled FROM provider_nodes ORDER BY name`)
+	rows, err := s.DB.Query(`SELECT id,name,base_url,protocol,definition_id,definition_contract_version,prefix,models_path,auth_mode,enabled FROM provider_nodes ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +317,7 @@ func (s *Store) ProviderNodes() ([]ProviderNode, error) {
 	for rows.Next() {
 		var n ProviderNode
 		var enabled int
-		if err := rows.Scan(&n.ID, &n.Name, &n.BaseURL, &n.Protocol, &n.DefinitionID, &n.Prefix, &n.ModelsPath, &n.AuthMode, &enabled); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.BaseURL, &n.Protocol, &n.DefinitionID, &n.DefinitionContractVersion, &n.Prefix, &n.ModelsPath, &n.AuthMode, &enabled); err != nil {
 			return nil, err
 		}
 		n.Enabled = enabled == 1
@@ -320,10 +327,10 @@ func (s *Store) ProviderNodes() ([]ProviderNode, error) {
 }
 
 func (s *Store) ProviderNode(id string) (ProviderNode, error) {
-	row := s.DB.QueryRow(`SELECT id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode,enabled FROM provider_nodes WHERE id=?`, id)
+	row := s.DB.QueryRow(`SELECT id,name,base_url,protocol,definition_id,definition_contract_version,prefix,models_path,auth_mode,enabled FROM provider_nodes WHERE id=?`, id)
 	var n ProviderNode
 	var enabled int
-	if err := row.Scan(&n.ID, &n.Name, &n.BaseURL, &n.Protocol, &n.DefinitionID, &n.Prefix, &n.ModelsPath, &n.AuthMode, &enabled); err != nil {
+	if err := row.Scan(&n.ID, &n.Name, &n.BaseURL, &n.Protocol, &n.DefinitionID, &n.DefinitionContractVersion, &n.Prefix, &n.ModelsPath, &n.AuthMode, &enabled); err != nil {
 		return n, err
 	}
 	n.Enabled = enabled == 1
@@ -1236,11 +1243,13 @@ func timeString(value *time.Time) any {
 
 type CreateProviderNodeInput struct {
 	Name, Prefix, BaseURL, Protocol, DefinitionID, ModelsPath, AuthMode string
+	DefinitionContractVersion                                           uint64 `json:"definitionContractVersion,omitempty"`
 }
 
 type UpdateProviderNodeInput struct {
 	ID                                                                  string
 	Name, Prefix, BaseURL, Protocol, DefinitionID, ModelsPath, AuthMode string
+	DefinitionContractVersion                                           uint64 `json:"definitionContractVersion,omitempty"`
 }
 
 func DefaultDefinitionForProtocol(protocol string) string {
@@ -1269,12 +1278,15 @@ func (s *Store) CreateProviderNode(input CreateProviderNodeInput) (ProviderNode,
 	if input.DefinitionID == "" {
 		input.DefinitionID = DefaultDefinitionForProtocol(input.Protocol)
 	}
+	if input.DefinitionContractVersion == 0 {
+		input.DefinitionContractVersion = 1
+	}
 	buf := make([]byte, 12)
 	if _, err := rand.Read(buf); err != nil {
 		return ProviderNode{}, err
 	}
-	node := ProviderNode{ID: "node_" + fmt.Sprintf("%x", buf), Name: input.Name, Prefix: input.Prefix, BaseURL: input.BaseURL, Protocol: input.Protocol, DefinitionID: input.DefinitionID, ModelsPath: input.ModelsPath, AuthMode: input.AuthMode, Enabled: true}
-	_, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode,enabled) VALUES(?,?,?,?,?,?,?,?,1)`, node.ID, node.Name, node.BaseURL, node.Protocol, node.DefinitionID, node.Prefix, node.ModelsPath, node.AuthMode)
+	node := ProviderNode{ID: "node_" + fmt.Sprintf("%x", buf), Name: input.Name, Prefix: input.Prefix, BaseURL: input.BaseURL, Protocol: input.Protocol, DefinitionID: input.DefinitionID, DefinitionContractVersion: input.DefinitionContractVersion, ModelsPath: input.ModelsPath, AuthMode: input.AuthMode, Enabled: true}
+	_, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,definition_contract_version,prefix,models_path,auth_mode,enabled) VALUES(?,?,?,?,?,?,?,?,?,1)`, node.ID, node.Name, node.BaseURL, node.Protocol, node.DefinitionID, node.DefinitionContractVersion, node.Prefix, node.ModelsPath, node.AuthMode)
 	return node, err
 }
 
@@ -1303,8 +1315,14 @@ func (s *Store) UpdateProviderNode(input UpdateProviderNodeInput) (ProviderNode,
 	}
 	if input.DefinitionID != "" {
 		current.DefinitionID = input.DefinitionID
+		current.DefinitionContractVersion = input.DefinitionContractVersion
+		if current.DefinitionContractVersion == 0 {
+			current.DefinitionContractVersion = 1
+		}
+	} else if input.DefinitionContractVersion != 0 {
+		current.DefinitionContractVersion = input.DefinitionContractVersion
 	}
-	_, err = s.DB.Exec(`UPDATE provider_nodes SET name=?,prefix=?,base_url=?,protocol=?,definition_id=?,models_path=?,auth_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, current.Name, current.Prefix, current.BaseURL, current.Protocol, current.DefinitionID, current.ModelsPath, current.AuthMode, current.ID)
+	_, err = s.DB.Exec(`UPDATE provider_nodes SET name=?,prefix=?,base_url=?,protocol=?,definition_id=?,definition_contract_version=?,models_path=?,auth_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, current.Name, current.Prefix, current.BaseURL, current.Protocol, current.DefinitionID, current.DefinitionContractVersion, current.ModelsPath, current.AuthMode, current.ID)
 	return current, err
 }
 
@@ -1376,6 +1394,7 @@ func (s *Store) Models() ([]Model, error) {
 
 type RouteRecord struct {
 	ID, NodeID, Prefix, ExternalModel, Protocol, DefinitionID string
+	DefinitionContractVersion                                 uint64
 	BaseURL, AuthMode, CredentialID, CredentialType           string
 	ProviderGeneration                                        string `json:"-"`
 	ConnectionGeneration                                      string `json:"-"`
@@ -1385,8 +1404,12 @@ type RouteRecord struct {
 	Enabled                                                   bool
 }
 
+func (r RouteRecord) DefinitionRef() extensions.Ref {
+	return extensions.Ref{Kind: "provider-definition", ID: r.DefinitionID, ContractVersion: r.DefinitionContractVersion}
+}
+
 func (s *Store) Routes() ([]RouteRecord, error) {
-	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),COALESCE(n.models_path,'/models'),m.external_id,m.enabled,
+	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.definition_contract_version,1),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),COALESCE(n.models_path,'/models'),m.external_id,m.enabled,
 	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
@@ -1404,14 +1427,14 @@ WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL
 		var capabilities, limits, modelsPath string
 		var modelID string
 		var credentialSecret string
-		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
+		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.DefinitionContractVersion, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
 			return nil, err
 		}
 		r.ID = modelID
 		r.Enabled = enabled == 1
 		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
 		_ = json.Unmarshal([]byte(limits), &r.Limits)
-		r.ProviderGeneration = configGeneration(r.NodeID, r.BaseURL, r.Protocol, r.DefinitionID, r.AuthMode, modelsPath)
+		r.ProviderGeneration = configGeneration(r.NodeID, r.BaseURL, r.Protocol, r.DefinitionID, fmt.Sprint(r.DefinitionContractVersion), r.AuthMode, modelsPath)
 		r.ConnectionGeneration = configGeneration(r.CredentialID, r.CredentialType, credentialSecret)
 		r.ModelGeneration = configGeneration(modelID, r.ExternalModel, capabilities, limits)
 		if r.CredentialID != "" {

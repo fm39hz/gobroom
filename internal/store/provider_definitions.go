@@ -42,13 +42,14 @@ func ReplaceProviderDefinitionsInTx(tx *sql.Tx, definitions []provider.ProviderD
 	}
 	seen := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
-		if definition.ContractVersion != 1 || definition.ID == "" || definition.Version == "" || definition.DisplayName == "" {
-			return fmt.Errorf("portable provider definition requires contract version 1, ID, version and display name")
+		if definition.ContractVersion == 0 || definition.ID == "" || definition.Version == "" || definition.DisplayName == "" {
+			return fmt.Errorf("portable provider definition requires a positive contract version, ID, version and display name")
 		}
-		if seen[definition.ID] {
-			return fmt.Errorf("duplicate portable provider definition %q", definition.ID)
+		ref := provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion)
+		if seen[ref.Key()] {
+			return fmt.Errorf("duplicate portable provider definition %q", ref.Key())
 		}
-		seen[definition.ID] = true
+		seen[ref.Key()] = true
 		if portable, reason := provider.ProviderDefinitionPortable(definition); !portable {
 			return fmt.Errorf("provider definition %q cannot be embedded: %s", definition.ID, reason)
 		}

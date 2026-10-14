@@ -169,6 +169,38 @@ func TestCreateProviderNodeDefaultsGeminiDefinition(t *testing.T) {
 	if item.DefinitionID != "gemini" {
 		t.Fatalf("definition ID=%q", item.DefinitionID)
 	}
+	if item.DefinitionRef().ContractVersion != 1 {
+		t.Fatalf("default definition contract version=%d", item.DefinitionRef().ContractVersion)
+	}
+}
+
+func TestProviderNodePersistsExactDefinitionContractVersion(t *testing.T) {
+	s, err := Open(t.TempDir() + "/provider-definition-version.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(CreateProviderNodeInput{
+		Name: "Versioned provider", Prefix: "versioned", BaseURL: "https://provider.test/v1",
+		Protocol: "openai_chat", DefinitionID: "versioned-provider", DefinitionContractVersion: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref := node.DefinitionRef(); ref.Kind != "provider-definition" || ref.ID != "versioned-provider" || ref.ContractVersion != 2 {
+		t.Fatalf("created provider exact definition ref=%#v", ref)
+	}
+	connection, err := s.CreateConnection(CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertCatalogModel(UpsertCatalogModelInput{ID: "route-v2", ProviderNodeID: node.ID, Kind: "custom", ExternalID: "model-v2", DisplayName: "Model v2", ConnectionIDs: []string{connection.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].DefinitionRef().ContractVersion != 2 {
+		t.Fatalf("persisted route definition ref=%#v err=%v", routes, err)
+	}
 }
 
 func TestSnapshotVersionSettingSurvivesStoreReopen(t *testing.T) {

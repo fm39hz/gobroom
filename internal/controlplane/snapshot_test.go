@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -132,6 +133,80 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 	combo := snapshot.Nodes["junior"]
 	if combo.Strategy != kernel.StrategyRoundRobinFallback || combo.StickyLimit != 2 || len(combo.Members) != 1 || combo.Members[0].ID != "model-a" || combo.Members[0].Weight != 4 {
 		t.Fatalf("combo node=%#v", combo)
+	}
+}
+
+func TestLoaderSelectsPersistedProviderDefinitionContractVersion(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/provider-contract-route.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	runtime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitionV1, ok := runtime.Primitives.Definition(provider.ProviderDefinitionRef("openai-compatible-chat", 1))
+	if !ok {
+		t.Fatal("built-in provider definition v1 is unavailable")
+	}
+	definitionV2 := definitionV1
+	definitionV2.ContractVersion = 2
+	definitionV2.Version = "2"
+	definitionV2.DisplayName = "OpenAI-compatible Chat v2"
+	definitionV2.AuthModes = append([]provider.AuthModeDefinition(nil), definitionV1.AuthModes...)
+	definitionV2.AuthModes[0].Presentation.Header = "X-API-Key"
+	if err := runtime.Primitives.RegisterDefinition(definitionV2); err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []uint64{1, 2} {
+		node, err := s.CreateProviderNode(store.CreateProviderNodeInput{
+			Name: fmt.Sprintf("Provider v%d", version), Prefix: fmt.Sprintf("provider-v%d", version),
+			BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: definitionV1.ID,
+			DefinitionContractVersion: version,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "account", CredentialType: "api_key", Secret: "secret"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		routeID := fmt.Sprintf("route-v%d", version)
+		externalModelID := fmt.Sprintf("model-v%d", version)
+		if err := s.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: node.ID, Kind: "discovered", ExternalID: externalModelID, DisplayName: externalModelID}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RecordConnectionModelSnapshot(connection.ID, node.ID, []string{externalModelID}, true, "models_endpoint"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bindings, err := runtime.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (Loader{Store: s, Bindings: bindings}).LoadSnapshot(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := s.Routes()
+	if err != nil || len(routes) != 2 {
+		t.Fatalf("stored routes=%#v err=%v", routes, err)
+	}
+	for _, storedRoute := range routes {
+		version := uint64(1)
+		wantHeader := "Authorization"
+		if storedRoute.ExternalModel == "model-v2" {
+			version = 2
+			wantHeader = "X-API-Key"
+		}
+		route, ok := snapshot.Routes[storedRoute.ID]
+		if !ok || route.DefinitionRef != provider.ProviderDefinitionRef(definitionV1.ID, version) {
+			t.Fatalf("route %q did not resolve exact provider definition: %#v", storedRoute.ID, route)
+		}
+		if route.CredentialPresentation.Header != wantHeader {
+			t.Fatalf("route %q auth presentation=%#v want header %q", storedRoute.ID, route.CredentialPresentation, wantHeader)
+		}
 	}
 }
 

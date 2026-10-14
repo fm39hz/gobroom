@@ -96,21 +96,23 @@ func resourceCommands() []*cobra.Command {
 	providers.AddCommand(listCommand("list", "providers.list", nil))
 	providers.AddCommand(listCommand("catalog", "providers.catalog", nil))
 	var name, prefix, baseURL, protocol, definitionID, modelsPath, authMode, providerID string
+	var definitionContractVersion uint64
 	create := &cobra.Command{Use: "create", Short: "create provider node", RunE: func(*cobra.Command, []string) error {
-		return invoke("providers.create", map[string]any{"name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "modelsPath": modelsPath, "authMode": authMode})
+		return invoke("providers.create", map[string]any{"name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "definitionContractVersion": definitionContractVersion, "modelsPath": modelsPath, "authMode": authMode})
 	}}
 	create.Flags().StringVar(&name, "name", "", "display name")
 	create.Flags().StringVar(&prefix, "prefix", "", "wire prefix")
 	create.Flags().StringVar(&baseURL, "base-url", "", "provider base URL")
 	create.Flags().StringVar(&protocol, "protocol", "openai_chat", "protocol")
 	create.Flags().StringVar(&definitionID, "definition-id", "", "provider definition ID")
+	create.Flags().Uint64Var(&definitionContractVersion, "definition-contract-version", 1, "exact provider-definition contract version")
 	create.Flags().StringVar(&modelsPath, "models-path", "/models", "models endpoint path")
 	create.Flags().StringVar(&authMode, "auth-mode", "", "credential type (defaults from provider definition)")
 	providers.AddCommand(create)
 	update := &cobra.Command{Use: "update", Short: "update provider node", RunE: func(*cobra.Command, []string) error {
-		return invoke("providers.update", map[string]any{"id": providerID, "name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "modelsPath": modelsPath, "authMode": authMode})
+		return invoke("providers.update", map[string]any{"id": providerID, "name": name, "prefix": prefix, "baseUrl": baseURL, "protocol": protocol, "definitionID": definitionID, "definitionContractVersion": definitionContractVersion, "modelsPath": modelsPath, "authMode": authMode})
 	}}
-	bindProviderFlags(update, &providerID, &name, &prefix, &baseURL, &protocol, &definitionID, &modelsPath, &authMode)
+	bindProviderFlags(update, &providerID, &name, &prefix, &baseURL, &protocol, &definitionID, &definitionContractVersion, &modelsPath, &authMode)
 	providers.AddCommand(update)
 	providers.AddCommand(idCommand("delete", "delete provider node", "providers.delete", "id", &providerID))
 	refresh := idCommand("refresh-models", "refresh provider model catalog", "providers.refresh_models", "nodeID", &providerID)
@@ -471,13 +473,14 @@ func idCommand(use, short, method, flag string, value *string) *cobra.Command {
 	return cmd
 }
 
-func bindProviderFlags(cmd *cobra.Command, id, name, prefix, baseURL, protocol, definitionID, modelsPath, authMode *string) {
+func bindProviderFlags(cmd *cobra.Command, id, name, prefix, baseURL, protocol, definitionID *string, definitionContractVersion *uint64, modelsPath, authMode *string) {
 	cmd.Flags().StringVar(id, "id", "", "provider node ID")
 	cmd.Flags().StringVar(name, "name", "", "display name")
 	cmd.Flags().StringVar(prefix, "prefix", "", "wire prefix")
 	cmd.Flags().StringVar(baseURL, "base-url", "", "provider base URL")
 	cmd.Flags().StringVar(protocol, "protocol", "", "protocol")
 	cmd.Flags().StringVar(definitionID, "definition-id", "", "provider definition ID")
+	cmd.Flags().Uint64Var(definitionContractVersion, "definition-contract-version", 0, "exact provider-definition contract version")
 	cmd.Flags().StringVar(modelsPath, "models-path", "", "models endpoint path")
 	cmd.Flags().StringVar(authMode, "auth-mode", "", "authentication mode")
 }

@@ -197,7 +197,7 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 	if selected != nil {
 		switch value := selected.payload.(type) {
 		case providerNode:
-			values = map[string]string{"name": value.Name, "prefix": value.Prefix, "baseURL": value.BaseURL, "protocol": value.Protocol, "definitionID": value.DefinitionID, "modelsPath": value.ModelsPath, "authMode": value.AuthMode}
+			values = map[string]string{"name": value.Name, "prefix": value.Prefix, "baseURL": value.BaseURL, "protocol": value.Protocol, "definitionID": value.DefinitionID, "definitionContractVersion": strconv.FormatUint(value.DefinitionContractVersion, 10), "modelsPath": value.ModelsPath, "authMode": value.AuthMode}
 			f := buildForm("Edit provider", "providers.update", providerFields(), values)
 			f.extra["id"] = value.ID
 			return f
@@ -264,7 +264,7 @@ func newResourceForm(section int, selected *entry, providerID string) *formState
 }
 
 func newProviderPresetForm(preset string) *formState {
-	values := map[string]string{"protocol": "openai_chat", "modelsPath": "/models"}
+	values := map[string]string{"protocol": "openai_chat", "definitionContractVersion": "1", "modelsPath": "/models"}
 	if profile, ok := provider.ProfileFor(preset); ok {
 		values["name"] = profile.DisplayName
 		values["prefix"] = profile.ID
@@ -307,7 +307,7 @@ func newConnectionFormWithMetadata(node providerNode, catalog []provider.Definit
 	}
 	values := map[string]string{"providerNodeID": node.ID, "credentialType": credentialType, "priority": "100"}
 	for _, definition := range catalog {
-		if definition.ID != node.DefinitionID {
+		if definition.ID != node.DefinitionID || definition.ContractVersion != node.DefinitionContractVersion {
 			continue
 		}
 		modeIndex := -1
@@ -416,7 +416,7 @@ func strategyOptionsJSON(options map[string]any) (string, error) {
 }
 
 func providerFields() []fieldSpec {
-	return []fieldSpec{{key: "name", label: "Name", placeholder: "OpenRouter"}, {key: "prefix", label: "Prefix", placeholder: "openrouter"}, {key: "baseURL", label: "Base URL", placeholder: "https://api.example/v1"}, {key: "protocol", label: "Protocol", placeholder: "openai_chat | openai_responses | anthropic"}, {key: "definitionID", label: "Provider definition", placeholder: "leave blank · derived from protocol"}, {key: "modelsPath", label: "Models path", placeholder: "/models"}, {key: "authMode", label: "Auth mode", placeholder: "api_key | oauth2 | none"}}
+	return []fieldSpec{{key: "name", label: "Name", placeholder: "OpenRouter"}, {key: "prefix", label: "Prefix", placeholder: "openrouter"}, {key: "baseURL", label: "Base URL", placeholder: "https://api.example/v1"}, {key: "protocol", label: "Protocol", placeholder: "openai_chat | openai_responses | anthropic"}, {key: "definitionID", label: "Provider definition ID", placeholder: "leave blank · derived from protocol"}, {key: "definitionContractVersion", label: "Definition contract version", placeholder: "1"}, {key: "modelsPath", label: "Models path", placeholder: "/models"}, {key: "authMode", label: "Auth mode", placeholder: "api_key | oauth2 | none"}}
 }
 
 func connectionFields() []fieldSpec {
@@ -724,12 +724,20 @@ func (f *formState) Params() (map[string]any, error) {
 			params[field.key] = value
 			continue
 		}
-		if field.key == "priority" || field.key == "stickyLimit" {
+		if field.key == "priority" || field.key == "stickyLimit" || field.key == "definitionContractVersion" {
 			if value == "" {
 				if field.key == "priority" {
 					continue
 				}
 				value = "1"
+			}
+			if field.key == "definitionContractVersion" {
+				number, err := strconv.ParseUint(value, 10, 64)
+				if err != nil || number == 0 {
+					return nil, fmt.Errorf("%s must be a positive contract version", field.label)
+				}
+				params[field.key] = number
+				continue
 			}
 			number, err := strconv.Atoi(value)
 			if err != nil {

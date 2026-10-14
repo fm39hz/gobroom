@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 7
+	bundle.Version = 8
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +122,7 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 7 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+	if bundle.Version != 8 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
 		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
@@ -176,8 +177,8 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 7 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
-		t.Fatalf("connection assignment was not exported in bundle v7: %#v", bundle.Models)
+	if bundle.Version != 8 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
+		t.Fatalf("connection assignment was not exported in bundle v8: %#v", bundle.Models)
 	}
 	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
 		t.Fatalf("custom assignment bundle validation: %v", err)
@@ -224,7 +225,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 7 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-a"}) || !reflect.DeepEqual(bundle.Models[0].ConnectionAssignments, []store.ModelConnectionAssignment{{ConnectionID: "conn-a", Source: store.ModelAssignmentStaticCatalog}}) {
+	if bundle.Version != 8 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-a"}) || !reflect.DeepEqual(bundle.Models[0].ConnectionAssignments, []store.ModelConnectionAssignment{{ConnectionID: "conn-a", Source: store.ModelAssignmentStaticCatalog}}) {
 		t.Fatalf("static assignment bundle=%#v", bundle.Models)
 	}
 	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
@@ -397,6 +398,74 @@ func TestBundleEmbedsOnlySecretFreeProviderDefinitionsAndPersistsThem(t *testing
 	}
 }
 
+func TestBundlePreservesSideBySideProviderDefinitionVersions(t *testing.T) {
+	runtime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitionV1, ok := runtime.Primitives.Definition(provider.ProviderDefinitionRef("openai-compatible-chat", 1))
+	if !ok {
+		t.Fatal("built-in provider definition v1 is unavailable")
+	}
+	definitionV2 := definitionV1
+	definitionV2.ContractVersion = 2
+	definitionV2.Version = "2"
+	definitionV2.DisplayName = "OpenAI-compatible Chat v2"
+	definitionV2.AuthModes = append([]provider.AuthModeDefinition(nil), definitionV1.AuthModes...)
+	definitionV2.AuthModes[0].Presentation.Header = "X-API-Key"
+	encodedDefinition, err := provider.EncodeProviderDefinitionJSON(definitionV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadDefinitionJSON(encodedDefinition); err != nil {
+		t.Fatal(err)
+	}
+	extensionSnapshot, err := runtime.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategies, err := kernel.NewStrategyCatalog(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := store.Open(t.TempDir() + "/provider-versions-source.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	for _, version := range []uint64{1, 2} {
+		if _, err := source.CreateProviderNode(store.CreateProviderNodeInput{
+			Name: "OpenAI chat v" + fmt.Sprint(version), Prefix: "openai-v" + fmt.Sprint(version),
+			BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: definitionV1.ID,
+			DefinitionContractVersion: version,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bundle, err := ExportBundle(source, extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Version != 8 || len(bundle.ProviderDefinitions) != 2 || bundle.ProviderDefinitions[0].ContractVersion != 1 || bundle.ProviderDefinitions[1].ContractVersion != 2 {
+		t.Fatalf("bundle did not preserve deterministic side-by-side provider contracts: %#v", bundle.ProviderDefinitions)
+	}
+	if err := ValidateBundleWithStrategies(bundle, strategies); err != nil {
+		t.Fatalf("side-by-side provider bundle validation: %v", err)
+	}
+	target, err := store.Open(t.TempDir() + "/provider-versions-target.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err := ApplyBundle(target, bundle, strategies); err != nil {
+		t.Fatalf("apply side-by-side provider bundle: %v", err)
+	}
+	providers, err := target.ProviderNodes()
+	if err != nil || len(providers) != 2 || providers[0].DefinitionRef() == providers[1].DefinitionRef() {
+		t.Fatalf("provider-node definition refs after import=%#v err=%v", providers, err)
+	}
+}
+
 func TestBundleRejectsProviderDefinitionPayloadDifferentFromPinnedDescriptor(t *testing.T) {
 	registry, err := provider.NewRuntimeRegistry()
 	if err != nil {
@@ -430,7 +499,7 @@ func TestBundleRejectsProviderDefinitionPayloadDifferentFromPinnedDescriptor(t *
 	modified := definition
 	modified.DisplayName = "Unpinned display name"
 	bundle := bundleWithDependencyLock(t, ConfigBundle{
-		Providers:           []store.ProviderNode{{ID: "pinned-node", Name: "Pinned", DefinitionID: definition.ID}},
+		Providers:           []store.ProviderNode{{ID: "pinned-node", Name: "Pinned", DefinitionID: definition.ID, DefinitionContractVersion: definition.ContractVersion}},
 		ProviderDefinitions: []provider.ProviderDefinition{modified},
 	}, strategies)
 	if err := ValidateBundleWithStrategies(bundle, strategies); err == nil {

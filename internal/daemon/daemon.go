@@ -1183,16 +1183,28 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		if input.DefinitionID != "" && input.AuthMode == "" {
-			if credentialType := d.providerAuthModes[provider.ProviderDefinitionRef(input.DefinitionID, 1)]; credentialType != "" {
-				input.AuthMode = credentialType
-			}
-		}
 		definitionID := input.DefinitionID
 		if definitionID == "" {
 			definitionID = previousProvider.DefinitionID
 		}
-		if input.AuthMode != "" && d.authFlowID(definitionID, input.AuthMode) == "" {
+		definitionVersion := input.DefinitionContractVersion
+		if definitionVersion == 0 {
+			definitionVersion = previousProvider.DefinitionContractVersion
+			if input.DefinitionID != "" {
+				definitionVersion = 1
+			}
+			if definitionVersion == 0 {
+				definitionVersion = 1
+			}
+		}
+		definitionRef := provider.ProviderDefinitionRef(definitionID, definitionVersion)
+		if input.AuthMode == "" && (input.DefinitionID != "" || input.DefinitionContractVersion != 0) {
+			input.AuthMode = d.providerAuthModes[definitionRef]
+		}
+		if input.DefinitionContractVersion != 0 || input.DefinitionID != "" {
+			input.DefinitionContractVersion = definitionVersion
+		}
+		if input.AuthMode != "" && d.authFlowID(definitionRef, input.AuthMode) == "" {
 			return fail(request, fmt.Sprintf("provider definition %q does not declare default credential type %q", definitionID, input.AuthMode))
 		}
 		if input.Prefix != "" {
@@ -1204,7 +1216,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		if item.BaseURL != previousProvider.BaseURL || item.Protocol != previousProvider.Protocol || item.DefinitionID != previousProvider.DefinitionID || item.ModelsPath != previousProvider.ModelsPath || item.AuthMode != previousProvider.AuthMode {
+		if item.BaseURL != previousProvider.BaseURL || item.Protocol != previousProvider.Protocol || item.DefinitionID != previousProvider.DefinitionID || item.DefinitionContractVersion != previousProvider.DefinitionContractVersion || item.ModelsPath != previousProvider.ModelsPath || item.AuthMode != previousProvider.AuthMode {
 			if err := d.resetProviderRoutingState(item.ID); err != nil {
 				return fail(request, fmt.Sprintf("provider updated but health reset failed: %v", err))
 			}
@@ -1690,17 +1702,21 @@ func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) err
 	if input.DefinitionID == "" {
 		input.DefinitionID = store.DefaultDefinitionForProtocol(input.Protocol)
 	}
-	if input.AuthMode == "" {
-		input.AuthMode = d.providerAuthModes[provider.ProviderDefinitionRef(input.DefinitionID, 1)]
+	if input.DefinitionContractVersion == 0 {
+		input.DefinitionContractVersion = 1
 	}
-	if input.AuthMode == "" || d.authFlowID(input.DefinitionID, input.AuthMode) == "" {
+	definitionRef := provider.ProviderDefinitionRef(input.DefinitionID, input.DefinitionContractVersion)
+	if input.AuthMode == "" {
+		input.AuthMode = d.providerAuthModes[definitionRef]
+	}
+	if input.AuthMode == "" || d.authFlowID(definitionRef, input.AuthMode) == "" {
 		return fmt.Errorf("provider definition %q does not declare default credential type %q", input.DefinitionID, input.AuthMode)
 	}
 	return nil
 }
 
-func (d *Daemon) authFlowID(definitionID, credentialType string) string {
-	return d.providerAuthFlowIDs[provider.ProviderDefinitionRef(definitionID, 1)][credentialType]
+func (d *Daemon) authFlowID(definitionRef extensions.Ref, credentialType string) string {
+	return d.providerAuthFlowIDs[definitionRef][credentialType]
 }
 
 func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, credentialType, secret string) error {
@@ -1711,7 +1727,7 @@ func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, c
 	if node.ID == "" {
 		return fmt.Errorf("provider node %q not found", providerNodeID)
 	}
-	flowID := d.authFlowID(node.DefinitionID, credentialType)
+	flowID := d.authFlowID(node.DefinitionRef(), credentialType)
 	flow, ok := d.authFlows[flowID]
 	if flowID == "" || !ok {
 		return fmt.Errorf("provider definition %q does not declare credential type %q", node.DefinitionID, credentialType)

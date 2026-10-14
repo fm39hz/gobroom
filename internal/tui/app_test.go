@@ -1741,6 +1741,18 @@ func TestProviderCreateFormLetsDaemonDeriveProtocolDefinition(t *testing.T) {
 	}
 }
 
+func TestProviderEditFormPreservesExactDefinitionContractVersion(t *testing.T) {
+	node := providerNode{ID: "node-v2", Name: "Versioned", Prefix: "versioned", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "openai-compatible-chat", DefinitionContractVersion: 2, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}
+	form := newResourceForm(int(sectionProviders), &entry{key: node.ID, payload: node}, "")
+	params, err := form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params["definitionID"] != node.DefinitionID || params["definitionContractVersion"] != uint64(2) {
+		t.Fatalf("provider edit form did not preserve exact definition ref: %#v", params)
+	}
+}
+
 func TestComboFormOpensSearchableStrategyCatalogAndAppliesSchemaDefaults(t *testing.T) {
 	model := newApp("/tmp/gobroom.sock")
 	model.width, model.height = 120, 40

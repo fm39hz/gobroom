@@ -443,8 +443,8 @@ func TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart(t *test
 		t.Fatal(err)
 	}
 	bundle := controlplane.ConfigBundle{
-		Version: 7, Dependencies: dependencies,
-		Providers:           []store.ProviderNode{{ID: "portable-node", Name: "Portable", Prefix: "portable", BaseURL: "https://provider.test/v1", Protocol: string(kernel.ProtocolOpenAIChat), DefinitionID: definition.ID, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}},
+		Version: 8, Dependencies: dependencies,
+		Providers:           []store.ProviderNode{{ID: "portable-node", Name: "Portable", Prefix: "portable", BaseURL: "https://provider.test/v1", Protocol: string(kernel.ProtocolOpenAIChat), DefinitionID: definition.ID, DefinitionContractVersion: definition.ContractVersion, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}},
 		ProviderDefinitions: []provider.ProviderDefinition{definition},
 	}
 	encodedBundle, err := json.Marshal(bundle)
@@ -1665,7 +1665,7 @@ func TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch(t *testing.T
 	adapterCalls := 0
 	adapter := daemonExplainAdapter{attempts: &adapterCalls}
 	binding := provider.RuntimeBinding{
-		DefinitionID: node.DefinitionID, DefinitionRef: provider.ProviderDefinitionRef(node.DefinitionID, 1), Operation: provider.OperationAudio, TaskRef: operationRef,
+		DefinitionID: node.DefinitionID, DefinitionRef: node.DefinitionRef(), Operation: provider.OperationAudio, TaskRef: operationRef,
 		Protocol: kernel.Protocol(node.Protocol), AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 	}
 	d := &Daemon{store: state, providerRegistry: runtimeRegistry, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionRef, provider.OperationAudio): binding}}

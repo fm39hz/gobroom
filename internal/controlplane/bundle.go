@@ -97,14 +97,14 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 7, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	bundle := ConfigBundle{Version: 8, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
 	if catalog != nil {
-		providerDefinitions := make(map[string]provider.ProviderDefinition)
+		providerDefinitions := make(map[extensions.Ref]provider.ProviderDefinition)
 		for _, item := range providers {
 			if item.DefinitionID == "" {
 				continue
 			}
-			ref := provider.ProviderDefinitionRef(item.DefinitionID, 1)
+			ref := item.DefinitionRef()
 			if _, installed := catalog.Descriptor(ref); installed {
 				_, implementation, bindErr := catalog.Bind(ref, nil)
 				if bindErr != nil {
@@ -115,10 +115,10 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 					return ConfigBundle{}, fmt.Errorf("provider definition %q has unexpected implementation type %T", ref.Key(), implementation)
 				}
 				if portable, reason := provider.ProviderDefinitionPortable(definition); portable {
-					if current, exists := providerDefinitions[definition.ID]; exists && !provider.SameProviderDefinition(current, definition) {
-						return ConfigBundle{}, fmt.Errorf("provider definition %q has conflicting portable bindings", definition.ID)
+					if current, exists := providerDefinitions[ref]; exists && !provider.SameProviderDefinition(current, definition) {
+						return ConfigBundle{}, fmt.Errorf("provider definition %q has conflicting portable bindings", ref.Key())
 					}
-					providerDefinitions[definition.ID] = definition
+					providerDefinitions[ref] = definition
 				} else {
 					bundle.ExternalProviderDefinitions = append(bundle.ExternalProviderDefinitions, ExternalProviderDefinition{
 						ProviderNodeID: item.ID, DefinitionRef: ref, Reason: reason,
@@ -138,7 +138,13 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 		for _, definition := range providerDefinitions {
 			bundle.ProviderDefinitions = append(bundle.ProviderDefinitions, definition)
 		}
-		sort.Slice(bundle.ProviderDefinitions, func(i, j int) bool { return bundle.ProviderDefinitions[i].ID < bundle.ProviderDefinitions[j].ID })
+		sort.Slice(bundle.ProviderDefinitions, func(i, j int) bool {
+			left, right := bundle.ProviderDefinitions[i], bundle.ProviderDefinitions[j]
+			if left.ID == right.ID {
+				return left.ContractVersion < right.ContractVersion
+			}
+			return left.ID < right.ID
+		})
 	}
 	if configured {
 		bundle.LossCeiling = &lossCeiling
@@ -159,7 +165,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 7 {
+	if bundle.Version != 8 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
 	if bundle.Dependencies.Version != 1 {
@@ -215,6 +221,9 @@ func ValidateBundle(bundle ConfigBundle) error {
 	for _, item := range bundle.Providers {
 		if item.ID == "" {
 			return fmt.Errorf("provider ID is required")
+		}
+		if item.DefinitionID != "" && item.DefinitionContractVersion == 0 {
+			return fmt.Errorf("provider %q requires an exact provider-definition contract version", item.ID)
 		}
 		if providers[item.ID] {
 			return fmt.Errorf("duplicate provider %q", item.ID)
@@ -429,7 +438,7 @@ func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
 	}
 	for _, item := range bundle.Providers {
 		if item.DefinitionID != "" && !unresolved[item.ID] {
-			roots = append(roots, provider.ProviderDefinitionRef(item.DefinitionID, 1))
+			roots = append(roots, item.DefinitionRef())
 		}
 	}
 	for _, definition := range bundle.ProviderDefinitions {
@@ -455,43 +464,44 @@ func bundleDependencyRoots(bundle ConfigBundle) []extensions.Ref {
 }
 
 func validatePortableProviderDefinitions(bundle ConfigBundle) error {
-	definitions := make(map[string]bool, len(bundle.ProviderDefinitions))
+	definitions := make(map[extensions.Ref]bool, len(bundle.ProviderDefinitions))
 	external := make(map[string]bool, len(bundle.ExternalProviderDefinitions))
 	for _, item := range bundle.ExternalProviderDefinitions {
 		external[item.ProviderNodeID] = true
 	}
 	for _, definition := range bundle.ProviderDefinitions {
-		if definition.ContractVersion != 1 || definition.ID == "" || definition.Version == "" || definition.DisplayName == "" {
-			return fmt.Errorf("portable provider definition requires contract version 1, ID, version and display name")
+		if definition.ContractVersion == 0 || definition.ID == "" || definition.Version == "" || definition.DisplayName == "" {
+			return fmt.Errorf("portable provider definition requires positive contract version, ID, version and display name")
 		}
-		if definitions[definition.ID] {
-			return fmt.Errorf("duplicate portable provider definition %q", definition.ID)
+		ref := provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion)
+		if definitions[ref] {
+			return fmt.Errorf("duplicate portable provider definition %q", ref.Key())
 		}
 		if portable, reason := provider.ProviderDefinitionPortable(definition); !portable {
-			return fmt.Errorf("provider definition %q contains non-portable configuration: %s", definition.ID, reason)
+			return fmt.Errorf("provider definition %q contains non-portable configuration: %s", ref.Key(), reason)
 		}
-		definitions[definition.ID] = true
+		definitions[ref] = true
 		found := false
 		for _, node := range bundle.Providers {
-			found = found || node.DefinitionID == definition.ID
+			found = found || node.DefinitionRef() == ref
 		}
 		if !found {
-			return fmt.Errorf("portable provider definition %q has no provider node", definition.ID)
+			return fmt.Errorf("portable provider definition %q has no provider node", ref.Key())
 		}
 	}
 	for _, unresolved := range bundle.UnresolvedProviderDefinitions {
-		if definitions[unresolved.DefinitionRef.ID] {
-			return fmt.Errorf("provider definition %q cannot be both portable and unresolved", unresolved.DefinitionRef.ID)
+		if definitions[unresolved.DefinitionRef] {
+			return fmt.Errorf("provider definition %q cannot be both portable and unresolved", unresolved.DefinitionRef.Key())
 		}
 	}
 	for _, node := range bundle.Providers {
-		if node.DefinitionID == "" || definitions[node.DefinitionID] {
+		if node.DefinitionID == "" || definitions[node.DefinitionRef()] {
 			continue
 		}
 		if isUnresolvedProvider(bundle, node.ID) || external[node.ID] {
 			continue
 		}
-		return fmt.Errorf("provider node %q definition %q has neither a portable payload, external dependency nor unresolved marker", node.ID, node.DefinitionID)
+		return fmt.Errorf("provider node %q definition %q has neither a portable payload, external dependency nor unresolved marker", node.ID, node.DefinitionRef().Key())
 	}
 	return nil
 }
@@ -508,7 +518,7 @@ func validateExternalProviderDefinitions(bundle ConfigBundle) error {
 		}
 		seen[external.ProviderNodeID] = true
 		node, exists := providers[external.ProviderNodeID]
-		if !exists || node.DefinitionID != external.DefinitionRef.ID || external.DefinitionRef.Kind != "provider-definition" || external.DefinitionRef.ContractVersion != 1 {
+		if !exists || node.DefinitionRef() != external.DefinitionRef || external.DefinitionRef.Kind != "provider-definition" {
 			return fmt.Errorf("external provider definition does not match provider node %q", external.ProviderNodeID)
 		}
 		if err := external.DefinitionRef.Validate(); err != nil {
@@ -521,8 +531,8 @@ func validateExternalProviderDefinitions(bundle ConfigBundle) error {
 			return fmt.Errorf("external provider definition %q is not pinned in the dependency lock", external.DefinitionRef.Key())
 		}
 		for _, definition := range bundle.ProviderDefinitions {
-			if definition.ID == node.DefinitionID {
-				return fmt.Errorf("provider definition %q cannot be both embedded and external", node.DefinitionID)
+			if provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion) == external.DefinitionRef {
+				return fmt.Errorf("provider definition %q cannot be both embedded and external", external.DefinitionRef.Key())
 			}
 		}
 	}
@@ -588,7 +598,7 @@ func validateUnresolvedProviderDefinitions(bundle ConfigBundle) error {
 		if !exists {
 			return fmt.Errorf("unresolved provider definition references missing provider node %q", unresolved.ProviderNodeID)
 		}
-		if err := unresolved.DefinitionRef.Validate(); err != nil || unresolved.DefinitionRef.Kind != "provider-definition" || unresolved.DefinitionRef.ID != item.DefinitionID || unresolved.DefinitionRef.ContractVersion != 1 {
+		if err := unresolved.DefinitionRef.Validate(); err != nil || unresolved.DefinitionRef.Kind != "provider-definition" || unresolved.DefinitionRef != item.DefinitionRef() {
 			return fmt.Errorf("unresolved provider definition does not match provider node %q", unresolved.ProviderNodeID)
 		}
 		if bundleProviderHasModels(bundle, unresolved.ProviderNodeID) {
@@ -707,7 +717,7 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 		}
 	}
 	for _, provider := range bundle.Providers {
-		if _, err = tx.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix,models_path,auth_mode,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,protocol=excluded.protocol,definition_id=excluded.definition_id,prefix=excluded.prefix,models_path=excluded.models_path,auth_mode=excluded.auth_mode,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, provider.ID, provider.Name, provider.BaseURL, provider.Protocol, provider.DefinitionID, provider.Prefix, provider.ModelsPath, provider.AuthMode, boolInt(provider.Enabled)); err != nil {
+		if _, err = tx.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,definition_contract_version,prefix,models_path,auth_mode,enabled,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET name=excluded.name,base_url=excluded.base_url,protocol=excluded.protocol,definition_id=excluded.definition_id,definition_contract_version=excluded.definition_contract_version,prefix=excluded.prefix,models_path=excluded.models_path,auth_mode=excluded.auth_mode,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, provider.ID, provider.Name, provider.BaseURL, provider.Protocol, provider.DefinitionID, provider.DefinitionContractVersion, provider.Prefix, provider.ModelsPath, provider.AuthMode, boolInt(provider.Enabled)); err != nil {
 			return err
 		}
 	}

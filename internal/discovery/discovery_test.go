@@ -507,7 +507,7 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 	}
 	adapter := operationProbeAdapterFixture{client: upstream.Client()}
 	binding := provider.RuntimeBinding{
-		DefinitionID: node.DefinitionID, DefinitionRef: provider.ProviderDefinitionRef(node.DefinitionID, 1), Operation: provider.OperationAudio, TaskRef: operationRef,
+		DefinitionID: node.DefinitionID, DefinitionRef: node.DefinitionRef(), Operation: provider.OperationAudio, TaskRef: operationRef,
 		Protocol: kernel.Protocol(node.Protocol), ProviderFormat: normalize.Format("vendor-audio"),
 		AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}}},
 	}

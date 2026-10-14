@@ -1250,7 +1250,7 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				continue
 			}
 			for catalogIndex := range m.providerCatalog {
-				if m.providerCatalog[catalogIndex].ID == m.providers[index].DefinitionID {
+				if m.providerCatalog[catalogIndex].ID == m.providers[index].DefinitionID && m.providerCatalog[catalogIndex].ContractVersion == m.providers[index].DefinitionContractVersion {
 					definition = &m.providerCatalog[catalogIndex]
 					break
 				}
