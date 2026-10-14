@@ -46,8 +46,10 @@ implementation code once, while ordinary provider definitions remain separate
 JSON manifests that reference exact primitive/task versions. This is a
 compile-time extension model, not runtime `plugin.so` loading or a remote code
 execution mechanism. The external-module example and its daemon-hosting test
-are tracked in M15 conformance; module resolution/distribution remains a
-separate concern from exact dependency pinning.
+are tracked in M15 conformance. Module resolution is intentionally ordinary
+Go dependency resolution at build time; a host application declares the module
+dependency, passes its implementation to the composition root and statically
+links it. A config bundle cannot fetch, install, or execute module code.
 
 Catalog compilation happens off the serving path. Schemas, factories,
 dependency resolution and plan templates are prepared once per snapshot.

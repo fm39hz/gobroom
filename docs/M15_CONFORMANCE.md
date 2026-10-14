@@ -68,13 +68,13 @@ provider defaults. Both IPC and the optional HTTP control API serve this same
 projection; `gobroom providers catalog` exposes it for headless clients.
 
 The current primitive catalog additionally contains exact versioned endpoint,
-transport, codec, auth, discovery, usage, classifier, quota and client renderer
-descriptors. Built-in endpoint/usage/error/OAuth option schemas and compiled
+transport, codec, auth, discovery, usage, classifier and client-renderer
+descriptors. Same-ID implementation versions bind independently; reachable
+statically linked module build/host-contract refs are included in dependency
+lock v2. Built-in endpoint/usage/error/OAuth option schemas and compiled
 fingerprints are available from IPC `extensions.catalog`, HTTP control
-`/api/extensions` and CLI `gobroom extensions catalog`.
-The provider runtime currently registers one implementation version per
-primitive ID; side-by-side module versions and catalog-backed operation,
-feature and strategy descriptors remain in C1.
+`/api/extensions` and CLI `gobroom extensions catalog`. Operations, feature
+evaluators, strategies and transforms also register through the catalog.
 
 The implementation adds no provider-name branch to the kernel and no
 provider-specific persistence field. The existing physical/combo graph,
