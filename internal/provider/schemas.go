@@ -81,6 +81,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
     "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "remainingPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "remainingFromLimitUsed":{"type":"boolean"},
+    "usedPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "remainingPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "resetAtPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "exhaustedStatusPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
@@ -89,6 +90,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
     "ignoreWhenValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
   },"anyOf":[{"required":["name"]},{"required":["namePath"]},{"required":["itemsPath"]}],
   "dependentRequired":{"aggregation":["aggregationValuePath","itemsPath","name"],"aggregationValuePath":["aggregation"],"aggregationStatusPath":["aggregationStatusValues"],"aggregationStatusValues":["aggregationStatusPath"],"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},
+  "not":{"anyOf":[{"required":["usedPercentPath","remainingPercentPath"]},{"required":["usedPercentPath","usedPath"]},{"required":["usedPercentPath","limitPath"]},{"required":["usedPercentPath","remainingPath"]},{"required":["remainingPercentPath","usedPath"]},{"required":["remainingPercentPath","limitPath"]},{"required":["remainingPercentPath","remainingPath"]}]},
   "additionalProperties":false}},
   "headerWindows":{"type":"array","maxItems":64,"items":{"type":"object","required":["name"],"properties":{
     "name":{"type":"string","minLength":1},
@@ -111,6 +113,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
       "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "remainingPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "remainingFromLimitUsed":{"type":"boolean"},
+      "usedPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "remainingPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "resetAtPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "exhaustedStatusPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
@@ -118,7 +121,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
       "ignoreWhenPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "ignoreWhenValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
     },"anyOf":[{"required":["name"]},{"required":["namePath"]},{"required":["itemsPath"]}],
-    "dependentRequired":{"aggregation":["aggregationValuePath","itemsPath","name"],"aggregationValuePath":["aggregation"],"aggregationStatusPath":["aggregationStatusValues"],"aggregationStatusValues":["aggregationStatusPath"],"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},"additionalProperties":false}}
+    "dependentRequired":{"aggregation":["aggregationValuePath","itemsPath","name"],"aggregationValuePath":["aggregation"],"aggregationStatusPath":["aggregationStatusValues"],"aggregationStatusValues":["aggregationStatusPath"],"remainingFromLimitUsed":["usedPath","limitPath"],"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},"not":{"anyOf":[{"required":["usedPercentPath","remainingPercentPath"]},{"required":["usedPercentPath","usedPath"]},{"required":["usedPercentPath","limitPath"]},{"required":["usedPercentPath","remainingPath"]},{"required":["remainingPercentPath","usedPath"]},{"required":["remainingPercentPath","limitPath"]},{"required":["remainingPercentPath","remainingPath"]}]},"additionalProperties":false}}
   },"additionalProperties":false}},
   "failureMode":{"enum":["fail_all","keep_available"]}
 },

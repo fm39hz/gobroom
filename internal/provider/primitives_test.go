@@ -1335,12 +1335,19 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(quotaRef, headerQuotaOptions); err != nil {
 		t.Fatalf("typed response-header quota options rejected by registered schema: %v", err)
 	}
+	usedPercentOptions := json.RawMessage(`{"scope":"connection","windows":[{"itemsPath":"/usage","usedPercentPath":"/percent","resetAtPath":"/resetsAt"}]}`)
+	if err := snapshot.ValidateOptions(quotaRef, usedPercentOptions); err != nil {
+		t.Fatalf("typed used-percent quota options rejected by registered schema: %v", err)
+	}
 	invalidHeaderQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","remainingHeader":"invalid header"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, invalidHeaderQuotaOptions); err == nil {
 		t.Fatal("schema accepted an invalid response-header quota mapping")
 	}
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"scope":"provider"}`)); err == nil {
 		t.Fatal("schema accepted an unsupported provider-wide credential quota scope")
+	}
+	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"windows":[{"name":"rolling","usedPercentPath":"/used","remainingPercentPath":"/remaining"}]}`)); err == nil {
+		t.Fatal("schema accepted contradictory used- and remaining-percent mappings")
 	}
 }
 

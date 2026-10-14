@@ -1322,6 +1322,14 @@ func DecodeQuotaJSONWithOptions(data []byte, route kernel.Route, defaultWindow s
 			if mapping.RemainingFromLimitUsed && used != nil && limit != nil {
 				remaining = floatPointer(*limit - *used)
 			}
+			if mapping.UsedPercentPath != "" {
+				if percent := parseJSONFloat(pointerValue(row.raw, mapping.UsedPercentPath)); percent != nil {
+					bounded := math.Max(0, math.Min(100, *percent))
+					limit = floatPointer(100)
+					used = floatPointer(bounded)
+					remaining = floatPointer(100 - bounded)
+				}
+			}
 			if mapping.RemainingPercentPath != "" {
 				if percent := parseJSONFloat(pointerValue(row.raw, mapping.RemainingPercentPath)); percent != nil {
 					bounded := math.Max(0, math.Min(100, *percent))

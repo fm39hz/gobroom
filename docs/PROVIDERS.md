@@ -147,7 +147,8 @@ health contract](PASSIVE_HEALTH_ROUTING.md).
 
 The `http-json-quota` source accepts per-binding `quotaSourceOptions`. A
 manifest can map multiple named windows from one quota report by JSON Pointer,
-including object-map windows, arrays with a `namePath`, remaining percentages,
+including object-map windows, arrays with a `namePath`, used or remaining
+percentages,
 reset timestamps, exhausted statuses and explicitly unreported windows. It
 also supports an `any_positive` aggregation over a selected array/object plus
 an explicit root status gate. The generic DeepSeek manifest fixture uses this

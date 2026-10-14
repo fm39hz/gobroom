@@ -379,6 +379,7 @@ type HTTPJSONQuotaWindow struct {
 	LimitPath               string   `json:"limitPath,omitempty"`
 	RemainingPath           string   `json:"remainingPath,omitempty"`
 	RemainingFromLimitUsed  bool     `json:"remainingFromLimitUsed,omitempty"`
+	UsedPercentPath         string   `json:"usedPercentPath,omitempty"`
 	RemainingPercentPath    string   `json:"remainingPercentPath,omitempty"`
 	ResetAtPath             string   `json:"resetAtPath,omitempty"`
 	ExhaustedStatusPath     string   `json:"exhaustedStatusPath,omitempty"`
@@ -467,7 +468,7 @@ func validateHTTPJSONQuotaWindows(windows []HTTPJSONQuotaWindow) error {
 			{"itemsPath", window.ItemsPath}, {"aggregationValuePath", window.AggregationValuePath},
 			{"aggregationStatusPath", window.AggregationStatusPath}, {"namePath", window.NamePath}, {"usedPath", window.UsedPath},
 			{"limitPath", window.LimitPath}, {"remainingPath", window.RemainingPath},
-			{"remainingPercentPath", window.RemainingPercentPath}, {"resetAtPath", window.ResetAtPath},
+			{"usedPercentPath", window.UsedPercentPath}, {"remainingPercentPath", window.RemainingPercentPath}, {"resetAtPath", window.ResetAtPath},
 			{"exhaustedStatusPath", window.ExhaustedStatusPath}, {"ignoreWhenPath", window.IgnoreWhenPath},
 		} {
 			if item.path != "" && !validJSONPointer(item.path) {
@@ -490,19 +491,22 @@ func validateHTTPJSONQuotaWindows(windows []HTTPJSONQuotaWindow) error {
 			if (window.AggregationStatusPath == "") != (len(window.AggregationStatusValues) == 0) {
 				return fmt.Errorf("quota window %d aggregation status path and values must be configured together", index)
 			}
-			if window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "" || window.RemainingPercentPath != "" || window.ExhaustedStatusPath != "" {
+			if window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "" || window.UsedPercentPath != "" || window.RemainingPercentPath != "" || window.ExhaustedStatusPath != "" {
 				return fmt.Errorf("quota window %d any_positive aggregation cannot combine scalar quota fields", index)
 			}
 		} else if window.AggregationValuePath != "" || window.AggregationStatusPath != "" || len(window.AggregationStatusValues) > 0 {
 			return fmt.Errorf("quota window %d aggregation fields require aggregation=any_positive", index)
 		}
-		if window.RemainingPercentPath != "" && (window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "") {
-			return fmt.Errorf("quota window %d cannot combine remainingPercentPath with absolute amount paths", index)
+		if (window.RemainingPercentPath != "" || window.UsedPercentPath != "") && (window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "") {
+			return fmt.Errorf("quota window %d cannot combine percentage paths with absolute amount paths", index)
 		}
-		if window.RemainingFromLimitUsed && (window.UsedPath == "" || window.LimitPath == "" || window.RemainingPath != "" || window.RemainingPercentPath != "") {
+		if window.RemainingPercentPath != "" && window.UsedPercentPath != "" {
+			return fmt.Errorf("quota window %d cannot configure both usedPercentPath and remainingPercentPath", index)
+		}
+		if window.RemainingFromLimitUsed && (window.UsedPath == "" || window.LimitPath == "" || window.RemainingPath != "" || window.RemainingPercentPath != "" || window.UsedPercentPath != "") {
 			return fmt.Errorf("quota window %d remainingFromLimitUsed requires limitPath and usedPath only", index)
 		}
-		if window.Aggregation == "" && window.UsedPath == "" && window.LimitPath == "" && window.RemainingPath == "" && window.RemainingPercentPath == "" && window.ResetAtPath == "" && window.ExhaustedStatusPath == "" {
+		if window.Aggregation == "" && window.UsedPath == "" && window.LimitPath == "" && window.RemainingPath == "" && window.UsedPercentPath == "" && window.RemainingPercentPath == "" && window.ResetAtPath == "" && window.ExhaustedStatusPath == "" {
 			return fmt.Errorf("quota window %d has no measurable fields", index)
 		}
 		for _, values := range [][]string{window.ExhaustedStatusValues, window.IgnoreWhenValues, window.AggregationStatusValues} {

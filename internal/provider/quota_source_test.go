@@ -127,6 +127,33 @@ func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
 	}
 }
 
+func TestHTTPJSONQuotaSourceMapsOpenCodeGoUsedPercentWindows(t *testing.T) {
+	reset := time.Now().Add(90 * time.Minute).UTC().Truncate(time.Second)
+	body := `{"usage":{"rolling":{"percent":34.5,"resetsAt":"` + reset.Format(time.RFC3339) + `"},"weekly":{"percent":"105"},"monthly":{"label":"no numeric quota"}}}`
+	transport := &quotaTransportFixture{body: body}
+	route := kernel.Route{NodeID: "opencode-go", CredentialID: "account", ExternalModel: "deepseek-v4-flash", BaseURL: "https://opencode.ai/zen/go/v1"}
+	source := HTTPJSONQuotaSource{Options: HTTPJSONQuotaOptions{Scope: QuotaScopeConnection, Windows: []HTTPJSONQuotaWindow{{
+		ItemsPath: "/usage", UsedPercentPath: "/percent", ResetAtPath: "/resetsAt",
+	}}}}
+	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
+		Credential: kernel.Credential{Secret: "api-key"}, Route: route,
+		Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
+		EndpointOptions: kernel.EndpointOptions{Path: "/usage"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transport.request.URL != "https://opencode.ai/zen/go/v1/usage" || transport.request.Headers.Get("Authorization") != "Bearer api-key" {
+		t.Fatalf("OpenCode Go usage request=%#v", transport.request)
+	}
+	if len(snapshots) != 2 || snapshots[0].WindowName != "rolling" || snapshots[0].ModelRef != "" || snapshots[0].Limit == nil || *snapshots[0].Limit != 100 || snapshots[0].Used != 34.5 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 65.5 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.Equal(reset) {
+		t.Fatalf("OpenCode Go rolling usage window=%#v", snapshots)
+	}
+	if snapshots[1].WindowName != "weekly" || snapshots[1].Remaining == nil || *snapshots[1].Remaining != 0 || snapshots[1].Used != 100 {
+		t.Fatalf("OpenCode Go clamped weekly usage window=%#v", snapshots[1])
+	}
+}
+
 func TestHTTPJSONQuotaOptionsExpandNestedWindowsWithoutProviderBranches(t *testing.T) {
 	reset := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
 	body := []byte(`{"quotas":{"5h":{"remainingPercentage":60,"fractionReported":true,"resetAt":"` + reset.Format(time.RFC3339) + `"},"weekly":{"remainingPercentage":25,"fractionReported":true},"unreported":{"remainingPercentage":0,"fractionReported":false}}}`)
