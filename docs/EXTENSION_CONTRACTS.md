@@ -511,12 +511,18 @@ boundary after protocol encoding. Provider adapters must not branch on
 `api_key` versus `oauth2`, nor hardcode an auth header when a route declares a
 presentation. The presentation contract supports a token header/prefix and
 non-secret static protocol headers; it cannot contain secret values. More
-complex request signing remains an Auth primitive's typed `Apply` capability,
-not provider-specific kernel logic. The same resolved credential mode is
-passed to quota/usage requests; an explicitly configured per-report credential
-header may override the default presentation where the provider API requires
-it. Credential headers are data carried by the selected auth mode; static
-presentation headers reject credential-bearing/reserved names.
+complex request signing remains a transport/auth execution extension, not
+provider-specific kernel logic. An Auth flow may also return
+`Credential.RequestHeaders`: runtime-only headers derived from that exact
+connection's credential state (for example, a device ID). They are merged
+after mode-level static protocol headers and before the declared token header;
+reserved transport headers, invalid names and CR/LF values are rejected. These
+dynamic values are never persisted or exposed in control-plane metadata. The
+same resolved credential mode and dynamic header output are passed to
+quota/model-discovery requests; an explicitly configured per-report
+credential header may override the default token presentation where the
+provider API requires it. Static presentation headers reject
+credential-bearing/reserved names.
 
 TUI/CLI catalogs expose the available modes, safe labels and per-mode setup
 schemas/capabilities, never auth options or secrets. A connection form selects
@@ -533,7 +539,7 @@ the mode-specific fields. Empty credentials are accepted only for a selected
 mode with an advertised interactive flow. Dual-mode snapshot and setup-form
 fixtures cover selection. Remaining M7 work is the broader live-provider and
 OAuth lifecycle acceptance matrix, plus implementing a generic signed-request
-Apply extension before claiming non-header auth schemes are covered.
+extension before claiming body-bound/non-header auth schemes are covered.
 
 Credential use and interactive setup are related contracts with separate
 lifecycles:

@@ -7,12 +7,12 @@ import (
 
 func TestCredentialPresentationAppliesTokenAndProtocolHeaders(t *testing.T) {
 	headers := make(http.Header)
-	credential := Credential{Secret: "oauth-token"}
+	credential := Credential{Secret: "oauth-token", RequestHeaders: http.Header{"X-Msh-Device-Id": []string{"device-123"}, "X-Msh-Platform": []string{"CLIProxyAPI"}}}
 	presentation := CredentialPresentation{Header: "Authorization", Prefix: "Bearer ", Headers: map[string]string{"anthropic-beta": "oauth-2025-04-20", "anthropic-version": "2023-06-01"}}
 	if err := ApplyCredentialPresentation(headers, credential, presentation); err != nil {
 		t.Fatal(err)
 	}
-	if headers.Get("Authorization") != "Bearer oauth-token" || headers.Get("anthropic-beta") != "oauth-2025-04-20" || headers.Get("anthropic-version") != "2023-06-01" {
+	if headers.Get("Authorization") != "Bearer oauth-token" || headers.Get("anthropic-beta") != "oauth-2025-04-20" || headers.Get("anthropic-version") != "2023-06-01" || headers.Get("X-Msh-Device-Id") != "device-123" {
 		t.Fatalf("presented headers=%#v", headers)
 	}
 }

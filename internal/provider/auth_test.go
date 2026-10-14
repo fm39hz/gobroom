@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -20,7 +21,7 @@ func (a deviceOAuthFixture) Resolve(_ context.Context, input AuthInput) (kernel.
 	if input.Secret == "" {
 		return kernel.Credential{}, context.Canceled
 	}
-	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret, ClientID: a.issuer}, nil
+	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret, ClientID: a.issuer, RequestHeaders: http.Header{"X-Provider-Device": []string{a.issuer}}}, nil
 }
 func (a deviceOAuthFixture) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
 	return credential, nil
@@ -125,7 +126,14 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 		t.Fatal(err)
 	}
 	credential, err := binding.AuthModes["oauth-device"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth-device", Secret: "access-token"})
-	if err != nil || credential.Secret != "access-token" || credential.ClientID != "login.example" {
+	if err != nil || credential.Secret != "access-token" || credential.ClientID != "login.example" || credential.RequestHeaders.Get("X-Provider-Device") != "login.example" {
 		t.Fatalf("provider auth extension credential=%#v err=%v", credential, err)
+	}
+	requestHeaders := make(http.Header)
+	if err := kernel.ApplyCredentialPresentation(requestHeaders, credential, kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}); err != nil {
+		t.Fatal(err)
+	}
+	if requestHeaders.Get("Authorization") != "Bearer access-token" || requestHeaders.Get("X-Provider-Device") != "login.example" {
+		t.Fatalf("auth-flow-derived dynamic headers were not applied: %#v", requestHeaders)
 	}
 }

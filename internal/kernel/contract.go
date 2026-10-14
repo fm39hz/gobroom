@@ -421,6 +421,9 @@ type Credential struct {
 	ExpiresAt    time.Time
 	ClientID     string
 	ClientSecret string
+	// RequestHeaders are credential-scoped values produced by an auth flow at
+	// resolution time. They are runtime-only and never persisted or serialized.
+	RequestHeaders http.Header
 }
 
 type CredentialResolver func(context.Context, Route) (Credential, error)

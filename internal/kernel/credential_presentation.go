@@ -93,6 +93,17 @@ func ApplyCredentialPresentation(headers http.Header, credential Credential, pre
 	for _, name := range names {
 		headers.Set(name, presentation.Headers[name])
 	}
+	for name, values := range credential.RequestHeaders {
+		if !validCredentialHeader(name) || restrictedRequestHeader(name) {
+			return fmt.Errorf("auth flow returned invalid or reserved request header %q", name)
+		}
+		for _, value := range values {
+			if !validCredentialHeaderValue(value) {
+				return fmt.Errorf("auth flow returned invalid value for request header %q", name)
+			}
+		}
+		headers[name] = append([]string(nil), values...)
+	}
 	if credential.Secret != "" {
 		if presentation.Header == "" {
 			return fmt.Errorf("credential secret has no declared presentation header")
@@ -100,4 +111,13 @@ func ApplyCredentialPresentation(headers http.Header, credential Credential, pre
 		headers.Set(presentation.Header, presentation.Prefix+credential.Secret)
 	}
 	return nil
+}
+
+func validCredentialHeaderValue(value string) bool {
+	for _, char := range value {
+		if char == '\r' || char == '\n' || char == 0 || (char < 32 && char != '\t') || char == 127 {
+			return false
+		}
+	}
+	return true
 }
