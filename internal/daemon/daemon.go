@@ -1123,6 +1123,37 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			if normalizeErr != nil {
 				return fail(request, "normalize compatibility request: "+normalizeErr.Error())
 			}
+			var semanticSample struct {
+				Operation                string                   `json:"operation"`
+				OperationContractVersion uint64                   `json:"operationContractVersion"`
+				OperationPayload         json.RawMessage          `json:"operationPayload"`
+				Artifacts                []extensions.ArtifactRef `json:"artifacts"`
+			}
+			encodedSample, marshalErr := json.Marshal(body)
+			if marshalErr != nil {
+				return fail(request, "encode compatibility request sample: "+marshalErr.Error())
+			}
+			if decodeErr := json.Unmarshal(encodedSample, &semanticSample); decodeErr != nil {
+				return fail(request, "decode compatibility operation sample: "+decodeErr.Error())
+			}
+			if semanticSample.Operation != "" {
+				if semanticSample.OperationContractVersion == 0 {
+					return fail(request, "operationContractVersion is required with a non-chat operation sample")
+				}
+				normalized.Request.Operation = normalize.Operation(semanticSample.Operation)
+				normalized.Request.OperationContractVersion = semanticSample.OperationContractVersion
+			} else if semanticSample.OperationContractVersion != 0 {
+				return fail(request, "operation is required with operationContractVersion")
+			}
+			if len(semanticSample.OperationPayload) > 0 {
+				normalized.Request.OperationPayload = append(json.RawMessage(nil), semanticSample.OperationPayload...)
+			}
+			if semanticSample.Artifacts != nil {
+				normalized.Request.Artifacts = make([]extensions.ArtifactRef, len(semanticSample.Artifacts))
+				for index, artifact := range semanticSample.Artifacts {
+					normalized.Request.Artifacts[index] = artifact.Clone()
+				}
+			}
 			compatibility, explainErr := d.kernel.ExplainCompatibility(ctx, model, normalized.Request)
 			if explainErr != nil {
 				return fail(request, "explain request compatibility: "+explainErr.Error())

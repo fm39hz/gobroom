@@ -99,7 +99,10 @@ func registerAudioArtifactInspection(runtime *provider.RuntimeRegistry) error {
 	artifactPolicy := provider.ArtifactPolicy{
 		OwnerDomains: []string{"client"}, ReplayScopes: []provider.ArtifactReplayScope{provider.ArtifactReplayRequest},
 		SensitivityLimit: provider.ArtifactPrivate, AllowedMediaTypes: []string{"audio/wav"},
-		RecipientContracts: []provider.Ref{{Kind: provider.ArtifactInterpreterKind, ID: "example.audio.header", ContractVersion: 1}},
+		RecipientContracts: []provider.Ref{
+			{Kind: provider.ArtifactInterpreterKind, ID: "example.audio.header", ContractVersion: 1},
+			{Kind: "provider-definition", ID: "example-audio", ContractVersion: 1},
+		},
 	}
 	if err := runtime.RegisterExtension(provider.ExtensionDescriptor{
 		Ref: artifactRef, ImplementationVersion: "1", DisplayName: "Audio body", Description: "Bounded audio input for the external module example.",
@@ -108,20 +111,24 @@ func registerAudioArtifactInspection(runtime *provider.RuntimeRegistry) error {
 		return err
 	}
 	factsSchemaRef := provider.Ref{Kind: provider.SchemaKind, ID: "example.audio.facts", ContractVersion: 1}
+	factsSchema := json.RawMessage(`{"type":"object","properties":{"codec":{"const":"wav"}},"required":["codec"],"additionalProperties":false}`)
 	if err := runtime.RegisterArtifactInterpreter(
 		provider.Ref{Kind: provider.ArtifactInterpreterKind, ID: "example.audio.header", ContractVersion: 1},
 		"1", "WAV header interpreter", "Read a small audio header without buffering the artifact.",
-		factsSchemaRef, json.RawMessage(`{"type":"object","properties":{"codec":{"const":"wav"}},"required":["codec"],"additionalProperties":false}`),
+		factsSchemaRef, factsSchema,
 		nil, nil, provider.ResourceBounds{MaxInputBytes: 64, MaxOutputBytes: 128, MaxBufferedBytes: 128, DeadlineMillis: 250},
 		func(json.RawMessage) (any, error) { return wavHeaderInterpreter{}, nil },
 	); err != nil {
+		return err
+	}
+	featureRef := provider.Ref{Kind: "feature-evaluator", ID: "example.audio.codec", ContractVersion: 1}
+	if err := runtime.RegisterFeatureEvaluator(featureRef, "1", "Audio codec", "Require a codec proven by bounded artifact inspection.", factsSchemaRef, factsSchema, audioCodecEvaluator{}); err != nil {
 		return err
 	}
 	inputSchemaRef := provider.Ref{Kind: provider.SchemaKind, ID: "example.audio.inspect.input", ContractVersion: 1}
 	if err := runtime.RegisterSchemaDocument(inputSchemaRef, json.RawMessage(`{"type":"object"}`)); err != nil {
 		return err
 	}
-	featureRef := provider.Ref{Kind: "feature-evaluator", ID: "example.audio.codec", ContractVersion: 1}
 	return runtime.Primitives.Operations.Register(provider.OperationDefinition{
 		Ref:         provider.Ref{Kind: "operation", ID: audioInspectOperation, ContractVersion: 1},
 		DisplayName: "Inspect audio", Description: "Derive decoder requirements from bounded audio bytes.",
@@ -139,6 +146,24 @@ func registerAudioArtifactInspection(runtime *provider.RuntimeRegistry) error {
 			return []provider.FeatureRequirement{{Ref: featureRef, Constraints: append(json.RawMessage(nil), facts[0].Value...)}}, nil
 		},
 	})
+}
+
+type audioCodecEvaluator struct{}
+
+func (audioCodecEvaluator) Evaluate(capability provider.Capability, constraints json.RawMessage) (bool, string) {
+	if capability.State != provider.SupportNative {
+		return false, "route has no native audio-codec evidence"
+	}
+	var supported, requested struct {
+		Codec string `json:"codec"`
+	}
+	if json.Unmarshal(capability.Constraints, &supported) != nil || json.Unmarshal(constraints, &requested) != nil || requested.Codec == "" {
+		return false, "audio codec constraint is invalid or absent"
+	}
+	if supported.Codec != requested.Codec {
+		return false, "route does not support the requested audio codec"
+	}
+	return true, "route supports the requested audio codec"
 }
 
 type wavHeaderInterpreter struct{}
@@ -199,7 +224,13 @@ func (audioResponseDecoder) Decode(_ context.Context, response provider.Upstream
 	if err != nil {
 		return err
 	}
-	if err := emit(provider.ResponseEvent{Kind: provider.EventTextDelta, Text: string(body)}); err != nil {
+	var result struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || result.Text == "" {
+		return fmt.Errorf("audio response must contain non-empty text")
+	}
+	if err := emit(provider.ResponseEvent{Kind: provider.EventTextDelta, Text: result.Text}); err != nil {
 		return err
 	}
 	return emit(provider.ResponseEvent{Kind: provider.EventResponseComplete})

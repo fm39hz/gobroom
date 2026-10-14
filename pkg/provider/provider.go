@@ -34,8 +34,20 @@ type OperationBinding = core.OperationBinding
 type PrimitiveKind = core.PrimitiveKind
 type PrimitiveRef = core.PrimitiveRef
 type CapabilitySet = core.CapabilitySet
+type Capability = kernel.Capability
+type SupportState = kernel.SupportState
+type FeatureEvaluator = kernel.FeatureEvaluator
+
+const (
+	SupportUnknown     = kernel.SupportUnknown
+	SupportUnsupported = kernel.SupportUnsupported
+	SupportNative      = kernel.SupportNative
+	SupportEmulated    = kernel.SupportEmulated
+	SupportConditional = kernel.SupportConditional
+)
 
 const RuntimeModuleHostContractVersion = core.RuntimeModuleHostContractVersion
+const MultipartRequestCodecID = core.MultipartRequestCodecID
 
 type OAuthFlowOptions = core.OAuthFlowOptions
 type AuthOptions = core.AuthOptions
@@ -142,6 +154,17 @@ func ValidateSessionState(state SessionState) error {
 type Format = normalize.Format
 type Task = normalize.Operation
 type OperationRequest = normalize.Request
+
+const (
+	FormatOpenAIChat      = normalize.FormatOpenAIChat
+	FormatOpenAIResponses = normalize.FormatOpenAIResponses
+	FormatAnthropic       = normalize.FormatAnthropic
+	FormatGemini          = normalize.FormatGemini
+	FormatGeminiCLI       = normalize.FormatGeminiCLI
+	FormatAntigravity     = normalize.FormatAntigravity
+	OperationChatGenerate = normalize.OperationChatGenerate
+)
+
 type ArtifactFacts = normalize.ArtifactFacts
 type FeatureRequirement = normalize.FeatureRequirement
 type Message = normalize.Message

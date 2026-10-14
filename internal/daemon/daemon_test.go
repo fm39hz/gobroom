@@ -342,7 +342,27 @@ func TestRouteExplainIPCPreflightsRequestCompatibility(t *testing.T) {
 	}
 	defer dataStore.Close()
 	bindings := map[normalize.Operation]kernel.RouteOperationBinding{
-		normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"fixture"}},
+		normalize.OperationChatGenerate:      {ContractVersion: 1, AdapterIDs: []string{"fixture"}},
+		normalize.Operation("audio.inspect"): {ContractVersion: 1, AdapterIDs: []string{"fixture"}},
+	}
+	operationCatalog := extensions.NewCatalog()
+	operationRegistry, err := operations.NewRegistry(operationCatalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := operations.RegisterChatGenerate(operationCatalog, operationRegistry); err != nil {
+		t.Fatal(err)
+	}
+	if err := operationRegistry.RegisterRawPayload(extensions.Ref{Kind: "operation", ID: "audio.inspect", ContractVersion: 1}, "Inspect audio", "Fixture non-chat operation.", json.RawMessage(`{"type":"object"}`), operations.ReplayNever); err != nil {
+		t.Fatal(err)
+	}
+	extensionsSnapshot, err := operationCatalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationSnapshot, err := operationRegistry.Seal(extensionsSnapshot)
+	if err != nil {
+		t.Fatal(err)
 	}
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "combo-junior"}},
@@ -360,6 +380,7 @@ func TestRouteExplainIPCPreflightsRequestCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	engine.Operations = operationSnapshot
 	defer engine.Close()
 	attempts := 0
 	engine.Adapters["fixture"] = daemonExplainAdapter{attempts: &attempts}
@@ -391,6 +412,26 @@ func TestRouteExplainIPCPreflightsRequestCompatibility(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "private fixture text") {
 		t.Fatal("route explanation leaked request content")
+	}
+	nonChat := service.handleIPC(context.Background(), IPCRequest{
+		ID: "route-explain-operation", Method: "routes.explain",
+		Params: map[string]any{
+			"model": "junior", "requestPath": "/v1/audio/inspect",
+			"request": map[string]any{
+				"model": "junior", "operation": "audio.inspect", "operationContractVersion": 1,
+				"operationPayload": map[string]any{},
+			},
+		},
+	})
+	if !nonChat.OK {
+		t.Fatalf("non-chat route explanation failed: %s", nonChat.Error)
+	}
+	nonChatItems, ok := nonChat.Result.([]runtimehealth.RouteExplanation)
+	if !ok || len(nonChatItems) != 1 || len(nonChatItems[0].Compatibility) != 1 || !nonChatItems[0].Compatibility[0].Compatible {
+		t.Fatalf("non-chat operation contract was not preflighted: %#v", nonChat.Result)
+	}
+	if attempts != 0 {
+		t.Fatalf("non-chat route explanation dispatched upstream request(s): %d", attempts)
 	}
 }
 

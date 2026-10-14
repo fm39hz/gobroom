@@ -1,12 +1,15 @@
 package externalprovider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,7 @@ import (
 
 func audioManifest() provider.ProviderDefinition {
 	task := provider.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
+	inspectTask := provider.Ref{Kind: "operation", ID: "audio.inspect", ContractVersion: 1}
 	return provider.ProviderDefinition{
 		ContractVersion: 1, ID: "example-audio", Version: "1", DisplayName: "Example Audio",
 		Capabilities:          provider.CapabilitySet{AudioInput: true},
@@ -34,6 +38,14 @@ func audioManifest() provider.ProviderDefinition {
 			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
 			QuotaSource:     provider.PrimitiveRef{Kind: provider.PrimitiveQuotaSource, ID: "example-audio-quota", ContractVersion: 1},
 			EndpointOptions: provider.EndpointOptions{Path: "/account/usage"},
+		}, provider.Operation("audio.inspect"): {
+			Protocol: "example_audio", TaskRef: &inspectTask, ProviderFormat: "example-audio-json",
+			Endpoint:            provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			EndpointOptions:     provider.EndpointOptions{Path: "/audio/inspect"},
+			Transport:           provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:        provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: provider.MultipartRequestCodecID, ContractVersion: 1},
+			RequestCodecOptions: json.RawMessage(`{"modelField":"model","payloadField":"request","artifacts":[{"role":"audio","field":"file","fileName":"audio.wav"}]}`),
+			ResponseDecoder:     provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "example-audio-json", ContractVersion: 1},
 		}},
 	}
 }
@@ -64,6 +76,34 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 	bindings, err := runtime.BuildBindings()
 	if err != nil {
 		t.Fatal(err)
+	}
+	inspectBinding := bindings[provider.RuntimeBindingKey(provider.Ref{Kind: "provider-definition", ID: "example-audio", ContractVersion: 1}, provider.Operation("audio.inspect"))]
+	inspectRequest := provider.NormalizedRequest{
+		Model: "audio-role", Operation: provider.Task("audio.inspect"), OperationContractVersion: 1,
+		SourceFormat: provider.FormatOpenAIChat, OperationPayload: json.RawMessage(`{}`),
+		Artifacts: []provider.ArtifactRef{{
+			TypeRef: provider.Ref{Kind: provider.ArtifactKind, ID: "example.audio.body", ContractVersion: 1}, Role: "audio",
+			Owner:       provider.ArtifactOwner{Domain: "client", ClientContract: "client-ingress:example-audio-inspect-multipart@1"},
+			ReplayScope: provider.ArtifactReplayRequest, Sensitivity: provider.ArtifactPrivate, MediaType: "audio/wav", SizeBytes: 8,
+			ExpiresAt: time.Now().Add(time.Minute), Body: &provider.BodyRef{ID: "fixture-body", MediaType: "audio/wav", SizeBytes: 8, Replayable: true},
+		}},
+		Requirements: []provider.FeatureRequirement{{Ref: provider.Ref{Kind: "feature-evaluator", ID: "example.audio.codec", ContractVersion: 1}, Constraints: json.RawMessage(`{"codec":"wav"}`)}},
+	}
+	var compatibilityInput provider.CompatibilityContext
+	compatibilityInput.Request = inspectRequest
+	compatibilityInput.Operation = inspectRequest.Operation
+	compatibilityInput.Route = provider.Route{
+		DefinitionRef: provider.Ref{Kind: "provider-definition", ID: "example-audio", ContractVersion: 1},
+		ExternalModel: "asr-v4", Protocol: "example_audio",
+		Profile: provider.CapabilityProfile{"example.audio.codec": {State: provider.SupportNative, Constraints: json.RawMessage(`{"codec":"wav"}`)}},
+	}
+	compatibilityInput.Policy.RequiredFacets = []string{"wire.request", "operation.artifact.audio", "wire.response", "response.event.text_delta", "response.event.response_complete"}
+	if inspectBinding.Adapter == nil {
+		t.Fatal("module operation has no provider adapter")
+	}
+	plan := inspectBinding.Adapter.PlanCompatibility(compatibilityInput)
+	if !plan.Supported {
+		t.Fatalf("module multipart provider adapter rejected its declared artifact/client contract: %#v", plan)
 	}
 	binding, ok := bindings[provider.RuntimeBindingKey(provider.Ref{Kind: "provider-definition", ID: "example-audio", ContractVersion: 1}, provider.OperationAudio)]
 	if !ok || binding.Adapter == nil || binding.TaskRef.ID != "audio.transcribe" {
@@ -160,6 +200,13 @@ func TestExternalModuleInterpretsBoundedArtifactAndCompilesRequirement(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	manifest, err := provider.EncodeManifest(audioManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadDefinitionJSON(manifest); err != nil {
+		t.Fatal(err)
+	}
 	operations, err := runtime.OperationSnapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -201,12 +248,54 @@ func TestExternalModuleInterpretsBoundedArtifactAndCompilesRequirement(t *testin
 
 func TestPublicDaemonHostsExternalProviderModuleAndManifest(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/v1/audio/transcriptions" || request.Header.Get("Authorization") != "Bearer account-secret" || request.Header.Get("X-Example-User") != "user:account-secret" {
+		if request.Header.Get("Authorization") != "Bearer account-secret" {
 			t.Errorf("unexpected module request %s %s auth=%q", request.Method, request.URL.Path, request.Header.Get("Authorization"))
 		}
-		var payload map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload["audio_url"] != "https://assets.test/sample.wav" {
-			t.Errorf("provider payload=%#v err=%v", payload, err)
+		switch request.URL.Path {
+		case "/v1/audio/transcriptions":
+			if request.Header.Get("X-Example-User") != "user:account-secret" {
+				t.Errorf("custom audio codec omitted its auth context header: %q", request.Header.Get("X-Example-User"))
+			}
+			var payload map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload["audio_url"] != "https://assets.test/sample.wav" {
+				t.Errorf("provider payload=%#v err=%v", payload, err)
+			}
+		case "/v1/audio/inspect":
+			reader, err := request.MultipartReader()
+			if err != nil {
+				t.Errorf("provider multipart request: %v", err)
+				break
+			}
+			foundModel, foundMetadata, foundAudio := false, false, false
+			for {
+				part, err := reader.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Errorf("read provider multipart request: %v", err)
+					break
+				}
+				data, readErr := io.ReadAll(part)
+				_ = part.Close()
+				if readErr != nil {
+					t.Errorf("read provider part %q: %v", part.FormName(), readErr)
+					continue
+				}
+				switch part.FormName() {
+				case "model":
+					foundModel = string(data) == "asr-v4"
+				case "request":
+					foundMetadata = string(data) == "{}"
+				case "file":
+					foundAudio = part.FileName() == "audio.wav" && string(data) == "RIFFWAVE"
+				}
+			}
+			if !foundModel || !foundMetadata || !foundAudio {
+				t.Errorf("provider multipart fields missing: model=%v metadata=%v audio=%v", foundModel, foundMetadata, foundAudio)
+			}
+		default:
+			t.Errorf("unexpected module request path %q", request.URL.Path)
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(writer, `{"text":"fixture transcript"}`)
@@ -316,6 +405,94 @@ func TestPublicDaemonHostsExternalProviderModuleAndManifest(t *testing.T) {
 	connectionJSON, _ := json.Marshal(connectionResponse.Result)
 	if err := json.Unmarshal(connectionJSON, &connection); err != nil || connection.ID == "" {
 		t.Fatalf("connection create result=%s err=%v", connectionJSON, err)
+	}
+	for _, setup := range []struct {
+		id     string
+		method string
+		params map[string]any
+	}{
+		{
+			id: "custom-model", method: "custom_models.upsert",
+			params: map[string]any{
+				"id": "route_audio_asr", "providerNodeID": node.ID, "kind": "custom", "externalID": "asr-v4", "displayName": "ASR v4",
+				"profile":       map[string]any{"example.audio.codec": map[string]any{"state": "native", "constraints": map[string]any{"codec": "wav"}}},
+				"connectionIds": []string{connection.ID},
+			},
+		},
+		{
+			id: "physical-model", method: "physical_models.upsert",
+			params: map[string]any{
+				"name": "audio-physical", "identity": map[string]any{"canonicalName": "asr-v4"},
+				"sources": []map[string]any{{"routeId": "route_audio_asr", "fidelity": "exact"}},
+				"enabled": true,
+			},
+		},
+		{
+			id: "combo-model", method: "combo_models.upsert",
+			params: map[string]any{
+				"name": "audio-role", "members": []map[string]any{{"kind": "physical", "id": "audio-physical"}},
+				"discoverable": true, "enabled": true,
+			},
+		},
+	} {
+		result, err := daemon.CallIPC(context.Background(), configuration.IPCPath, daemon.IPCRequest{ID: setup.id, Method: setup.method, Params: setup.params})
+		if err != nil || !result.OK {
+			t.Fatalf("%s response=%#v err=%v", setup.method, result, err)
+		}
+	}
+	modelsResponse, err := http.Get("http://" + dataPlaneAddr + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelsBody, _ := io.ReadAll(modelsResponse.Body)
+	_ = modelsResponse.Body.Close()
+	if modelsResponse.StatusCode != http.StatusOK || !strings.Contains(string(modelsBody), `"id":"audio-role"`) {
+		t.Fatalf("external module's combo was not exposed through /v1/models: status=%d body=%s", modelsResponse.StatusCode, modelsBody)
+	}
+	apiResponse, err := http.Post("http://"+dataPlaneAddr+"/v1/audio/transcriptions", "application/json", strings.NewReader(`{"model":"audio-role","operationPayload":{"audio_url":"https://assets.test/sample.wav"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiBody, _ := io.ReadAll(apiResponse.Body)
+	_ = apiResponse.Body.Close()
+	if apiResponse.StatusCode != http.StatusOK || !strings.Contains(string(apiBody), "fixture transcript") {
+		t.Fatalf("external non-chat graph call status=%d body=%s", apiResponse.StatusCode, apiBody)
+	}
+	var inspectBody bytes.Buffer
+	inspectForm := multipart.NewWriter(&inspectBody)
+	inspectMetadata, err := inspectForm.CreateFormField("request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectMetadata.Write([]byte(`{"model":"audio-role","operationPayload":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	audioHeader := make(textproto.MIMEHeader)
+	audioHeader.Set("Content-Disposition", `form-data; name="audio"; filename="sample.wav"`)
+	audioHeader.Set("Content-Type", "audio/wav")
+	audioPart, err := inspectForm.CreatePart(audioHeader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := audioPart.Write([]byte("RIFFWAVE")); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspectForm.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inspectRequest, err := http.NewRequest(http.MethodPost, "http://"+dataPlaneAddr+"/v1/audio/inspect", &inspectBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectRequest.Header.Set("Content-Type", inspectForm.FormDataContentType())
+	inspectResponse, err := http.DefaultClient.Do(inspectRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectResponseBody, _ := io.ReadAll(inspectResponse.Body)
+	_ = inspectResponse.Body.Close()
+	if inspectResponse.StatusCode != http.StatusOK || !strings.Contains(string(inspectResponseBody), "fixture transcript") {
+		t.Fatalf("external multipart artifact operation status=%d body=%s", inspectResponse.StatusCode, inspectResponseBody)
 	}
 	probe, err := daemon.CallIPC(context.Background(), configuration.IPCPath, daemon.IPCRequest{
 		ID: "probe", Method: "connections.test_operation", Params: map[string]any{

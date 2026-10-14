@@ -229,7 +229,8 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    provider artifact handoffs. The selected payload-free plan summary is now
    persisted with successful usage, returned through `usage.list` and shown in
    the TUI Usage inspector. `routes.explain` now accepts a normalized request
-   sample and evaluates every enabled model-path candidate through the same
+   sample including exact non-chat operation refs and payloads, then evaluates
+   every enabled model-path candidate through the same
    compatibility planner without strategy-state mutation, credential lookup
    or upstream dispatch; CLI accepts a JSON file or stdin. Remaining: close
    the full SG1/SG4 matrices and transform fallback accounting.
@@ -274,14 +275,18 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    provider-operation header binding; the kernel derives a deterministic key
    scoped to provider definition, node/endpoint, credential, protocol, upstream
    model and operation, then permits one same-route replay for ambiguous effects
-   only. It never grants cross-issuer fallback. Remaining: real provider
-   idempotency semantics/expiry, async job effects, and a real non-chat
-   payload/result through the shared graph executor while preserving the
-   pre/post-client-commit boundary.
+   only. It never grants cross-issuer fallback. A separate Go-module audio
+   fixture now executes both JSON and bounded multipart non-chat operations
+   through module-owned ingress, assigned model, Physical/Combo graph, shared
+   multipart provider codec, decoder and client renderer. Remaining: real
+   provider idempotency semantics/expiry, async job effects and broader
+   commit/cancellation/replay stress cases.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and
-   versioned client ingress, loads its manifest and executes a schema-validated request over ordinary
-   IPC/daemon/HTTP boundaries. It also binds a custom AuthFactory, passes
+   versioned JSON/multipart ingress, loads its manifest, builds an assigned
+   route plus Physical/Combo graph and executes schema-validated JSON and
+   multipart artifact operations over ordinary IPC/daemon/HTTP boundaries. It
+   also binds a custom AuthFactory, passes
    bounded credential AuthContext to an external request codec, and includes a
    source-derived Qoder COSY fixture that encodes then signs its body bytes and
    unwraps an SSE envelope through the shared runtime. This leaves kernel graph
