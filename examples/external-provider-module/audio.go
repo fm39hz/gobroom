@@ -46,6 +46,17 @@ func (AudioModule) Register(runtime *provider.RuntimeRegistry) error {
 	}); err != nil {
 		return err
 	}
+	if err := runtime.RegisterClientIngress(provider.MultipartOperationIngress{
+		CodecID: "example-audio-inspect-multipart", IngressContractVersion: 1,
+		Operation: audioInspectOperation, OperationContractVersion: 1,
+		Endpoints: []provider.ClientIngressRoute{{Method: http.MethodPost, Path: "/v1/audio/inspect"}},
+		Bindings: []provider.MultipartArtifactBinding{{
+			Field: "audio", Role: "audio", TypeRef: provider.Ref{Kind: provider.ArtifactKind, ID: "example.audio.body", ContractVersion: 1},
+			MaxBytes: 16 * 1024 * 1024,
+		}},
+	}); err != nil {
+		return err
+	}
 	return runtime.RegisterQuotaSource(audioQuotaSource{})
 }
 

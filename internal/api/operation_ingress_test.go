@@ -109,7 +109,7 @@ func TestMultipartOperationIngressSpoolsDeclaredArtifact(t *testing.T) {
 		t.Fatalf("decoded request did not preserve operation and artifact: %#v", decoded)
 	}
 	artifact := decoded.Artifacts[0]
-	if artifact.Role != "source-document" || artifact.TypeRef.ID != "fixture.document" || artifact.Owner.Domain != "client" || artifact.Body == nil {
+	if artifact.Role != "source-document" || artifact.TypeRef.ID != "fixture.document" || artifact.Owner.Domain != "client" || artifact.Owner.ClientContract != codec.IngressRef().Key() || artifact.Body == nil {
 		t.Fatalf("artifact provenance/role/body not preserved: %#v", artifact)
 	}
 	lease, err := store.Open(context.Background(), artifact.Owner, *artifact.Body)

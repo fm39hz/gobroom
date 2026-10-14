@@ -36,6 +36,11 @@ those routes into its existing API server, which retains authentication,
 request bounds, executor, cancellation and error mapping. A client ingress
 cannot call a provider directly or bypass compatibility planning. Its
 descriptor depends on the operation contract it produces.
+The public `pkg/provider` API exposes the reusable JSON-envelope and
+schema-bound multipart artifact ingress codecs as data-driven implementations;
+custom client dialects implement the same interface when those shapes do not
+fit. Multipart files are streamed into bounded leases, never copied into the
+canonical request IR.
 
 Each linked module declares an opaque, exact build version and a positive
 GoBroom host-contract version. GoBroom does not infer semver compatibility:

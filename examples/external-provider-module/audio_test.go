@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,6 +85,30 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 	}
 	if prepared.Method != http.MethodPost || prepared.URL != "https://audio.example/v1/audio/transcriptions" || prepared.Headers.Get("Authorization") != "Bearer module-secret" || prepared.Headers.Get("X-Example-User") != "user:module-secret" || !strings.Contains(string(body), "audio_url") {
 		t.Fatalf("external module produced invalid request: method=%s URL=%s headers=%#v body=%s", prepared.Method, prepared.URL, prepared.Headers, body)
+	}
+}
+
+func TestExternalModuleCanRegisterReusableMultipartClientIngress(t *testing.T) {
+	runtime, err := provider.NewRuntimeRegistryWithModules(AudioModule{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var multipartIngress provider.MultipartOperationIngress
+	found := false
+	for _, candidate := range runtime.ClientIngresses() {
+		if candidate.ID() != "example-audio-inspect-multipart" {
+			continue
+		}
+		var ok bool
+		multipartIngress, ok = candidate.(provider.MultipartOperationIngress)
+		if !ok {
+			t.Fatalf("module multipart ingress has unexpected type %T", candidate)
+		}
+		found = true
+		break
+	}
+	if !found || multipartIngress.OperationRef().ID != "audio.inspect" || len(multipartIngress.Bindings) != 1 || multipartIngress.Bindings[0].Role != "audio" {
+		t.Fatalf("public multipart ingress contract did not preserve exact operation/artifact mapping: %#v", multipartIngress)
 	}
 }
 
@@ -187,6 +212,14 @@ func TestPublicDaemonHostsExternalProviderModuleAndManifest(t *testing.T) {
 		_, _ = io.WriteString(writer, `{"text":"fixture transcript"}`)
 	}))
 	defer upstream.Close()
+	dataPlaneListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataPlaneAddr := dataPlaneListener.Addr().String()
+	if err := dataPlaneListener.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	manifestDir := t.TempDir()
 	writeManifest(t, manifestDir)
@@ -194,12 +227,33 @@ func TestPublicDaemonHostsExternalProviderModuleAndManifest(t *testing.T) {
 	configuration := daemon.Config{
 		DBPath: filepath.Join(runtimeDir, "fixture.db"), IPCPath: filepath.Join(runtimeDir, "fixture.sock"),
 		ProviderManifestDir: manifestDir, ArtifactStoreDir: filepath.Join(runtimeDir, "artifacts"),
+		HTTPEnabled: true, HTTPAddr: dataPlaneAddr,
 	}
 	service := daemon.NewWithProviderModules(configuration, AudioModule{})
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer service.Stop(context.Background())
+	httpReadyDeadline := time.Now().Add(5 * time.Second)
+	for {
+		connection, dialErr := net.DialTimeout("tcp", dataPlaneAddr, 50*time.Millisecond)
+		if dialErr == nil {
+			_ = connection.Close()
+			break
+		}
+		if time.Now().After(httpReadyDeadline) {
+			t.Fatalf("daemon HTTP listener did not become ready: %v", dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	response, err := http.Post("http://"+dataPlaneAddr+"/v1/audio/inspect", "multipart/form-data", strings.NewReader("not-multipart"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("module-owned multipart endpoint did not reach the common ingress decoder: status=%d content-type=%q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
 
 	catalogResponse, err := daemon.CallIPC(context.Background(), configuration.IPCPath, daemon.IPCRequest{ID: "catalog", Method: "providers.catalog"})
 	if err != nil || !catalogResponse.OK {

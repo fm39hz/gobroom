@@ -15,6 +15,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/controlplane"
 	"github.com/fm39hz/gobroom/internal/extensions"
+	"github.com/fm39hz/gobroom/internal/ingress"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
@@ -529,7 +530,7 @@ func (s *Server) customModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const maxIngressBodyBytes = 32 << 20
+const maxIngressBodyBytes = ingress.MaxRequestBodyBytes
 
 func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
