@@ -41,7 +41,7 @@ func bundleTestCatalog(t *testing.T, extraRefs ...extensions.Ref) *kernel.Strate
 
 func bundleWithDependencyLock(t *testing.T, bundle ConfigBundle, catalog *kernel.StrategyCatalog) ConfigBundle {
 	t.Helper()
-	bundle.Version = 6
+	bundle.Version = 7
 	lock, err := catalog.Extensions().LockDependencies(bundleDependencyRoots(bundle))
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +121,7 @@ func TestModelLossPoliciesRoundTripThroughConfigBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 6 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
+	if bundle.Version != 7 || bundle.LossCeiling == nil || !reflect.DeepEqual(*bundle.LossCeiling, ceiling) {
 		t.Fatalf("versioned global loss ceiling was not exported: %#v", bundle)
 	}
 	encoded, err := json.Marshal(bundle)
@@ -176,8 +176,8 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Version != 6 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
-		t.Fatalf("custom connection assignment was not exported in bundle v6: %#v", bundle.Models)
+	if bundle.Version != 7 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-b"}) {
+		t.Fatalf("connection assignment was not exported in bundle v7: %#v", bundle.Models)
 	}
 	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
 		t.Fatalf("custom assignment bundle validation: %v", err)
@@ -197,6 +197,53 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	}
 }
 
+func TestStaticCatalogAssignmentsRoundTripWithoutEntitlementEvidence(t *testing.T) {
+	catalog := bundleTestCatalog(t)
+	createStore := func(t *testing.T) *store.Store {
+		t.Helper()
+		db, err := store.Open(t.TempDir() + "/static-assignments.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('node','Provider','https://provider.test/v1','openai_chat','p');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-a','node','A','api_key','secret-a'),('conn-b','node','B','api_key','secret-b');`); err != nil {
+			db.Close()
+			t.Fatal(err)
+		}
+		return db
+	}
+	source := createStore(t)
+	defer source.Close()
+	if err := source.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: "static-route", ProviderNodeID: "node", Kind: "discovered", ExternalID: "qwen3.8-max", DisplayName: "Qwen 3.8 Max", Raw: map[string]any{"source": string(store.ModelAssignmentStaticCatalog)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SetStaticCatalogAssignments("conn-a", "node", []string{"static-route"}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := ExportBundle(source, catalog.Extensions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Version != 7 || len(bundle.Models) != 1 || !reflect.DeepEqual(bundle.Models[0].ConnectionIDs, []string{"conn-a"}) || !reflect.DeepEqual(bundle.Models[0].ConnectionAssignments, []store.ModelConnectionAssignment{{ConnectionID: "conn-a", Source: store.ModelAssignmentStaticCatalog}}) {
+		t.Fatalf("static assignment bundle=%#v", bundle.Models)
+	}
+	if err := ValidateBundleWithStrategies(bundle, catalog); err != nil {
+		t.Fatalf("static assignment bundle validation: %v", err)
+	}
+	target := createStore(t)
+	defer target.Close()
+	if err := ApplyBundle(target, bundle, catalog); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := target.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "conn-a" {
+		t.Fatalf("static assigned route did not survive bundle import: %#v err=%v", routes, err)
+	}
+	if evidence, err := target.ConnectionModelEntitlements("node"); err != nil || len(evidence) != 0 {
+		t.Fatalf("config import invented endpoint entitlement evidence: %#v err=%v", evidence, err)
+	}
+}
+
 func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	current := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
@@ -213,7 +260,7 @@ func TestDiffBundleDetectsServerLossCeilingChanges(t *testing.T) {
 func TestConfigBundleRejectsPreviousContractVersion(t *testing.T) {
 	catalog := bundleTestCatalog(t)
 	bundle := bundleWithDependencyLock(t, ConfigBundle{}, catalog)
-	bundle.Version = 5
+	bundle.Version = 6
 	if err := ValidateBundleWithStrategies(bundle, catalog); err == nil {
 		t.Fatal("previous config bundle contract version was accepted")
 	}

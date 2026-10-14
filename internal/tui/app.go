@@ -265,6 +265,7 @@ type app struct {
 	importPreview       discovery.ConnectionModelsPreview
 	importSelected      map[string]bool
 	importExisting      map[string]bool
+	importAssigned      map[string]bool
 	importBaselineKnown bool
 	raw                 map[sectionID]json.RawMessage
 	pickerSelected      map[string]bool
@@ -319,6 +320,7 @@ func newApp(ipcPath string) *app {
 	strategySelected := map[string]bool{}
 	importSelected := map[string]bool{}
 	importExisting := map[string]bool{}
+	importAssigned := map[string]bool{}
 	picker := list.New([]list.Item{}, itemDelegate{selected: pickerSelected, ordered: pickerOrderPos}, 60, 12)
 	memberPicker := list.New([]list.Item{}, itemDelegate{selected: pickerSelected, ordered: pickerOrderPos}, 30, 12)
 	strategyPicker := list.New([]list.Item{}, itemDelegate{selected: strategySelected}, 60, 12)
@@ -381,6 +383,7 @@ func newApp(ipcPath string) *app {
 		pickerOrderPos:   pickerOrderPos,
 		importSelected:   importSelected,
 		importExisting:   importExisting,
+		importAssigned:   importAssigned,
 		status:           "connecting to daemon…",
 		loading:          true,
 	}
@@ -599,7 +602,9 @@ func (m *app) updateModelImportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.mode, m.loading = modeBrowse, true
-		if len(selected) == 0 {
+		if m.importPreview.Evidence == provider.ModelCatalogProviderRegistry {
+			m.status = fmt.Sprintf("syncing %d explicit model assignments to %s…", len(selected), m.importPreview.ConnectionID)
+		} else if len(selected) == 0 {
 			m.status = "applying account availability without importing route IDs…"
 		} else {
 			m.status = fmt.Sprintf("importing %d selected model IDs with %s…", len(selected), m.importPreview.ConnectionID)
@@ -725,7 +730,11 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.importPreview = preview
 			clear(m.importSelected)
 			clear(m.importExisting)
+			clear(m.importAssigned)
 			m.importBaselineKnown = len(m.raw[sectionModels]) > 0
+			for _, modelID := range preview.AssignedModelIDs {
+				m.importAssigned[modelID] = true
+			}
 			known := map[string]bool{}
 			var catalog []catalogModel
 			if err := json.Unmarshal(m.raw[sectionModels], &catalog); err == nil {
@@ -747,8 +756,18 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					item.summary += " · new route"
 					item.title += "  · new"
 				}
+				if preview.Evidence == provider.ModelCatalogProviderRegistry {
+					if m.importAssigned[model.ID] {
+						item.summary += " · assigned here"
+						item.title += " · assigned here"
+					} else {
+						item.summary += " · not assigned here"
+					}
+				}
 				items = append(items, item)
-				m.importSelected[model.ID] = true
+				if preview.Evidence != provider.ModelCatalogProviderRegistry || m.importAssigned[model.ID] {
+					m.importSelected[model.ID] = true
+				}
 			}
 			_ = m.importPicker.SetItems(items)
 			m.importPicker.ResetFilter()
@@ -756,7 +775,9 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeModelImport
 			m.loading = false
 			m.lastError = ""
-			if m.importBaselineKnown {
+			if preview.Evidence == provider.ModelCatalogProviderRegistry {
+				m.status = fmt.Sprintf("static catalog · %d models already assigned · upstream availability unverified", len(preview.AssignedModelIDs))
+			} else if m.importBaselineKnown {
 				m.status = fmt.Sprintf("reviewing %d IDs · all checked; deselect routes not to import", len(preview.Models))
 			} else {
 				m.status = "catalog baseline not loaded · all returned IDs checked; verify before apply"
@@ -898,14 +919,20 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.method == "providers.refresh_models" {
 			var result struct {
-				Models    int    `json:"models"`
-				Available int    `json:"available"`
-				Complete  bool   `json:"complete"`
-				URL       string `json:"url"`
+				Models        int    `json:"models"`
+				Available     int    `json:"available"`
+				CatalogModels int    `json:"catalogModels"`
+				Evidence      string `json:"evidence"`
+				Complete      bool   `json:"complete"`
+				URL           string `json:"url"`
 			}
 			if json.Unmarshal(message.result, &result) == nil {
-				m.status = fmt.Sprintf("imported %d selected IDs · %d available in %s", result.Models, result.Available, result.URL)
-				if !result.Complete {
+				if result.Evidence == string(provider.ModelCatalogProviderRegistry) {
+					m.status = fmt.Sprintf("assigned %d selected models to this connection · %d catalog candidates · upstream access unverified", result.Models, result.CatalogModels)
+				} else {
+					m.status = fmt.Sprintf("imported %d selected IDs · %d endpoint-listed for this connection", result.Models, result.Available)
+				}
+				if !result.Complete && result.Evidence != string(provider.ModelCatalogProviderRegistry) {
 					m.status += " · incomplete catalog: absence remains unknown"
 				}
 			}
@@ -2800,7 +2827,9 @@ func (m *app) renderMainView() string {
 			completeness += " · review limit reached"
 		}
 		catalogSummary := fmt.Sprintf("%d returned · %d new · %d already imported · %d selected · %s", m.importPreview.ModelsFound, newCount, len(m.importExisting), selected, completeness)
-		if !m.importBaselineKnown {
+		if m.importPreview.Evidence == provider.ModelCatalogProviderRegistry {
+			catalogSummary = fmt.Sprintf("%d registry candidates · %d assigned to this connection · %d selected · registry does not prove upstream access", m.importPreview.ModelsFound, len(m.importPreview.AssignedModelIDs), selected)
+		} else if !m.importBaselineKnown {
 			catalogSummary = fmt.Sprintf("%d returned · %d selected · existing catalog not loaded · %s", m.importPreview.ModelsFound, selected, completeness)
 		}
 		return lipgloss.JoinVertical(lipgloss.Left,

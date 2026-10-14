@@ -80,12 +80,13 @@ CREATE TABLE IF NOT EXISTS model_catalog (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_model_catalog_node ON model_catalog(provider_node_id);
-CREATE TABLE IF NOT EXISTS custom_model_connections (
+CREATE TABLE IF NOT EXISTS model_connection_assignments (
   model_id TEXT NOT NULL REFERENCES model_catalog(id) ON DELETE CASCADE,
   connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  source TEXT NOT NULL CHECK(source IN ('user_assignment','static_model_catalog')),
   PRIMARY KEY(model_id,connection_id)
 );
-CREATE INDEX IF NOT EXISTS idx_custom_model_connections_connection ON custom_model_connections(connection_id,model_id);
+CREATE INDEX IF NOT EXISTS idx_model_connection_assignments_connection ON model_connection_assignments(connection_id,model_id);
 CREATE INDEX IF NOT EXISTS idx_custom_model_identity ON model_catalog(provider_node_id,external_id) WHERE kind='custom' AND external_id<>'';
 CREATE TABLE IF NOT EXISTS usage_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -214,6 +215,12 @@ CREATE TABLE IF NOT EXISTS combo_model_members (
 );
 CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(ref_kind, ref_id);
 `)
+	if err != nil {
+		return err
+	}
+	if err := s.migrateCustomModelAssignments(); err != nil {
+		return err
+	}
 	// Additive migration for databases created before prefix became a first-class field.
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN prefix TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''`)
@@ -247,6 +254,28 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE physical_models ADD COLUMN allow_dynamic_sources INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.DB.Exec(`UPDATE provider_nodes SET definition_id=CASE protocol WHEN 'openai_chat' THEN 'openai-compatible-chat' WHEN 'chat' THEN 'openai-compatible-chat' WHEN 'openai_responses' THEN 'openai-compatible-responses' WHEN 'responses' THEN 'openai-compatible-responses' WHEN 'anthropic' THEN 'anthropic-messages' ELSE definition_id END WHERE definition_id=''`)
 	return err
+}
+
+func (s *Store) migrateCustomModelAssignments() error {
+	var exists bool
+	if err := s.DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='custom_model_connections')`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO model_connection_assignments(model_id,connection_id,source) SELECT model_id,connection_id,'user_assignment' FROM custom_model_connections`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DROP TABLE custom_model_connections`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type ProviderNode struct {
@@ -617,6 +646,69 @@ func (s *Store) ConnectionModelEntitlements(providerNodeID string) ([]Connection
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+// SetStaticCatalogAssignments replaces the explicit user selection for one
+// connection. These assignments are routing intent, not observed entitlement.
+func (s *Store) SetStaticCatalogAssignments(connectionID, providerNodeID string, routeIDs []string) error {
+	if connectionID == "" || providerNodeID == "" {
+		return fmt.Errorf("connection ID and provider node ID are required")
+	}
+	var actualNodeID string
+	if err := s.DB.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&actualNodeID); err != nil {
+		return fmt.Errorf("load connection %q: %w", connectionID, err)
+	}
+	if actualNodeID != providerNodeID {
+		return fmt.Errorf("connection %q does not belong to provider node %q", connectionID, providerNodeID)
+	}
+	seen := make(map[string]struct{}, len(routeIDs))
+	for _, routeID := range routeIDs {
+		if routeID == "" {
+			return fmt.Errorf("static catalog route IDs must be non-empty")
+		}
+		if _, duplicate := seen[routeID]; duplicate {
+			return fmt.Errorf("static catalog route %q was assigned more than once", routeID)
+		}
+		seen[routeID] = struct{}{}
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM model_connection_assignments WHERE connection_id=? AND source=? AND model_id IN (SELECT id FROM model_catalog WHERE provider_node_id=? AND kind='discovered')`, connectionID, ModelAssignmentStaticCatalog, providerNodeID); err != nil {
+		return err
+	}
+	for _, routeID := range routeIDs {
+		var exists int
+		if err := tx.QueryRow(`SELECT count(*) FROM model_catalog WHERE id=? AND provider_node_id=? AND kind='discovered'`, routeID, providerNodeID).Scan(&exists); err != nil {
+			return fmt.Errorf("static catalog route %q: %w", routeID, err)
+		}
+		if exists != 1 {
+			return fmt.Errorf("static catalog route %q is not an imported discovered model for provider %q", routeID, providerNodeID)
+		}
+		if _, err := tx.Exec(`INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES(?,?,?)`, routeID, connectionID, ModelAssignmentStaticCatalog); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) StaticCatalogAssignedModels(connectionID, providerNodeID string) ([]string, error) {
+	rows, err := s.DB.Query(`SELECT model.external_id FROM model_connection_assignments assignment JOIN model_catalog model ON model.id=assignment.model_id WHERE assignment.connection_id=? AND assignment.source=? AND model.provider_node_id=? AND model.kind='discovered' ORDER BY model.external_id`, connectionID, ModelAssignmentStaticCatalog, providerNodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var models []string
+	for rows.Next() {
+		var modelID string
+		if err := rows.Scan(&modelID); err != nil {
+			return nil, err
+		}
+		models = append(models, modelID)
+	}
+	return models, rows.Err()
 }
 
 type ProxyPool struct {
@@ -1207,8 +1299,21 @@ type Model struct {
 	ID, NodeID, Kind, ExternalID, DisplayName string
 	Profile                                   kernel.CapabilityProfile
 	Limits                                    kernel.TokenLimits
-	ConnectionIDs                             []string `json:"connectionIds,omitempty"`
+	ConnectionIDs                             []string                    `json:"connectionIds,omitempty"`
+	ConnectionAssignments                     []ModelConnectionAssignment `json:"connectionAssignments,omitempty"`
 }
+
+type ModelConnectionAssignment struct {
+	ConnectionID string                `json:"connectionId"`
+	Source       ModelAssignmentSource `json:"source"`
+}
+
+type ModelAssignmentSource string
+
+const (
+	ModelAssignmentUser          ModelAssignmentSource = "user_assignment"
+	ModelAssignmentStaticCatalog ModelAssignmentSource = "static_model_catalog"
+)
 
 func (s *Store) Models() ([]Model, error) {
 	rows, err := s.DB.Query(`SELECT id,COALESCE(provider_node_id,''),kind,external_id,display_name,capabilities_json,limits_json FROM model_catalog WHERE enabled=1 ORDER BY display_name`)
@@ -1230,24 +1335,28 @@ func (s *Store) Models() ([]Model, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	connectionRows, err := s.DB.Query(`SELECT model_id,connection_id FROM custom_model_connections ORDER BY model_id,connection_id`)
+	connectionRows, err := s.DB.Query(`SELECT model_id,connection_id,source FROM model_connection_assignments ORDER BY model_id,connection_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer connectionRows.Close()
 	assignments := make(map[string][]string)
+	connectionAssignments := make(map[string][]ModelConnectionAssignment)
 	for connectionRows.Next() {
 		var modelID, connectionID string
-		if err := connectionRows.Scan(&modelID, &connectionID); err != nil {
+		var source ModelAssignmentSource
+		if err := connectionRows.Scan(&modelID, &connectionID, &source); err != nil {
 			return nil, err
 		}
 		assignments[modelID] = append(assignments[modelID], connectionID)
+		connectionAssignments[modelID] = append(connectionAssignments[modelID], ModelConnectionAssignment{ConnectionID: connectionID, Source: source})
 	}
 	if err := connectionRows.Err(); err != nil {
 		return nil, err
 	}
 	for index := range result {
 		result[index].ConnectionIDs = assignments[result[index].ID]
+		result[index].ConnectionAssignments = connectionAssignments[result[index].ID]
 	}
 	return result, nil
 }
@@ -1268,9 +1377,9 @@ func (s *Store) Routes() ([]RouteRecord, error) {
 	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
-LEFT JOIN connection_model_catalog e ON e.connection_id=c.id AND e.provider_node_id=m.provider_node_id AND e.external_model_id=m.external_id AND e.status='available'
-LEFT JOIN custom_model_connections assignment ON assignment.model_id=m.id AND assignment.connection_id=c.id
-WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL) OR (m.kind<>'custom' AND e.connection_id IS NOT NULL)) ORDER BY m.id,c.priority,c.id`)
+LEFT JOIN connection_model_catalog e ON e.connection_id=c.id AND e.provider_node_id=m.provider_node_id AND e.external_model_id=m.external_id
+LEFT JOIN model_connection_assignments assignment ON assignment.model_id=m.id AND assignment.connection_id=c.id
+WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL) OR (m.kind<>'custom' AND (e.status='available' OR (assignment.connection_id IS NOT NULL AND e.connection_id IS NULL)))) ORDER BY m.id,c.priority,c.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1376,12 +1485,14 @@ display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,
 raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, input.ProviderNodeID, input.Kind, input.ExternalID, input.DisplayName, string(caps), string(limits), string(overrides), string(raw)); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`DELETE FROM custom_model_connections WHERE model_id=?`, input.ID); err != nil {
-		return err
-	}
-	for _, connectionID := range input.ConnectionIDs {
-		if _, err = tx.Exec(`INSERT INTO custom_model_connections(model_id,connection_id) VALUES(?,?)`, input.ID, connectionID); err != nil {
+	if input.Kind == "custom" {
+		if _, err = tx.Exec(`DELETE FROM model_connection_assignments WHERE model_id=?`, input.ID); err != nil {
 			return err
+		}
+		for _, connectionID := range input.ConnectionIDs {
+			if _, err = tx.Exec(`INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES(?,?,?)`, input.ID, connectionID, ModelAssignmentUser); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

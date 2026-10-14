@@ -288,3 +288,82 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 		t.Fatalf("rejected assignment update changed active routing state: routes=%#v err=%v", routes, err)
 	}
 }
+
+func TestStaticCatalogAssignmentRoutesWithoutCreatingEntitlementEvidence(t *testing.T) {
+	s, err := Open(t.TempDir() + "/static-assignments.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('static','Static','https://static.test','openai_chat','ocg');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('account-a','static','A','api_key','a'),('account-b','static','B','api_key','b');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertCatalogModel(UpsertCatalogModelInput{ID: "static-route", ProviderNodeID: "static", Kind: "discovered", ExternalID: "qwen3.8-max", DisplayName: "Qwen 3.8 Max", Raw: map[string]any{"source": string(ModelAssignmentStaticCatalog)}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetStaticCatalogAssignments("account-a", "static", []string{"static-route"}); err != nil {
+		t.Fatal(err)
+	}
+	if entitlements, err := s.ConnectionModelEntitlements("static"); err != nil || len(entitlements) != 0 {
+		t.Fatalf("static source created observed entitlement evidence: %#v err=%v", entitlements, err)
+	}
+	routes, err := s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != "account-a" {
+		t.Fatalf("static route did not expand only to its assigned account: %#v err=%v", routes, err)
+	}
+	models, err := s.Models()
+	if err != nil || len(models) != 1 || !reflect.DeepEqual(models[0].ConnectionIDs, []string{"account-a"}) || !reflect.DeepEqual(models[0].ConnectionAssignments, []ModelConnectionAssignment{{ConnectionID: "account-a", Source: ModelAssignmentStaticCatalog}}) {
+		t.Fatalf("static assignment did not survive catalog projection: %#v err=%v", models, err)
+	}
+	available, err := s.DiscoveredRoutes("static")
+	if err != nil || len(available) != 1 {
+		t.Fatalf("static route projection=%#v err=%v", available, err)
+	}
+	statuses := map[string]string{}
+	for _, evidence := range available[0].ConnectionAvailability {
+		statuses[evidence.ConnectionID] = evidence.Status
+	}
+	if statuses["account-a"] != "assigned" || statuses["account-b"] != EntitlementUnknown {
+		t.Fatalf("assignment was conflated with entitlement or leaked to another account: %#v", statuses)
+	}
+	if err := s.SetStaticCatalogAssignments("account-a", "static", nil); err != nil {
+		t.Fatal(err)
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("removed static assignment remained routable: %#v err=%v", routes, err)
+	}
+}
+
+func TestCustomRouteAssignmentsMigrateToTypedModelAssignments(t *testing.T) {
+	path := t.TempDir() + "/assignment-migration.db"
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('provider','Provider','https://provider.test','openai_chat','p');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('connection','provider','Account','api_key','key');
+INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route','provider','custom','model-x','Model X');
+CREATE TABLE custom_model_connections(model_id TEXT NOT NULL,connection_id TEXT NOT NULL,PRIMARY KEY(model_id,connection_id));
+INSERT INTO custom_model_connections(model_id,connection_id) VALUES('route','connection');`); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	models, err := s.Models()
+	if err != nil || len(models) != 1 || !reflect.DeepEqual(models[0].ConnectionIDs, []string{"connection"}) || !reflect.DeepEqual(models[0].ConnectionAssignments, []ModelConnectionAssignment{{ConnectionID: "connection", Source: ModelAssignmentUser}}) {
+		t.Fatalf("migrated route assignment=%#v err=%v", models, err)
+	}
+	var oldTableCount int
+	if err := s.DB.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='custom_model_connections'`).Scan(&oldTableCount); err != nil || oldTableCount != 0 {
+		t.Fatalf("legacy custom assignment table remains: count=%d err=%v", oldTableCount, err)
+	}
+}

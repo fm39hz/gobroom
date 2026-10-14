@@ -26,13 +26,15 @@ type Service struct {
 	Operations *operations.Snapshot
 }
 type Result struct {
-	NodeID       string   `json:"nodeId"`
-	ConnectionID string   `json:"connectionId"`
-	Models       int      `json:"models"`
-	ModelIDs     []string `json:"modelIds,omitempty"`
-	Available    int      `json:"available"`
-	Complete     bool     `json:"complete"`
-	URL          string   `json:"url"`
+	NodeID        string                        `json:"nodeId"`
+	ConnectionID  string                        `json:"connectionId"`
+	Models        int                           `json:"models"`
+	ModelIDs      []string                      `json:"modelIds,omitempty"`
+	Available     int                           `json:"available"`
+	CatalogModels int                           `json:"catalogModels"`
+	Evidence      provider.ModelCatalogEvidence `json:"evidence"`
+	Complete      bool                          `json:"complete"`
+	URL           string                        `json:"url"`
 }
 
 type ConnectionTestResult struct {
@@ -47,14 +49,29 @@ type ConnectionTestResult struct {
 }
 
 type ConnectionModelsPreview struct {
-	ProviderNodeID string         `json:"providerNodeId"`
-	ConnectionID   string         `json:"connectionId"`
-	Endpoint       string         `json:"endpoint"`
-	ModelsFound    int            `json:"modelsFound"`
-	Models         []ModelPreview `json:"models"`
-	PreviewLimit   int            `json:"previewLimit"`
-	Truncated      bool           `json:"truncated"`
-	Complete       bool           `json:"complete"`
+	ProviderNodeID   string                        `json:"providerNodeId"`
+	ConnectionID     string                        `json:"connectionId"`
+	Endpoint         string                        `json:"endpoint"`
+	Evidence         provider.ModelCatalogEvidence `json:"evidence"`
+	AssignedModelIDs []string                      `json:"assignedModelIds,omitempty"`
+	ModelsFound      int                           `json:"modelsFound"`
+	Models           []ModelPreview                `json:"models"`
+	PreviewLimit     int                           `json:"previewLimit"`
+	Truncated        bool                          `json:"truncated"`
+	Complete         bool                          `json:"complete"`
+}
+
+type fetchedModelCatalog struct {
+	Node     store.ProviderNode
+	Endpoint string
+	Snapshot provider.ModelCatalogSnapshot
+}
+
+func (f fetchedModelCatalog) EndpointLabel() string {
+	if f.Snapshot.Evidence == provider.ModelCatalogProviderRegistry {
+		return "static model catalog"
+	}
+	return endpointSummary(f.Endpoint)
 }
 
 type InferenceTestResult struct {
@@ -87,6 +104,11 @@ type ModelPreview struct {
 	Profile     kernel.CapabilityProfile `json:"profile,omitempty"`
 }
 
+type ModelImportOptions struct {
+	ModelIDs         []string
+	EntitlementsOnly bool
+}
+
 const connectionTestPreviewLimit = 100
 const connectionModelReviewLimit = 5000
 
@@ -94,17 +116,18 @@ const connectionModelReviewLimit = 5000
 // exactly the selected enabled connection. It never writes discovered models;
 // the caller can inspect the result before importing the catalog.
 func (s Service) TestConnection(ctx context.Context, nodeID, connectionID string) (ConnectionTestResult, error) {
-	_, endpoint, catalog, err := s.fetchModels(ctx, nodeID, connectionID, true)
+	fetched, err := s.fetchModels(ctx, nodeID, connectionID, true)
 	if err != nil {
 		return ConnectionTestResult{}, err
 	}
+	catalog := fetched.Snapshot
 	models := catalog.Models
 	previewLimit := min(len(models), connectionTestPreviewLimit)
 	preview := make([]ModelPreview, 0, previewLimit)
 	for _, model := range models[:previewLimit] {
 		preview = append(preview, ModelPreview{ID: model.ID, DisplayName: model.DisplayName, Profile: model.Profile})
 	}
-	return ConnectionTestResult{ProviderNodeID: nodeID, ConnectionID: connectionID, Endpoint: endpointSummary(endpoint), ModelsFound: len(models), Preview: preview, PreviewLimit: connectionTestPreviewLimit, Truncated: len(models) > previewLimit, Complete: catalog.Complete}, nil
+	return ConnectionTestResult{ProviderNodeID: nodeID, ConnectionID: connectionID, Endpoint: fetched.EndpointLabel(), ModelsFound: len(models), Preview: preview, PreviewLimit: connectionTestPreviewLimit, Truncated: len(models) > previewLimit, Complete: catalog.Complete}, nil
 }
 
 const inferenceProbeResponseLimit = 64 << 10
@@ -350,35 +373,43 @@ func inferenceProbePayload(operation provider.Operation, modelID string) (normal
 // PreviewConnectionModels fetches the model list for review without writing
 // catalog or entitlement state. Import remains a separate explicit operation.
 func (s Service) PreviewConnectionModels(ctx context.Context, nodeID, connectionID string) (ConnectionModelsPreview, error) {
-	_, endpoint, catalog, err := s.fetchModels(ctx, nodeID, connectionID, false)
+	fetched, err := s.fetchModels(ctx, nodeID, connectionID, false)
 	if err != nil {
 		return ConnectionModelsPreview{}, err
 	}
+	catalog := fetched.Snapshot
 	limit := min(len(catalog.Models), connectionModelReviewLimit)
 	models := make([]ModelPreview, 0, limit)
 	for _, model := range catalog.Models[:limit] {
 		models = append(models, ModelPreview{ID: model.ID, DisplayName: model.DisplayName, Profile: model.Profile})
 	}
-	return ConnectionModelsPreview{ProviderNodeID: nodeID, ConnectionID: connectionID, Endpoint: endpointSummary(endpoint), ModelsFound: len(catalog.Models), Models: models, PreviewLimit: connectionModelReviewLimit, Truncated: len(catalog.Models) > limit, Complete: catalog.Complete}, nil
+	var assignedModelIDs []string
+	if catalog.Evidence == provider.ModelCatalogProviderRegistry {
+		assignedModelIDs, err = s.Store.StaticCatalogAssignedModels(connectionID, nodeID)
+		if err != nil {
+			return ConnectionModelsPreview{}, err
+		}
+	}
+	return ConnectionModelsPreview{ProviderNodeID: nodeID, ConnectionID: connectionID, Endpoint: fetched.EndpointLabel(), Evidence: catalog.Evidence, AssignedModelIDs: assignedModelIDs, ModelsFound: len(catalog.Models), Models: models, PreviewLimit: connectionModelReviewLimit, Truncated: len(catalog.Models) > limit, Complete: catalog.Complete}, nil
 }
 
-func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, test bool) (store.ProviderNode, string, provider.ModelCatalogSnapshot, error) {
+func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, test bool) (fetchedModelCatalog, error) {
 	node, err := s.Store.ProviderNode(nodeID)
 	if err != nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, err
+		return fetchedModelCatalog{}, err
 	}
 	if node.ID == "" {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("provider node %q not found", nodeID)
+		return fetchedModelCatalog{}, fmt.Errorf("provider node %q not found", nodeID)
 	}
 	if node.BaseURL == "" {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("provider node %q has no base URL", nodeID)
+		return fetchedModelCatalog{}, fmt.Errorf("provider node %q has no base URL", nodeID)
 	}
 	if connectionID == "" {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("connection ID is required")
+		return fetchedModelCatalog{}, fmt.Errorf("connection ID is required")
 	}
 	connections, err := s.Store.Connections(nodeID)
 	if err != nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, err
+		return fetchedModelCatalog{}, err
 	}
 	var selected store.ConnectionRecord
 	for _, connection := range connections {
@@ -388,39 +419,39 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 		}
 	}
 	if selected.ID == "" {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, nodeID)
+		return fetchedModelCatalog{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, nodeID)
 	}
 	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, provider.OperationModels)]
 	if !ok || binding.ModelSource == nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("provider definition %q does not provide model discovery", node.DefinitionID)
+		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q does not provide model discovery", node.DefinitionID)
 	}
 	if static, isStatic := binding.ModelSource.(provider.StaticModelCatalogSource); isStatic && static.StaticCatalog() {
 		if test {
-			return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("model source %q is a static catalog and cannot test connection health", binding.ModelSource.ID())
+			return fetchedModelCatalog{}, fmt.Errorf("model source %q is a static catalog and cannot test connection health", binding.ModelSource.ID())
 		}
 		catalog, err := static.ListSnapshot(ctx, provider.ModelSourceInput{})
 		if err != nil {
-			return store.ProviderNode{}, "static catalog", provider.ModelCatalogSnapshot{}, err
+			return fetchedModelCatalog{}, err
 		}
-		return node, "static catalog", catalog, nil
+		return fetchedModelCatalog{Node: node, Snapshot: catalog}, nil
 	}
 	if binding.Endpoint == nil || binding.Transport == nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("model source %q requires endpoint and transport primitives", binding.ModelSource.ID())
+		return fetchedModelCatalog{}, fmt.Errorf("model source %q requires endpoint and transport primitives", binding.ModelSource.ID())
 	}
 	endpoint, err := binding.Endpoint.Resolve(node.BaseURL, node.ModelsPath, binding.EndpointOptions)
 	if err != nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("resolve model-list endpoint: %w", err)
+		return fetchedModelCatalog{}, fmt.Errorf("resolve model-list endpoint: %w", err)
 	}
 	credential, found := s.Store.ConnectionCredentialByID(connectionID)
 	if !found {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
+		return fetchedModelCatalog{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
 	}
 	if binding.Auth == nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("provider definition %q has no auth flow for model discovery", node.DefinitionID)
+		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q has no auth flow for model discovery", node.DefinitionID)
 	}
 	resolvedCredential, err := binding.Auth.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
 	if err != nil {
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("resolve discovery credential: %w", err)
+		return fetchedModelCatalog{}, fmt.Errorf("resolve discovery credential: %w", err)
 	}
 	input := provider.ModelSourceInput{URL: endpoint, Credential: resolvedCredential, Client: s.Client}
 	var catalog provider.ModelCatalogSnapshot
@@ -430,7 +461,7 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 		} else if tester, ok := binding.ModelSource.(provider.ConnectionTestModelSource); ok {
 			catalog.Models, err = tester.Test(ctx, input)
 		} else {
-			return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("model source %q does not provide an active endpoint test", binding.ModelSource.ID())
+			return fetchedModelCatalog{}, fmt.Errorf("model source %q does not provide an active endpoint test", binding.ModelSource.ID())
 		}
 	} else if source, ok := binding.ModelSource.(provider.ModelCatalogSnapshotSource); ok {
 		catalog, err = source.ListSnapshot(ctx, input)
@@ -439,17 +470,17 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	}
 	if err != nil {
 		if test {
-			return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, fmt.Errorf("test model-list endpoint for connection %q: %w", connectionID, err)
+			return fetchedModelCatalog{}, fmt.Errorf("test model-list endpoint for connection %q: %w", connectionID, err)
 		}
-		return store.ProviderNode{}, "", provider.ModelCatalogSnapshot{}, err
+		return fetchedModelCatalog{}, err
 	}
-	return node, endpoint, catalog, nil
+	if catalog.Evidence == "" {
+		catalog.Evidence = provider.ModelCatalogConnectionObserved
+	}
+	return fetchedModelCatalog{Node: node, Endpoint: endpoint, Snapshot: catalog}, nil
 }
 
 func endpointSummary(raw string) string {
-	if raw == "static catalog" {
-		return "static model catalog"
-	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return "configured model-list endpoint"
@@ -465,6 +496,15 @@ func (s Service) RefreshNode(ctx context.Context, nodeID string) (Result, error)
 	if !found {
 		return Result{}, fmt.Errorf("provider node %q has no enabled connection", nodeID)
 	}
+	node, err := s.Store.ProviderNode(nodeID)
+	if err != nil {
+		return Result{}, err
+	}
+	if binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, provider.OperationModels)]; ok {
+		if source, static := binding.ModelSource.(provider.StaticModelCatalogSource); static && source.StaticCatalog() {
+			return Result{}, fmt.Errorf("static model catalogs require an explicitly selected connection")
+		}
+	}
 	return s.RefreshConnection(ctx, nodeID, stored.ID)
 }
 
@@ -472,25 +512,40 @@ func (s Service) RefreshNode(ctx context.Context, nodeID string) (Result, error)
 // connection. It is intentionally separate from TestConnection's read-only
 // preview, so callers choose when catalog state is mutated.
 func (s Service) RefreshConnection(ctx context.Context, nodeID, connectionID string) (Result, error) {
-	return s.ImportConnectionModels(ctx, nodeID, connectionID, nil)
+	return s.ImportConnectionModels(ctx, nodeID, connectionID, ModelImportOptions{})
 }
 
 // ImportConnectionModels imports all returned model IDs when selectedIDs is
 // nil, or the requested exact IDs otherwise. Entitlement evidence records the
-// complete upstream response even when the user imports only a subset.
-func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionID string, selectedIDs []string) (Result, error) {
-	node, endpoint, catalog, err := s.fetchModels(ctx, nodeID, connectionID, false)
+// complete connection-observed response even when the user imports a subset.
+// Provider-registry catalogs instead synchronize explicit assignments and do
+// not manufacture entitlement evidence.
+func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionID string, options ModelImportOptions) (Result, error) {
+	fetched, err := s.fetchModels(ctx, nodeID, connectionID, false)
 	if err != nil {
 		return Result{}, err
 	}
+	catalog := fetched.Snapshot
+	if options.EntitlementsOnly && options.ModelIDs != nil {
+		return Result{}, fmt.Errorf("entitlements-only import cannot be combined with selected model IDs")
+	}
+	if options.EntitlementsOnly && catalog.Evidence == provider.ModelCatalogProviderRegistry {
+		return Result{}, fmt.Errorf("static provider registries have no connection entitlement evidence to record")
+	}
 	evidenceSource := "models_endpoint"
-	if endpoint == "static catalog" {
+	if catalog.Evidence == provider.ModelCatalogProviderRegistry {
 		evidenceSource = "static_model_catalog"
+	}
+	selectedIDs := options.ModelIDs
+	if options.EntitlementsOnly {
+		selectedIDs = []string{}
 	}
 	modelsToImport, err := selectModels(catalog.Models, selectedIDs)
 	if err != nil {
 		return Result{}, err
 	}
+	var selectedRouteIDs []string
+	var selectedModelIDs []string
 	for _, model := range modelsToImport {
 		id := model.ID
 		routeID := "route_" + hash(nodeID+"\x00"+id)
@@ -502,18 +557,30 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 		if err := s.Store.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: nodeID, Kind: "discovered", ExternalID: id, DisplayName: model.DisplayName, Profile: model.Profile, Raw: raw}); err != nil {
 			return Result{}, err
 		}
+		selectedRouteIDs = append(selectedRouteIDs, routeID)
+		selectedModelIDs = append(selectedModelIDs, id)
 	}
 	externalIDs := make([]string, 0, len(catalog.Models))
 	for _, model := range catalog.Models {
 		externalIDs = append(externalIDs, model.ID)
 	}
-	if err := s.Store.RecordConnectionModelSnapshot(connectionID, node.ID, externalIDs, catalog.Complete, evidenceSource); err != nil {
-		return Result{}, err
+	available := len(catalog.Models)
+	modelIDs := externalIDs
+	if catalog.Evidence == provider.ModelCatalogProviderRegistry {
+		if err := s.Store.SetStaticCatalogAssignments(connectionID, fetched.Node.ID, selectedRouteIDs); err != nil {
+			return Result{}, err
+		}
+		available = 0
+		modelIDs = selectedModelIDs
+	} else {
+		if err := s.Store.RecordConnectionModelSnapshot(connectionID, fetched.Node.ID, externalIDs, catalog.Complete, evidenceSource); err != nil {
+			return Result{}, err
+		}
+		if err := s.Store.ClearInvalidModelHealth(connectionID, externalIDs); err != nil {
+			return Result{}, err
+		}
 	}
-	if err := s.Store.ClearInvalidModelHealth(connectionID, externalIDs); err != nil {
-		return Result{}, err
-	}
-	return Result{NodeID: nodeID, ConnectionID: connectionID, Models: len(modelsToImport), ModelIDs: externalIDs, Available: len(catalog.Models), Complete: catalog.Complete, URL: endpointSummary(endpoint)}, nil
+	return Result{NodeID: nodeID, ConnectionID: connectionID, Models: len(modelsToImport), ModelIDs: modelIDs, Available: available, CatalogModels: len(catalog.Models), Evidence: catalog.Evidence, Complete: catalog.Complete, URL: fetched.EndpointLabel()}, nil
 }
 
 func selectModels(models []provider.ModelDescriptor, selectedIDs []string) ([]provider.ModelDescriptor, error) {

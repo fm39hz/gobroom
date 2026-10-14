@@ -1090,9 +1090,10 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			return daemon.IPCResponse{ID: request.ID, OK: true, Result: value}
 		}
 		var input struct {
-			NodeID       string   `json:"nodeID"`
-			ConnectionID string   `json:"connectionID"`
-			ModelIDs     []string `json:"modelIDs"`
+			NodeID           string   `json:"nodeID"`
+			ConnectionID     string   `json:"connectionID"`
+			ModelIDs         []string `json:"modelIDs"`
+			EntitlementsOnly bool     `json:"entitlementsOnly"`
 		}
 		encoded, marshalErr := json.Marshal(request.Params)
 		if marshalErr != nil {
@@ -1156,7 +1157,7 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			}
 			return success(result)
 		case "providers.refresh_models":
-			result, err := discoveryService.ImportConnectionModels(ctx, input.NodeID, input.ConnectionID, input.ModelIDs)
+			result, err := discoveryService.ImportConnectionModels(ctx, input.NodeID, input.ConnectionID, discovery.ModelImportOptions{ModelIDs: input.ModelIDs, EntitlementsOnly: input.EntitlementsOnly})
 			if err != nil {
 				return fail(err)
 			}
@@ -1506,6 +1507,64 @@ func TestSelectedConnectionModelImportReviewsAndSubmitsOnlyCheckedIDs(t *testing
 	modelIDs, ok := entitlementApply.Params["modelIDs"].([]any)
 	if !ok || len(modelIDs) != 0 {
 		t.Fatalf("empty selection should be explicit entitlements-only apply: %#v", entitlementApply.Params["modelIDs"])
+	}
+}
+
+func TestStaticCatalogImportPreselectsOnlyExistingConnectionAssignments(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.width, model.height = 120, 40
+	model.activePanel = int(dashboardConnections)
+	model.activeTabs[dashboardConnections] = 1
+	model.setPaneItems(model.activeContextIndex(), []entry{{key: "conn-a", title: "account A", payload: connection{ID: "conn-a", ProviderNodeID: "node-a", Name: "account A", Enabled: true}}})
+	requests := make(chan daemon.IPCRequest, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socket := t.TempDir() + "/static-catalog.sock"
+	server := daemon.NewIPCServer(socket, func(_ context.Context, request daemon.IPCRequest) daemon.IPCResponse {
+		requests <- request
+		if request.Method == "connections.preview_models" {
+			return daemon.IPCResponse{ID: request.ID, OK: true, Result: map[string]any{
+				"providerNodeId": "node-a", "connectionId": "conn-a", "endpoint": "static model catalog",
+				"evidence": string(provider.ModelCatalogProviderRegistry), "assignedModelIds": []string{"model-a"},
+				"modelsFound": 2, "previewLimit": 5000, "complete": true,
+				"models": []map[string]any{{"id": "model-a", "displayName": "A"}, {"id": "model-b", "displayName": "B"}},
+			}}
+		}
+		return daemon.IPCResponse{ID: request.ID, OK: true, Result: map[string]any{"models": 2, "available": 0, "catalogModels": 2, "evidence": string(provider.ModelCatalogProviderRegistry), "complete": true}}
+	})
+	if err := server.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	model.ipcPath = socket
+	updated, previewCommand := model.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	model = updated.(*app)
+	if previewCommand == nil {
+		t.Fatal("i did not request the static catalog preview")
+	}
+	updated, _ = model.Update(previewCommand())
+	model = updated.(*app)
+	if model.mode != modeModelImport || !model.importSelected["model-a"] || model.importSelected["model-b"] {
+		t.Fatalf("static catalog selection was not scoped to prior assignments: selected=%#v preview=%#v", model.importSelected, model.importPreview)
+	}
+	model.importPicker.Select(1)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeySpace})
+	model = updated.(*app)
+	_, importCommand := model.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if importCommand == nil {
+		t.Fatal("Enter did not apply static catalog assignments")
+	}
+	importResult := importCommand()
+	previewRequest := <-requests
+	importRequest := <-requests
+	selectedIDs, ok := importRequest.Params["modelIDs"].([]any)
+	if previewRequest.Method != "connections.preview_models" || importRequest.Method != "providers.refresh_models" || !ok || len(selectedIDs) != 2 {
+		t.Fatalf("static assignment request sequence=%#v then %#v", previewRequest, importRequest)
+	}
+	updated, _ = model.Update(importResult)
+	model = updated.(*app)
+	if !strings.Contains(model.status, "upstream access unverified") {
+		t.Fatalf("static catalog assignment was presented as observed availability: %q", model.status)
 	}
 }
 

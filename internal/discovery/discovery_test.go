@@ -191,7 +191,7 @@ func TestSelectiveImportStoresOnlyChosenRoutesAndConnectionEntitlements(t *testi
 	if err := s.SaveModelAvailability(store.ModelAvailability{ConnectionID: selected.ID, ModelRef: "model-b", Status: "invalid", Reason: "model_not_found", ErrorCode: string(kernel.ScopeRoute)}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, []string{"model-b"})
+	result, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, ModelImportOptions{ModelIDs: []string{"model-b"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestSelectiveImportStoresOnlyChosenRoutesAndConnectionEntitlements(t *testi
 	if states[selected.ID] != store.EntitlementAvailable || states[unverified.ID] != store.EntitlementUnknown {
 		t.Fatalf("connection entitlement evidence=%#v", states)
 	}
-	entitlementsOnly, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, []string{})
+	entitlementsOnly, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, ModelImportOptions{EntitlementsOnly: true})
 	if err != nil || entitlementsOnly.Models != 0 || entitlementsOnly.Available != 3 {
 		t.Fatalf("entitlements-only apply=%#v err=%v", entitlementsOnly, err)
 	}
@@ -229,7 +229,7 @@ func TestSelectiveImportStoresOnlyChosenRoutesAndConnectionEntitlements(t *testi
 	if err != nil || len(models) != 1 || models[0].ExternalID != "model-b" {
 		t.Fatalf("entitlements-only apply imported route IDs: models=%#v err=%v", models, err)
 	}
-	if _, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, []string{"not-returned"}); err == nil {
+	if _, err := service.ImportConnectionModels(context.Background(), node.ID, selected.ID, ModelImportOptions{ModelIDs: []string{"not-returned"}}); err == nil {
 		t.Fatal("selected upstream ID missing from the fetched catalog must be rejected")
 	}
 }
@@ -325,21 +325,61 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	otherConnection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "other account", CredentialType: "api_key", Secret: "other-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	service := Service{Store: s, Bindings: bindings}
 	if _, err := service.TestConnection(context.Background(), node.ID, connection.ID); err == nil || !strings.Contains(err.Error(), "static catalog") {
 		t.Fatalf("static catalog produced a false-positive endpoint test: %v", err)
+	}
+	if _, err := service.ImportConnectionModels(context.Background(), node.ID, connection.ID, ModelImportOptions{EntitlementsOnly: true}); err == nil || !strings.Contains(err.Error(), "no connection entitlement evidence") {
+		t.Fatalf("static catalog accepted an entitlements-only import: %v", err)
 	}
 	preview, err := service.PreviewConnectionModels(context.Background(), node.ID, connection.ID)
 	if err != nil || preview.Endpoint != "static model catalog" || preview.ModelsFound != 2 || !preview.Complete || preview.Models[0].ID != "model-a" {
 		t.Fatalf("static model preview=%#v err=%v", preview, err)
 	}
-	result, err := service.ImportConnectionModels(context.Background(), node.ID, connection.ID, []string{"model-a"})
-	if err != nil || result.Models != 1 || result.Available != 2 {
+	result, err := service.ImportConnectionModels(context.Background(), node.ID, connection.ID, ModelImportOptions{ModelIDs: []string{"model-a"}})
+	if err != nil || result.Models != 1 || result.Available != 0 || result.CatalogModels != 2 || result.Evidence != provider.ModelCatalogProviderRegistry || !reflect.DeepEqual(result.ModelIDs, []string{"model-a"}) {
 		t.Fatalf("selected static model import=%#v err=%v", result, err)
 	}
 	models, err := s.Models()
-	if err != nil || len(models) != 1 || models[0].ExternalID != "model-a" {
+	if err != nil || len(models) != 1 || models[0].ExternalID != "model-a" || !reflect.DeepEqual(models[0].ConnectionIDs, []string{connection.ID}) || !reflect.DeepEqual(models[0].ConnectionAssignments, []store.ModelConnectionAssignment{{ConnectionID: connection.ID, Source: store.ModelAssignmentStaticCatalog}}) {
 		t.Fatalf("static catalog import evidence=%#v err=%v", models, err)
+	}
+	entitlements, err := s.ConnectionModelEntitlements(node.ID)
+	if err != nil || len(entitlements) != 0 {
+		t.Fatalf("static provider catalog was mislabeled as observed entitlement: %#v err=%v", entitlements, err)
+	}
+	routes, err := s.Routes()
+	if err != nil || len(routes) != 1 || routes[0].CredentialID != connection.ID {
+		t.Fatalf("static route did not expand only for its explicitly assigned connection: %#v err=%v", routes, err)
+	}
+	assignedRoutes, err := s.DiscoveredRoutes(node.ID)
+	assignedHere := false
+	if len(assignedRoutes) == 1 {
+		for _, evidence := range assignedRoutes[0].ConnectionAvailability {
+			if evidence.ConnectionID == connection.ID && evidence.Status == "assigned" && evidence.Source == string(store.ModelAssignmentStaticCatalog) {
+				assignedHere = true
+			}
+		}
+	}
+	if err != nil || len(assignedRoutes) != 1 || !assignedHere {
+		t.Fatalf("static provider assignment evidence=%#v err=%v", assignedRoutes, err)
+	}
+	if _, err := service.ImportConnectionModels(context.Background(), node.ID, connection.ID, ModelImportOptions{ModelIDs: []string{}}); err != nil {
+		t.Fatalf("clear static model assignments: %v", err)
+	}
+	routes, err = s.Routes()
+	if err != nil || len(routes) != 0 {
+		t.Fatalf("cleared static assignment remained routable: %#v err=%v", routes, err)
+	}
+	if assigned, err := s.StaticCatalogAssignedModels(connection.ID, node.ID); err != nil || len(assigned) != 0 {
+		t.Fatalf("cleared static assignments=%v err=%v", assigned, err)
+	}
+	if available, err := s.StaticCatalogAssignedModels(otherConnection.ID, node.ID); err != nil || len(available) != 0 {
+		t.Fatalf("static assignment leaked to another connection=%v err=%v", available, err)
 	}
 }
 

@@ -60,7 +60,15 @@ type StaticModelCatalogSource interface {
 type ModelCatalogSnapshot struct {
 	Models   []ModelDescriptor
 	Complete bool
+	Evidence ModelCatalogEvidence
 }
+
+type ModelCatalogEvidence string
+
+const (
+	ModelCatalogConnectionObserved ModelCatalogEvidence = "connection_observed"
+	ModelCatalogProviderRegistry   ModelCatalogEvidence = "provider_registry"
+)
 
 type ModelSourceInput struct {
 	URL        string
@@ -833,7 +841,7 @@ func (s StaticModelSource) List(_ context.Context, _ ModelSourceInput) ([]ModelD
 }
 func (s StaticModelSource) ListSnapshot(_ context.Context, _ ModelSourceInput) (ModelCatalogSnapshot, error) {
 	models, err := cloneModelDescriptors(s.Models)
-	return ModelCatalogSnapshot{Models: models, Complete: err == nil}, err
+	return ModelCatalogSnapshot{Models: models, Complete: err == nil, Evidence: ModelCatalogProviderRegistry}, err
 }
 
 func cloneModelDescriptors(models []ModelDescriptor) ([]ModelDescriptor, error) {
@@ -933,7 +941,7 @@ func (AnthropicModelSource) ListSnapshot(ctx context.Context, input ModelSourceI
 			return ModelCatalogSnapshot{}, err
 		}
 		if !pageInfo.HasMore {
-			return ModelCatalogSnapshot{Models: models, Complete: true}, nil
+			return ModelCatalogSnapshot{Models: models, Complete: true, Evidence: ModelCatalogConnectionObserved}, nil
 		}
 		if pageInfo.LastID == "" || seenCursors[pageInfo.LastID] {
 			return ModelCatalogSnapshot{}, fmt.Errorf("anthropic model catalog has_more without a progressing last_id")
@@ -941,7 +949,7 @@ func (AnthropicModelSource) ListSnapshot(ctx context.Context, input ModelSourceI
 		seenCursors[pageInfo.LastID] = true
 		cursor = pageInfo.LastID
 	}
-	return ModelCatalogSnapshot{Models: models, Complete: false}, nil
+	return ModelCatalogSnapshot{Models: models, Complete: false, Evidence: ModelCatalogConnectionObserved}, nil
 }
 
 func (OpenAIModelSource) ID() string { return "openai-models" }
@@ -1060,7 +1068,7 @@ func DecodeModelCatalogSnapshot(data []byte) (ModelCatalogSnapshot, error) {
 		}
 		result = append(result, ModelDescriptor{ID: id, DisplayName: displayName, Metadata: metadata})
 	}
-	return ModelCatalogSnapshot{Models: result, Complete: complete}, nil
+	return ModelCatalogSnapshot{Models: result, Complete: complete, Evidence: ModelCatalogConnectionObserved}, nil
 }
 
 type NoopQuotaSource struct{}

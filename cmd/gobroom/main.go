@@ -235,7 +235,7 @@ func resourceCommands() []*cobra.Command {
 			return fmt.Errorf("--entitlements-only cannot be combined with --model-id")
 		}
 		if entitlementsOnly {
-			params["modelIDs"] = []string{}
+			params["entitlementsOnly"] = true
 		} else if selectedModelIDs != nil {
 			params["modelIDs"] = selectedModelIDs
 		}

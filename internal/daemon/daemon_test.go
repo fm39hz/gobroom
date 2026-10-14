@@ -357,7 +357,7 @@ func TestConfigApplyPersistsPortableProviderDefinitionAndRequiresRestart(t *test
 		t.Fatal(err)
 	}
 	bundle := controlplane.ConfigBundle{
-		Version: 6, Dependencies: dependencies,
+		Version: 7, Dependencies: dependencies,
 		Providers:           []store.ProviderNode{{ID: "portable-node", Name: "Portable", Prefix: "portable", BaseURL: "https://provider.test/v1", Protocol: string(kernel.ProtocolOpenAIChat), DefinitionID: definition.ID, ModelsPath: "/models", AuthMode: "api_key", Enabled: true}},
 		ProviderDefinitions: []provider.ProviderDefinition{definition},
 	}

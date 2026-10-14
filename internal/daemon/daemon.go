@@ -964,9 +964,10 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		return success(request, map[string]string{"deleted": id})
 	case "providers.refresh_models":
 		var input struct {
-			NodeID       string   `json:"nodeID"`
-			ConnectionID string   `json:"connectionID"`
-			ModelIDs     []string `json:"modelIDs"`
+			NodeID           string   `json:"nodeID"`
+			ConnectionID     string   `json:"connectionID"`
+			ModelIDs         []string `json:"modelIDs"`
+			EntitlementsOnly bool     `json:"entitlementsOnly"`
 		}
 		if err := decodeParams(request.Params, &input); err != nil {
 			return fail(request, err.Error())
@@ -978,29 +979,31 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		var result discovery.Result
 		var err error
 		if input.ConnectionID == "" {
-			if input.ModelIDs != nil {
-				return fail(request, "selective model import requires a connection ID")
+			if input.ModelIDs != nil || input.EntitlementsOnly {
+				return fail(request, "selective or entitlements-only model import requires a connection ID")
 			}
 			result, err = service.RefreshNode(ctx, input.NodeID)
 		} else {
-			result, err = service.ImportConnectionModels(ctx, input.NodeID, input.ConnectionID, input.ModelIDs)
+			result, err = service.ImportConnectionModels(ctx, input.NodeID, input.ConnectionID, discovery.ModelImportOptions{ModelIDs: input.ModelIDs, EntitlementsOnly: input.EntitlementsOnly})
 		}
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		availableModels := make(map[string]struct{}, len(result.ModelIDs))
-		for _, modelID := range result.ModelIDs {
-			availableModels[modelID] = struct{}{}
-		}
-		for _, route := range d.kernel.Snapshots.Load().Routes {
-			if route.NodeID != result.NodeID || route.CredentialID != result.ConnectionID {
-				continue
+		if result.Evidence == provider.ModelCatalogConnectionObserved {
+			availableModels := make(map[string]struct{}, len(result.ModelIDs))
+			for _, modelID := range result.ModelIDs {
+				availableModels[modelID] = struct{}{}
 			}
-			if _, found := availableModels[route.ExternalModel]; !found {
-				continue
+			for _, route := range d.kernel.Snapshots.Load().Routes {
+				if route.NodeID != result.NodeID || route.CredentialID != result.ConnectionID {
+					continue
+				}
+				if _, found := availableModels[route.ExternalModel]; !found {
+					continue
+				}
+				d.policy.Health.ClearInvalid(route, kernel.ScopeRoute)
+				d.policy.Health.ClearInvalid(route, kernel.ScopeRouteConnection)
 			}
-			d.policy.Health.ClearInvalid(route, kernel.ScopeRoute)
-			d.policy.Health.ClearInvalid(route, kernel.ScopeRouteConnection)
 		}
 		if err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())

@@ -97,7 +97,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 	if err != nil {
 		return ConfigBundle{}, err
 	}
-	bundle := ConfigBundle{Version: 6, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
+	bundle := ConfigBundle{Version: 7, Providers: providers, Connections: connections, Models: models, Physical: physical, Combos: combos, TransformBindings: transformBindings}
 	if catalog != nil {
 		providerDefinitions := make(map[string]provider.ProviderDefinition)
 		for _, item := range providers {
@@ -159,7 +159,7 @@ func ExportBundle(s *store.Store, catalog *extensions.Snapshot) (ConfigBundle, e
 }
 
 func ValidateBundle(bundle ConfigBundle) error {
-	if bundle.Version != 6 {
+	if bundle.Version != 7 {
 		return fmt.Errorf("unsupported config bundle version %d", bundle.Version)
 	}
 	if bundle.Dependencies.Version != 1 {
@@ -241,6 +241,29 @@ func ValidateBundle(bundle ConfigBundle) error {
 			return fmt.Errorf("duplicate model %q", item.ID)
 		}
 		models[item.ID] = true
+		if len(item.ConnectionIDs) != len(item.ConnectionAssignments) {
+			return fmt.Errorf("model %q connection ID list does not match typed connection assignments", item.ID)
+		}
+		connectionAssignments := make(map[string]store.ModelAssignmentSource, len(item.ConnectionAssignments))
+		for _, assignment := range item.ConnectionAssignments {
+			if assignment.ConnectionID == "" {
+				return fmt.Errorf("model %q has an empty connection assignment", item.ID)
+			}
+			if _, duplicate := connectionAssignments[assignment.ConnectionID]; duplicate {
+				return fmt.Errorf("model %q assigns a connection more than once", item.ID)
+			}
+			connectionAssignments[assignment.ConnectionID] = assignment.Source
+		}
+		seenConnectionIDs := map[string]bool{}
+		for _, connectionID := range item.ConnectionIDs {
+			if seenConnectionIDs[connectionID] {
+				return fmt.Errorf("model %q repeats connection ID %q", item.ID, connectionID)
+			}
+			seenConnectionIDs[connectionID] = true
+			if _, exists := connectionAssignments[connectionID]; !exists {
+				return fmt.Errorf("model %q connection IDs and typed assignments differ", item.ID)
+			}
+		}
 		if item.Kind == "custom" {
 			if item.NodeID == "" || !providers[item.NodeID] || item.ExternalID == "" || len(item.ConnectionIDs) == 0 {
 				return fmt.Errorf("custom model %q requires a provider, exact upstream ID and at least one connection assignment", item.ID)
@@ -251,14 +274,31 @@ func ValidateBundle(bundle ConfigBundle) error {
 			}
 			customIdentities[identityKey] = item.ID
 			seen := map[string]bool{}
-			for _, connectionID := range item.ConnectionIDs {
+			for _, assignment := range item.ConnectionAssignments {
+				connectionID := assignment.ConnectionID
+				if assignment.Source != store.ModelAssignmentUser {
+					return fmt.Errorf("custom model %q has unsupported assignment source %q", item.ID, assignment.Source)
+				}
 				if seen[connectionID] || connections[connectionID] != item.NodeID {
 					return fmt.Errorf("custom model %q connection %q is duplicated or belongs to another provider", item.ID, connectionID)
 				}
 				seen[connectionID] = true
 			}
 		} else if len(item.ConnectionIDs) > 0 {
-			return fmt.Errorf("non-custom model %q cannot carry custom connection assignments", item.ID)
+			if item.Kind != "discovered" || item.NodeID == "" || !providers[item.NodeID] || item.ExternalID == "" {
+				return fmt.Errorf("non-custom model %q may carry connection assignments only for a static provider catalog", item.ID)
+			}
+			seen := map[string]bool{}
+			for _, assignment := range item.ConnectionAssignments {
+				connectionID := assignment.ConnectionID
+				if assignment.Source != store.ModelAssignmentStaticCatalog {
+					return fmt.Errorf("discovered model %q has unsupported assignment source %q", item.ID, assignment.Source)
+				}
+				if seen[connectionID] || connections[connectionID] != item.NodeID {
+					return fmt.Errorf("static catalog model %q connection %q is duplicated or belongs to another provider", item.ID, connectionID)
+				}
+				seen[connectionID] = true
+			}
 		}
 	}
 	physical := map[string]bool{}
@@ -683,11 +723,11 @@ func ApplyBundle(s *store.Store, bundle ConfigBundle, strategyCatalogs ...*kerne
 		if _, err = tx.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?, ?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,kind=excluded.kind,external_id=excluded.external_id,display_name=excluded.display_name,capabilities_json=excluded.capabilities_json,limits_json=excluded.limits_json,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP`, model.ID, model.NodeID, model.Kind, model.ExternalID, model.DisplayName, string(profile), string(limits), `{}`, `{}`, boolInt(true)); err != nil {
 			return err
 		}
-		if _, err = tx.Exec(`DELETE FROM custom_model_connections WHERE model_id=?`, model.ID); err != nil {
+		if _, err = tx.Exec(`DELETE FROM model_connection_assignments WHERE model_id=?`, model.ID); err != nil {
 			return err
 		}
-		for _, connectionID := range model.ConnectionIDs {
-			if _, err = tx.Exec(`INSERT INTO custom_model_connections(model_id,connection_id) VALUES(?,?)`, model.ID, connectionID); err != nil {
+		for _, assignment := range model.ConnectionAssignments {
+			if _, err = tx.Exec(`INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES(?,?,?)`, model.ID, assignment.ConnectionID, assignment.Source); err != nil {
 				return err
 			}
 		}

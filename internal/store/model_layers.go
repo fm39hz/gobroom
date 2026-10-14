@@ -133,8 +133,8 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 	if err != nil {
 		return nil, err
 	}
-	customAssignments := map[string]map[string]bool{}
-	assignmentQuery := `SELECT assignment.model_id,assignment.connection_id FROM custom_model_connections assignment JOIN model_catalog model ON model.id=assignment.model_id`
+	assignments := map[string]map[string]ModelAssignmentSource{}
+	assignmentQuery := `SELECT assignment.model_id,assignment.connection_id,assignment.source FROM model_connection_assignments assignment JOIN model_catalog model ON model.id=assignment.model_id`
 	assignmentArgs := []any{}
 	if providerNodeID != "" {
 		assignmentQuery += ` WHERE model.provider_node_id=?`
@@ -146,14 +146,15 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 	}
 	for assignmentRows.Next() {
 		var modelID, connectionID string
-		if err := assignmentRows.Scan(&modelID, &connectionID); err != nil {
+		var source ModelAssignmentSource
+		if err := assignmentRows.Scan(&modelID, &connectionID, &source); err != nil {
 			assignmentRows.Close()
 			return nil, err
 		}
-		if customAssignments[modelID] == nil {
-			customAssignments[modelID] = map[string]bool{}
+		if assignments[modelID] == nil {
+			assignments[modelID] = map[string]ModelAssignmentSource{}
 		}
-		customAssignments[modelID][connectionID] = true
+		assignments[modelID][connectionID] = source
 	}
 	if err := assignmentRows.Err(); err != nil {
 		assignmentRows.Close()
@@ -178,10 +179,12 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 					continue
 				}
 				status := "not_assigned"
-				if customAssignments[item.ID][connection.ID] {
+				source := ModelAssignmentUser
+				if assignmentSource, ok := assignments[item.ID][connection.ID]; ok {
 					status = "assigned"
+					source = assignmentSource
 				}
-				item.ConnectionAvailability = append(item.ConnectionAvailability, ConnectionModelEvidence{ConnectionID: connection.ID, ConnectionName: connection.Name, Status: status, Source: "user_assignment", Enabled: connection.Enabled})
+				item.ConnectionAvailability = append(item.ConnectionAvailability, ConnectionModelEvidence{ConnectionID: connection.ID, ConnectionName: connection.Name, Status: status, Source: string(source), Enabled: connection.Enabled})
 			}
 			continue
 		}
@@ -192,6 +195,8 @@ WHERE m.provider_node_id IS NOT NULL AND m.kind IN ('discovered','custom')`
 			evidence := ConnectionModelEvidence{ConnectionID: connection.ID, ConnectionName: connection.Name, Status: "unknown", Enabled: connection.Enabled}
 			if recorded, ok := byConnectionRoute[connection.ID+"\x00"+item.ExternalID]; ok {
 				evidence.Status, evidence.Source, evidence.ObservedAt = recorded.Status, recorded.Source, recorded.ObservedAt
+			} else if source, assigned := assignments[item.ID][connection.ID]; assigned {
+				evidence.Status, evidence.Source = "assigned", string(source)
 			}
 			item.ConnectionAvailability = append(item.ConnectionAvailability, evidence)
 		}

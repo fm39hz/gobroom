@@ -24,7 +24,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,prio
 INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,prefix) VALUES('node-media','Media','http://media','vendor.audio.v1','manifest-selected-provider','media');
 INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref,priority) VALUES('media-account','node-media','Media account','api_key','media-secret',1);
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name) VALUES('route:audio','node-media','custom','transcribe-v1','Transcribe V1');
-INSERT INTO custom_model_connections(model_id,connection_id) VALUES('route:audio','media-account');
+INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('route:audio','media-account','user_assignment');
 `); err != nil {
 		t.Fatal(err)
 	}
