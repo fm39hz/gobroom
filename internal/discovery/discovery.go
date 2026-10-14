@@ -198,6 +198,9 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 	if err != nil {
 		return OperationTestResult{}, fmt.Errorf("resolve operation-probe credential: %w", err)
 	}
+	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
+		return OperationTestResult{}, err
+	}
 	task := normalize.Operation(binding.TaskRef.ID)
 	route := kernel.Route{
 		ID: connectionID + ":operation-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
@@ -301,6 +304,9 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
 	if err != nil {
 		return InferenceTestResult{}, fmt.Errorf("resolve inference credential: %w", err)
+	}
+	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
+		return InferenceTestResult{}, err
 	}
 	sourceFormat, path, body, err := inferenceProbePayload(binding.Operation, modelID)
 	if err != nil {
@@ -463,6 +469,9 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
 	if err != nil {
 		return fetchedModelCatalog{}, fmt.Errorf("resolve discovery credential: %w", err)
+	}
+	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
+		return fetchedModelCatalog{}, err
 	}
 	input := provider.ModelSourceInput{URL: endpoint, Credential: resolvedCredential, Presentation: authMode.Presentation, Client: s.Client}
 	var catalog provider.ModelCatalogSnapshot

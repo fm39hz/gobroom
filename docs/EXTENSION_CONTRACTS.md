@@ -518,6 +518,11 @@ connection's credential state (for example, a device ID). They are merged
 after mode-level static protocol headers and before the declared token header;
 reserved transport headers, invalid names and CR/LF values are rejected. These
 dynamic values are never persisted or exposed in control-plane metadata. The
+credential also carries a bounded string-valued `AuthContext` for request
+codecs/transports that need connection-scoped identity such as `userId`,
+`machineId`, or organization IDs to construct provider-specific wire requests.
+The kernel does not inspect or route on those keys, and does not log or persist
+them. A provider's auth primitive and request codec own their interpretation.
 same resolved credential mode and dynamic header output are passed to
 quota/model-discovery requests; an explicitly configured per-report
 credential header may override the default token presentation where the
@@ -538,8 +543,10 @@ per-mode setup metadata; the TUI `ctrl+o` cycles the selected mode and rebuilds
 the mode-specific fields. Empty credentials are accepted only for a selected
 mode with an advertised interactive flow. Dual-mode snapshot and setup-form
 fixtures cover selection. Remaining M7 work is the broader live-provider and
-OAuth lifecycle acceptance matrix, plus implementing a generic signed-request
-extension before claiming body-bound/non-header auth schemes are covered.
+OAuth lifecycle acceptance matrix. Body-bound signatures are provider
+request-codec/transport implementations over `AuthContext` and the encoded
+request; the kernel does not need a provider branch, but each such implementation
+still needs its own bounded/replay-safe fixture before claiming support.
 
 Credential use and interactive setup are related contracts with separate
 lifecycles:

@@ -69,7 +69,7 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 		t.Fatalf("public module API did not bind exact provider task: %#v", binding)
 	}
 	request := provider.NormalizedRequest{Model: "asr-v4", Operation: "audio.transcribe", OperationContractVersion: 1, OperationPayload: json.RawMessage(`{"audio_url":"https://assets.test/sample.wav"}`)}
-	prepared, err := binding.Adapter.Prepare(context.Background(), request, provider.Route{BaseURL: "https://audio.example/v1"}, provider.Credential{Secret: "module-secret"})
+	prepared, err := binding.Adapter.Prepare(context.Background(), request, provider.Route{BaseURL: "https://audio.example/v1", CredentialPresentation: provider.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}, provider.Credential{Secret: "module-secret", AuthContext: provider.AuthContext{"userId": "signed-in-user"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prepared.Method != http.MethodPost || prepared.URL != "https://audio.example/v1/audio/transcriptions" || prepared.Headers.Get("Authorization") != "Bearer module-secret" || !strings.Contains(string(body), "audio_url") {
+	if prepared.Method != http.MethodPost || prepared.URL != "https://audio.example/v1/audio/transcriptions" || prepared.Headers.Get("Authorization") != "Bearer module-secret" || prepared.Headers.Get("X-Example-User") != "signed-in-user" || !strings.Contains(string(body), "audio_url") {
 		t.Fatalf("external module produced invalid request: method=%s URL=%s headers=%#v body=%s", prepared.Method, prepared.URL, prepared.Headers, body)
 	}
 }

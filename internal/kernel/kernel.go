@@ -462,6 +462,14 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					continue
 				}
 			}
+			if err := selectedCredential.ValidateRuntimeContext(); err != nil {
+				k.Scheduler.Release(candidate)
+				failureClass, memberErr = ErrorAuth, err
+				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+					feedback.MarkFailure(candidate, ErrorAuth, err)
+				}
+				continue
+			}
 			attemptCtx := ctx
 			if k.ArtifactStore != nil {
 				attemptCtx = artifacts.WithAccess(ctx, artifacts.Access{Store: k.ArtifactStore, Catalog: k.Operations.ExtensionCatalog(), Receiver: receiver, Recipient: candidate.DefinitionRef})

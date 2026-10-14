@@ -82,6 +82,9 @@ func ApplyCredentialPresentation(headers http.Header, credential Credential, pre
 	if headers == nil {
 		return fmt.Errorf("credential presentation requires an initialized header map")
 	}
+	if err := credential.ValidateRuntimeContext(); err != nil {
+		return err
+	}
 	if err := presentation.Validate(); err != nil {
 		return err
 	}
@@ -94,15 +97,7 @@ func ApplyCredentialPresentation(headers http.Header, credential Credential, pre
 		headers.Set(name, presentation.Headers[name])
 	}
 	for name, values := range credential.RequestHeaders {
-		if !validCredentialHeader(name) || restrictedRequestHeader(name) {
-			return fmt.Errorf("auth flow returned invalid or reserved request header %q", name)
-		}
-		for _, value := range values {
-			if !validCredentialHeaderValue(value) {
-				return fmt.Errorf("auth flow returned invalid value for request header %q", name)
-			}
-		}
-		headers[name] = append([]string(nil), values...)
+		headers[http.CanonicalHeaderKey(name)] = append([]string(nil), values...)
 	}
 	if credential.Secret != "" {
 		if presentation.Header == "" {
@@ -120,4 +115,32 @@ func validCredentialHeaderValue(value string) bool {
 		}
 	}
 	return true
+}
+
+func (c Credential) ValidateRuntimeContext() error {
+	if err := c.ValidateAuthContext(); err != nil {
+		return err
+	}
+	if len(c.RequestHeaders) > maxAuthContextEntries {
+		return fmt.Errorf("credential request headers exceed %d entries", maxAuthContextEntries)
+	}
+	total := 0
+	for name, values := range c.RequestHeaders {
+		if !validCredentialHeader(name) || restrictedRequestHeader(name) {
+			return fmt.Errorf("auth flow returned invalid or reserved request header %q", name)
+		}
+		if len(values) > 16 {
+			return fmt.Errorf("auth flow returned too many values for request header %q", name)
+		}
+		for _, value := range values {
+			if !validCredentialHeaderValue(value) {
+				return fmt.Errorf("auth flow returned invalid value for request header %q", name)
+			}
+			total += len(name) + len(value)
+			if total > maxAuthContextBytes {
+				return fmt.Errorf("credential request headers exceed %d bytes", maxAuthContextBytes)
+			}
+		}
+	}
+	return nil
 }

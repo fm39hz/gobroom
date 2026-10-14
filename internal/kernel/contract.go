@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/artifacts"
@@ -423,7 +424,48 @@ type Credential struct {
 	ClientSecret string
 	// RequestHeaders are credential-scoped values produced by an auth flow at
 	// resolution time. They are runtime-only and never persisted or serialized.
-	RequestHeaders http.Header
+	RequestHeaders http.Header `json:"-"`
+	// AuthContext carries bounded provider-specific state derived by the selected
+	// auth flow (for example userId or machineId) into request codecs/transports.
+	// It is runtime-only and never persisted or serialized by the kernel.
+	AuthContext AuthContext `json:"-"`
+}
+
+// AuthContext carries string values from a provider auth implementation into
+// its request codec or transport. Keys are namespaced by the provider
+// implementation, not interpreted by the kernel.
+type AuthContext map[string]string
+
+const (
+	maxAuthContextEntries    = 64
+	maxAuthContextKeyBytes   = 128
+	maxAuthContextValueBytes = 8192
+	maxAuthContextBytes      = 32 * 1024
+)
+
+// ValidateAuthContext enforces bounded runtime-only provider state before any
+// request primitive consumes it.
+func (c Credential) ValidateAuthContext() error {
+	if len(c.AuthContext) > maxAuthContextEntries {
+		return fmt.Errorf("credential auth context exceeds %d entries", maxAuthContextEntries)
+	}
+	total := 0
+	for key, value := range c.AuthContext {
+		if strings.TrimSpace(key) == "" || len(key) > maxAuthContextKeyBytes {
+			return fmt.Errorf("credential auth context contains an invalid key")
+		}
+		if strings.ContainsAny(key, "\r\n\x00") || strings.ContainsAny(value, "\r\n\x00") {
+			return fmt.Errorf("credential auth context contains control characters")
+		}
+		if len(value) > maxAuthContextValueBytes {
+			return fmt.Errorf("credential auth context value for %q exceeds %d bytes", key, maxAuthContextValueBytes)
+		}
+		total += len(key) + len(value)
+		if total > maxAuthContextBytes {
+			return fmt.Errorf("credential auth context exceeds %d bytes", maxAuthContextBytes)
+		}
+	}
+	return nil
 }
 
 type CredentialResolver func(context.Context, Route) (Credential, error)

@@ -919,6 +919,9 @@ func (AnthropicModelSource) ListSnapshot(ctx context.Context, input ModelSourceI
 	if input.URL == "" {
 		return ModelCatalogSnapshot{}, fmt.Errorf("resolved model endpoint URL is required")
 	}
+	if err := input.Credential.ValidateRuntimeContext(); err != nil {
+		return ModelCatalogSnapshot{}, err
+	}
 	client := input.Client
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Minute}
@@ -1009,6 +1012,9 @@ func (OpenAIModelSource) List(ctx context.Context, input ModelSourceInput) ([]Mo
 func (OpenAIModelSource) ListSnapshot(ctx context.Context, input ModelSourceInput) (ModelCatalogSnapshot, error) {
 	if input.URL == "" {
 		return ModelCatalogSnapshot{}, fmt.Errorf("resolved model endpoint URL is required")
+	}
+	if err := input.Credential.ValidateRuntimeContext(); err != nil {
+		return ModelCatalogSnapshot{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.URL, nil)
 	if err != nil {
@@ -1145,6 +1151,9 @@ func quotaRouteForScope(route kernel.Route, scope QuotaScope) kernel.Route {
 func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]quota.Snapshot, error) {
 	if input.Endpoint == nil || input.Transport == nil {
 		return nil, fmt.Errorf("quota operation requires endpoint and transport primitives")
+	}
+	if err := input.Credential.ValidateRuntimeContext(); err != nil {
+		return nil, err
 	}
 	if err := s.Options.Validate(); err != nil {
 		return nil, err

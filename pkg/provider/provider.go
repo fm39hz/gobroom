@@ -8,6 +8,8 @@
 package provider
 
 import (
+	"net/http"
+
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -84,6 +86,7 @@ type ResponseDecoder = kernel.ResponseDecoder
 type ResponseRenderer = kernel.ResponseRenderer
 type ProviderAdapter = kernel.ProviderAdapter
 type Credential = kernel.Credential
+type AuthContext = kernel.AuthContext
 type CredentialPresentation = kernel.CredentialPresentation
 type Route = kernel.Route
 type UpstreamRequest = kernel.UpstreamRequest
@@ -103,6 +106,14 @@ type Protocol = kernel.Protocol
 type CapabilityProfile = kernel.CapabilityProfile
 type TokenLimits = kernel.TokenLimits
 type SessionStore = kernel.SessionStore
+
+// ApplyCredentialPresentation applies the selected auth mode's safe static
+// headers, dynamic credential headers and token presentation to an upstream
+// request header map. External request-codec modules should use this instead
+// of hardcoding API-key/OAuth branches.
+func ApplyCredentialPresentation(headers http.Header, credential Credential, presentation CredentialPresentation) error {
+	return kernel.ApplyCredentialPresentation(headers, credential, presentation)
+}
 
 type Format = normalize.Format
 type Task = normalize.Operation

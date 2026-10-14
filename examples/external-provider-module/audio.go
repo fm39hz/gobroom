@@ -120,13 +120,18 @@ func (audioRequestCodec) ID() string { return "example-audio-json" }
 func (audioRequestCodec) DescribeCompatibility(input provider.CompatibilityContext) []provider.FacetMapping {
 	return []provider.FacetMapping{{Facet: provider.FacetWireRequest, Paths: []string{"operationPayload"}, Disposition: provider.FacetTranslated}}
 }
-func (audioRequestCodec) Prepare(_ context.Context, request provider.NormalizedRequest, _ provider.Route, credential provider.Credential) (provider.UpstreamRequest, error) {
+func (audioRequestCodec) Prepare(_ context.Context, request provider.NormalizedRequest, route provider.Route, credential provider.Credential) (provider.UpstreamRequest, error) {
 	if len(request.OperationPayload) == 0 || !json.Valid(request.OperationPayload) {
 		return provider.UpstreamRequest{}, fmt.Errorf("audio payload must be valid JSON")
 	}
 	headers := make(http.Header)
-	headers.Set("Authorization", "Bearer "+credential.Secret)
 	headers.Set("Content-Type", "application/json")
+	if userID := credential.AuthContext["userId"]; userID != "" {
+		headers.Set("X-Example-User", userID)
+	}
+	if err := provider.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
+		return provider.UpstreamRequest{}, err
+	}
 	return provider.UpstreamRequest{Method: http.MethodPost, URL: "/audio/transcriptions", Headers: headers, Body: bytes.NewReader(request.OperationPayload)}, nil
 }
 
