@@ -124,10 +124,11 @@ live credentials are not required for deterministic acceptance.
    connection and provider health persistence is implemented and tested.
    Add specialized
    extractors only for shapes not expressible through current typed options.
-4. **M7 OAuth/provider acceptance:** complete the denial/expiry/shutdown
-   lifecycle matrix, HTTPS/non-loopback callback integrations and
-   credential-generation tests. Add real provider OAuth definitions only from
-   captured/source-verified contracts; live credential acceptance requires
+4. **M7 OAuth/provider acceptance:** the RFC 8628 `slow_down` interval and
+   daemon shutdown during active polling now have integration evidence. Complete
+   the remaining denial/expiry/shutdown race matrix, HTTPS/non-loopback callback
+   integrations and credential-generation tests. Add real provider OAuth
+   definitions only from captured/source-verified contracts; live credential acceptance requires
    user authorization. Add generic signed-request `Apply` only for auth schemes
    that cannot be represented by the now-shared typed header presentation.
 5. **M6 protocol conformance:** broaden Gemini end-to-end coverage to additional

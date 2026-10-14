@@ -873,6 +873,8 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 
 func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testing.T) {
 	var tokenRequests int
+	var tokenRequestMu sync.Mutex
+	var tokenRequestTimes []time.Time
 	transport := oauthRoundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		switch request.URL.Path {
 		case "/device":
@@ -889,9 +891,16 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 			if form.Get("grant_type") != "urn:ietf:params:oauth:grant-type:device_code" || form.Get("device_code") != "private-device-code" {
 				t.Errorf("unexpected device token request: %#v", form)
 			}
+			tokenRequestMu.Lock()
 			tokenRequests++
-			if tokenRequests == 1 {
+			requestNumber := tokenRequests
+			tokenRequestTimes = append(tokenRequestTimes, time.Now())
+			tokenRequestMu.Unlock()
+			if requestNumber == 1 {
 				return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"authorization_pending"}`)), Request: request}, nil
+			}
+			if requestNumber == 2 {
+				return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":"slow_down"}`)), Request: request}, nil
 			}
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"access_token":"device-access","refresh_token":"device-refresh","expires_in":3600,"token_type":"Bearer"}`)), Request: request}, nil
 		default:
@@ -933,7 +942,7 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 	if strings.Contains(string(encodedView), "private-device-code") || view.UserCode != "ABCD-EFGH" || view.VerificationURL != "https://identity.test/activate" {
 		t.Fatalf("device action leaked private code or omitted public instructions: %s", encodedView)
 	}
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(12 * time.Second)
 	for view.Status != "completed" && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 		response := d.handleIPC(rootCtx, IPCRequest{ID: "device-get", Method: "auth.device.get", Params: map[string]any{"sessionID": view.SessionID}})
@@ -942,8 +951,19 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 		}
 		view = response.Result.(deviceAuthorizationView)
 	}
-	if view.Status != "completed" || tokenRequests < 2 {
-		t.Fatalf("device flow did not poll pending then complete: status=%q requests=%d error=%q", view.Status, tokenRequests, view.Error)
+	tokenRequestMu.Lock()
+	requestsAfterFirstFlow := tokenRequests
+	requestTimes := append([]time.Time(nil), tokenRequestTimes...)
+	tokenRequestMu.Unlock()
+	if view.Status != "completed" || requestsAfterFirstFlow < 3 {
+		t.Fatalf("device flow did not poll pending/slow_down then complete: status=%q requests=%d error=%q", view.Status, requestsAfterFirstFlow, view.Error)
+	}
+	if len(requestTimes) < 3 || requestTimes[2].Sub(requestTimes[1]) < 5*time.Second {
+		gap := time.Duration(0)
+		if len(requestTimes) >= 3 {
+			gap = requestTimes[2].Sub(requestTimes[1])
+		}
+		t.Fatalf("OAuth slow_down did not add the RFC-required five seconds to the polling interval: gap=%s", gap)
 	}
 	stored, ok := s.ConnectionCredentialByID(connection.ID)
 	if !ok {
