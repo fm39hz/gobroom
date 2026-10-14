@@ -1704,6 +1704,12 @@ func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, c
 	if flowID == "" || !ok {
 		return fmt.Errorf("auth flow for provider definition %q is unavailable", node.DefinitionID)
 	}
+	if strings.TrimSpace(secret) == "" {
+		authorizationCode, deviceAuthorization := provider.InteractiveAuthModes(flow)
+		if authorizationCode || deviceAuthorization {
+			return nil
+		}
+	}
 	_, err = flow.Resolve(ctx, provider.AuthInput{Type: credentialType, Secret: secret})
 	if err != nil {
 		return fmt.Errorf("validate connection credential: %w", err)

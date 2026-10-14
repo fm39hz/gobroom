@@ -350,6 +350,28 @@ func TestConnectionFormUsesProviderAuthSetupSchema(t *testing.T) {
 	}
 }
 
+func TestInteractiveOAuthConnectionFormAllowsDeferredAuthorization(t *testing.T) {
+	catalog := []provider.DefinitionMetadata{{
+		ID: "oauth-device", Auth: provider.AuthMetadata{ID: "oauth2", DeviceAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
+			{Name: "access_token", Type: "string", Secret: true},
+			{Name: "refresh_token", Type: "string", Secret: true},
+		}}},
+	}}
+	form := newConnectionFormWithMetadata(providerNode{ID: "node-oauth", DefinitionID: "oauth-device", AuthMode: "oauth2"}, catalog)
+	for index, field := range form.fields {
+		if field.key == "name" {
+			form.inputs[index].SetValue("new account")
+		}
+	}
+	params, err := form.Params()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret, ok := params["secret"].(string); !ok || secret != "" {
+		t.Fatalf("empty interactive credential should be sent as empty, got %#v", params["secret"])
+	}
+}
+
 func TestNoAuthConnectionFormAllowsBlankSecret(t *testing.T) {
 	form := newConnectionForm(providerNode{ID: "public-node", AuthMode: "none"})
 	for index, field := range form.fields {

@@ -676,7 +676,7 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 	}
 	definition := ProviderDefinition{ContractVersion: 1, ID: "catalog-oauth", Version: "2", DisplayName: "Catalog OAuth", Aliases: []string{"co"},
 		Auth:         PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
-		AuthOptions:  AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "not-returned", AuthURL: "https://auth.test", TokenURL: "https://token.test"}, Options: json.RawMessage(`{"client_secret":"not-returned"}`)},
+		AuthOptions:  AuthOptions{OAuth: &OAuthFlowOptions{ClientID: "not-returned", AuthURL: "https://auth.test", TokenURL: "https://token.test", DeviceAuthURL: "https://auth.test/device"}, Options: json.RawMessage(`{"client_secret":"not-returned"}`)},
 		Defaults:     map[string]any{"apiKey": "not-returned", "baseUrl": "https://upstream.test"},
 		Capabilities: CapabilitySet{Chat: true, Streaming: true},
 		Operations: map[Operation]OperationBinding{
@@ -704,6 +704,14 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 	}
 	if got == nil || got.Auth.ID != "oauth2" || len(got.Auth.SetupSchema.Fields) == 0 || len(got.Operations) != 1 {
 		t.Fatalf("generic provider setup metadata missing: %#v", got)
+	}
+	if !got.Auth.DeviceAuthorization || got.Auth.AuthorizationCode {
+		t.Fatalf("interactive auth capabilities=%#v", got.Auth)
+	}
+	for _, field := range got.Auth.SetupSchema.Fields {
+		if field.Name == "access_token" && field.Required {
+			t.Fatal("interactive OAuth token should be optional during connection creation")
+		}
 	}
 	if got.Operations[0].Protocol != "vendor.chat.v1" || got.Operations[0].Primitives["responseDecoder"].ID != "openai-sse" || got.Operations[0].Primitives["responseDecoder"].ContractVersion != 1 {
 		t.Fatalf("operation binding metadata=%#v", got.Operations[0])

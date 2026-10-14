@@ -567,6 +567,45 @@ func TestProviderCreationDefaultsConnectionAuthFromDefinition(t *testing.T) {
 	}
 }
 
+func TestConnectionCanBeCreatedWithoutTokenOnlyForInteractiveOAuth(t *testing.T) {
+	s, err := store.Open(t.TempDir() + "/oauth-bootstrap.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	node, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Device OAuth", Prefix: "device", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "device-oauth", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{store: s,
+		providerAuthFlowIDs: map[string]string{"device-oauth": "device-oauth:oauth2", "token-only": "token-only:oauth2"},
+		authFlows: map[string]provider.AuthFlow{
+			"device-oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token", DeviceAuthURL: "https://identity.test/device"}},
+			"token-only:oauth2":   provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}},
+		},
+	}
+	if err := d.validateConnectionSecret(context.Background(), node.ID, "oauth2", ""); err != nil {
+		t.Fatalf("interactive OAuth should permit an uninitialized connection: %v", err)
+	}
+	connection, err := s.CreateConnection(store.CreateConnectionInput{ProviderNodeID: node.ID, Name: "new account", CredentialType: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connection.ID == "" {
+		t.Fatal("empty-token OAuth connection was not persisted")
+	}
+	if err := d.validateConnectionSecret(context.Background(), node.ID, "oauth2", ""); err != nil {
+		t.Fatalf("empty OAuth secret changed validation outcome after persist: %v", err)
+	}
+	tokenOnlyNode, err := s.CreateProviderNode(store.CreateProviderNodeInput{Name: "Token-only OAuth", Prefix: "token-only", BaseURL: "https://provider.test/v1", Protocol: "openai_chat", DefinitionID: "token-only", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.validateConnectionSecret(context.Background(), tokenOnlyNode.ID, "oauth2", ""); err == nil {
+		t.Fatal("OAuth flow without an interactive endpoint accepted an empty credential")
+	}
+}
+
 func TestRefreshedCredentialPersistenceRetainsOAuthClientSecret(t *testing.T) {
 	credential := kernel.Credential{Secret: "new-access", RefreshToken: "new-refresh", ClientID: "client", ClientSecret: "secret", ExpiresAt: time.Now().Add(time.Hour)}
 	stored, err := refreshedCredentialSecret(credential)

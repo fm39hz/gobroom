@@ -41,6 +41,26 @@ type AuthFlow interface {
 	Refresh(context.Context, kernel.Credential) (kernel.Credential, error)
 }
 
+// InteractiveAuthCapabilities advertises which daemon-owned authorization
+// paths can bootstrap a connection without a pre-existing credential.
+type InteractiveAuthCapabilities interface {
+	CanAuthorizeCode() bool
+	CanAuthorizeDevice() bool
+}
+
+// InteractiveAuthModes reports only capabilities backed by the corresponding
+// lifecycle interface, preventing a flow from advertising an unusable setup.
+func InteractiveAuthModes(flow AuthFlow) (authorizationCode, device bool) {
+	capabilities, ok := flow.(InteractiveAuthCapabilities)
+	if !ok {
+		return false, false
+	}
+	_, authorizationCodeFlow := flow.(AuthorizationCodeFlow)
+	_, deviceAuthorizationFlow := flow.(DeviceAuthorizationFlow)
+	return capabilities.CanAuthorizeCode() && authorizationCodeFlow,
+		capabilities.CanAuthorizeDevice() && deviceAuthorizationFlow
+}
+
 // AuthorizationCodeFlow is an optional interactive capability. The daemon
 // owns state and PKCE verifier lifecycle; frontends only display the URL and
 // submit the callback code plus the returned session ID.
@@ -188,6 +208,14 @@ func (a OAuthAuth) AuthorizationURL(state, verifier string) (string, error) {
 		return "", fmt.Errorf("OAuth authorization requires state, PKCE verifier, client ID, auth/token URLs and redirect URL")
 	}
 	return a.Config.AuthCodeURL(state, verifier), nil
+}
+
+func (a OAuthAuth) CanAuthorizeCode() bool {
+	return a.Config.ClientID != "" && a.Config.AuthURL != "" && a.Config.TokenURL != "" && a.Config.RedirectURL != ""
+}
+
+func (a OAuthAuth) CanAuthorizeDevice() bool {
+	return a.Config.ClientID != "" && a.Config.DeviceAuthURL != "" && a.Config.TokenURL != ""
 }
 
 func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (kernel.Credential, error) {

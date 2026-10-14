@@ -746,11 +746,22 @@ func (f *formState) Params() (map[string]any, error) {
 				if len(f.authSchema) == 1 && f.authSchema[0].Name == "secret" {
 					params["secret"] = authValues["secret"]
 				} else {
-					encoded, err := json.Marshal(authValues)
-					if err != nil {
-						return nil, fmt.Errorf("encode auth setup values: %w", err)
+					hasValue := false
+					for _, value := range authValues {
+						if value != "" {
+							hasValue = true
+							break
+						}
 					}
-					params["secret"] = string(encoded)
+					if hasValue {
+						encoded, err := json.Marshal(authValues)
+						if err != nil {
+							return nil, fmt.Errorf("encode auth setup values: %w", err)
+						}
+						params["secret"] = string(encoded)
+					} else {
+						params["secret"] = ""
+					}
 				}
 			}
 		} else if credentialType != "none" {

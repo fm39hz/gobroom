@@ -72,8 +72,10 @@ type DefinitionMetadata struct {
 }
 
 type AuthMetadata struct {
-	ID          string      `json:"id"`
-	SetupSchema SetupSchema `json:"setupSchema"`
+	ID                  string      `json:"id"`
+	SetupSchema         SetupSchema `json:"setupSchema"`
+	AuthorizationCode   bool        `json:"authorizationCode,omitempty"`
+	DeviceAuthorization bool        `json:"deviceAuthorization,omitempty"`
 }
 
 type OperationMetadata struct {
@@ -99,13 +101,22 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 		if err != nil {
 			return nil, fmt.Errorf("provider %q auth metadata: %w", definition.ID, err)
 		}
+		authMetadata := AuthMetadata{ID: flow.ID(), SetupSchema: flow.SetupSchema()}
+		authMetadata.AuthorizationCode, authMetadata.DeviceAuthorization = InteractiveAuthModes(flow)
+		if authMetadata.AuthorizationCode || authMetadata.DeviceAuthorization {
+			for i := range authMetadata.SetupSchema.Fields {
+				if authMetadata.SetupSchema.Fields[i].Name == "access_token" || authMetadata.SetupSchema.Fields[i].Name == "secret" {
+					authMetadata.SetupSchema.Fields[i].Required = false
+				}
+			}
+		}
 		item := DefinitionMetadata{
 			ContractVersion: definition.ContractVersion,
 			ID:              definition.ID, Version: definition.Version,
 			DisplayName:  definition.DisplayName,
 			Aliases:      append([]string(nil), definition.Aliases...),
 			Capabilities: definition.Capabilities,
-			Auth:         AuthMetadata{ID: flow.ID(), SetupSchema: flow.SetupSchema()},
+			Auth:         authMetadata,
 		}
 		item.Auth.SetupSchema.Fields = append([]SetupField(nil), item.Auth.SetupSchema.Fields...)
 		operations := make([]string, 0, len(definition.Operations))
