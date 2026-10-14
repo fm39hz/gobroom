@@ -1314,6 +1314,15 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(classifierRef, statusWithoutValues); err == nil {
 		t.Fatal("schema accepted a status header without configured exhausted values")
 	}
+
+	quotaRef := extensionRef(PrimitiveRef{Kind: PrimitiveQuotaSource, ID: "http-json-quota", ContractVersion: 1})
+	quotaOptions := json.RawMessage(`{"reports":[{"endpointOptions":{"path":"/key"},"windows":[{"name":"key","limitPath":"/data/limit","remainingPath":"/data/limit_remaining"}]},{"endpointOptions":{"path":"/credits"},"windows":[{"name":"credits","limitPath":"/data/total_credits","usedPath":"/data/total_usage","remainingFromLimitUsed":true}]}],"failureMode":"keep_available"}`)
+	if err := snapshot.ValidateOptions(quotaRef, quotaOptions); err != nil {
+		t.Fatalf("multi-endpoint typed quota options rejected by registered schema: %v", err)
+	}
+	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"failureMode":"keep_available"}`)); err == nil {
+		t.Fatal("schema accepted a multi-report failure mode without report endpoints")
+	}
 }
 
 func TestRuntimeRegistryContributesVersionedFeatureEvaluatorsToSharedCatalog(t *testing.T) {

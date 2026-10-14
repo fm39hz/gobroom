@@ -148,12 +148,15 @@ health contract](PASSIVE_HEALTH_ROUTING.md).
 The `http-json-quota` source accepts per-binding `quotaSourceOptions`. A
 manifest can map multiple named windows from one quota report by JSON Pointer,
 including object-map windows, arrays with a `namePath`, remaining percentages,
-reset timestamps, exhausted statuses and explicitly unreported windows. Its
-response body is bounded; credentials can be sent using a configured header
-and prefix, without storing the credential in the manifest. A provider that
-needs multiple endpoints, joins, currency preference or partial-source
-fallback can register a dedicated `QuotaSource` module; the daemon's poller,
-generation fencing and persistence remain shared.
+reset timestamps, exhausted statuses and explicitly unreported windows. It
+can also compose up to eight report endpoints, each with its own path/query and
+window mappings. `failureMode: "keep_available"` retains successful report
+windows when another endpoint fails; the default is fail-all. Response bodies
+are bounded, and credentials can use a configured header/prefix without
+storing credential material in the manifest. Providers needing currency
+selection, cross-report joins, or different auth per endpoint can register a
+dedicated `QuotaSource` module; the daemon's poller, generation fencing and
+persistence remain shared.
 
 ```json
 "quota": {
@@ -172,6 +175,24 @@ generation fencing and persistence remain shared.
       "ignoreWhenValues":["false"]
     }]
   }
+}
+```
+
+For a provider whose account quota spans separate key and credits endpoints,
+the same primitive can bind both endpoints and explicitly derive the second
+window's remaining amount:
+
+```json
+"quotaSourceOptions": {
+  "failureMode": "keep_available",
+  "reports": [
+    {"endpointOptions":{"path":"/key"},"windows":[
+      {"name":"key-cap","limitPath":"/data/limit","usedPath":"/data/usage","remainingPath":"/data/limit_remaining"}
+    ]},
+    {"endpointOptions":{"path":"/credits"},"windows":[
+      {"name":"account-credits","limitPath":"/data/total_credits","usedPath":"/data/total_usage","remainingFromLimitUsed":true}
+    ]}
+  ]
 }
 ```
 
