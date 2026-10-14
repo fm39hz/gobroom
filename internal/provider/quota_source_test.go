@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,30 @@ type quotaTransportFixture struct {
 	request kernel.UpstreamRequest
 	body    string
 	status  int
+}
+
+type quotaReportFixture struct {
+	body   string
+	status int
+}
+
+type multiQuotaTransportFixture struct {
+	requests  []kernel.UpstreamRequest
+	responses map[string]quotaReportFixture
+}
+
+func (*multiQuotaTransportFixture) ID() string { return "multi-quota-fixture" }
+func (t *multiQuotaTransportFixture) Execute(_ context.Context, request kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	t.requests = append(t.requests, request)
+	response, ok := t.responses[request.URL]
+	if !ok {
+		return kernel.UpstreamResponse{}, fmt.Errorf("unexpected quota endpoint %q", request.URL)
+	}
+	status := response.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return kernel.UpstreamResponse{Status: status, Headers: make(http.Header), Body: io.NopCloser(strings.NewReader(response.body))}, nil
 }
 
 func (*quotaTransportFixture) ID() string { return "fixture-http" }
@@ -135,5 +161,100 @@ func TestManifestBindsTypedQuotaWindowOptionsAndCredentialHeader(t *testing.T) {
 	}
 	if len(snapshots) != 1 || snapshots[0].WindowName != "monthly" || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 7 {
 		t.Fatalf("configured quota snapshots=%#v", snapshots)
+	}
+}
+
+func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing.T) {
+	reset := time.Now().Add(45 * time.Minute).UTC().Truncate(time.Second)
+	keyURL := "https://openrouter.test/api/v1/key"
+	creditsURL := "https://openrouter.test/api/v1/credits"
+	keyBody := `{"data":{"limit":25,"limit_remaining":8,"limit_reset":` + strconv.FormatInt(reset.Unix(), 10) + `,"usage":17,"usage_daily":3}}`
+	creditsBody := `{"data":{"total_credits":100,"total_usage":40}}`
+	options := HTTPJSONQuotaOptions{FailureMode: QuotaReportsKeepAvailable, Reports: []HTTPJSONQuotaReport{
+		{EndpointOptions: kernel.EndpointOptions{Path: "/key"}, Windows: []HTTPJSONQuotaWindow{
+			{Name: "key-cap", LimitPath: "/data/limit", RemainingPath: "/data/limit_remaining", UsedPath: "/data/usage", ResetAtPath: "/data/limit_reset"},
+			{Name: "daily-usage", UsedPath: "/data/usage_daily"},
+		}},
+		{EndpointOptions: kernel.EndpointOptions{Path: "/credits"}, Windows: []HTTPJSONQuotaWindow{{
+			Name: "account-credits", LimitPath: "/data/total_credits", UsedPath: "/data/total_usage", RemainingFromLimitUsed: true,
+		}}},
+	}}
+	optionsJSON, err := json.Marshal(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := ProviderDefinition{ContractVersion: 1, ID: "openrouter-report-fixture", Version: "1", DisplayName: "OpenRouter quota reports",
+		Auth: PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1},
+		Operations: map[Operation]OperationBinding{OperationQuota: {
+			Endpoint:           PrimitiveRef{Kind: PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:          PrimitiveRef{Kind: PrimitiveTransport, ID: "http", ContractVersion: 1},
+			QuotaSource:        PrimitiveRef{Kind: PrimitiveQuotaSource, ID: "http-json-quota", ContractVersion: 1},
+			QuotaSourceOptions: optionsJSON,
+		}},
+	}
+	registry, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := EncodeProviderDefinitionJSON(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.LoadDefinitionJSON(manifest); err != nil {
+		t.Fatal(err)
+	}
+	runtimeBindings, err := registry.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := runtimeBindings[RuntimeBindingKey(definition.ID, OperationQuota)]
+	wantSourceRef := runtimeQuotaSourceRef(definition.ID, OperationQuota, definition.Operations[OperationQuota].QuotaSource)
+	if binding.QuotaSourceRef != wantSourceRef {
+		t.Fatalf("multi-report source did not bind per definition: %s", binding.QuotaSourceRef.Key())
+	}
+	source := registry.QuotaSourcesForBindings(runtimeBindings)[binding.QuotaSourceRef]
+	configuredSource, ok := source.(HTTPJSONQuotaSource)
+	if !ok || len(configuredSource.Options.Reports) != 2 || configuredSource.Options.FailureMode != QuotaReportsKeepAvailable {
+		t.Fatalf("manifest quota source options were not bound: %#v", source)
+	}
+	route := kernel.Route{NodeID: "openrouter", CredentialID: "account", ExternalModel: "model", BaseURL: "https://openrouter.test/api/v1"}
+	transport := &multiQuotaTransportFixture{responses: map[string]quotaReportFixture{
+		keyURL:     {body: keyBody},
+		creditsURL: {status: http.StatusServiceUnavailable, body: `{"error":"temporarily unavailable"}`},
+	}}
+	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
+		Credential: kernel.Credential{Secret: "openrouter-key"}, Route: route,
+		Endpoint: binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions,
+	})
+	if err != nil {
+		t.Fatalf("best-effort quota source discarded a successful report: %v", err)
+	}
+	if len(transport.requests) != 2 || transport.requests[0].Headers.Get("Authorization") != "Bearer openrouter-key" || transport.requests[1].URL != creditsURL {
+		t.Fatalf("composed quota requests=%#v", transport.requests)
+	}
+	if len(snapshots) != 2 || snapshots[0].WindowName != "key-cap" || snapshots[1].WindowName != "daily-usage" {
+		t.Fatalf("partial quota snapshots=%#v", snapshots)
+	}
+	if snapshots[0].Remaining == nil || *snapshots[0].Remaining != 8 || snapshots[0].Limit == nil || *snapshots[0].Limit != 25 || snapshots[0].ResetAt == nil || !snapshots[0].ResetAt.Equal(reset) {
+		t.Fatalf("OpenRouter key quota normalization=%#v", snapshots[0])
+	}
+
+	sourceFailAll := configuredSource
+	sourceFailAll.Options.FailureMode = QuotaReportsFailAll
+	transport = &multiQuotaTransportFixture{responses: map[string]quotaReportFixture{
+		keyURL:     {body: keyBody},
+		creditsURL: {status: http.StatusServiceUnavailable, body: `{"error":"temporarily unavailable"}`},
+	}}
+	if snapshots, err = sourceFailAll.Fetch(context.Background(), QuotaRequest{Credential: kernel.Credential{Secret: "openrouter-key"}, Route: route, Endpoint: binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions}); err == nil || snapshots != nil {
+		t.Fatalf("fail-all quota mode returned partial results: snapshots=%#v err=%v", snapshots, err)
+	}
+
+	transport = &multiQuotaTransportFixture{responses: map[string]quotaReportFixture{
+		keyURL:     {body: keyBody},
+		creditsURL: {body: creditsBody},
+	}}
+	snapshots, err = sourceFailAll.Fetch(context.Background(), QuotaRequest{Credential: kernel.Credential{Secret: "openrouter-key"}, Route: route, Endpoint: binding.Endpoint, Transport: transport, EndpointOptions: binding.EndpointOptions})
+	if err != nil || len(snapshots) != 3 || snapshots[2].WindowName != "account-credits" || snapshots[2].Remaining == nil || *snapshots[2].Remaining != 60 {
+		t.Fatalf("successful multi-report normalization: snapshots=%#v err=%v", snapshots, err)
 	}
 }

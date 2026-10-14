@@ -29,7 +29,24 @@ func (AudioModule) Register(runtime *provider.RuntimeRegistry) error {
 	if err := runtime.RegisterRequestCodec(audioRequestCodec{}); err != nil {
 		return err
 	}
-	return runtime.RegisterResponseDecoder(audioResponseDecoder{})
+	if err := runtime.RegisterResponseDecoder(audioResponseDecoder{}); err != nil {
+		return err
+	}
+	return runtime.RegisterQuotaSource(audioQuotaSource{})
+}
+
+// audioQuotaSource demonstrates that the public QuotaSource contract can be
+// implemented outside the GoBroom module without importing internal/quota.
+type audioQuotaSource struct{}
+
+func (audioQuotaSource) ID() string { return "example-audio-quota" }
+func (audioQuotaSource) Fetch(_ context.Context, request provider.QuotaRequest) ([]provider.QuotaSnapshot, error) {
+	remaining, limit := float64(42), float64(100)
+	return []provider.QuotaSnapshot{{
+		ProviderNodeID: request.Route.NodeID, ConnectionID: request.Route.CredentialID,
+		ModelRef: request.Route.ExternalModel, WindowName: "example-daily",
+		Limit: &limit, Remaining: &remaining, Source: "quota_api",
+	}}, nil
 }
 
 const audioInspectOperation = "audio.inspect"

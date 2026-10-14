@@ -3,9 +3,10 @@
 This directory is a separate Go module that imports only GoBroom's public
 `pkg/provider` and `pkg/daemon` APIs. It demonstrates the static-module path:
 
-1. `AudioModule` registers an operation contract and its wire codecs.
-2. A separate provider manifest binds that task to the shared endpoint and
-   transport primitives.
+1. `AudioModule` registers an operation contract, wire codecs, and a custom
+   `QuotaSource` using only the public normalized quota request/snapshot types.
+2. A separate provider manifest binds the audio task and quota source to the
+   shared endpoint/transport primitives.
 3. A custom binary embeds the module through `daemon.NewWithProviderModules`;
    the normal daemon then loads the provider manifest and exposes its metadata.
 
@@ -15,6 +16,6 @@ module version; downstream modules should depend on the released GoBroom module
 version instead.
 
 Run from this directory with `GOWORK=off go test ./...`. The tests compile the
-module as an independent importer, bind the manifest, then start the public
-daemon API with the module and exercise the operation through local IPC and a
-fake HTTP provider.
+module as an independent importer, bind the manifest, verify the custom quota
+source through the registry, then start the public daemon API with the module
+and exercise the operation through local IPC and a fake HTTP provider.

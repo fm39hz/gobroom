@@ -28,6 +28,11 @@ func audioManifest() provider.ProviderDefinition {
 			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
 			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "example-audio-json", ContractVersion: 1},
 			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "example-audio-json", ContractVersion: 1},
+		}, provider.OperationQuota: {
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			QuotaSource:     provider.PrimitiveRef{Kind: provider.PrimitiveQuotaSource, ID: "example-audio-quota", ContractVersion: 1},
+			EndpointOptions: provider.EndpointOptions{Path: "/account/usage"},
 		}},
 	}
 }
@@ -74,6 +79,34 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 	}
 	if prepared.Method != http.MethodPost || prepared.URL != "https://audio.example/v1/audio/transcriptions" || prepared.Headers.Get("Authorization") != "Bearer module-secret" || !strings.Contains(string(body), "audio_url") {
 		t.Fatalf("external module produced invalid request: method=%s URL=%s headers=%#v body=%s", prepared.Method, prepared.URL, prepared.Headers, body)
+	}
+}
+
+func TestExternalModuleImplementsQuotaSourceThroughPublicTypes(t *testing.T) {
+	runtime, err := provider.NewRuntimeRegistryWithModules(AudioModule{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := provider.EncodeManifest(audioManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadDefinitionJSON(manifest); err != nil {
+		t.Fatal(err)
+	}
+	bindings, err := runtime.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := bindings[provider.RuntimeBindingKey("example-audio", provider.OperationQuota)]
+	wantSourceRef := provider.Ref{Kind: string(provider.PrimitiveQuotaSource), ID: "example-audio-quota", ContractVersion: 1}
+	if binding.QuotaSource == nil || binding.QuotaSourceRef != wantSourceRef {
+		t.Fatalf("external quota source was not bound: %#v", binding)
+	}
+	source := runtime.QuotaSourcesForBindings(bindings)[binding.QuotaSourceRef]
+	snapshots, err := source.Fetch(context.Background(), provider.QuotaRequest{Route: provider.Route{NodeID: "audio", CredentialID: "account", ExternalModel: "asr-v4"}})
+	if err != nil || len(snapshots) != 1 || snapshots[0].WindowName != "example-daily" || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 42 {
+		t.Fatalf("external quota source snapshot=%#v err=%v", snapshots, err)
 	}
 }
 
@@ -162,8 +195,17 @@ func TestPublicDaemonHostsExternalProviderModuleAndManifest(t *testing.T) {
 	}
 	found := false
 	for _, definition := range definitions {
-		if definition.ID == "example-audio" && len(definition.Operations) == 1 && definition.Operations[0].TaskRef != nil && definition.Operations[0].TaskRef.ID == "audio.transcribe" {
-			found = true
+		if definition.ID == "example-audio" {
+			foundAudio, foundQuota := false, false
+			for _, operation := range definition.Operations {
+				if operation.ID == provider.OperationAudio && operation.TaskRef != nil && operation.TaskRef.ID == "audio.transcribe" {
+					foundAudio = true
+				}
+				if operation.ID == provider.OperationQuota && operation.Primitives["quotaSource"].ID == "example-audio-quota" {
+					foundQuota = true
+				}
+			}
+			found = foundAudio && foundQuota
 		}
 	}
 	if !found {

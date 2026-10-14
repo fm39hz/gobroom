@@ -325,31 +325,49 @@ type OperationBinding struct {
 	ErrorClassifierOptions ErrorClassifierOptions    `json:"errorClassifierOptions,omitempty"`
 }
 
-// HTTPJSONQuotaOptions describes provider-neutral extraction from one JSON
-// quota report. Providers with multiple endpoints or non-composable semantics
-// can register a dedicated QuotaSource primitive instead.
+// HTTPJSONQuotaOptions describes provider-neutral extraction from one or more
+// JSON quota reports. Providers with non-composable semantics can register a
+// dedicated QuotaSource primitive instead.
 type HTTPJSONQuotaOptions struct {
-	CredentialHeader string                `json:"credentialHeader,omitempty"`
-	CredentialPrefix string                `json:"credentialPrefix,omitempty"`
-	Windows          []HTTPJSONQuotaWindow `json:"windows,omitempty"`
+	CredentialHeader string                 `json:"credentialHeader,omitempty"`
+	CredentialPrefix string                 `json:"credentialPrefix,omitempty"`
+	Windows          []HTTPJSONQuotaWindow  `json:"windows,omitempty"`
+	Reports          []HTTPJSONQuotaReport  `json:"reports,omitempty"`
+	FailureMode      QuotaReportFailureMode `json:"failureMode,omitempty"`
+}
+
+type QuotaReportFailureMode string
+
+const (
+	QuotaReportsFailAll       QuotaReportFailureMode = "fail_all"
+	QuotaReportsKeepAvailable QuotaReportFailureMode = "keep_available"
+)
+
+// HTTPJSONQuotaReport selects one report endpoint. Its windows
+// override the source-level Windows; absent endpoint fields inherit the
+// operation quota endpoint settings.
+type HTTPJSONQuotaReport struct {
+	EndpointOptions kernel.EndpointOptions `json:"endpointOptions,omitempty"`
+	Windows         []HTTPJSONQuotaWindow  `json:"windows,omitempty"`
 }
 
 // HTTPJSONQuotaWindow maps either one named object or each item under
 // ItemsPath into a separate normalized quota snapshot. For object maps, the
 // object key is used as the window name unless NamePath is configured.
 type HTTPJSONQuotaWindow struct {
-	Name                  string   `json:"name,omitempty"`
-	ItemsPath             string   `json:"itemsPath,omitempty"`
-	NamePath              string   `json:"namePath,omitempty"`
-	UsedPath              string   `json:"usedPath,omitempty"`
-	LimitPath             string   `json:"limitPath,omitempty"`
-	RemainingPath         string   `json:"remainingPath,omitempty"`
-	RemainingPercentPath  string   `json:"remainingPercentPath,omitempty"`
-	ResetAtPath           string   `json:"resetAtPath,omitempty"`
-	ExhaustedStatusPath   string   `json:"exhaustedStatusPath,omitempty"`
-	ExhaustedStatusValues []string `json:"exhaustedStatusValues,omitempty"`
-	IgnoreWhenPath        string   `json:"ignoreWhenPath,omitempty"`
-	IgnoreWhenValues      []string `json:"ignoreWhenValues,omitempty"`
+	Name                   string   `json:"name,omitempty"`
+	ItemsPath              string   `json:"itemsPath,omitempty"`
+	NamePath               string   `json:"namePath,omitempty"`
+	UsedPath               string   `json:"usedPath,omitempty"`
+	LimitPath              string   `json:"limitPath,omitempty"`
+	RemainingPath          string   `json:"remainingPath,omitempty"`
+	RemainingFromLimitUsed bool     `json:"remainingFromLimitUsed,omitempty"`
+	RemainingPercentPath   string   `json:"remainingPercentPath,omitempty"`
+	ResetAtPath            string   `json:"resetAtPath,omitempty"`
+	ExhaustedStatusPath    string   `json:"exhaustedStatusPath,omitempty"`
+	ExhaustedStatusValues  []string `json:"exhaustedStatusValues,omitempty"`
+	IgnoreWhenPath         string   `json:"ignoreWhenPath,omitempty"`
+	IgnoreWhenValues       []string `json:"ignoreWhenValues,omitempty"`
 }
 
 func (o HTTPJSONQuotaOptions) Validate() error {
@@ -359,11 +377,44 @@ func (o HTTPJSONQuotaOptions) Validate() error {
 	if strings.ContainsAny(o.CredentialPrefix, "\r\n") {
 		return fmt.Errorf("quota credential prefix must not contain line breaks")
 	}
-	if len(o.Windows) > 64 {
+	if o.FailureMode != "" && o.FailureMode != QuotaReportsFailAll && o.FailureMode != QuotaReportsKeepAvailable {
+		return fmt.Errorf("quota report failureMode %q is unsupported", o.FailureMode)
+	}
+	if o.FailureMode != "" && len(o.Reports) == 0 {
+		return fmt.Errorf("quota report failureMode requires report endpoints")
+	}
+	if len(o.Windows) > 0 && len(o.Reports) > 0 {
+		return fmt.Errorf("quota source cannot combine source-level windows with report endpoints")
+	}
+	if err := validateHTTPJSONQuotaWindows(o.Windows); err != nil {
+		return err
+	}
+	if len(o.Reports) > 8 {
+		return fmt.Errorf("quota source supports at most 8 report endpoints")
+	}
+	for index, report := range o.Reports {
+		if report.EndpointOptions.Path == "" && len(report.EndpointOptions.Query) == 0 {
+			return fmt.Errorf("quota report %d requires endpoint path or query options", index)
+		}
+		if len(report.Windows) == 0 {
+			return fmt.Errorf("quota report %d requires at least one window mapping", index)
+		}
+		if len(report.Windows) > 64 {
+			return fmt.Errorf("quota report %d supports at most 64 window mappings", index)
+		}
+		if err := validateHTTPJSONQuotaWindows(report.Windows); err != nil {
+			return fmt.Errorf("quota report %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func validateHTTPJSONQuotaWindows(windows []HTTPJSONQuotaWindow) error {
+	if len(windows) > 64 {
 		return fmt.Errorf("quota source supports at most 64 window mappings")
 	}
-	seenNames := make(map[string]struct{}, len(o.Windows))
-	for index, window := range o.Windows {
+	seenNames := make(map[string]struct{}, len(windows))
+	for index, window := range windows {
 		if window.ItemsPath == "" && strings.TrimSpace(window.Name) == "" && window.NamePath == "" {
 			return fmt.Errorf("quota window %d requires a name, namePath or itemsPath", index)
 		}
@@ -388,6 +439,9 @@ func (o HTTPJSONQuotaOptions) Validate() error {
 		}
 		if window.RemainingPercentPath != "" && (window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "") {
 			return fmt.Errorf("quota window %d cannot combine remainingPercentPath with absolute amount paths", index)
+		}
+		if window.RemainingFromLimitUsed && (window.UsedPath == "" || window.LimitPath == "" || window.RemainingPath != "" || window.RemainingPercentPath != "") {
+			return fmt.Errorf("quota window %d remainingFromLimitUsed requires limitPath and usedPath only", index)
 		}
 		if window.UsedPath == "" && window.LimitPath == "" && window.RemainingPath == "" && window.RemainingPercentPath == "" && window.ResetAtPath == "" && window.ExhaustedStatusPath == "" {
 			return fmt.Errorf("quota window %d has no measurable fields", index)

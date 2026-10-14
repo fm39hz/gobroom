@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -76,6 +77,9 @@ type QuotaRequest struct {
 	EndpointOptions kernel.EndpointOptions
 	WindowName      string
 }
+
+// QuotaSnapshot is the normalized public result type for provider quota sources.
+type QuotaSnapshot = quota.Snapshot
 
 type UsageSource interface {
 	kernel.UsageEnricher
@@ -1011,11 +1015,75 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 	if input.Endpoint == nil || input.Transport == nil {
 		return nil, fmt.Errorf("quota operation requires endpoint and transport primitives")
 	}
+	if err := s.Options.Validate(); err != nil {
+		return nil, err
+	}
+	if len(s.Options.Reports) == 0 {
+		body, err := s.fetchQuotaReport(ctx, input, input.EndpointOptions)
+		if err != nil {
+			return nil, err
+		}
+		if len(s.Options.Windows) > 0 {
+			return DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, s.Options)
+		}
+		windowName := input.WindowName
+		if windowName == "" {
+			windowName = s.WindowName
+		}
+		return DecodeQuotaJSON(body, input.Route, windowName)
+	}
+
+	var snapshots []quota.Snapshot
+	var failures []error
+	completedReports := 0
+	for index, report := range s.Options.Reports {
+		endpointOptions := mergeQuotaEndpointOptions(input.EndpointOptions, report.EndpointOptions)
+		body, err := s.fetchQuotaReport(ctx, input, endpointOptions)
+		if err == nil {
+			reportOptions := s.Options
+			reportOptions.Reports = nil
+			reportOptions.FailureMode = ""
+			reportOptions.Windows = report.Windows
+			snapshotsForReport, decodeErr := DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, reportOptions)
+			if decodeErr != nil {
+				err = decodeErr
+			} else {
+				if len(snapshots)+len(snapshotsForReport) > 128 {
+					return nil, fmt.Errorf("quota reports exceed 128 normalized windows")
+				}
+				completedReports++
+				snapshots = append(snapshots, snapshotsForReport...)
+			}
+		}
+		if err != nil {
+			failures = append(failures, fmt.Errorf("quota report %d: %w", index, err))
+			if s.Options.FailureMode != QuotaReportsKeepAvailable {
+				return nil, errors.Join(failures...)
+			}
+		}
+	}
+	if len(failures) > 0 && completedReports == 0 {
+		return nil, errors.Join(failures...)
+	}
+	seenNames := make(map[string]struct{}, len(snapshots))
+	for _, snapshot := range snapshots {
+		key := strings.ToLower(snapshot.WindowName)
+		if _, duplicate := seenNames[key]; duplicate {
+			return nil, fmt.Errorf("quota reports produced duplicate window name %q", snapshot.WindowName)
+		}
+		seenNames[key] = struct{}{}
+	}
+	return snapshots, nil
+}
+
+const maxQuotaReportBytes = 1 << 20
+
+func (s HTTPJSONQuotaSource) fetchQuotaReport(ctx context.Context, input QuotaRequest, options kernel.EndpointOptions) ([]byte, error) {
 	path := s.Path
 	if path == "" {
 		path = "/usage"
 	}
-	url, err := input.Endpoint.Resolve(input.Route.BaseURL, path, input.EndpointOptions)
+	endpointURL, err := input.Endpoint.Resolve(input.Route.BaseURL, path, options)
 	if err != nil {
 		return nil, err
 	}
@@ -1031,16 +1099,18 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 		}
 		headers.Set(header, prefix+input.Credential.Secret)
 	}
-	response, err := input.Transport.Execute(ctx, kernel.UpstreamRequest{Method: http.MethodGet, URL: url, Headers: headers})
+	response, err := input.Transport.Execute(ctx, kernel.UpstreamRequest{Method: http.MethodGet, URL: endpointURL, Headers: headers})
 	if err != nil {
 		return nil, err
+	}
+	if response.Body == nil {
+		return nil, fmt.Errorf("quota endpoint returned no response body")
 	}
 	defer response.Body.Close()
 	if response.Status >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024))
 		return nil, fmt.Errorf("quota endpoint returned %s: %s", http.StatusText(response.Status), strings.TrimSpace(string(body)))
 	}
-	const maxQuotaReportBytes = 1 << 20
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxQuotaReportBytes+1))
 	if err != nil {
 		return nil, err
@@ -1048,14 +1118,21 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 	if len(body) > maxQuotaReportBytes {
 		return nil, fmt.Errorf("quota response exceeds %d-byte limit", maxQuotaReportBytes)
 	}
-	if len(s.Options.Windows) > 0 {
-		return DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, s.Options)
+	return body, nil
+}
+
+func mergeQuotaEndpointOptions(base, override kernel.EndpointOptions) kernel.EndpointOptions {
+	result := kernel.EndpointOptions{Path: base.Path, Query: make(map[string]string, len(base.Query)+len(override.Query))}
+	for key, value := range base.Query {
+		result.Query[key] = value
 	}
-	windowName := input.WindowName
-	if windowName == "" {
-		windowName = s.WindowName
+	if override.Path != "" {
+		result.Path = override.Path
 	}
-	return DecodeQuotaJSON(body, input.Route, windowName)
+	for key, value := range override.Query {
+		result.Query[key] = value
+	}
+	return result
 }
 
 func DecodeQuotaJSON(data []byte, route kernel.Route, windowName string) ([]quota.Snapshot, error) {
@@ -1121,6 +1198,9 @@ func DecodeQuotaJSONWithOptions(data []byte, route kernel.Route, defaultWindow s
 			used := parseJSONFloat(pointerValue(row.raw, mapping.UsedPath))
 			limit := parseJSONFloat(pointerValue(row.raw, mapping.LimitPath))
 			remaining := parseJSONFloat(pointerValue(row.raw, mapping.RemainingPath))
+			if mapping.RemainingFromLimitUsed && used != nil && limit != nil {
+				remaining = floatPointer(*limit - *used)
+			}
 			if mapping.RemainingPercentPath != "" {
 				if percent := parseJSONFloat(pointerValue(row.raw, mapping.RemainingPercentPath)); percent != nil {
 					bounded := math.Max(0, math.Min(100, *percent))
