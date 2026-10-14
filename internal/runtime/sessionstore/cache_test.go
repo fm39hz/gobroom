@@ -22,6 +22,7 @@ func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cache.ttl = 2 * time.Hour
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -29,18 +30,31 @@ func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 		cache.Run(ctx)
 	}()
 	route := kernel.Route{DefinitionID: "openai-compatible-responses", ExternalModel: "gpt-model", CredentialID: "account"}
-	state := kernel.SessionState{ResponseID: "resp_1", ProviderData: []byte(`{"opaque":"v"}`)}
+	providerExpiry := time.Now().Add(time.Hour).UTC()
+	state := kernel.SessionState{ResponseID: "resp_1", ProviderData: []byte(`{"opaque":"v"}`), ExpiresAt: providerExpiry}
 	if err := cache.Save(context.Background(), route, "client-session", state); err != nil {
 		t.Fatal(err)
 	}
 	loaded, found, err := cache.Load(context.Background(), route, "client-session")
-	if err != nil || !found || loaded.ResponseID != state.ResponseID || string(loaded.ProviderData) != string(state.ProviderData) {
+	if err != nil || !found || loaded.ResponseID != state.ResponseID || string(loaded.ProviderData) != string(state.ProviderData) || !loaded.ExpiresAt.Equal(providerExpiry) {
 		t.Fatalf("cached=%#v found=%v err=%v", loaded, found, err)
+	}
+	longProviderExpiry := time.Now().Add(4 * time.Hour).UTC()
+	if err := cache.Save(context.Background(), route, "client-session-long", kernel.SessionState{ResponseID: "resp_2", ExpiresAt: longProviderExpiry}); err != nil {
+		t.Fatal(err)
+	}
+	bounded, found, err := cache.Load(context.Background(), route, "client-session-long")
+	if err != nil || !found || !bounded.ExpiresAt.Before(longProviderExpiry) || time.Until(bounded.ExpiresAt) > 2*time.Hour {
+		t.Fatalf("provider session expiry was not bounded by the cache TTL: state=%#v found=%v err=%v", bounded, found, err)
 	}
 	cancel()
 	<-done
 	rows, err := db.ProviderSessions()
-	if err != nil || len(rows) != 1 || rows[0].State.ResponseID != "resp_1" || !rows[0].State.ExpiresAt.After(time.Now()) {
+	persistedExpiries := map[string]time.Time{}
+	for _, row := range rows {
+		persistedExpiries[row.State.ResponseID] = row.State.ExpiresAt
+	}
+	if err != nil || len(rows) != 2 || !persistedExpiries["resp_1"].Equal(providerExpiry) || !persistedExpiries["resp_2"].Equal(bounded.ExpiresAt) {
 		t.Fatalf("persisted=%#v err=%v", rows, err)
 	}
 	reloaded, err := New(db)

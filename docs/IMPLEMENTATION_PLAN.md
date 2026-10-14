@@ -247,10 +247,12 @@ pending.
    a daemon-owned, cancellable worker handles pending/slow-down/expiry without
    a connected frontend. CLI and TUI expose only public actions; device codes
    remain daemon-private. Credential compare-and-swap fences delayed auth and
-   refresh against newer secrets. The loopback callback listener is now
-   exercised through HTTP and the TUI projects its status. Remaining: provider
-   lifecycle fixtures for deny/expiry/slow-down and shutdown/cancel races,
-   plus HTTPS/non-loopback callback integrations. Opaque leases and
+   refresh against newer secrets; an in-flight authorization-code exchange is
+   tested against a concurrent credential update. The loopback callback
+   listener is exercised through HTTP and the TUI projects its status. Denial,
+   expiry, device slow-down and shutdown during device polling have lifecycle
+   evidence. Remaining: broader cancellation/shutdown races and HTTPS/non-loopback
+   callback integrations. Opaque leases and
    prepared request signing remain separate auth-driver work. Validate full
    lifecycle fixtures, not token-only stubs.
 5. **C5 — attempt replay and operation execution (in progress):** operation

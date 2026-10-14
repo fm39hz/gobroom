@@ -69,12 +69,13 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 			return err
 		}
 	}
-	if state.ExpiresAt.IsZero() {
-		ttl := s.TTL
-		if ttl <= 0 {
-			ttl = 24 * time.Hour
-		}
-		state.ExpiresAt = time.Now().Add(ttl)
+	ttl := s.TTL
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	cacheExpiry := time.Now().Add(ttl)
+	if state.ExpiresAt.IsZero() || state.ExpiresAt.After(cacheExpiry) {
+		state.ExpiresAt = cacheExpiry
 	}
 	s.mu.Lock()
 	s.entries[key] = cloneSessionState(state)

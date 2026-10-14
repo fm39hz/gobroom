@@ -107,7 +107,10 @@ func (c *Cache) Save(ctx context.Context, route kernel.Route, sessionID string, 
 		return fmt.Errorf("provider session data must be valid JSON no larger than 64 KiB")
 	}
 	now := time.Now()
-	state.ExpiresAt = now.Add(c.ttl)
+	cacheExpiry := now.Add(c.ttl)
+	if state.ExpiresAt.IsZero() || state.ExpiresAt.After(cacheExpiry) {
+		state.ExpiresAt = cacheExpiry
+	}
 	state = clone(state)
 	c.mu.Lock()
 	if _, exists := c.entries[k]; !exists && len(c.entries) >= c.maxEntries {

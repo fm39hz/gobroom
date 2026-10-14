@@ -43,7 +43,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/provider -run '^TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonCompositionRootRegistersStaticProviderModule$$' -count=1
 	go test ./internal/kernel -run '^TestRequiredRequestFacetsSeparateReasoningBudgetFromEffort$$' -count=1
-	go test ./internal/kernel -run '^(TestKernelLoadsAndSavesProviderSessionContinuity|TestKernelFailsClosedWhenSessionStateCannotBeLoaded)$$' -count=1
+	go test ./internal/kernel -run '^(TestKernelLoadsAndSavesProviderSessionContinuity|TestKernelFailsClosedWhenSessionStateCannotBeLoaded|TestMemorySessionStoreExpiresStateAndCopiesOpaqueData)$$' -count=1
 	go test ./internal/kernel -run '^(TestKernelRejectsResponseSignatureFromWrongIssuer|TestComposedAdapterBindsSignatureEventToProviderIssuer|TestResponseTransformCannotRewriteSignatureIssuer)$$' -count=1
 	go test ./internal/adapter/gemini -run '^TestGeminiReasonsAboutBudgetSeparatelyFromEffort$$' -count=1
 	go test ./internal/adapter/gemini -run '^TestGeminiSignatureHistoryRequiresExactSessionIssuerAttestation$$' -count=1
@@ -104,6 +104,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1
 	go test ./internal/daemon -run '^(TestLoopbackCallbackAddressRejectsNonLocalAndInvalidRedirects|TestOAuthCallbackTargetMatchesExactRegisteredPathAndQuery)$$' -count=1
 	go test ./internal/daemon -run '^TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow$$' -count=1
+	go test ./internal/runtime/sessionstore -run '^TestCachePersistsSessionStateOffTheReadPath$$' -count=1
 
 test-conformance-transform-boundaries:
 	go test ./internal/kernel -run '^(TestRequestTransformCannotAppendOpaqueMessageMetadata|TestRequestTransformAcceptsCanonicalMessageSuffix|TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded)$$' -count=1

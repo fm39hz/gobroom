@@ -136,14 +136,23 @@ func TestKernelFailsClosedWhenSessionStateCannotBeLoaded(t *testing.T) {
 func TestMemorySessionStoreExpiresStateAndCopiesOpaqueData(t *testing.T) {
 	route := Route{DefinitionID: "provider", ExternalModel: "model", CredentialID: "account"}
 	store := NewMemorySessionStore()
+	providerExpiry := time.Now().Add(12 * time.Hour)
 	data := json.RawMessage(`{"opaque":"value"}`)
-	if err := store.Save(context.Background(), route, "session", SessionState{ProviderData: data}); err != nil {
+	if err := store.Save(context.Background(), route, "session", SessionState{ProviderData: data, ExpiresAt: providerExpiry}); err != nil {
 		t.Fatal(err)
 	}
 	data[2] = 'X'
 	state, ok, err := store.Load(context.Background(), route, "session")
-	if err != nil || !ok || string(state.ProviderData) != `{"opaque":"value"}` {
+	if err != nil || !ok || string(state.ProviderData) != `{"opaque":"value"}` || !state.ExpiresAt.Equal(providerExpiry) {
 		t.Fatalf("state=%#v ok=%v err=%v", state, ok, err)
+	}
+	longExpiry := time.Now().Add(48 * time.Hour)
+	if err := store.Save(context.Background(), route, "long-expiry", SessionState{ResponseID: "bounded", ExpiresAt: longExpiry}); err != nil {
+		t.Fatal(err)
+	}
+	bounded, ok, err := store.Load(context.Background(), route, "long-expiry")
+	if err != nil || !ok || !bounded.ExpiresAt.Before(longExpiry) || time.Until(bounded.ExpiresAt) > store.TTL {
+		t.Fatalf("provider state expiry was not capped at the memory-store TTL: state=%#v ok=%v err=%v", bounded, ok, err)
 	}
 	if err := store.Save(context.Background(), route, "expired", SessionState{ResponseID: "old", ExpiresAt: time.Now().Add(-time.Second)}); err != nil {
 		t.Fatal(err)
