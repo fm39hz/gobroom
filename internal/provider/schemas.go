@@ -89,7 +89,15 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
     "quotaTypes":{"type":"array","items":{"type":"string","minLength":1}},
     "quotaStatuses":{"type":"array","items":{"type":"string","minLength":1}},
     "quotaHTTPStatuses":{"type":"array","uniqueItems":true,"items":{"type":"integer","minimum":400,"maximum":599}},
-    "quotaMessageTokens":{"type":"array","items":{"type":"string","minLength":1}}
+    "quotaMessageTokens":{"type":"array","items":{"type":"string","minLength":1}},
+    "scopeSignals":{"type":"array","items":{"type":"object","required":["scope"],"properties":{
+      "cause":{"enum":["request_invalid","capability_mismatch","model_not_found","auth","permission","quota_exhausted","rate_limited","capacity","overloaded","timeout","network","protocol","stream_failure","unknown"]},
+      "codes":{"type":"array","items":{"type":"string","minLength":1}},
+      "types":{"type":"array","items":{"type":"string","minLength":1}},
+      "statuses":{"type":"array","items":{"type":"string","minLength":1}},
+      "messageTokens":{"type":"array","items":{"type":"string","minLength":1}},
+      "scope":{"enum":["request","route","route_connection","connection","provider"]}
+    },"additionalProperties":false}}
   },
   "additionalProperties":false
 }},

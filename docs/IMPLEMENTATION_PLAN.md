@@ -114,10 +114,11 @@ live credentials are not required for deterministic acceptance.
    normalized identity into a reviewable draft; routes, fidelity and evidence
    remain inspectable before saving.
 3. **M8 provider evidence coverage:** test additional real-world error and
-   reset envelopes, and ambiguous/untyped scope signals. Generic body/header
-   deadline precedence, quota freshness/authority conflict resolution, and
-   manifest-configured quota HTTP status codes with matching coarse/rich
-   classification are tested. Bounded asynchronous health/quota write failure now retries, spools
+   reset envelopes and untyped scope signals not expressible by JSON pointers
+   or ordered `scopeSignals`. Generic body/header deadline precedence, quota
+   freshness/authority conflict resolution, provider-configured quota HTTP
+   statuses, and declarative scope mapping with class/cause consistency are
+   tested. Bounded asynchronous health/quota write failure now retries, spools
    durably, dead-letters after the retry cap and exposes CLI status/requeue;
    unrecoverable spool-full/filesystem failures remain logged. Scope-correct route/model,
    connection and provider health persistence is implemented and tested.

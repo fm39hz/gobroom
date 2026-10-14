@@ -228,6 +228,9 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	if outcome.Cause == kernel.CauseAuth && (c.Options == nil || c.Options.DefaultScope == "") && outcome.Scope == kernel.ScopeRoute {
 		outcome.Scope = kernel.ScopeConnection
 	}
+	if scope, matched := matchHTTPJSONScopeSignal(c.Options, errorEvidence, outcome.Cause); matched {
+		outcome.Scope = scope
+	}
 	now := time.Now()
 	headerRetryAt := parseRetryAfter(headers.Get("Retry-After"), now)
 	headerResetAt := parseResetTimestamp(json.RawMessage(headers.Get("X-RateLimit-Reset")))
@@ -323,6 +326,10 @@ type httpErrorDetail struct {
 
 type httpErrorEvidence struct {
 	QuotaExhausted bool
+	Code           string
+	Type           string
+	Status         string
+	Message        string
 	ResetAt        time.Time
 	RetryAt        time.Time
 	HasWindow      bool
@@ -363,12 +370,24 @@ func decodeHTTPErrorEvidence(body []byte, options *HTTPJSONErrorClassifierOption
 	if !quotaExhausted && strings.Contains(statusName, "resource_exhausted") && strings.Contains(errorMessage, "quota") {
 		quotaExhausted = true
 	}
-	evidence := httpErrorEvidence{QuotaExhausted: quotaExhausted}
+	evidence := httpErrorEvidence{QuotaExhausted: quotaExhausted, Code: code, Type: typeName, Status: statusName, Message: errorMessage}
 	if options != nil {
 		customCode := pointerText(body, options.CodePath)
 		customType := pointerText(body, options.TypePath)
 		customStatus := pointerText(body, options.StatusPath)
 		customMessage := pointerText(body, options.MessagePath)
+		if customCode != "" {
+			evidence.Code = strings.ToLower(customCode)
+		}
+		if customType != "" {
+			evidence.Type = strings.ToLower(customType)
+		}
+		if customStatus != "" {
+			evidence.Status = strings.ToLower(customStatus)
+		}
+		if customMessage != "" {
+			evidence.Message = strings.ToLower(customMessage)
+		}
 		quotaExhausted = quotaExhausted || matchesAny(customCode, options.QuotaCodes) || matchesAny(customType, options.QuotaTypes) || matchesAny(customStatus, options.QuotaStatuses) || containsAny(strings.ToLower(customMessage), options.QuotaMessageTokens...)
 		if at := parseResetTimestamp(pointerValue(body, options.ResetAtPath)); at.After(evidence.ResetAt) {
 			evidence.ResetAt = at
@@ -404,6 +423,31 @@ func decodeHTTPErrorEvidence(body []byte, options *HTTPJSONErrorClassifierOption
 		}
 	}
 	return evidence
+}
+
+func matchHTTPJSONScopeSignal(options *HTTPJSONErrorClassifierOptions, evidence httpErrorEvidence, cause kernel.OutcomeCause) (kernel.OutcomeScope, bool) {
+	if options == nil {
+		return "", false
+	}
+	for _, signal := range options.ScopeSignals {
+		if signal.Cause != "" && signal.Cause != cause {
+			continue
+		}
+		if len(signal.Codes) > 0 && !matchesAny(evidence.Code, signal.Codes) {
+			continue
+		}
+		if len(signal.Types) > 0 && !matchesAny(evidence.Type, signal.Types) {
+			continue
+		}
+		if len(signal.Statuses) > 0 && !matchesAny(evidence.Status, signal.Statuses) {
+			continue
+		}
+		if len(signal.MessageTokens) > 0 && !containsAny(evidence.Message, signal.MessageTokens...) {
+			continue
+		}
+		return signal.Scope, true
+	}
+	return "", false
 }
 
 func rawJSONText(raw json.RawMessage) string {

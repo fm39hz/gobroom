@@ -72,29 +72,41 @@ type ErrorClassifierOptions struct {
 }
 
 type HTTPJSONErrorClassifierOptions struct {
-	DefaultScope        kernel.OutcomeScope `json:"defaultScope,omitempty"`
-	AuthScope           kernel.OutcomeScope `json:"authScope,omitempty"`
-	QuotaScope          kernel.OutcomeScope `json:"quotaScope,omitempty"`
-	RateLimitScope      kernel.OutcomeScope `json:"rateLimitScope,omitempty"`
-	CapacityScope       kernel.OutcomeScope `json:"capacityScope,omitempty"`
-	CodePath            string              `json:"codePath,omitempty"`
-	TypePath            string              `json:"typePath,omitempty"`
-	StatusPath          string              `json:"statusPath,omitempty"`
-	MessagePath         string              `json:"messagePath,omitempty"`
-	ResetAtPath         string              `json:"resetAtPath,omitempty"`
-	RetryAfterPath      string              `json:"retryAfterPath,omitempty"`
-	RetryDelayPath      string              `json:"retryDelayPath,omitempty"`
-	WindowNamePath      string              `json:"windowNamePath,omitempty"`
-	WindowLimitPath     string              `json:"windowLimitPath,omitempty"`
-	WindowUsedPath      string              `json:"windowUsedPath,omitempty"`
-	WindowRemainingPath string              `json:"windowRemainingPath,omitempty"`
-	QuotaWindowName     string              `json:"quotaWindowName,omitempty"`
-	QuotaWindowKind     string              `json:"quotaWindowKind,omitempty"`
-	QuotaCodes          []string            `json:"quotaCodes,omitempty"`
-	QuotaTypes          []string            `json:"quotaTypes,omitempty"`
-	QuotaStatuses       []string            `json:"quotaStatuses,omitempty"`
-	QuotaHTTPStatuses   []int               `json:"quotaHTTPStatuses,omitempty"`
-	QuotaMessageTokens  []string            `json:"quotaMessageTokens,omitempty"`
+	DefaultScope        kernel.OutcomeScope   `json:"defaultScope,omitempty"`
+	AuthScope           kernel.OutcomeScope   `json:"authScope,omitempty"`
+	QuotaScope          kernel.OutcomeScope   `json:"quotaScope,omitempty"`
+	RateLimitScope      kernel.OutcomeScope   `json:"rateLimitScope,omitempty"`
+	CapacityScope       kernel.OutcomeScope   `json:"capacityScope,omitempty"`
+	CodePath            string                `json:"codePath,omitempty"`
+	TypePath            string                `json:"typePath,omitempty"`
+	StatusPath          string                `json:"statusPath,omitempty"`
+	MessagePath         string                `json:"messagePath,omitempty"`
+	ResetAtPath         string                `json:"resetAtPath,omitempty"`
+	RetryAfterPath      string                `json:"retryAfterPath,omitempty"`
+	RetryDelayPath      string                `json:"retryDelayPath,omitempty"`
+	WindowNamePath      string                `json:"windowNamePath,omitempty"`
+	WindowLimitPath     string                `json:"windowLimitPath,omitempty"`
+	WindowUsedPath      string                `json:"windowUsedPath,omitempty"`
+	WindowRemainingPath string                `json:"windowRemainingPath,omitempty"`
+	QuotaWindowName     string                `json:"quotaWindowName,omitempty"`
+	QuotaWindowKind     string                `json:"quotaWindowKind,omitempty"`
+	QuotaCodes          []string              `json:"quotaCodes,omitempty"`
+	QuotaTypes          []string              `json:"quotaTypes,omitempty"`
+	QuotaStatuses       []string              `json:"quotaStatuses,omitempty"`
+	QuotaHTTPStatuses   []int                 `json:"quotaHTTPStatuses,omitempty"`
+	QuotaMessageTokens  []string              `json:"quotaMessageTokens,omitempty"`
+	ScopeSignals        []HTTPJSONScopeSignal `json:"scopeSignals,omitempty"`
+}
+
+// HTTPJSONScopeSignal maps an exact structured error pattern to a routing
+// scope. Signals are checked in declaration order; the first match wins.
+type HTTPJSONScopeSignal struct {
+	Cause         kernel.OutcomeCause `json:"cause,omitempty"`
+	Codes         []string            `json:"codes,omitempty"`
+	Types         []string            `json:"types,omitempty"`
+	Statuses      []string            `json:"statuses,omitempty"`
+	MessageTokens []string            `json:"messageTokens,omitempty"`
+	Scope         kernel.OutcomeScope `json:"scope"`
 }
 
 func (o ErrorClassifierOptions) Empty() bool {
@@ -102,7 +114,7 @@ func (o ErrorClassifierOptions) Empty() bool {
 }
 
 func (o HTTPJSONErrorClassifierOptions) Empty() bool {
-	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0
+	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0 && len(o.ScopeSignals) == 0
 }
 
 func (o HTTPJSONErrorClassifierOptions) Validate() error {
@@ -132,6 +144,24 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 			}
 		}
 	}
+	for index, signal := range o.ScopeSignals {
+		if !validOutcomeScope(signal.Scope) {
+			return fmt.Errorf("error classifier scope signal %d has unsupported scope %q", index, signal.Scope)
+		}
+		if signal.Cause != "" && !validOutcomeCause(signal.Cause) {
+			return fmt.Errorf("error classifier scope signal %d has unsupported cause %q", index, signal.Cause)
+		}
+		if len(signal.Codes)+len(signal.Types)+len(signal.Statuses)+len(signal.MessageTokens) == 0 {
+			return fmt.Errorf("error classifier scope signal %d has no matching evidence", index)
+		}
+		for _, values := range [][]string{signal.Codes, signal.Types, signal.Statuses, signal.MessageTokens} {
+			for _, value := range values {
+				if strings.TrimSpace(value) == "" {
+					return fmt.Errorf("error classifier scope signal %d has an empty matcher", index)
+				}
+			}
+		}
+	}
 	seenQuotaHTTPStatuses := make(map[int]struct{}, len(o.QuotaHTTPStatuses))
 	for _, status := range o.QuotaHTTPStatuses {
 		if status < 400 || status > 599 {
@@ -143,6 +173,15 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 		seenQuotaHTTPStatuses[status] = struct{}{}
 	}
 	return nil
+}
+
+func validOutcomeCause(cause kernel.OutcomeCause) bool {
+	switch cause {
+	case kernel.CauseRequestInvalid, kernel.CauseCapability, kernel.CauseModelNotFound, kernel.CauseAuth, kernel.CausePermission, kernel.CauseQuotaExhausted, kernel.CauseRateLimited, kernel.CauseCapacity, kernel.CauseOverloaded, kernel.CauseTimeout, kernel.CauseNetwork, kernel.CauseProtocol, kernel.CauseStreamFailure, kernel.CauseUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 func validOutcomeScope(scope kernel.OutcomeScope) bool {

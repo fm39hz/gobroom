@@ -390,6 +390,7 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 				CodePath: "/failure/reason", MessagePath: "/failure/explanation", ResetAtPath: "/failure/reopens_at",
 				WindowNamePath: "/failure/window", WindowLimitPath: "/failure/budget", WindowUsedPath: "/failure/spent", WindowRemainingPath: "/failure/left",
 				QuotaWindowKind: "tokens", QuotaCodes: []string{"BALANCE_EMPTY"}, QuotaHTTPStatuses: []int{409}, QuotaMessageTokens: []string{"credits exhausted"},
+				ScopeSignals: []HTTPJSONScopeSignal{{Cause: kernel.CauseQuotaExhausted, Codes: []string{"BALANCE_EMPTY"}, Scope: kernel.ScopeConnection}},
 			}},
 		}},
 	}
@@ -424,7 +425,7 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 	reset := time.Now().Add(7 * time.Minute).UTC().Truncate(time.Second)
 	body := []byte(`{"failure":{"reason":"BALANCE_EMPTY","explanation":"monthly credits exhausted","reopens_at":"` + reset.Format(time.RFC3339) + `","window":"weekly","budget":1000,"spent":1000,"left":0}}`)
 	outcome := classifier.ClassifyOutcome(http.StatusTooManyRequests, nil, body)
-	if outcome.Cause != kernel.CauseQuotaExhausted || outcome.RetryAt.IsZero() || len(outcome.Limits) != 1 {
+	if outcome.Cause != kernel.CauseQuotaExhausted || outcome.Scope != kernel.ScopeConnection || outcome.RetryAt.IsZero() || len(outcome.Limits) != 1 {
 		t.Fatalf("configured error outcome=%#v", outcome)
 	}
 	window := outcome.Limits[0]

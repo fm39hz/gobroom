@@ -235,3 +235,25 @@ func TestHTTPJSONErrorClassifierHandlesTypedQuotaStatusesAndGenericConflict(t *t
 		t.Fatal("invalid quota HTTP status was accepted")
 	}
 }
+
+func TestHTTPJSONErrorClassifierAppliesOrderedTypedScopeSignals(t *testing.T) {
+	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{
+		DefaultScope: kernel.ScopeRoute, CapacityScope: kernel.ScopeConnection,
+		ScopeSignals: []HTTPJSONScopeSignal{
+			{Cause: kernel.CauseOverloaded, Codes: []string{"region_capacity"}, Scope: kernel.ScopeProvider},
+			{Cause: kernel.CauseOverloaded, Types: []string{"resource_exhausted"}, Scope: kernel.ScopeConnection},
+		},
+	}}
+	body := []byte(`{"error":{"code":"REGION_CAPACITY","status":"RESOURCE_EXHAUSTED","message":"regional capacity exhausted"}}`)
+	outcome := classifier.ClassifyOutcome(http.StatusConflict, nil, body)
+	if outcome.Cause != kernel.CauseOverloaded || outcome.Scope != kernel.ScopeProvider {
+		t.Fatalf("first matching typed scope signal did not win: %#v", outcome)
+	}
+	other := classifier.ClassifyOutcome(http.StatusConflict, nil, []byte(`{"error":{"status":"RESOURCE_EXHAUSTED","message":"regional capacity exhausted"}}`))
+	if other.Cause != kernel.CauseOverloaded || other.Scope != kernel.ScopeConnection {
+		t.Fatalf("secondary typed scope signal did not match its envelope: %#v", other)
+	}
+	if _, err := (HTTPJSONErrorClassifier{}).WithOptions(ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{ScopeSignals: []HTTPJSONScopeSignal{{Scope: kernel.ScopeProvider}}}}); err == nil {
+		t.Fatal("unconditional scope signal was accepted")
+	}
+}
