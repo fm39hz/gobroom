@@ -464,6 +464,26 @@ func TestBundlePreservesSideBySideProviderDefinitionVersions(t *testing.T) {
 	if err != nil || len(providers) != 2 || providers[0].DefinitionRef() == providers[1].DefinitionRef() {
 		t.Fatalf("provider-node definition refs after import=%#v err=%v", providers, err)
 	}
+	storedDefinitions, err := target.ProviderDefinitions()
+	if err != nil || len(storedDefinitions) != 2 {
+		t.Fatalf("portable definitions after import=%#v err=%v", storedDefinitions, err)
+	}
+	restartedRuntime, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range storedDefinitions {
+		if err := restartedRuntime.RegisterDefinitionIfAbsent(definition); err != nil {
+			t.Fatalf("restore portable provider definition %s: %v", provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion).Key(), err)
+		}
+	}
+	restartedBindings, err := restartedRuntime.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restartedBindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef(definitionV2.ID, 2), provider.OperationChat)].AuthModes["api_key"].Presentation.Header != "X-API-Key" {
+		t.Fatal("daemon-restart runtime did not restore the exact v2 provider definition")
+	}
 }
 
 func TestBundleRejectsProviderDefinitionPayloadDifferentFromPinnedDescriptor(t *testing.T) {
