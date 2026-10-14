@@ -9,10 +9,11 @@ import (
 )
 
 var (
-	endpointOptionsSchemaRef = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.endpoint-options", ContractVersion: 1}
-	usageOptionsSchemaRef    = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.usage-options", ContractVersion: 1}
-	errorOptionsSchemaRef    = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.http-json-error-options", ContractVersion: 1}
-	oauthOptionsSchemaRef    = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.auth.oauth2-options", ContractVersion: 1}
+	endpointOptionsSchemaRef    = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.endpoint-options", ContractVersion: 1}
+	usageOptionsSchemaRef       = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.usage-options", ContractVersion: 1}
+	quotaSourceOptionsSchemaRef = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.http-json-quota-options", ContractVersion: 1}
+	errorOptionsSchemaRef       = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.provider.http-json-error-options", ContractVersion: 1}
+	oauthOptionsSchemaRef       = extensions.Ref{Kind: extensions.SchemaKind, ID: "gobroom.auth.oauth2-options", ContractVersion: 1}
 )
 
 const schemaDraft2020 = "https://json-schema.org/draft/2020-12/schema"
@@ -56,6 +57,33 @@ func usageOptionsSchema() (json.RawMessage, error) {
   "inputTokensHeader":{"type":"string","minLength":1},
   "outputTokensHeader":{"type":"string","minLength":1},
   "estimatedCostHeader":{"type":"string","minLength":1}
+},
+"additionalProperties":false
+}`))
+}
+
+func quotaSourceOptionsSchema() (json.RawMessage, error) {
+	return bindSchemaDocument(quotaSourceOptionsSchemaRef, json.RawMessage(`{
+"type":"object",
+"properties":{
+  "credentialHeader":{"type":"string","minLength":1,"pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+  "credentialPrefix":{"type":"string"},
+  "windows":{"type":"array","maxItems":64,"items":{"type":"object","properties":{
+    "name":{"type":"string","minLength":1},
+    "itemsPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "namePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "usedPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "remainingPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "remainingPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "resetAtPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "exhaustedStatusPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "exhaustedStatusValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
+    "ignoreWhenPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
+    "ignoreWhenValues":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
+  },"anyOf":[{"required":["name"]},{"required":["namePath"]},{"required":["itemsPath"]}],
+  "dependentRequired":{"exhaustedStatusPath":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusPath"],"ignoreWhenPath":["ignoreWhenValues"],"ignoreWhenValues":["ignoreWhenPath"]},
+  "additionalProperties":false}}
 },
 "additionalProperties":false
 }`))

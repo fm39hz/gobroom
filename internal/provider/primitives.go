@@ -319,9 +319,98 @@ type OperationBinding struct {
 	UsageSource            PrimitiveRef              `json:"usageSource,omitempty"`
 	UsageOptions           kernel.UsageSourceOptions `json:"usageOptions,omitempty"`
 	QuotaSource            PrimitiveRef              `json:"quotaSource,omitempty"`
+	QuotaSourceOptions     json.RawMessage           `json:"quotaSourceOptions,omitempty"`
 	QuotaWindowName        string                    `json:"quotaWindowName,omitempty"`
 	ErrorClassifier        PrimitiveRef              `json:"errorClassifier,omitempty"`
 	ErrorClassifierOptions ErrorClassifierOptions    `json:"errorClassifierOptions,omitempty"`
+}
+
+// HTTPJSONQuotaOptions describes provider-neutral extraction from one JSON
+// quota report. Providers with multiple endpoints or non-composable semantics
+// can register a dedicated QuotaSource primitive instead.
+type HTTPJSONQuotaOptions struct {
+	CredentialHeader string                `json:"credentialHeader,omitempty"`
+	CredentialPrefix string                `json:"credentialPrefix,omitempty"`
+	Windows          []HTTPJSONQuotaWindow `json:"windows,omitempty"`
+}
+
+// HTTPJSONQuotaWindow maps either one named object or each item under
+// ItemsPath into a separate normalized quota snapshot. For object maps, the
+// object key is used as the window name unless NamePath is configured.
+type HTTPJSONQuotaWindow struct {
+	Name                  string   `json:"name,omitempty"`
+	ItemsPath             string   `json:"itemsPath,omitempty"`
+	NamePath              string   `json:"namePath,omitempty"`
+	UsedPath              string   `json:"usedPath,omitempty"`
+	LimitPath             string   `json:"limitPath,omitempty"`
+	RemainingPath         string   `json:"remainingPath,omitempty"`
+	RemainingPercentPath  string   `json:"remainingPercentPath,omitempty"`
+	ResetAtPath           string   `json:"resetAtPath,omitempty"`
+	ExhaustedStatusPath   string   `json:"exhaustedStatusPath,omitempty"`
+	ExhaustedStatusValues []string `json:"exhaustedStatusValues,omitempty"`
+	IgnoreWhenPath        string   `json:"ignoreWhenPath,omitempty"`
+	IgnoreWhenValues      []string `json:"ignoreWhenValues,omitempty"`
+}
+
+func (o HTTPJSONQuotaOptions) Validate() error {
+	if o.CredentialHeader != "" && !validHTTPHeaderName(o.CredentialHeader) {
+		return fmt.Errorf("quota credential header name is invalid")
+	}
+	if strings.ContainsAny(o.CredentialPrefix, "\r\n") {
+		return fmt.Errorf("quota credential prefix must not contain line breaks")
+	}
+	if len(o.Windows) > 64 {
+		return fmt.Errorf("quota source supports at most 64 window mappings")
+	}
+	seenNames := make(map[string]struct{}, len(o.Windows))
+	for index, window := range o.Windows {
+		if window.ItemsPath == "" && strings.TrimSpace(window.Name) == "" && window.NamePath == "" {
+			return fmt.Errorf("quota window %d requires a name, namePath or itemsPath", index)
+		}
+		if window.ItemsPath != "" && window.Name != "" {
+			return fmt.Errorf("quota window %d cannot combine a static name with itemsPath", index)
+		}
+		for _, item := range []struct{ field, path string }{
+			{"itemsPath", window.ItemsPath}, {"namePath", window.NamePath}, {"usedPath", window.UsedPath},
+			{"limitPath", window.LimitPath}, {"remainingPath", window.RemainingPath},
+			{"remainingPercentPath", window.RemainingPercentPath}, {"resetAtPath", window.ResetAtPath},
+			{"exhaustedStatusPath", window.ExhaustedStatusPath}, {"ignoreWhenPath", window.IgnoreWhenPath},
+		} {
+			if item.path != "" && !validJSONPointer(item.path) {
+				return fmt.Errorf("quota window %d %s must be an absolute JSON Pointer", index, item.field)
+			}
+		}
+		if (window.ExhaustedStatusPath == "") != (len(window.ExhaustedStatusValues) == 0) {
+			return fmt.Errorf("quota window %d must configure exhausted status path and values together", index)
+		}
+		if (window.IgnoreWhenPath == "") != (len(window.IgnoreWhenValues) == 0) {
+			return fmt.Errorf("quota window %d must configure ignore path and values together", index)
+		}
+		if window.RemainingPercentPath != "" && (window.UsedPath != "" || window.LimitPath != "" || window.RemainingPath != "") {
+			return fmt.Errorf("quota window %d cannot combine remainingPercentPath with absolute amount paths", index)
+		}
+		if window.UsedPath == "" && window.LimitPath == "" && window.RemainingPath == "" && window.RemainingPercentPath == "" && window.ResetAtPath == "" && window.ExhaustedStatusPath == "" {
+			return fmt.Errorf("quota window %d has no measurable fields", index)
+		}
+		for _, values := range [][]string{window.ExhaustedStatusValues, window.IgnoreWhenValues} {
+			for _, value := range values {
+				if strings.TrimSpace(value) == "" {
+					return fmt.Errorf("quota window %d has an empty status matcher", index)
+				}
+			}
+		}
+		if window.Name != "" {
+			key := strings.ToLower(strings.TrimSpace(window.Name))
+			if window.Name != strings.TrimSpace(window.Name) {
+				return fmt.Errorf("quota window %d name must be trimmed", index)
+			}
+			if _, duplicate := seenNames[key]; duplicate {
+				return fmt.Errorf("quota window name %q is duplicated", window.Name)
+			}
+			seenNames[key] = struct{}{}
+		}
+	}
+	return nil
 }
 
 type CapabilitySet struct {
@@ -579,7 +668,19 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 		runtime.RegisterModelSource(OpenAIModelSource{}), runtime.RegisterModelSource(AnthropicModelSource{}), runtime.RegisterModelSource(StaticModelSource{}),
 		runtime.RegisterUsageSource(HTTPHeaderUsageSource{}),
 		runtime.RegisterErrorClassifier(HTTPJSONErrorClassifier{}),
-		runtime.RegisterQuotaSource(NoopQuotaSource{}), runtime.RegisterQuotaSource(HTTPJSONQuotaSource{}),
+		runtime.RegisterQuotaSource(NoopQuotaSource{}),
+		runtime.RegisterQuotaSourceFactory(HTTPJSONQuotaSource{}, 1, func(raw json.RawMessage) (QuotaSource, error) {
+			var options HTTPJSONQuotaOptions
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, &options); err != nil {
+					return nil, fmt.Errorf("decode HTTP/JSON quota options: %w", err)
+				}
+			}
+			if err := options.Validate(); err != nil {
+				return nil, err
+			}
+			return HTTPJSONQuotaSource{Options: options}, nil
+		}),
 		runtime.RegisterAuthFactoryWithOptionsSchema("oauth2", 1, oauthOptionsSchemaRef, oauthSchema, OAuthAuthFactory),
 	)
 	for _, renderer := range egress.Builtins() {
@@ -1160,6 +1261,36 @@ func (r *RuntimeRegistry) RegisterQuotaSourceVersion(source QuotaSource, contrac
 	return nil
 }
 
+// RegisterQuotaSourceFactory binds exact manifest options into a per-provider
+// QuotaSource instance. The primitive descriptor must already carry the
+// matching versioned options schema.
+func (r *RuntimeRegistry) RegisterQuotaSourceFactory(source QuotaSource, contractVersion uint64, factory QuotaSourceFactory) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if source == nil || factory == nil || contractVersion == 0 {
+		return fmt.Errorf("quota source, options factory and positive contract version are required")
+	}
+	ref := PrimitiveRef{Kind: PrimitiveQuotaSource, ID: source.ID(), ContractVersion: contractVersion}
+	if _, exists := r.quotaSources[extensionRef(ref)]; exists {
+		return fmt.Errorf("quota source %q is already registered", extensionRef(ref).Key())
+	}
+	if err := r.registerImplementation(PrimitiveQuotaSource, source.ID(), contractVersion, func(raw json.RawMessage) (any, error) {
+		configured, err := factory(append(json.RawMessage(nil), raw...))
+		if err != nil {
+			return nil, err
+		}
+		if configured == nil {
+			return nil, fmt.Errorf("quota source options factory returned nil")
+		}
+		return configured, nil
+	}); err != nil {
+		return err
+	}
+	r.quotaSources[extensionRef(ref)] = source
+	return nil
+}
+
 func (r *RuntimeRegistry) RegisterAuthFlow(flow AuthFlow) error {
 	return r.RegisterAuthFlowVersion(flow, 1)
 }
@@ -1297,6 +1428,16 @@ func (r *RuntimeRegistry) QuotaSources() map[extensions.Ref]QuotaSource {
 	return result
 }
 
+func (r *RuntimeRegistry) QuotaSourcesForBindings(bindings map[string]RuntimeBinding) map[extensions.Ref]QuotaSource {
+	result := r.QuotaSources()
+	for _, binding := range bindings {
+		if binding.QuotaSource != nil && binding.QuotaSourceRef.ID != "" {
+			result[binding.QuotaSourceRef] = binding.QuotaSource
+		}
+	}
+	return result
+}
+
 func (r *RuntimeRegistry) UsageSources() map[extensions.Ref]kernel.UsageEnricher {
 	result := make(map[extensions.Ref]kernel.UsageEnricher, len(r.usageSources))
 	for ref, source := range r.usageSources {
@@ -1402,6 +1543,7 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	operationBindings := make(map[Operation]OperationBinding, len(def.Operations))
 	for operation, binding := range def.Operations {
 		binding.RequestCodecOptions = append(json.RawMessage(nil), binding.RequestCodecOptions...)
+		binding.QuotaSourceOptions = append(json.RawMessage(nil), binding.QuotaSourceOptions...)
 		operationBindings[operation] = binding
 	}
 	def.Operations = operationBindings
@@ -1449,6 +1591,9 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		}
 		if operation == OperationQuota && binding.QuotaSource.ID == "" {
 			return fmt.Errorf("provider %q quota operation requires a quotaSource", def.ID)
+		}
+		if len(binding.QuotaSourceOptions) > 0 && binding.QuotaSource.ID == "" {
+			return fmt.Errorf("provider %q %q quotaSourceOptions requires a quotaSource", def.ID, operation)
 		}
 		if operation != OperationQuota && binding.QuotaSource.ID != "" {
 			return fmt.Errorf("provider %q quotaSource must be bound to the quota operation", def.ID)

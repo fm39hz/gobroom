@@ -145,6 +145,36 @@ expressible with these common typed options still need a reusable extractor
 primitive. Polling and enrichment boundaries are defined in [the passive
 health contract](PASSIVE_HEALTH_ROUTING.md).
 
+The `http-json-quota` source accepts per-binding `quotaSourceOptions`. A
+manifest can map multiple named windows from one quota report by JSON Pointer,
+including object-map windows, arrays with a `namePath`, remaining percentages,
+reset timestamps, exhausted statuses and explicitly unreported windows. Its
+response body is bounded; credentials can be sent using a configured header
+and prefix, without storing the credential in the manifest. A provider that
+needs multiple endpoints, joins, currency preference or partial-source
+fallback can register a dedicated `QuotaSource` module; the daemon's poller,
+generation fencing and persistence remain shared.
+
+```json
+"quota": {
+  "endpoint": {"kind":"endpoint","id":"http-json","contractVersion":1},
+  "endpointOptions": {"path":"/account/usage"},
+  "transport": {"kind":"transport","id":"http","contractVersion":1},
+  "quotaSource": {"kind":"quota_source","id":"http-json-quota","contractVersion":1},
+  "quotaSourceOptions": {
+    "credentialHeader":"Authorization",
+    "credentialPrefix":"Bearer ",
+    "windows":[{
+      "itemsPath":"/quotas",
+      "remainingPercentPath":"/remainingPercentage",
+      "resetAtPath":"/resetAt",
+      "ignoreWhenPath":"/fractionReported",
+      "ignoreWhenValues":["false"]
+    }]
+  }
+}
+```
+
 ## Resolution precedence
 
 Explicit node/connection settings override provider-definition defaults.

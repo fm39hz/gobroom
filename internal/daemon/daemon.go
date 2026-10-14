@@ -324,7 +324,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.kernel.UsageSources = runtimeRegistry.UsageSources()
 	d.kernel.SessionStores = runtimeRegistry.SessionStores()
 	opportunisticQuota := &runtimehealth.OpportunisticQuota{
-		Sources:    runtimeRegistry.QuotaSources(),
+		Sources:    runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
 		Endpoints:  runtimeRegistry.Endpoints(),
 		Transports: runtimeRegistry.Transports(),
 		Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
@@ -358,7 +358,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	go func() {
 		defer close(quotaPollerDone)
 		(runtimehealth.QuotaPoller{
-			Sources:    runtimeRegistry.QuotaSources(),
+			Sources:    runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
 			Endpoints:  runtimeRegistry.Endpoints(),
 			Transports: runtimeRegistry.Transports(),
 			Snapshot:   func() kernel.Snapshot { return d.kernel.Snapshots.Load() },

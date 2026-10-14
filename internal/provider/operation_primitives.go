@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,8 @@ type QuotaSource interface {
 	ID() string
 	Fetch(context.Context, QuotaRequest) ([]quota.Snapshot, error)
 }
+
+type QuotaSourceFactory func(json.RawMessage) (QuotaSource, error)
 
 type QuotaRequest struct {
 	Credential      kernel.Credential
@@ -276,10 +279,13 @@ func parseHeaderReset(value string, now time.Time) time.Time {
 			at = time.Unix(int64(whole), int64(fractional*float64(time.Second)))
 		case numeric <= 1000000000:
 			at = now.Add(time.Duration(numeric * float64(time.Second)))
+		default:
+			return time.Time{}
 		}
 		if at.After(now) {
 			return at
 		}
+		return time.Time{}
 	}
 	return parseRetryAfter(value, now)
 }
@@ -997,6 +1003,7 @@ func (NoopQuotaSource) Fetch(_ context.Context, _ QuotaRequest) ([]quota.Snapsho
 type HTTPJSONQuotaSource struct {
 	Path       string
 	WindowName string
+	Options    HTTPJSONQuotaOptions
 }
 
 func (s HTTPJSONQuotaSource) ID() string { return "http-json-quota" }
@@ -1015,7 +1022,14 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 	headers := make(http.Header)
 	headers.Set("Accept", "application/json")
 	if input.Credential.Secret != "" {
-		headers.Set("Authorization", "Bearer "+input.Credential.Secret)
+		header, prefix := s.Options.CredentialHeader, s.Options.CredentialPrefix
+		if header == "" {
+			header = "Authorization"
+		}
+		if prefix == "" && strings.EqualFold(header, "Authorization") {
+			prefix = "Bearer "
+		}
+		headers.Set(header, prefix+input.Credential.Secret)
 	}
 	response, err := input.Transport.Execute(ctx, kernel.UpstreamRequest{Method: http.MethodGet, URL: url, Headers: headers})
 	if err != nil {
@@ -1026,9 +1040,16 @@ func (s HTTPJSONQuotaSource) Fetch(ctx context.Context, input QuotaRequest) ([]q
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024))
 		return nil, fmt.Errorf("quota endpoint returned %s: %s", http.StatusText(response.Status), strings.TrimSpace(string(body)))
 	}
-	body, err := io.ReadAll(response.Body)
+	const maxQuotaReportBytes = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxQuotaReportBytes+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(body) > maxQuotaReportBytes {
+		return nil, fmt.Errorf("quota response exceeds %d-byte limit", maxQuotaReportBytes)
+	}
+	if len(s.Options.Windows) > 0 {
+		return DecodeQuotaJSONWithOptions(body, input.Route, input.WindowName, s.Options)
 	}
 	windowName := input.WindowName
 	if windowName == "" {
@@ -1065,6 +1086,120 @@ func DecodeQuotaJSON(data []byte, route kernel.Route, windowName string) ([]quot
 	}
 	return []quota.Snapshot{{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: windowName, Used: valueOrZero(used), Limit: limitPtr, Remaining: remainingPtr, Source: "http-json-quota"}}, nil
 }
+
+func DecodeQuotaJSONWithOptions(data []byte, route kernel.Route, defaultWindow string, options HTTPJSONQuotaOptions) ([]quota.Snapshot, error) {
+	if err := options.Validate(); err != nil {
+		return nil, err
+	}
+	var snapshots []quota.Snapshot
+	seenWindows := make(map[string]struct{})
+	for _, mapping := range options.Windows {
+		rows, err := quotaWindowRows(data, mapping)
+		if err != nil {
+			return nil, fmt.Errorf("decode quota window %q rows: %w", mapping.Name, err)
+		}
+		for _, row := range rows {
+			if len(mapping.IgnoreWhenValues) > 0 && matchesAny(pointerText(row.raw, mapping.IgnoreWhenPath), mapping.IgnoreWhenValues) {
+				continue
+			}
+			name := mapping.Name
+			if mapping.NamePath != "" {
+				name = pointerText(row.raw, mapping.NamePath)
+			}
+			if name == "" {
+				name = row.key
+			}
+			if name == "" && mapping.ItemsPath != "" {
+				return nil, fmt.Errorf("quota itemsPath row has no name; configure namePath for array results")
+			}
+			if name == "" {
+				name = defaultWindow
+			}
+			if name == "" {
+				return nil, fmt.Errorf("quota window mapping produced an empty name")
+			}
+			used := parseJSONFloat(pointerValue(row.raw, mapping.UsedPath))
+			limit := parseJSONFloat(pointerValue(row.raw, mapping.LimitPath))
+			remaining := parseJSONFloat(pointerValue(row.raw, mapping.RemainingPath))
+			if mapping.RemainingPercentPath != "" {
+				if percent := parseJSONFloat(pointerValue(row.raw, mapping.RemainingPercentPath)); percent != nil {
+					bounded := math.Max(0, math.Min(100, *percent))
+					limit = floatPointer(100)
+					remaining = floatPointer(bounded)
+					used = floatPointer(100 - bounded)
+				}
+			}
+			if len(mapping.ExhaustedStatusValues) > 0 && matchesAny(pointerText(row.raw, mapping.ExhaustedStatusPath), mapping.ExhaustedStatusValues) {
+				remaining = floatPointer(0)
+			}
+			var resetAt *time.Time
+			if mapping.ResetAtPath != "" {
+				if value := pointerValue(row.raw, mapping.ResetAtPath); len(value) > 0 {
+					reset := parseHeaderReset(rawJSONText(value), time.Now())
+					if !reset.IsZero() {
+						resetAt = &reset
+					}
+				}
+			}
+			if used == nil && limit == nil && remaining == nil && resetAt == nil {
+				continue
+			}
+			nameKey := strings.ToLower(name)
+			if _, duplicate := seenWindows[nameKey]; duplicate {
+				return nil, fmt.Errorf("quota report contains duplicate window name %q", name)
+			}
+			seenWindows[nameKey] = struct{}{}
+			if len(snapshots) >= 128 {
+				return nil, fmt.Errorf("quota report exceeds 128 normalized windows")
+			}
+			snapshots = append(snapshots, quota.Snapshot{
+				ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID,
+				ModelRef: route.ExternalModel, WindowName: name, Used: valueOrZero(used),
+				Limit: limit, Remaining: remaining, ResetAt: resetAt, Source: "http-json-quota",
+			})
+		}
+	}
+	return snapshots, nil
+}
+
+type quotaWindowRow struct {
+	key string
+	raw json.RawMessage
+}
+
+func quotaWindowRows(data []byte, mapping HTTPJSONQuotaWindow) ([]quotaWindowRow, error) {
+	if mapping.ItemsPath == "" {
+		return []quotaWindowRow{{key: mapping.Name, raw: append(json.RawMessage(nil), data...)}}, nil
+	}
+	items := pointerValue(data, mapping.ItemsPath)
+	if len(items) == 0 || string(items) == "null" {
+		return nil, nil
+	}
+	var array []json.RawMessage
+	if json.Unmarshal(items, &array) == nil {
+		rows := make([]quotaWindowRow, 0, len(array))
+		for _, item := range array {
+			rows = append(rows, quotaWindowRow{raw: item})
+		}
+		return rows, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(items, &object); err != nil {
+		return nil, fmt.Errorf("itemsPath must select an object or array")
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	rows := make([]quotaWindowRow, 0, len(keys))
+	for _, key := range keys {
+		rows = append(rows, quotaWindowRow{key: key, raw: object[key]})
+	}
+	return rows, nil
+}
+
+func floatPointer(value float64) *float64 { return &value }
 
 func firstNumber(values map[string]any, fallback *float64, keys ...string) *float64 {
 	for _, key := range keys {

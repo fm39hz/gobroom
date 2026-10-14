@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -272,11 +273,18 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	var quotaSource QuotaSource
 	quotaSourceRef := extensions.Ref{}
 	if binding.QuotaSource.ID != "" {
-		quotaSource, err = bindPrimitiveAs[QuotaSource](b, binding.QuotaSource)
+		options := binding.QuotaSourceOptions
+		if len(options) == 0 {
+			options = json.RawMessage(`{}`)
+		}
+		quotaSource, err = bindPrimitiveAsOptions[QuotaSource](b, binding.QuotaSource, options)
 		if err != nil {
 			return RuntimeBinding{}, fmt.Errorf("resolve quota source %q: %w", binding.QuotaSource.ID, err)
 		}
 		quotaSourceRef = extensionRef(binding.QuotaSource)
+		if len(binding.QuotaSourceOptions) > 0 && !bytes.Equal(bytes.TrimSpace(options), []byte(`{}`)) {
+			quotaSourceRef = runtimeQuotaSourceRef(definitionID, operation, binding.QuotaSource)
+		}
 	}
 	endpointOptions := binding.EndpointOptions
 	query := make(map[string]string, len(binding.EndpointOptions.Query))
@@ -358,6 +366,10 @@ func RuntimeBindingsForProtocol(bindings map[string]RuntimeBinding, definitionID
 
 func RuntimeErrorClassifierRef(definitionID string, operation Operation, primitive PrimitiveRef) extensions.Ref {
 	return extensions.Ref{Kind: string(PrimitiveErrorClassifier), ID: RuntimeBindingKey(definitionID, operation) + ":error:" + primitive.ID, ContractVersion: primitive.ContractVersion}
+}
+
+func runtimeQuotaSourceRef(definitionID string, operation Operation, primitive PrimitiveRef) extensions.Ref {
+	return extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: RuntimeBindingKey(definitionID, operation) + ":quota:" + primitive.ID, ContractVersion: primitive.ContractVersion}
 }
 
 func AuthBindingKey(definitionID string, auth PrimitiveRef) string {

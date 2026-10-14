@@ -40,8 +40,11 @@ type ModelSource = core.ModelSource
 type ModelSourceInput = core.ModelSourceInput
 type ModelDescriptor = core.ModelDescriptor
 type ModelCatalogSnapshot = core.ModelCatalogSnapshot
+type HTTPJSONQuotaOptions = core.HTTPJSONQuotaOptions
+type HTTPJSONQuotaWindow = core.HTTPJSONQuotaWindow
 type UsageSource = core.UsageSource
 type QuotaSource = core.QuotaSource
+type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
 
 type Ref = extensions.Ref

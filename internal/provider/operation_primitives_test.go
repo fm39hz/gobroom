@@ -201,6 +201,9 @@ func TestParseHeaderResetUsesObservedAbsoluteAndRelativeForms(t *testing.T) {
 			t.Errorf("parseHeaderReset(%q)=%s want=%s", fixture.value, got, fixture.want)
 		}
 	}
+	if got := parseHeaderReset("1787000000.5", now.Add(time.Second)); !got.IsZero() {
+		t.Fatalf("expired Unix reset was reinterpreted as a relative delay: %s", got)
+	}
 }
 
 func TestHTTPJSONErrorClassifierUsesResetOnlyForRejectedStatusWindow(t *testing.T) {

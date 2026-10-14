@@ -47,6 +47,7 @@ func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 	}{
 		{PrimitiveEndpoint, "http-json", endpointOptionsSchemaRef, endpointOptionsSchema},
 		{PrimitiveUsageSource, "http-header-usage", usageOptionsSchemaRef, usageOptionsSchema},
+		{PrimitiveQuotaSource, "http-json-quota", quotaSourceOptionsSchemaRef, quotaSourceOptionsSchema},
 		{PrimitiveErrorClassifier, "http-json", errorOptionsSchemaRef, httpJSONErrorOptionsSchema},
 	} {
 		document, err := configured.schema()
