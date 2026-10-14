@@ -114,6 +114,7 @@ test-conformance-transform-boundaries:
 	go test ./internal/adapter/anthropic -run '^TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack$$' -count=1
 	go test ./internal/api -run '^TestClientDisconnectCancelsDataPlaneExecution$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
+	go test ./internal/daemon -run '^TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream$$' -count=1
 
 test-external-provider-module: ## compile a separate Go module against the public provider/daemon APIs
 	cd examples/external-provider-module && GOWORK=off go test ./... -count=1

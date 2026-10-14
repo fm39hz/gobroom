@@ -47,11 +47,79 @@ type callbackOAuthFixture struct{ redirectURL string }
 type daemonExplainAdapter struct{ attempts *int }
 type daemonTransformFixture struct{}
 
+type streamingDaemonAdapter struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+type pendingDaemonDeviceAuth struct{ pollStarted chan struct{} }
+
 func (daemonTransformFixture) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.daemon-transform", ContractVersion: 1}, ImplementationVersion: "1", Label: "Daemon test transform", Description: "Fixture for control-plane binding CRUD.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformInput}}
 }
 func (daemonTransformFixture) Apply(context.Context, *kernel.NormalizedRequest, json.RawMessage) error {
 	return nil
+}
+
+func (streamingDaemonAdapter) ID() string { return "daemon-stream-control-fixture" }
+func (streamingDaemonAdapter) PlanCompatibility(input kernel.CompatibilityContext) kernel.CompatibilityPlan {
+	mappings := make([]kernel.FacetMapping, 0, len(input.Policy.RequiredFacets)+1)
+	for _, facet := range input.Policy.RequiredFacets {
+		mappings = append(mappings, kernel.FacetMapping{Facet: facet, Paths: []string{"fixture"}, Disposition: kernel.FacetPreserved})
+	}
+	mappings = append(mappings, kernel.FacetMapping{Facet: kernel.FacetWireResponse, Paths: []string{"fixture"}, Disposition: kernel.FacetPreserved})
+	return kernel.ComposeCompatibilityPlan([][]kernel.FacetMapping{mappings}, input.Policy)
+}
+func (streamingDaemonAdapter) Prepare(context.Context, kernel.NormalizedRequest, kernel.Route, kernel.Credential) (kernel.UpstreamRequest, error) {
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: "test://stream"}, nil
+}
+func (streamingDaemonAdapter) Execute(context.Context, kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	return kernel.UpstreamResponse{Status: http.StatusOK, Body: http.NoBody}, nil
+}
+func (streamingDaemonAdapter) ClassifyError(int, []byte) kernel.ErrorClass {
+	return kernel.ErrorTerminal
+}
+func (a streamingDaemonAdapter) RenderResponse(ctx context.Context, _ kernel.UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks kernel.StreamHooks) error {
+	writer.Header().Set("Content-Type", "text/event-stream")
+	if hooks.OnFirstByte != nil {
+		hooks.OnFirstByte(time.Now())
+	}
+	if _, err := io.WriteString(writer, "data: stream-open\n\n"); err != nil {
+		return err
+	}
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	close(a.started)
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if _, err := io.WriteString(writer, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
+	if hooks.OnComplete != nil {
+		hooks.OnComplete(kernel.UsageEvent{Status: "ok"})
+	}
+	return nil
+}
+
+func (*pendingDaemonDeviceAuth) ID() string                        { return "daemon-pending-device-auth" }
+func (*pendingDaemonDeviceAuth) SetupSchema() provider.SetupSchema { return provider.SetupSchema{} }
+func (*pendingDaemonDeviceAuth) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
+	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
+}
+func (*pendingDaemonDeviceAuth) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
+	return credential, nil
+}
+func (*pendingDaemonDeviceAuth) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
+	return provider.DeviceAuthorization{DeviceCode: "ipc-private-code", UserCode: "IPC-CODE", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute), PollInterval: time.Second}, nil
+}
+func (f *pendingDaemonDeviceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (kernel.Credential, error) {
+	close(f.pollStarted)
+	<-ctx.Done()
+	return kernel.Credential{}, ctx.Err()
 }
 
 func (daemonExplainAdapter) ID() string { return "daemon-explain-fixture" }
@@ -1309,6 +1377,220 @@ func TestDaemonStopCancelsActiveHTTPRequestBeforeDraining(t *testing.T) {
 	}
 	_ = response.Body.Close()
 	<-serveDone
+}
+
+func TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream(t *testing.T) {
+	upstreamStarted := make(chan struct{})
+	releaseUpstream := make(chan struct{})
+	var upstreamStartedOnce sync.Once
+	var releaseOnce sync.Once
+	releaseStream := func() { releaseOnce.Do(func() { close(releaseUpstream) }) }
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/models":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"data":[{"id":"stream-model"}]}`)
+		case "/v1/chat/completions":
+			writer.Header().Set("Content-Type", "text/event-stream")
+			writer.Header().Set("Cache-Control", "no-cache")
+			_, _ = io.WriteString(writer, "data: {\"id\":\"stream-response\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"first\"},\"finish_reason\":null}]}\n\n")
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			upstreamStartedOnce.Do(func() { close(upstreamStarted) })
+			select {
+			case <-releaseUpstream:
+			case <-request.Context().Done():
+				return
+			}
+			_, _ = io.WriteString(writer, "data: {\"id\":\"stream-response\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+
+	root := t.TempDir()
+	config := Config{DBPath: filepath.Join(root, "gobroom.db"), RuntimeSpoolPath: filepath.Join(root, "spool.json"), IPCPath: filepath.Join(root, "run", "gobroom.sock"), ArtifactStoreDir: filepath.Join(root, "artifacts")}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	d := New(config)
+	if err := d.Start(runCtx); err != nil {
+		cancelRun()
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = d.Stop(context.Background())
+		cancelRun()
+	}()
+	defer releaseStream()
+
+	callIPC := func(method string, params map[string]any) IPCResponse {
+		t.Helper()
+		callCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		response, err := CallIPC(callCtx, config.IPCPath, IPCRequest{ID: method, Method: method, Params: params})
+		if err != nil {
+			t.Fatalf("IPC %s while streaming: %v", method, err)
+		}
+		return response
+	}
+	paramsFor := func(value any) map[string]any {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var params map[string]any
+		if err := json.Unmarshal(encoded, &params); err != nil {
+			t.Fatal(err)
+		}
+		return params
+	}
+	createdProvider := callIPC("providers.create", map[string]any{"name": "Streaming fixture", "prefix": "streamfixture", "baseUrl": upstream.URL + "/v1", "protocol": "openai_chat"})
+	if !createdProvider.OK {
+		t.Fatalf("create streaming provider: %s", createdProvider.Error)
+	}
+	providerResult, ok := createdProvider.Result.(map[string]any)
+	if !ok || providerResult["ID"] == nil {
+		t.Fatalf("provider creation result=%#v", createdProvider.Result)
+	}
+	providerNodeID, _ := providerResult["ID"].(string)
+	createdConnection := callIPC("connections.create", map[string]any{"providerNodeID": providerNodeID, "name": "stream account", "credentialType": "api_key", "secret": "stream-secret"})
+	if !createdConnection.OK {
+		t.Fatalf("create streaming connection: %s", createdConnection.Error)
+	}
+	connectionResult, ok := createdConnection.Result.(map[string]any)
+	if !ok || connectionResult["ID"] == nil {
+		t.Fatalf("connection creation result=%#v", createdConnection.Result)
+	}
+	connectionID, _ := connectionResult["ID"].(string)
+	if refreshed := callIPC("providers.refresh_models", map[string]any{"nodeID": providerNodeID, "connectionID": connectionID}); !refreshed.OK {
+		t.Fatalf("discover streaming model: %s", refreshed.Error)
+	}
+	discovered, err := d.store.DiscoveredRoutes(providerNodeID)
+	if err != nil || len(discovered) != 1 || discovered[0].ExternalID != "stream-model" {
+		t.Fatalf("discovered routes=%#v err=%v", discovered, err)
+	}
+	physical := store.PhysicalModel{Name: "stream-physical", Identity: kernel.PhysicalIdentity{CanonicalName: "stream-model"}, Sources: []store.RouteReference{{RouteID: discovered[0].ID, Fidelity: kernel.FidelityExact}}, Enabled: true}
+	if result := callIPC("physical_models.upsert", paramsFor(physical)); !result.OK {
+		t.Fatalf("create physical model: %s", result.Error)
+	}
+	combo := store.ComboModel{Name: "stream-role", Members: []store.ModelReference{{Kind: store.PhysicalReference, ID: physical.Name}}, Discoverable: true, Enabled: true}
+	if result := callIPC("combo_models.upsert", paramsFor(combo)); !result.OK {
+		t.Fatalf("publish stream role: %s", result.Error)
+	}
+
+	deviceNode, err := d.store.CreateProviderNode(store.CreateProviderNodeInput{Name: "Device auth fixture", Prefix: "devicefixture", BaseURL: "https://identity.test", Protocol: "openai_chat", DefinitionID: "ipc-device-fixture", AuthMode: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceConnection, err := d.store.CreateConnection(store.CreateConnectionInput{ProviderNodeID: deviceNode.ID, Name: "device login", CredentialType: "oauth2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deviceFlow := &pendingDaemonDeviceAuth{pollStarted: make(chan struct{})}
+	d.providerAuthFlowIDs[deviceNode.DefinitionID] = map[string]string{"oauth2": deviceFlow.ID()}
+	d.authFlows[deviceFlow.ID()] = deviceFlow
+
+	dataPlane := httptest.NewServer(d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}))
+	defer dataPlane.Close()
+	request, err := http.NewRequest(http.MethodPost, dataPlane.URL+"/v1/chat/completions", strings.NewReader(`{"model":"stream-role","messages":[{"role":"user","content":"keep the stream open"}],"stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	streamResponse, err := dataPlane.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer streamResponse.Body.Close()
+	if streamResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(streamResponse.Body)
+		t.Fatalf("stream HTTP status=%d body=%s", streamResponse.StatusCode, body)
+	}
+	streamReader := bufio.NewReader(streamResponse.Body)
+	type lineResult struct {
+		line string
+		err  error
+	}
+	firstLine := make(chan lineResult, 1)
+	go func() {
+		line, err := streamReader.ReadString('\n')
+		firstLine <- lineResult{line: line, err: err}
+	}()
+	select {
+	case result := <-firstLine:
+		if result.err != nil || !strings.HasPrefix(result.line, "data:") {
+			t.Fatalf("first downstream SSE line=%q err=%v", result.line, result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("downstream stream did not emit its first event")
+	}
+	select {
+	case <-upstreamStarted:
+	case <-time.After(time.Second):
+		t.Fatal("upstream stream did not reach its blocked interval")
+	}
+
+	if status := callIPC("status", nil); !status.OK {
+		t.Fatalf("status IPC blocked by active HTTP stream: %s", status.Error)
+	}
+	if reloaded := callIPC("reload", nil); !reloaded.OK {
+		t.Fatalf("reload IPC blocked by active HTTP stream: %s", reloaded.Error)
+	}
+	authorization := callIPC("auth.device.start", map[string]any{"connectionID": deviceConnection.ID})
+	if !authorization.OK {
+		t.Fatalf("device auth start IPC blocked by active HTTP stream: %s", authorization.Error)
+	}
+	authorizationResult, ok := authorization.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("device auth result=%#v", authorization.Result)
+	}
+	sessionID, _ := authorizationResult["sessionId"].(string)
+	select {
+	case <-deviceFlow.pollStarted:
+	case <-time.After(time.Second):
+		t.Fatal("daemon device-auth worker did not begin polling")
+	}
+	if current := callIPC("auth.device.get", map[string]any{"sessionID": sessionID}); !current.OK {
+		t.Fatalf("device auth status IPC blocked by active HTTP stream: %s", current.Error)
+	}
+	if cancelled := callIPC("auth.device.cancel", map[string]any{"sessionID": sessionID}); !cancelled.OK {
+		t.Fatalf("device auth cancellation IPC blocked by active HTTP stream: %s", cancelled.Error)
+	}
+	workerDone := make(chan struct{})
+	go func() { d.authWG.Wait(); close(workerDone) }()
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("device authorization worker did not stop after IPC cancellation")
+	}
+
+	bodyDone := make(chan struct {
+		body []byte
+		err  error
+	}, 1)
+	go func() {
+		body, err := io.ReadAll(streamReader)
+		bodyDone <- struct {
+			body []byte
+			err  error
+		}{body: body, err: err}
+	}()
+	select {
+	case completed := <-bodyDone:
+		t.Fatalf("HTTP stream ended during control/auth IPC before upstream release: body=%q err=%v", completed.body, completed.err)
+	default:
+	}
+	releaseStream()
+	select {
+	case completed := <-bodyDone:
+		if completed.err != nil || !strings.Contains(string(completed.body), "data: [DONE]") {
+			t.Fatalf("HTTP stream did not finish after upstream release: body=%q err=%v", completed.body, completed.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("HTTP stream remained blocked after upstream release")
+	}
 }
 
 func TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation(t *testing.T) {
