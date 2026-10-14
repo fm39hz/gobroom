@@ -656,7 +656,7 @@ type PrimitivePlugin interface {
 }
 
 type PrimitiveRegistry struct {
-	definitions map[string]ProviderDefinition
+	definitions map[extensions.Ref]ProviderDefinition
 	primitives  map[PrimitiveKind]map[extensions.Ref]struct{}
 	catalog     *extensions.Catalog
 	Operations  *operations.Registry
@@ -1583,30 +1583,31 @@ func (r *RuntimeRegistry) AuthFlowsForBindings(bindings map[string]RuntimeBindin
 	return result
 }
 
-func (r *RuntimeRegistry) DefaultCredentialTypes() map[string]string {
-	result := make(map[string]string)
+func (r *RuntimeRegistry) DefaultCredentialTypes() map[extensions.Ref]string {
+	result := make(map[extensions.Ref]string)
 	if r == nil || r.Primitives == nil {
 		return result
 	}
 	for _, definition := range r.Primitives.Definitions() {
 		if definition.DefaultCredentialType != "" {
-			result[definition.ID] = definition.DefaultCredentialType
+			result[ProviderDefinitionRef(definition.ID, definition.ContractVersion)] = definition.DefaultCredentialType
 		}
 	}
 	return result
 }
 
-func (r *RuntimeRegistry) AuthFlowIDsByDefinition() map[string]map[string]string {
-	result := make(map[string]map[string]string)
+func (r *RuntimeRegistry) AuthFlowIDsByDefinition() map[extensions.Ref]map[string]string {
+	result := make(map[extensions.Ref]map[string]string)
 	if r == nil || r.Primitives == nil {
 		return result
 	}
 	for _, definition := range r.Primitives.Definitions() {
+		definitionRef := ProviderDefinitionRef(definition.ID, definition.ContractVersion)
 		for _, mode := range definition.AuthModes {
-			if result[definition.ID] == nil {
-				result[definition.ID] = make(map[string]string, len(definition.AuthModes))
+			if result[definitionRef] == nil {
+				result[definitionRef] = make(map[string]string, len(definition.AuthModes))
 			}
-			result[definition.ID][mode.CredentialType] = AuthBindingKey(definition.ID, mode.CredentialType, mode.Auth)
+			result[definitionRef][mode.CredentialType] = AuthBindingKey(definitionRef, mode.CredentialType, mode.Auth)
 		}
 	}
 	return result
@@ -1684,7 +1685,7 @@ func NewPrimitiveRegistry() *PrimitiveRegistry {
 	catalog := extensions.NewCatalog()
 	operationRegistry, _ := operations.NewRegistry(catalog)
 	return &PrimitiveRegistry{
-		definitions: map[string]ProviderDefinition{},
+		definitions: map[extensions.Ref]ProviderDefinition{},
 		primitives: map[PrimitiveKind]map[extensions.Ref]struct{}{
 			PrimitiveEndpoint: {}, PrimitiveTransport: {}, PrimitiveAuth: {}, PrimitiveRequestCodec: {},
 			PrimitiveResponseDecoder: {}, PrimitiveModelSource: {}, PrimitiveUsageSource: {},
@@ -1750,11 +1751,12 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	if r == nil {
 		return fmt.Errorf("primitive registry is nil")
 	}
-	if def.ContractVersion != 1 || def.ID == "" || def.Version == "" || def.DisplayName == "" {
-		return fmt.Errorf("provider definition requires supported contractVersion 1, ID, version and display name")
+	if def.ContractVersion == 0 || def.ID == "" || def.Version == "" || def.DisplayName == "" {
+		return fmt.Errorf("provider definition requires a positive contractVersion, ID, version and display name")
 	}
-	if _, exists := r.definitions[def.ID]; exists {
-		return fmt.Errorf("provider definition %q already registered", def.ID)
+	providerRef := ProviderDefinitionRef(def.ID, def.ContractVersion)
+	if _, exists := r.definitions[providerRef]; exists {
+		return fmt.Errorf("provider definition %q already registered", providerRef.Key())
 	}
 	if len(def.Operations) == 0 {
 		return fmt.Errorf("provider %q has no operations", def.ID)
@@ -1904,7 +1906,6 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		dependencyRefs = append(dependencyRefs, dependency)
 	}
 	sort.Slice(dependencyRefs, func(i, j int) bool { return dependencyRefs[i].Key() < dependencyRefs[j].Key() })
-	providerRef := ProviderDefinitionRef(def.ID, def.ContractVersion)
 	if err := r.catalog.Register(extensions.Descriptor{
 		Ref: providerRef, ImplementationVersion: def.Version, DisplayName: def.DisplayName,
 		Description:  "Provider behavior definition with exact primitive and operation dependencies.",
@@ -1912,7 +1913,7 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	}, func(json.RawMessage) (any, error) { return def, nil }); err != nil {
 		return fmt.Errorf("register provider definition extension %q: %w", providerRef.Key(), err)
 	}
-	r.definitions[def.ID] = def
+	r.definitions[providerRef] = def
 	return nil
 }
 
@@ -1942,11 +1943,12 @@ func validIdempotencyHeaderName(name string) bool {
 // already installed built-in/manifest definition only when they are identical.
 // A differing definition under the same ID is rejected rather than shadowed.
 func (r *PrimitiveRegistry) RegisterDefinitionIfAbsent(def ProviderDefinition) error {
-	if existing, ok := r.definitions[def.ID]; ok {
+	ref := ProviderDefinitionRef(def.ID, def.ContractVersion)
+	if existing, ok := r.definitions[ref]; ok {
 		if SameProviderDefinition(existing, def) {
 			return nil
 		}
-		return fmt.Errorf("provider definition %q conflicts with the installed definition", def.ID)
+		return fmt.Errorf("provider definition %q conflicts with the installed definition", ref.Key())
 	}
 	return r.RegisterDefinition(def)
 }
@@ -1958,8 +1960,8 @@ func (r *PrimitiveRegistry) RegisterPlugin(plugin PrimitivePlugin) error {
 	return r.RegisterDefinition(plugin.Definition())
 }
 
-func (r *PrimitiveRegistry) Definition(id string) (ProviderDefinition, bool) {
-	definition, ok := r.definitions[id]
+func (r *PrimitiveRegistry) Definition(ref extensions.Ref) (ProviderDefinition, bool) {
+	definition, ok := r.definitions[ref]
 	return definition, ok
 }
 
@@ -1968,6 +1970,10 @@ func (r *PrimitiveRegistry) Definitions() []ProviderDefinition {
 	for _, definition := range r.definitions {
 		result = append(result, definition)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		left, right := ProviderDefinitionRef(result[i].ID, result[i].ContractVersion), ProviderDefinitionRef(result[j].ID, result[j].ContractVersion)
+		return left.Key() < right.Key()
+	})
 	return result
 }
 

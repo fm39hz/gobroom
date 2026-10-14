@@ -121,7 +121,7 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, Operation(operationID))
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation(operationID))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -125,12 +125,13 @@ func TestDefinitionBoundOAuthFlowRefreshesWithConnectionSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := registry.DefaultCredentialTypes()["bound-oauth"]; got != "oauth2" {
+	definitionRef := ProviderDefinitionRef("bound-oauth", 1)
+	if got := registry.DefaultCredentialTypes()[definitionRef]; got != "oauth2" {
 		t.Fatalf("definition credential type default=%q", got)
 	}
-	binding := bindings[RuntimeBindingKey("bound-oauth", OperationChat)]
+	binding := bindings[RuntimeBindingKey(definitionRef, OperationChat)]
 	flows := registry.AuthFlowsForBindings(bindings)
-	if flow := flows[AuthBindingKey("bound-oauth", "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1})]; flow == nil || flow.ID() != "oauth2" {
+	if flow := flows[AuthBindingKey(definitionRef, "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1})]; flow == nil || flow.ID() != "oauth2" {
 		t.Fatalf("definition-specific OAuth flow was not published to the daemon runtime: %#v", flow)
 	}
 	state := `{"access_token":"old-access","refresh_token":"refresh","client_secret":"connection-secret","expires_at":"2000-01-01T00:00:00Z"}`

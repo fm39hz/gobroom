@@ -665,7 +665,7 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 		t.Fatal(err)
 	}
 	defer k.Close()
-	binding := bindings[provider.RuntimeBindingKey("openai-compatible-chat", provider.OperationChat)]
+	binding := bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef("openai-compatible-chat", 1), provider.OperationChat)]
 	k.Adapters[binding.AdapterID] = binding.Adapter
 	k.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
 		credential, ok := s.ConnectionCredentialByID(route.CredentialID)
@@ -746,7 +746,7 @@ INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity) VAL
 		t.Fatal(err)
 	}
 	defer k.Close()
-	binding := bindings[provider.RuntimeBindingKey("anthropic-messages", provider.OperationMessages)]
+	binding := bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef("anthropic-messages", 1), provider.OperationMessages)]
 	k.Adapters[binding.AdapterID] = binding.Adapter
 	k.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
 		credential, ok := s.ConnectionCredentialByID(route.CredentialID)

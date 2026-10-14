@@ -64,7 +64,7 @@ func TestExternalModuleBindsManifestAndPreparesRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, ok := bindings[provider.RuntimeBindingKey("example-audio", provider.OperationAudio)]
+	binding, ok := bindings[provider.RuntimeBindingKey(provider.Ref{Kind: "provider-definition", ID: "example-audio", ContractVersion: 1}, provider.OperationAudio)]
 	if !ok || binding.Adapter == nil || binding.TaskRef.ID != "audio.transcribe" {
 		t.Fatalf("public module API did not bind exact provider task: %#v", binding)
 	}
@@ -103,7 +103,7 @@ func TestExternalModuleImplementsQuotaSourceThroughPublicTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[provider.RuntimeBindingKey("example-audio", provider.OperationQuota)]
+	binding := bindings[provider.RuntimeBindingKey(provider.Ref{Kind: "provider-definition", ID: "example-audio", ContractVersion: 1}, provider.OperationQuota)]
 	wantSourceRef := provider.Ref{Kind: string(provider.PrimitiveQuotaSource), ID: "example-audio-quota", ContractVersion: 1}
 	if binding.QuotaSource == nil || binding.QuotaSourceRef != wantSourceRef {
 		t.Fatalf("external quota source was not bound: %#v", binding)

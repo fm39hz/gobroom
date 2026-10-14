@@ -523,14 +523,14 @@ func TestDaemonLoadsPortableProviderDefinitionFromStoreBeforeRuntimeBinding(t *t
 	if _, err := registry.BuildBindings(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := registry.Primitives.Definition(definition.ID); !ok {
+	if _, ok := registry.Primitives.Definition(provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion)); !ok {
 		t.Fatal("persisted portable provider definition was not registered on startup")
 	}
 	bindings, err := registry.BuildBindings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := bindings[provider.RuntimeBindingKey(definition.ID, provider.OperationChat)]; !ok {
+	if _, ok := bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef(definition.ID, definition.ContractVersion), provider.OperationChat)]; !ok {
 		t.Fatal("persisted portable provider definition did not bind its operation")
 	}
 }
@@ -624,8 +624,8 @@ func TestProviderCreationDefaultsConnectionAuthFromDefinition(t *testing.T) {
 	defer s.Close()
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
-		providerAuthModes:   map[string]string{"oauth-provider": "oauth2"},
-		providerAuthFlowIDs: map[string]map[string]string{"oauth-provider": {"oauth2": "oauth-provider:oauth2"}},
+		providerAuthModes:   map[extensions.Ref]string{provider.ProviderDefinitionRef("oauth-provider", 1): "oauth2"},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth-provider", 1): {"oauth2": "oauth-provider:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{
 			"oauth-provider:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://oauth.test/authorize", TokenURL: "https://oauth.test/token"}},
 		},
@@ -664,7 +664,7 @@ func TestConnectionCanBeCreatedWithoutTokenOnlyForInteractiveOAuth(t *testing.T)
 		t.Fatal(err)
 	}
 	d := &Daemon{store: s,
-		providerAuthFlowIDs: map[string]map[string]string{"device-oauth": {"api_key": "device-oauth:api_key", "oauth2": "device-oauth:oauth2"}, "token-only": {"oauth2": "token-only:oauth2"}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("device-oauth", 1): {"api_key": "device-oauth:api_key", "oauth2": "device-oauth:oauth2"}, provider.ProviderDefinitionRef("token-only", 1): {"oauth2": "token-only:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{
 			"device-oauth:api_key": provider.StaticSecretAuth{},
 			"device-oauth:oauth2":  provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token", DeviceAuthURL: "https://identity.test/device"}},
@@ -752,7 +752,7 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	}
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
-		providerAuthFlowIDs: map[string]map[string]string{"oauth": {"oauth2": "oauth:oauth2"}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth", 1): {"oauth2": "oauth:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{"oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
 			ClientID: "client", AuthURL: "https://identity.test/authorize", TokenURL: "https://identity.test/token",
 			RedirectURL: "https://identity.test/oauth/callback", Scopes: []string{"models.read"},
@@ -847,7 +847,7 @@ func TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential(t *te
 	flow := &blockingCallbackOAuthFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://identity.test/oauth/callback"}, entered: make(chan struct{}), release: make(chan struct{})}
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
-		providerAuthFlowIDs: map[string]map[string]string{"oauth": {"oauth2": "oauth:oauth2"}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth", 1): {"oauth2": "oauth:oauth2"}},
 		authFlows:           map[string]provider.AuthFlow{"oauth:oauth2": flow},
 	}
 	challenge, err := d.startAuthorization(connection.ID)
@@ -916,7 +916,7 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	}
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
-		providerAuthFlowIDs: map[string]map[string]string{"loopback-oauth": {"oauth2": "loopback-oauth:auth"}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("loopback-oauth", 1): {"oauth2": "loopback-oauth:auth"}},
 		authFlows:           map[string]provider.AuthFlow{"loopback-oauth:auth": callbackOAuthFixture{redirectURL: redirectURL}},
 	}
 	started := d.handleIPC(context.Background(), IPCRequest{ID: "start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
@@ -1070,7 +1070,7 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 	defer stop()
 	d := &Daemon{
 		store: s, server: api.NewServer(s), runCtx: rootCtx,
-		providerAuthFlowIDs: map[string]map[string]string{"device-oauth": {"oauth2": "device-oauth:oauth2"}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("device-oauth", 1): {"oauth2": "device-oauth:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{"device-oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
 			ClientID: "device-client", DeviceAuthURL: "https://identity.test/device", TokenURL: "https://identity.test/token",
 		}}},
@@ -1252,7 +1252,7 @@ func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *test
 	flow := &serializedDeviceAuthFixture{started: make(chan struct{}, 2), release: make(chan struct{})}
 	d := &Daemon{
 		store: s, server: api.NewServer(s), runCtx: rootCtx,
-		providerAuthFlowIDs: map[string]map[string]string{"device-oauth": {"oauth2": "device-oauth:fixture"}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("device-oauth", 1): {"oauth2": "device-oauth:fixture"}},
 		authFlows:           map[string]provider.AuthFlow{"device-oauth:fixture": flow},
 	}
 	firstDone := make(chan IPCResponse, 1)
@@ -1489,7 +1489,7 @@ func TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream(t *testing
 		t.Fatal(err)
 	}
 	deviceFlow := &pendingDaemonDeviceAuth{pollStarted: make(chan struct{})}
-	d.providerAuthFlowIDs[deviceNode.DefinitionID] = map[string]string{"oauth2": deviceFlow.ID()}
+	d.providerAuthFlowIDs[provider.ProviderDefinitionRef(deviceNode.DefinitionID, 1)] = map[string]string{"oauth2": deviceFlow.ID()}
 	d.authFlows[deviceFlow.ID()] = deviceFlow
 
 	dataPlane := httptest.NewServer(d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}))
@@ -1621,11 +1621,11 @@ func TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation(t *testing.T) {
 	}
 	adapter := openai.NewAdapter()
 	binding := provider.RuntimeBinding{
-		DefinitionID: "inference-only", Operation: provider.OperationChat,
+		DefinitionID: "inference-only", DefinitionRef: provider.ProviderDefinitionRef("inference-only", 1), Operation: provider.OperationChat,
 		TaskRef: *provider.OperationRef(normalize.OperationChatGenerate, 1), Protocol: kernel.ProtocolOpenAIChat,
 		ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 	}
-	d := &Daemon{store: state, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionID, binding.Operation): binding}}
+	d := &Daemon{store: state, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionRef, binding.Operation): binding}}
 	response := d.handleIPC(context.Background(), IPCRequest{ID: "probe", Method: "connections.test_inference", Params: map[string]any{"connectionID": connection.ID, "modelID": "manual/model-x"}})
 	if !response.OK {
 		t.Fatalf("inference probe failed: %s", response.Error)
@@ -1665,10 +1665,10 @@ func TestIPCOperationProbeSchemaRejectsPayloadBeforeAdapterDispatch(t *testing.T
 	adapterCalls := 0
 	adapter := daemonExplainAdapter{attempts: &adapterCalls}
 	binding := provider.RuntimeBinding{
-		DefinitionID: node.DefinitionID, Operation: provider.OperationAudio, TaskRef: operationRef,
+		DefinitionID: node.DefinitionID, DefinitionRef: provider.ProviderDefinitionRef(node.DefinitionID, 1), Operation: provider.OperationAudio, TaskRef: operationRef,
 		Protocol: kernel.Protocol(node.Protocol), AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 	}
-	d := &Daemon{store: state, providerRegistry: runtimeRegistry, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(node.DefinitionID, provider.OperationAudio): binding}}
+	d := &Daemon{store: state, providerRegistry: runtimeRegistry, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionRef, provider.OperationAudio): binding}}
 	response := d.handleIPC(context.Background(), IPCRequest{
 		ID: "operation-probe", Method: "connections.test_operation",
 		Params: map[string]any{"connectionID": connection.ID, "operationID": string(provider.OperationAudio), "modelID": "asr-v4", "payload": map[string]any{"language": "vi"}},

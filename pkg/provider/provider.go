@@ -213,8 +213,12 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 	return core.NewRuntimeRegistryWithModules(modules...)
 }
 
-func RuntimeBindingKey(definitionID string, operation Operation) string {
-	return core.RuntimeBindingKey(definitionID, operation)
+func ProviderDefinitionRef(id string, contractVersion uint64) Ref {
+	return core.ProviderDefinitionRef(id, contractVersion)
+}
+
+func RuntimeBindingKey(definitionRef Ref, operation Operation) string {
+	return core.RuntimeBindingKey(definitionRef, operation)
 }
 
 func EncodeManifest(definition ProviderDefinition) ([]byte, error) {

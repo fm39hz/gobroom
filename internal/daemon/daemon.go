@@ -66,8 +66,8 @@ type Daemon struct {
 	strategyDefinitions []kernel.StrategyDefinition
 	extensionCatalog    extensions.CatalogView
 	authFlows           map[string]provider.AuthFlow
-	providerAuthModes   map[string]string
-	providerAuthFlowIDs map[string]map[string]string
+	providerAuthModes   map[extensions.Ref]string
+	providerAuthFlowIDs map[extensions.Ref]map[string]string
 	sessionCache        *sessionruntime.Cache
 	policy              *runtimehealth.PolicyGate
 	quotaPersistence    *runtimehealth.QuotaSnapshotQueue
@@ -1184,7 +1184,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		if input.DefinitionID != "" && input.AuthMode == "" {
-			if credentialType := d.providerAuthModes[input.DefinitionID]; credentialType != "" {
+			if credentialType := d.providerAuthModes[provider.ProviderDefinitionRef(input.DefinitionID, 1)]; credentialType != "" {
 				input.AuthMode = credentialType
 			}
 		}
@@ -1691,7 +1691,7 @@ func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) err
 		input.DefinitionID = store.DefaultDefinitionForProtocol(input.Protocol)
 	}
 	if input.AuthMode == "" {
-		input.AuthMode = d.providerAuthModes[input.DefinitionID]
+		input.AuthMode = d.providerAuthModes[provider.ProviderDefinitionRef(input.DefinitionID, 1)]
 	}
 	if input.AuthMode == "" || d.authFlowID(input.DefinitionID, input.AuthMode) == "" {
 		return fmt.Errorf("provider definition %q does not declare default credential type %q", input.DefinitionID, input.AuthMode)
@@ -1700,7 +1700,7 @@ func (d *Daemon) applyProviderDefaults(input *store.CreateProviderNodeInput) err
 }
 
 func (d *Daemon) authFlowID(definitionID, credentialType string) string {
-	return d.providerAuthFlowIDs[definitionID][credentialType]
+	return d.providerAuthFlowIDs[provider.ProviderDefinitionRef(definitionID, 1)][credentialType]
 }
 
 func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, credentialType, secret string) error {

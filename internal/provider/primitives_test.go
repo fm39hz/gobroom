@@ -101,7 +101,7 @@ func TestPrimitiveRegistryValidatesComposedProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := r.Definition("openai-compatible"); !ok {
+	if _, ok := r.Definition(ProviderDefinitionRef("openai-compatible", 1)); !ok {
 		t.Fatal("definition was not registered")
 	}
 }
@@ -141,7 +141,7 @@ func TestProviderOperationBindsOnlyValidIdempotencyHeaderNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition, ok := runtime.Primitives.Definition("openai-compatible-chat")
+	definition, ok := runtime.Primitives.Definition(ProviderDefinitionRef("openai-compatible-chat", 1))
 	if !ok {
 		t.Fatal("built-in generic provider definition missing")
 	}
@@ -166,7 +166,7 @@ func TestProviderOperationBindsOnlyValidIdempotencyHeaderNames(t *testing.T) {
 	if err := runtime.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatalf("valid idempotency header rejected: %v", err)
 	}
-	runtimeBinding, err := NewRuntimeBindingBuilder(runtime).Build(definition.ID, OperationChat)
+	runtimeBinding, err := NewRuntimeBindingBuilder(runtime).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationChat)
 	if err != nil || runtimeBinding.IdempotencyHeader != "Idempotency-Key" {
 		t.Fatalf("runtime idempotency header=%q err=%v", runtimeBinding.IdempotencyHeader, err)
 	}
@@ -300,7 +300,7 @@ func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 	if err := runtime.LoadDefinitionJSON(data); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := runtime.Primitives.Definition("external-chat"); !ok {
+	if _, ok := runtime.Primitives.Definition(ProviderDefinitionRef("external-chat", 1)); !ok {
 		t.Fatal("external definition was not loaded")
 	}
 }
@@ -342,7 +342,7 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, ok := bindings[RuntimeBindingKey(definition.ID, OperationAudio)]
+	binding, ok := bindings[RuntimeBindingKey(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationAudio)]
 	if !ok || binding.Adapter == nil || binding.TaskRef != operationRef || binding.RequestCodecID != MultipartRequestCodecID {
 		t.Fatalf("static module + manifest did not resolve exact shared operation primitives: %#v", binding)
 	}
@@ -418,8 +418,9 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[RuntimeBindingKey(definition.ID, OperationChat)]
-	if binding.ErrorClassifierRef != RuntimeErrorClassifierRef(definition.ID, OperationChat, PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}) {
+	definitionRef := ProviderDefinitionRef(definition.ID, definition.ContractVersion)
+	binding := bindings[RuntimeBindingKey(definitionRef, OperationChat)]
+	if binding.ErrorClassifierRef != RuntimeErrorClassifierRef(definitionRef, OperationChat, PrimitiveRef{Kind: PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}) {
 		t.Fatalf("configured classifier ref=%q", binding.ErrorClassifierRef.Key())
 	}
 	classifiers := registry.ErrorClassifiersForBindings(bindings)
@@ -514,8 +515,8 @@ func TestPrimitiveReferencesRequireTheExactContractVersion(t *testing.T) {
 		}},
 	}
 	definition.ContractVersion = 0
-	if err := registry.RegisterDefinition(definition); err == nil || !strings.Contains(err.Error(), "contractVersion 1") {
-		t.Fatalf("unsupported or missing provider contract version was accepted: %v", err)
+	if err := registry.RegisterDefinition(definition); err == nil || !strings.Contains(err.Error(), "positive contractVersion") {
+		t.Fatalf("missing provider contract version was accepted: %v", err)
 	}
 	definition.ContractVersion = 1
 	if err := registry.RegisterDefinition(definition); err == nil || !strings.Contains(err.Error(), "contractVersion") {
@@ -551,17 +552,17 @@ func TestBuiltinManifestsBuildExecutableBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, definitionID := range []string{"openai", "openrouter", "deepseek", "anthropic"} {
-		definition, ok := registry.Primitives.Definition(definitionID)
+		definition, ok := registry.Primitives.Definition(ProviderDefinitionRef(definitionID, 1))
 		if !ok {
 			t.Fatalf("manifest %q was not loaded", definitionID)
 		}
 		for operation := range definition.Operations {
-			if _, ok := bindings[RuntimeBindingKey(definitionID, operation)]; !ok {
+			if _, ok := bindings[RuntimeBindingKey(ProviderDefinitionRef(definitionID, 1), operation)]; !ok {
 				t.Fatalf("binding missing for %s/%s", definitionID, operation)
 			}
 		}
 	}
-	if _, ok := registry.Primitives.Definition("opencode-go"); !ok {
+	if _, ok := registry.Primitives.Definition(ProviderDefinitionRef("opencode-go", 1)); !ok {
 		t.Fatal("embedded OpenCode Go provider definition was not loaded by default")
 	}
 }
@@ -581,21 +582,22 @@ func TestRuntimeBindingBuilderBuildsComposedOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build("openai-compatible-chat", OperationChat)
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef("openai-compatible-chat", 1), OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.AdapterID != "openai-compatible-chat:chat" || binding.Adapter == nil || binding.AuthModes["api_key"].Flow == nil || binding.AuthModes["api_key"].FlowID != AuthBindingKey("openai-compatible-chat", "api_key", PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || binding.EndpointID != "http-json" || binding.TransportID != "http" || binding.RequestCodecID != "openai-chat-json" || binding.ResponseDecoderID != "openai-sse" {
+	definitionRef := ProviderDefinitionRef("openai-compatible-chat", 1)
+	if binding.AdapterID != RuntimeBindingKey(definitionRef, OperationChat) || binding.Adapter == nil || binding.AuthModes["api_key"].Flow == nil || binding.AuthModes["api_key"].FlowID != AuthBindingKey(definitionRef, "api_key", PrimitiveRef{Kind: PrimitiveAuth, ID: "static-secret", ContractVersion: 1}) || binding.EndpointID != "http-json" || binding.TransportID != "http" || binding.RequestCodecID != "openai-chat-json" || binding.ResponseDecoderID != "openai-sse" {
 		t.Fatalf("binding=%#v", binding)
 	}
 	if binding.ErrorClassifier == nil || binding.ErrorClassifierID != "http-json" {
 		t.Fatalf("error classifier was not resolved: %#v", binding)
 	}
-	modelBinding, err := NewRuntimeBindingBuilder(registry).Build("openai-compatible-chat", OperationModels)
+	modelBinding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef("openai-compatible-chat", 1), OperationModels)
 	if err != nil || modelBinding.ModelSource == nil {
 		t.Fatalf("model source was not resolved: %#v err=%v", modelBinding, err)
 	}
-	responseBinding, err := NewRuntimeBindingBuilder(registry).Build("openai-compatible-responses", OperationResponses)
+	responseBinding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef("openai-compatible-responses", 1), OperationResponses)
 	if err != nil || responseBinding.SessionStoreID != "session" || responseBinding.SessionStore == nil {
 		t.Fatalf("response session store was not resolved: %#v err=%v", responseBinding, err)
 	}
@@ -649,11 +651,11 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, OperationChat)
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.AuthModes["oauth2"].Flow == nil || binding.AuthModes["oauth2"].Flow.ID() != "oauth2" || binding.AuthModes["oauth2"].FlowID != AuthBindingKey("oauth-provider", "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
+	if binding.AuthModes["oauth2"].Flow == nil || binding.AuthModes["oauth2"].Flow.ID() != "oauth2" || binding.AuthModes["oauth2"].FlowID != AuthBindingKey(ProviderDefinitionRef("oauth-provider", 1), "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
 		t.Fatalf("auth binding=%#v", binding)
 	}
 	if oauth, ok := binding.AuthModes["oauth2"].Flow.(OAuthAuth); !ok || oauth.Config.DeviceAuthURL != "https://oauth.test/device" {
@@ -824,15 +826,16 @@ func TestProviderMustDeclareNoAuthExplicitly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[RuntimeBindingKey(definition.ID, OperationChat)]
-	if binding.AuthModes["none"].FlowID != AuthBindingKey("public-provider", "none", PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}) || binding.AuthModes["none"].Flow == nil {
+	definitionRef := ProviderDefinitionRef(definition.ID, definition.ContractVersion)
+	binding := bindings[RuntimeBindingKey(definitionRef, OperationChat)]
+	if binding.AuthModes["none"].FlowID != AuthBindingKey(definitionRef, "none", PrimitiveRef{Kind: PrimitiveAuth, ID: "none", ContractVersion: 1}) || binding.AuthModes["none"].Flow == nil {
 		t.Fatalf("no-auth binding=%#v", binding)
 	}
 	credential, err := binding.AuthModes["none"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "none"})
 	if err != nil || credential.Secret != "" {
 		t.Fatalf("no-auth credential=%#v err=%v", credential, err)
 	}
-	if got := registry.DefaultCredentialTypes()[definition.ID]; got != "none" {
+	if got := registry.DefaultCredentialTypes()[definitionRef]; got != "none" {
 		t.Fatalf("no-auth credential type default=%q", got)
 	}
 }
@@ -990,7 +993,7 @@ func TestRuntimeBindingExecutesSelectedEndpointAndCodecs(t *testing.T) {
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, OperationChat)
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1066,11 +1069,11 @@ func TestRuntimeBindingAcceptsNewNamespacedOperationWithoutOperationSwitch(t *te
 	if err := registry.LoadDefinitionJSON(manifest); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, operation)
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), operation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if binding.Adapter == nil || binding.AdapterID != "media-extension:audio.transcribe.v1" || binding.TaskRef.ID != string(operation) || binding.TaskRef.ContractVersion != 1 || binding.Protocol != "vendor.audio.v1" {
+	if binding.Adapter == nil || binding.AdapterID != RuntimeBindingKey(ProviderDefinitionRef(definition.ID, definition.ContractVersion), operation) || binding.TaskRef.ID != string(operation) || binding.TaskRef.ContractVersion != 1 || binding.Protocol != "vendor.audio.v1" {
 		t.Fatalf("operation binding=%#v", binding)
 	}
 }
@@ -1092,16 +1095,16 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 		{"openai", OperationChat, kernel.ProtocolOpenAIChat},
 		{"anthropic", OperationMessages, kernel.ProtocolAnthropic},
 	} {
-		binding := bindings[RuntimeBindingKey(test.definition, test.operation)]
+		binding := bindings[RuntimeBindingKey(ProviderDefinitionRef(test.definition, 1), test.operation)]
 		if binding.Protocol != test.protocol || binding.TaskRef.ID != string(normalize.OperationChatGenerate) || binding.TaskRef.ContractVersion != 1 || binding.Adapter == nil {
 			t.Errorf("%s/%s binding=%#v", test.definition, test.operation, binding)
 		}
 	}
-	modelBinding := bindings[RuntimeBindingKey("openai", OperationModels)]
+	modelBinding := bindings[RuntimeBindingKey(ProviderDefinitionRef("openai", 1), OperationModels)]
 	if modelBinding.AuthModes["api_key"].Flow == nil || modelBinding.ModelSource == nil || modelBinding.Endpoint == nil || modelBinding.Transport == nil {
 		t.Fatalf("manifest-bound API-key /models operation was incomplete: %#v", modelBinding)
 	}
-	staticModels := bindings[RuntimeBindingKey("opencode-go", OperationModels)]
+	staticModels := bindings[RuntimeBindingKey(ProviderDefinitionRef("opencode-go", 1), OperationModels)]
 	staticCatalog, ok := staticModels.ModelSource.(StaticModelCatalogSource)
 	if !ok || staticModels.Endpoint != nil || staticModels.Transport != nil {
 		t.Fatalf("static model operation unexpectedly requires network primitives: %#v", staticModels)
@@ -1119,11 +1122,11 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	if err != nil || catalogAgain.Models[0].ID != "deepseek-flash" {
 		t.Fatalf("static model source leaked mutable catalog state: %#v err=%v", catalogAgain.Models, err)
 	}
-	opencodeQuota := bindings[RuntimeBindingKey("opencode-go", OperationQuota)]
+	opencodeQuota := bindings[RuntimeBindingKey(ProviderDefinitionRef("opencode-go", 1), OperationQuota)]
 	if quotaSource, ok := opencodeQuota.QuotaSource.(HTTPJSONQuotaSource); !ok || quotaSource.QuotaScope() != QuotaScopeConnection || opencodeQuota.EndpointOptions.Path != "/usage" {
 		t.Fatalf("OpenCode Go quota binding=%#v", opencodeQuota)
 	}
-	groqQuota := bindings[RuntimeBindingKey("groq", OperationQuota)]
+	groqQuota := bindings[RuntimeBindingKey(ProviderDefinitionRef("groq", 1), OperationQuota)]
 	if groqQuota.QuotaSource == nil || groqQuota.EndpointOptions.Path != "/models" {
 		t.Fatalf("Groq manifest did not bind model-endpoint quota extraction: %#v", groqQuota)
 	}
@@ -1131,10 +1134,65 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	if !ok || configuredGroqQuota.QuotaScope() != QuotaScopeConnection || len(configuredGroqQuota.Options.HeaderWindows) != 2 || configuredGroqQuota.Options.HeaderWindows[0].Name != "requests" || configuredGroqQuota.Options.HeaderWindows[1].Name != "tokens" {
 		t.Fatalf("Groq quota source options=%#v", groqQuota.QuotaSource)
 	}
-	vercelQuota := bindings[RuntimeBindingKey("vercel-ai-gateway", OperationQuota)]
+	vercelQuota := bindings[RuntimeBindingKey(ProviderDefinitionRef("vercel-ai-gateway", 1), OperationQuota)]
 	vercelSource, ok := vercelQuota.QuotaSource.(HTTPJSONQuotaSource)
 	if !ok || vercelQuota.EndpointOptions.Path != "/credits" || vercelSource.QuotaScope() != QuotaScopeConnection || len(vercelSource.Options.Windows) != 2 || vercelSource.Options.Windows[0].RoutingEffect != QuotaRoutingObserve || vercelSource.Options.Windows[1].RoutingEffect != QuotaRoutingObserve {
 		t.Fatalf("Vercel credits report must remain observational: %#v", vercelQuota)
+	}
+}
+
+func TestProviderDefinitionVersionsBindSideBySideByExactRef(t *testing.T) {
+	runtime, err := NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	refV1 := ProviderDefinitionRef("openai-compatible-chat", 1)
+	definitionV1, ok := runtime.Primitives.Definition(refV1)
+	if !ok {
+		t.Fatal("built-in provider definition v1 is unavailable")
+	}
+	definitionV2 := definitionV1
+	definitionV2.ContractVersion = 2
+	definitionV2.Version = "2"
+	definitionV2.DisplayName = "OpenAI-compatible Chat v2"
+	definitionV2.AuthModes = append([]AuthModeDefinition(nil), definitionV1.AuthModes...)
+	definitionV2.AuthModes[0].Presentation.Header = "X-API-Key"
+	encoded, err := EncodeProviderDefinitionJSON(definitionV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadDefinitionJSON(encoded); err != nil {
+		t.Fatal(err)
+	}
+	refV2 := ProviderDefinitionRef(definitionV2.ID, definitionV2.ContractVersion)
+	resolvedV2, ok := runtime.Primitives.Definition(refV2)
+	if !ok || resolvedV2.AuthModes[0].Presentation.Header != "X-API-Key" {
+		t.Fatalf("exact provider-definition v2 did not resolve independently: %#v ok=%v", resolvedV2, ok)
+	}
+	metadata, err := runtime.DefinitionCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listedVersions []uint64
+	for _, item := range metadata {
+		if item.ID == definitionV1.ID {
+			listedVersions = append(listedVersions, item.ContractVersion)
+		}
+	}
+	if len(listedVersions) != 2 || listedVersions[0] != 1 || listedVersions[1] != 2 {
+		t.Fatalf("provider-definition catalog did not expose deterministic side-by-side refs: %#v", listedVersions)
+	}
+	bindings, err := runtime.BuildBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingV1, okV1 := bindings[RuntimeBindingKey(refV1, OperationChat)]
+	bindingV2, okV2 := bindings[RuntimeBindingKey(refV2, OperationChat)]
+	if !okV1 || !okV2 || bindingV1.DefinitionRef != refV1 || bindingV2.DefinitionRef != refV2 || bindingV1.AdapterID == bindingV2.AdapterID || bindingV1.AuthModes["api_key"].Presentation.Header != "Authorization" || bindingV2.AuthModes["api_key"].Presentation.Header != "X-API-Key" {
+		t.Fatalf("side-by-side runtime bindings v1=%#v (found=%v) v2=%#v (found=%v)", bindingV1, okV1, bindingV2, okV2)
+	}
+	if _, ok := runtime.Primitives.Definition(ProviderDefinitionRef(definitionV1.ID, 3)); ok {
+		t.Fatal("unregistered provider-definition v3 resolved to another contract")
 	}
 }
 
@@ -1229,7 +1287,7 @@ func TestVersionedPrimitiveRefsSelectExactAdapterComponents(t *testing.T) {
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definitionID, OperationChat)
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definitionID, 1), OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}

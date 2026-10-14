@@ -89,7 +89,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := provider.NewRuntimeBindingBuilder(registry).Build("gemini", provider.OperationChat)
+	binding, err := provider.NewRuntimeBindingBuilder(registry).Build(provider.ProviderDefinitionRef("gemini", 1), provider.OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := provider.NewRuntimeBindingBuilder(registry).Build("gemini", provider.OperationChat)
+	binding, err := provider.NewRuntimeBindingBuilder(registry).Build(provider.ProviderDefinitionRef("gemini", 1), provider.OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestGeminiRuntimeBindingPropagatesRequestCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := provider.NewRuntimeBindingBuilder(registry).Build("gemini", provider.OperationChat)
+	binding, err := provider.NewRuntimeBindingBuilder(registry).Build(provider.ProviderDefinitionRef("gemini", 1), provider.OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestGeminiRuntimeBindingTranslatesNonStreamingTextCompletion(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := provider.NewRuntimeBindingBuilder(registry).Build("gemini", provider.OperationChat)
+	binding, err := provider.NewRuntimeBindingBuilder(registry).Build(provider.ProviderDefinitionRef("gemini", 1), provider.OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +523,7 @@ func newGeminiFallbackGateway(t *testing.T, baseURL string, stream bool) (*kerne
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding, err := provider.NewRuntimeBindingBuilder(registry).Build("gemini", provider.OperationChat)
+	binding, err := provider.NewRuntimeBindingBuilder(registry).Build(provider.ProviderDefinitionRef("gemini", 1), provider.OperationChat)
 	if err != nil {
 		t.Fatal(err)
 	}

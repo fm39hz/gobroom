@@ -170,7 +170,8 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 		return OperationTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
 	}
 	operation := provider.Operation(operationID)
-	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, operation)]
+	definitionRef := provider.ProviderDefinitionRef(node.DefinitionID, 1)
+	binding, ok := s.Bindings[provider.RuntimeBindingKey(definitionRef, operation)]
 	if !ok || binding.Adapter == nil || binding.TaskRef.Kind != "operation" || binding.TaskRef.ContractVersion == 0 {
 		return OperationTestResult{}, fmt.Errorf("provider definition %q has no executable binding for operation %q", node.DefinitionID, operationID)
 	}
@@ -288,7 +289,7 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	}
 	var binding provider.RuntimeBinding
 	for _, operation := range []provider.Operation{provider.OperationChat, provider.OperationResponses, provider.OperationMessages} {
-		candidate, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, operation)]
+		candidate, ok := s.Bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef(node.DefinitionID, 1), operation)]
 		if ok && candidate.Adapter != nil && candidate.Protocol == kernel.Protocol(node.Protocol) && candidate.TaskRef.ID == string(normalize.OperationChatGenerate) {
 			binding = candidate
 			break
@@ -437,7 +438,7 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	if selected.ID == "" {
 		return fetchedModelCatalog{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, nodeID)
 	}
-	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, provider.OperationModels)]
+	binding, ok := s.Bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef(node.DefinitionID, 1), provider.OperationModels)]
 	if !ok || binding.ModelSource == nil {
 		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q does not provide model discovery", node.DefinitionID)
 	}
@@ -520,7 +521,7 @@ func (s Service) RefreshNode(ctx context.Context, nodeID string) (Result, error)
 	if err != nil {
 		return Result{}, err
 	}
-	if binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionID, provider.OperationModels)]; ok {
+	if binding, ok := s.Bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef(node.DefinitionID, 1), provider.OperationModels)]; ok {
 		if source, static := binding.ModelSource.(provider.StaticModelCatalogSource); static && source.StaticCatalog() {
 			return Result{}, fmt.Errorf("static model catalogs require an explicitly selected connection")
 		}

@@ -41,6 +41,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/provider -run '^(TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess)$$' -count=1
 	go test ./internal/provider -run '^TestDeepSeekQuotaManifestAggregatesCurrencyBalanceAvailability$$' -count=1
 	go test ./internal/provider -run '^TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges$$' -count=1
+	go test ./internal/provider -run '^TestProviderDefinitionVersionsBindSideBySideByExactRef$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonCompositionRootRegistersStaticProviderModule$$' -count=1
 	go test ./internal/kernel -run '^TestRequiredRequestFacetsSeparateReasoningBudgetFromEffort$$' -count=1
 	go test ./internal/kernel -run '^(TestKernelLoadsAndSavesProviderSessionContinuity|TestKernelFailsClosedWhenSessionStateCannotBeLoaded|TestMemorySessionStoreExpiresStateAndCopiesOpaqueData)$$' -count=1

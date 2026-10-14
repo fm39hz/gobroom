@@ -292,8 +292,8 @@ func TestManifestBindsTypedQuotaWindowOptionsAndCredentialHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[RuntimeBindingKey(definition.ID, OperationQuota)]
-	wantRef := runtimeQuotaSourceRef(definition.ID, OperationQuota, definition.Operations[OperationQuota].QuotaSource)
+	binding := bindings[RuntimeBindingKey(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationQuota)]
+	wantRef := runtimeQuotaSourceRef(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationQuota, definition.Operations[OperationQuota].QuotaSource)
 	if binding.QuotaSourceRef != wantRef {
 		t.Fatalf("quota source options were not bound to a definition-scoped ref: got=%s want=%s", binding.QuotaSourceRef.Key(), wantRef.Key())
 	}
@@ -358,8 +358,8 @@ func TestHTTPJSONQuotaSourceComposesMultipleReportsWithPartialSuccess(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := runtimeBindings[RuntimeBindingKey(definition.ID, OperationQuota)]
-	wantSourceRef := runtimeQuotaSourceRef(definition.ID, OperationQuota, definition.Operations[OperationQuota].QuotaSource)
+	binding := runtimeBindings[RuntimeBindingKey(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationQuota)]
+	wantSourceRef := runtimeQuotaSourceRef(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationQuota, definition.Operations[OperationQuota].QuotaSource)
 	if binding.QuotaSourceRef != wantSourceRef {
 		t.Fatalf("multi-report source did not bind per definition: %s", binding.QuotaSourceRef.Key())
 	}
@@ -424,7 +424,7 @@ func TestDeepSeekQuotaManifestAggregatesCurrencyBalanceAvailability(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[RuntimeBindingKey("deepseek", OperationQuota)]
+	binding := bindings[RuntimeBindingKey(ProviderDefinitionRef("deepseek", 1), OperationQuota)]
 	if binding.QuotaSource == nil || binding.EndpointOptions.Path != "/user/balance" {
 		t.Fatalf("DeepSeek quota binding=%#v", binding)
 	}
@@ -471,7 +471,7 @@ func TestDeepSeekQuotaManifestAggregatesAlternativeCurrencyBalances(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[RuntimeBindingKey("deepseek", OperationQuota)]
+	binding := bindings[RuntimeBindingKey(ProviderDefinitionRef("deepseek", 1), OperationQuota)]
 	if binding.QuotaSource == nil || binding.EndpointOptions.Path != "/user/balance" {
 		t.Fatalf("DeepSeek quota binding=%#v", binding)
 	}

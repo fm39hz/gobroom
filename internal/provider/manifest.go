@@ -80,7 +80,7 @@ func (r *RuntimeRegistry) HasDefinition(definition ProviderDefinition) bool {
 	if r == nil || r.Primitives == nil {
 		return false
 	}
-	existing, ok := r.Primitives.Definition(definition.ID)
+	existing, ok := r.Primitives.Definition(ProviderDefinitionRef(definition.ID, definition.ContractVersion))
 	return ok && SameProviderDefinition(existing, definition)
 }
 

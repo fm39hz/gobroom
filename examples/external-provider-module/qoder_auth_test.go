@@ -263,7 +263,7 @@ func TestExternalRequestCodecEncodesThenSignsBodyWithoutKernelChanges(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := bindings[provider.RuntimeBindingKey(definition.ID, provider.OperationChat)]
+	binding := bindings[provider.RuntimeBindingKey(provider.Ref{Kind: "provider-definition", ID: definition.ID, ContractVersion: definition.ContractVersion}, provider.OperationChat)]
 	flow := binding.AuthModes["qoder_oauth"].Flow
 	credential, err := flow.Resolve(context.Background(), provider.AuthInput{
 		ConnectionID: "qoder-account", Type: "qoder_oauth",

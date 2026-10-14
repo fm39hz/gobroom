@@ -101,7 +101,13 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 		return nil, fmt.Errorf("provider runtime registry is not initialized")
 	}
 	definitions := r.Primitives.Definitions()
-	sort.Slice(definitions, func(i, j int) bool { return definitions[i].ID < definitions[j].ID })
+	sort.Slice(definitions, func(i, j int) bool {
+		left, right := ProviderDefinitionRef(definitions[i].ID, definitions[i].ContractVersion), ProviderDefinitionRef(definitions[j].ID, definitions[j].ContractVersion)
+		if left.ID == right.ID {
+			return left.ContractVersion < right.ContractVersion
+		}
+		return left.ID < right.ID
+	})
 	result := make([]DefinitionMetadata, 0, len(definitions))
 	for _, definition := range definitions {
 		item := DefinitionMetadata{
@@ -206,17 +212,21 @@ func bindPrimitiveAsOptions[T any](builder *RuntimeBindingBuilder, ref Primitive
 	return resolved, nil
 }
 
-func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) (RuntimeBinding, error) {
+func (b *RuntimeBindingBuilder) Build(definitionRef extensions.Ref, operation Operation) (RuntimeBinding, error) {
 	if b == nil || b.registry == nil || b.registry.Primitives == nil {
 		return RuntimeBinding{}, fmt.Errorf("runtime binding registry is not initialized")
 	}
 	if _, err := b.registry.FreezeCatalog(); err != nil {
 		return RuntimeBinding{}, fmt.Errorf("freeze extension catalog: %w", err)
 	}
-	definition, ok := b.registry.Primitives.Definition(definitionID)
-	if !ok {
-		return RuntimeBinding{}, fmt.Errorf("provider definition %q is not registered", definitionID)
+	if err := definitionRef.Validate(); err != nil || definitionRef.Kind != "provider-definition" {
+		return RuntimeBinding{}, fmt.Errorf("runtime binding requires an exact provider-definition reference")
 	}
+	definition, ok := b.registry.Primitives.Definition(definitionRef)
+	if !ok {
+		return RuntimeBinding{}, fmt.Errorf("provider definition %q is not registered", definitionRef.Key())
+	}
+	definitionID := definition.ID
 	binding, ok := definition.Operations[operation]
 	if !ok {
 		return RuntimeBinding{}, fmt.Errorf("provider %q has no %q operation", definitionID, operation)
@@ -231,7 +241,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 		if err != nil {
 			return RuntimeBinding{}, fmt.Errorf("bind auth flow %q: %w", mode.Auth.ID, err)
 		}
-		flowID := AuthBindingKey(definition.ID, mode.CredentialType, mode.Auth)
+		flowID := AuthBindingKey(definitionRef, mode.CredentialType, mode.Auth)
 		authModes[mode.CredentialType] = BoundAuthMode{FlowID: flowID, Flow: flow, Presentation: mode.Presentation}
 	}
 	var err error
@@ -291,7 +301,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 				return RuntimeBinding{}, fmt.Errorf("configure error classifier %q: %w", binding.ErrorClassifier.ID, err)
 			}
 			classifier = configured
-			errorClassifierRef = RuntimeErrorClassifierRef(definitionID, operation, binding.ErrorClassifier)
+			errorClassifierRef = RuntimeErrorClassifierRef(definitionRef, operation, binding.ErrorClassifier)
 		} else {
 			errorClassifierRef = extensionRef(binding.ErrorClassifier)
 		}
@@ -309,7 +319,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 		}
 		quotaSourceRef = extensionRef(binding.QuotaSource)
 		if len(binding.QuotaSourceOptions) > 0 && !bytes.Equal(bytes.TrimSpace(options), []byte(`{}`)) {
-			quotaSourceRef = runtimeQuotaSourceRef(definitionID, operation, binding.QuotaSource)
+			quotaSourceRef = runtimeQuotaSourceRef(definitionRef, operation, binding.QuotaSource)
 		}
 	}
 	endpointOptions := binding.EndpointOptions
@@ -371,7 +381,7 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	if err != nil {
 		return RuntimeBinding{}, fmt.Errorf("resolve response decoder %q: %w", binding.ResponseDecoder.ID, err)
 	}
-	result.AdapterID = RuntimeBindingKey(definitionID, operation)
+	result.AdapterID = RuntimeBindingKey(definitionRef, operation)
 	if result.Protocol == "" {
 		result.Protocol = kernel.Protocol(operation)
 	}
@@ -379,14 +389,14 @@ func (b *RuntimeBindingBuilder) Build(definitionID string, operation Operation) 
 	return result, nil
 }
 
-func RuntimeBindingKey(definitionID string, operation Operation) string {
-	return definitionID + ":" + string(operation)
+func RuntimeBindingKey(definitionRef extensions.Ref, operation Operation) string {
+	return definitionRef.Key() + ":operation:" + string(operation)
 }
 
-func RuntimeBindingsForProtocol(bindings map[string]RuntimeBinding, definitionID string, protocol kernel.Protocol) []RuntimeBinding {
+func RuntimeBindingsForProtocol(bindings map[string]RuntimeBinding, definitionRef extensions.Ref, protocol kernel.Protocol) []RuntimeBinding {
 	result := make([]RuntimeBinding, 0)
 	for _, binding := range bindings {
-		if binding.DefinitionID == definitionID && binding.Adapter != nil && binding.Protocol == protocol {
+		if binding.DefinitionRef == definitionRef && binding.Adapter != nil && binding.Protocol == protocol {
 			result = append(result, binding)
 		}
 	}
@@ -394,19 +404,19 @@ func RuntimeBindingsForProtocol(bindings map[string]RuntimeBinding, definitionID
 	return result
 }
 
-func RuntimeErrorClassifierRef(definitionID string, operation Operation, primitive PrimitiveRef) extensions.Ref {
-	return extensions.Ref{Kind: string(PrimitiveErrorClassifier), ID: RuntimeBindingKey(definitionID, operation) + ":error:" + primitive.ID, ContractVersion: primitive.ContractVersion}
+func RuntimeErrorClassifierRef(definitionRef extensions.Ref, operation Operation, primitive PrimitiveRef) extensions.Ref {
+	return extensions.Ref{Kind: string(PrimitiveErrorClassifier), ID: RuntimeBindingKey(definitionRef, operation) + ":error:" + primitive.ID, ContractVersion: primitive.ContractVersion}
 }
 
-func runtimeQuotaSourceRef(definitionID string, operation Operation, primitive PrimitiveRef) extensions.Ref {
-	return extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: RuntimeBindingKey(definitionID, operation) + ":quota:" + primitive.ID, ContractVersion: primitive.ContractVersion}
+func runtimeQuotaSourceRef(definitionRef extensions.Ref, operation Operation, primitive PrimitiveRef) extensions.Ref {
+	return extensions.Ref{Kind: string(PrimitiveQuotaSource), ID: RuntimeBindingKey(definitionRef, operation) + ":quota:" + primitive.ID, ContractVersion: primitive.ContractVersion}
 }
 
-func AuthBindingKey(definitionID, credentialType string, auth PrimitiveRef) string {
-	if definitionID == "" || credentialType == "" || auth.ID == "" || auth.ContractVersion == 0 {
+func AuthBindingKey(definitionRef extensions.Ref, credentialType string, auth PrimitiveRef) string {
+	if definitionRef.Validate() != nil || definitionRef.Kind != "provider-definition" || credentialType == "" || auth.ID == "" || auth.ContractVersion == 0 {
 		return ""
 	}
-	return definitionID + ":" + credentialType + ":" + extensionRef(auth).Key()
+	return definitionRef.Key() + ":" + credentialType + ":" + extensionRef(auth).Key()
 }
 
 func (r *RuntimeRegistry) BuildBindings() (map[string]RuntimeBinding, error) {
@@ -417,11 +427,12 @@ func (r *RuntimeRegistry) BuildBindings() (map[string]RuntimeBinding, error) {
 	result := map[string]RuntimeBinding{}
 	for _, definition := range r.Primitives.Definitions() {
 		for operation := range definition.Operations {
-			binding, err := builder.Build(definition.ID, operation)
+			definitionRef := ProviderDefinitionRef(definition.ID, definition.ContractVersion)
+			binding, err := builder.Build(definitionRef, operation)
 			if err != nil {
 				return nil, err
 			}
-			result[RuntimeBindingKey(definition.ID, operation)] = binding
+			result[RuntimeBindingKey(definitionRef, operation)] = binding
 		}
 	}
 	return result, nil

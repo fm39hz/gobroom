@@ -198,7 +198,7 @@ func TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions(t *testing.T
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, Operation("audio.transcribe"))
+	binding, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation("audio.transcribe"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions(t *testing.T
 	if codec.options.ModelField != "model" || codec.options.PayloadField != "metadata" || codec.options.StreamField != "stream" || codec.artifactFields["source-audio"].Field != "file" {
 		t.Fatalf("manifest requestCodecOptions were not bound: %#v", codec.options)
 	}
-	if _, err := NewRuntimeBindingBuilder(registry).Build(definition.ID, Operation("audio.transcribe.bad")); err == nil || !strings.Contains(err.Error(), "does not map declared artifact role") {
+	if _, err := NewRuntimeBindingBuilder(registry).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation("audio.transcribe.bad")); err == nil || !strings.Contains(err.Error(), "does not map declared artifact role") {
 		t.Fatalf("manifest mapped an undeclared artifact role: %v", err)
 	}
 }
@@ -283,7 +283,7 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 	if err := runtime.Primitives.RegisterDefinition(providerDefinition); err != nil {
 		t.Fatal(err)
 	}
-	binding, err := NewRuntimeBindingBuilder(runtime).Build(providerDefinition.ID, Operation("audio.transcribe.e2e"))
+	binding, err := NewRuntimeBindingBuilder(runtime).Build(ProviderDefinitionRef(providerDefinition.ID, providerDefinition.ContractVersion), Operation("audio.transcribe.e2e"))
 	if err != nil {
 		t.Fatal(err)
 	}

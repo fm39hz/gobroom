@@ -188,9 +188,11 @@ pending.
    non-chat task, bind a JSON manifest to shared primitives, and host the
    daemon; `make test-external-provider-module` proves a schema-validated
    request through that boundary with no kernel or storage-schema change.
-   Remaining: published module compatibility/version policy, dependency
-   resolution for portable bundles and side-by-side provider-definition
-   contract versions; C6 still needs the full SG1–SG7 integrated proof.
+   The runtime registry now resolves provider-definition implementations by
+   exact ref and allows side-by-side contracts with one ID. Remaining: pinning
+   that exact ref in provider-node storage/control-plane route selection,
+   publishing a module compatibility/version policy and resolving portable
+   bundle dependencies; C6 still needs the full SG1–SG7 integrated proof.
 2. **C2 — full compatibility planning (in progress):** the kernel now asks
    adapters for a request/route/operation-scoped `CompatibilityPlan` and
    recomputes admission from immutable facet declarations rather than trusting

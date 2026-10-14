@@ -70,7 +70,8 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	}
 	for _, row := range routeRows {
 		protocol := kernel.Protocol(row.Protocol)
-		routeBindings := provider.RuntimeBindingsForProtocol(l.Bindings, row.DefinitionID, protocol)
+		definitionRef := provider.ProviderDefinitionRef(row.DefinitionID, 1)
+		routeBindings := provider.RuntimeBindingsForProtocol(l.Bindings, definitionRef, protocol)
 		if l.Bindings != nil && len(routeBindings) == 0 {
 			return kernel.Snapshot{}, fmt.Errorf("provider definition %q has no inference operation for protocol %q", row.DefinitionID, protocol)
 		}
@@ -103,7 +104,7 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 				}
 			}
 		}
-		quotaBinding := l.Bindings[provider.RuntimeBindingKey(row.DefinitionID, provider.OperationQuota)]
+		quotaBinding := l.Bindings[provider.RuntimeBindingKey(definitionRef, provider.OperationQuota)]
 		authMode, authModeExists := binding.AuthModes[row.CredentialType]
 		if !authModeExists || authMode.Flow == nil || authMode.FlowID == "" {
 			return kernel.Snapshot{}, fmt.Errorf("provider definition %q does not bind credential type %q", row.DefinitionID, row.CredentialType)
