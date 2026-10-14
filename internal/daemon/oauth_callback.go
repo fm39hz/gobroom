@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -131,8 +132,8 @@ func (d *Daemon) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	callbackURL := (&url.URL{Scheme: "http", Host: r.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}).String()
 	code, state, err := authorizationCallbackCode(callbackURL)
 	if err != nil {
-		if state != "" && strings.Contains(err.Error(), "rejected") && d.callbackTargetMatchesSession(state, callbackURL) {
-			_ = d.cancelAuthorization(state)
+		if errors.Is(err, errOAuthAuthorizationDenied) && state != "" && d.callbackTargetMatchesSession(state, callbackURL) {
+			_ = d.denyAuthorization(state, state, callbackURL)
 		}
 		http.Error(w, "Authorization was not completed. Return to GoBroom and try again.", http.StatusBadRequest)
 		return

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -20,6 +21,8 @@ const (
 	maxOAuthCallbackURLBytes = 8192
 	maxOAuthCodeBytes        = 4096
 )
+
+var errOAuthAuthorizationDenied = errors.New("OAuth authorization was denied")
 
 type authorizationSession struct {
 	kind           string
@@ -276,18 +279,27 @@ func sameOAuthCallbackTarget(expected, actual string) bool {
 	}
 	expectedQuery, actualQuery := want.Query(), got.Query()
 	for key := range actualQuery {
-		if key != "code" && key != "state" {
+		if !oauthCallbackResultParameter(key) {
 			if _, exists := expectedQuery[key]; !exists {
 				return false
 			}
 		}
 	}
 	for key, values := range expectedQuery {
-		if key == "code" || key == "state" || !equalStringSlices(values, actualQuery[key]) {
+		if oauthCallbackResultParameter(key) || !equalStringSlices(values, actualQuery[key]) {
 			return false
 		}
 	}
 	return true
+}
+
+func oauthCallbackResultParameter(key string) bool {
+	switch key {
+	case "code", "state", "error", "error_description", "error_uri":
+		return true
+	default:
+		return false
+	}
 }
 
 func equalStringSlices(left, right []string) bool {
@@ -323,6 +335,40 @@ func (d *Daemon) cancelAuthorization(sessionID string) error {
 	}
 	sessions.mu.Unlock()
 	d.releaseOAuthCallbackListener(session.callbackKey)
+	return nil
+}
+
+func (d *Daemon) denyAuthorization(sessionID, state, callbackURL string) error {
+	sessions := d.authorizationSessions()
+	sessions.mu.Lock()
+	session, exists := sessions.byID[sessionID]
+	if !exists || session.kind != "authorization_code" || session.status != "awaiting_user" || session.state != state {
+		sessions.mu.Unlock()
+		return fmt.Errorf("authorization session is missing, expired or has invalid state")
+	}
+	if callbackURL != "" && !sameOAuthCallbackTarget(session.redirectURL, callbackURL) {
+		sessions.mu.Unlock()
+		return fmt.Errorf("OAuth callback URL does not match the redirect URI bound to this session")
+	}
+	if sessions.inFlight[sessionID] {
+		sessions.mu.Unlock()
+		return fmt.Errorf("authorization session is already completing")
+	}
+	callbackKey := session.callbackKey
+	session.callbackKey = ""
+	if session.timer != nil {
+		session.timer.Stop()
+		session.timer = nil
+	}
+	session.status = "denied"
+	session.statusError = errOAuthAuthorizationDenied.Error()
+	session.expiresAt = time.Now().Add(authorizationSessionRetention)
+	sessions.byID[sessionID] = session
+	if sessions.byConnection[session.connectionID] == sessionID {
+		delete(sessions.byConnection, session.connectionID)
+	}
+	sessions.mu.Unlock()
+	d.releaseOAuthCallbackListener(callbackKey)
 	return nil
 }
 
@@ -411,7 +457,7 @@ func authorizationCallbackCode(raw string) (string, string, error) {
 	}
 	query := parsed.Query()
 	if message := query.Get("error"); message != "" {
-		return "", query.Get("state"), fmt.Errorf("OAuth authorization rejected: %s", message)
+		return "", query.Get("state"), errOAuthAuthorizationDenied
 	}
 	code, state := query.Get("code"), query.Get("state")
 	if code == "" || state == "" {

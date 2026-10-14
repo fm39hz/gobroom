@@ -723,8 +723,23 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	if !startedAgain.OK {
 		t.Fatalf("new authorization after completion failed: %s", startedAgain.Error)
 	}
-	second := startedAgain.Result.(authorizationChallenge)
-	cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.authorization.cancel", Params: map[string]any{"sessionID": second.SessionID}})
+	deniedChallenge := startedAgain.Result.(authorizationChallenge)
+	deniedCallback := "https://identity.test/oauth/callback?error=access_denied&state=" + url.QueryEscape(deniedChallenge.SessionID)
+	denied := d.handleIPC(context.Background(), IPCRequest{ID: "denied", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": deniedChallenge.SessionID, "callbackURL": deniedCallback}})
+	if denied.OK || !strings.Contains(denied.Error, "denied") {
+		t.Fatalf("manual OAuth denial should be reported to CLI: %#v", denied)
+	}
+	deniedStatus := d.handleIPC(context.Background(), IPCRequest{ID: "denied-status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": deniedChallenge.SessionID}})
+	deniedView, deniedStatusOK := deniedStatus.Result.(authorizationStatusView)
+	if !deniedStatus.OK || !deniedStatusOK || deniedView.Status != "denied" {
+		t.Fatalf("manual OAuth denial did not retain terminal state: %#v error=%q", deniedStatus.Result, deniedStatus.Error)
+	}
+	thirdStart := d.handleIPC(context.Background(), IPCRequest{ID: "third-start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !thirdStart.OK {
+		t.Fatalf("new authorization after denial failed: %s", thirdStart.Error)
+	}
+	third := thirdStart.Result.(authorizationChallenge)
+	cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.authorization.cancel", Params: map[string]any{"sessionID": third.SessionID}})
 	if !cancelled.OK {
 		t.Fatalf("cancel authorization: %s", cancelled.Error)
 	}
@@ -806,6 +821,50 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	d.oauthCallbackMu.Unlock()
 	if remainingListeners != 0 {
 		t.Fatalf("callback listener remained after completed session: %d", remainingListeners)
+	}
+	deniedStart := d.handleIPC(context.Background(), IPCRequest{ID: "denied-start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !deniedStart.OK {
+		t.Fatalf("start denied-flow fixture: %s", deniedStart.Error)
+	}
+	deniedChallenge := deniedStart.Result.(authorizationChallenge)
+	deniedCallback := redirectURL + "?error=access_denied&state=" + url.QueryEscape(deniedChallenge.SessionID)
+	deniedResponse, err := http.Get(deniedCallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = deniedResponse.Body.Close()
+	if deniedResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("denied callback returned HTTP %d", deniedResponse.StatusCode)
+	}
+	deniedStatus := d.handleIPC(context.Background(), IPCRequest{ID: "denied-status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": deniedChallenge.SessionID}})
+	deniedView, deniedOK := deniedStatus.Result.(authorizationStatusView)
+	if !deniedStatus.OK || !deniedOK || deniedView.Status != "denied" || deniedView.Error != errOAuthAuthorizationDenied.Error() {
+		t.Fatalf("denied OAuth session not retained as a terminal state: %#v error=%q", deniedStatus.Result, deniedStatus.Error)
+	}
+	stored, ok = s.ConnectionCredentialByID(connection.ID)
+	if !ok {
+		t.Fatal("connection disappeared after OAuth denial")
+	}
+	token, err = provider.DecodeOAuthTokenState(stored.Secret)
+	if err != nil || token.AccessToken != "loopback-access" {
+		t.Fatalf("OAuth denial changed the existing credential: %#v err=%v", token, err)
+	}
+	startedExpiry := d.handleIPC(context.Background(), IPCRequest{ID: "expiry-start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !startedExpiry.OK {
+		t.Fatalf("start expiry-flow fixture after denial: %s", startedExpiry.Error)
+	}
+	expiryChallenge := startedExpiry.Result.(authorizationChallenge)
+	d.expireAuthorizationSession(expiryChallenge.SessionID)
+	expiredStatus := d.handleIPC(context.Background(), IPCRequest{ID: "expired-status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": expiryChallenge.SessionID}})
+	expiredView, expiredOK := expiredStatus.Result.(authorizationStatusView)
+	if !expiredStatus.OK || !expiredOK || expiredView.Status != "expired" {
+		t.Fatalf("expired OAuth session not retained as a terminal state: %#v error=%q", expiredStatus.Result, expiredStatus.Error)
+	}
+	d.oauthCallbackMu.Lock()
+	remainingListeners = len(d.oauthCallbacks)
+	d.oauthCallbackMu.Unlock()
+	if remainingListeners != 0 {
+		t.Fatalf("OAuth listener remained after denial/expiry: %d", remainingListeners)
 	}
 	d.cancelAuthorizationSessions()
 	d.closeOAuthCallbackListeners()

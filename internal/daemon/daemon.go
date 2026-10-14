@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1260,6 +1261,12 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if callbackURL != "" {
 			parsedCode, parsedState, err := authorizationCallbackCode(callbackURL)
 			if err != nil {
+				if errors.Is(err, errOAuthAuthorizationDenied) {
+					if denyErr := d.denyAuthorization(sessionID, parsedState, callbackURL); denyErr != nil {
+						return fail(request, denyErr.Error())
+					}
+					return fail(request, err.Error())
+				}
 				return fail(request, err.Error())
 			}
 			code, state = parsedCode, parsedState
