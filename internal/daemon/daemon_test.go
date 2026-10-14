@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -963,6 +964,108 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 	}
 	stop()
 	d.authWG.Wait()
+}
+
+func TestDaemonStopCancelsDeviceOAuthPollBeforeClosingStore(t *testing.T) {
+	tokenEntered := make(chan struct{})
+	releaseToken := make(chan struct{})
+	var tokenEnteredOnce sync.Once
+	identity := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/device":
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(writer, `{"device_code":"private-shutdown-code","user_code":"SHUT-DOWN","verification_uri":"https://identity.test/activate","expires_in":60,"interval":1}`)
+		case "/token":
+			tokenEnteredOnce.Do(func() { close(tokenEntered) })
+			select {
+			case <-request.Context().Done():
+			case <-releaseToken:
+			}
+		default:
+			writer.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer identity.Close()
+	defer close(releaseToken)
+
+	root := t.TempDir()
+	manifestDir := filepath.Join(root, "providers")
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	definition := provider.ProviderDefinition{
+		ContractVersion: 1, ID: "shutdown-device-oauth", Version: "1", DisplayName: "Shutdown device OAuth",
+		DefaultCredentialType: "oauth2",
+		AuthModes: []provider.AuthModeDefinition{{
+			CredentialType: "oauth2", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1},
+			AuthOptions:  provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "device-client", AuthURL: identity.URL + "/authorize", TokenURL: identity.URL + "/token", DeviceAuthURL: identity.URL + "/device"}},
+			Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "},
+		}},
+		Operations: map[provider.Operation]provider.OperationBinding{provider.OperationChat: {
+			Protocol: kernel.ProtocolOpenAIChat, TaskRef: provider.OperationRef("chat.generate", 1), ProviderFormat: normalize.FormatOpenAIChat,
+			Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+			Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+			RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1},
+			ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
+		}},
+	}
+	manifest, err := provider.EncodeProviderDefinitionJSON(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manifestDir, "shutdown-device-oauth.json"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := DefaultConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.DBPath = filepath.Join(root, "gobroom.db")
+	config.IPCPath = filepath.Join(root, "gobroom.sock")
+	config.ProviderManifestDir = manifestDir
+	config.RuntimeSpoolPath = filepath.Join(root, "runtime-spool.json")
+	config.ArtifactStoreDir = filepath.Join(root, "artifacts")
+	config.HTTPEnabled = false
+	startCtx := context.WithValue(context.Background(), oauth2.HTTPClient, identity.Client())
+	d := New(config)
+	if err := d.Start(startCtx); err != nil {
+		t.Fatal(err)
+	}
+	providerResponse := d.handleIPC(context.Background(), IPCRequest{ID: "provider", Method: "providers.create", Params: map[string]any{
+		"name": "Shutdown OAuth", "prefix": "shutdown-oauth", "baseUrl": "https://provider.test/v1", "protocol": "openai_chat", "definitionID": definition.ID,
+	}})
+	if !providerResponse.OK {
+		_ = d.Stop(context.Background())
+		t.Fatalf("create provider: %s", providerResponse.Error)
+	}
+	node := providerResponse.Result.(store.ProviderNode)
+	connectionResponse := d.handleIPC(context.Background(), IPCRequest{ID: "connection", Method: "connections.create", Params: map[string]any{
+		"providerNodeID": node.ID, "name": "pending OAuth", "credentialType": "oauth2", "secret": "",
+	}})
+	if !connectionResponse.OK {
+		_ = d.Stop(context.Background())
+		t.Fatalf("create pending OAuth connection: %s", connectionResponse.Error)
+	}
+	connection := connectionResponse.Result.(store.ConnectionRecord)
+	started := d.handleIPC(context.Background(), IPCRequest{ID: "device-start", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !started.OK {
+		_ = d.Stop(context.Background())
+		t.Fatalf("start device authorization: %s", started.Error)
+	}
+	select {
+	case <-tokenEntered:
+	case <-time.After(3 * time.Second):
+		_ = d.Stop(context.Background())
+		t.Fatal("device OAuth worker never started its token poll")
+	}
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	if err := d.Stop(stopCtx); err != nil {
+		t.Fatalf("daemon shutdown while device poll was active: %v", err)
+	}
+	if err := d.store.DB.Ping(); err == nil {
+		t.Fatal("daemon shutdown returned before closing the credential store")
+	}
 }
 
 func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *testing.T) {
