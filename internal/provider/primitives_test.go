@@ -1123,6 +1123,11 @@ func TestGenericProviderManifestBindsProtocolsAndSemanticTasks(t *testing.T) {
 	if !ok || configuredGroqQuota.QuotaScope() != QuotaScopeConnection || len(configuredGroqQuota.Options.HeaderWindows) != 2 || configuredGroqQuota.Options.HeaderWindows[0].Name != "requests" || configuredGroqQuota.Options.HeaderWindows[1].Name != "tokens" {
 		t.Fatalf("Groq quota source options=%#v", groqQuota.QuotaSource)
 	}
+	vercelQuota := bindings[RuntimeBindingKey("vercel-ai-gateway", OperationQuota)]
+	vercelSource, ok := vercelQuota.QuotaSource.(HTTPJSONQuotaSource)
+	if !ok || vercelQuota.EndpointOptions.Path != "/credits" || vercelSource.QuotaScope() != QuotaScopeConnection || len(vercelSource.Options.Windows) != 2 || vercelSource.Options.Windows[0].RoutingEffect != QuotaRoutingObserve || vercelSource.Options.Windows[1].RoutingEffect != QuotaRoutingObserve {
+		t.Fatalf("Vercel credits report must remain observational: %#v", vercelQuota)
+	}
 }
 
 type fixtureFeatureEvaluator struct{ accept bool }
@@ -1361,13 +1366,17 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"failureMode":"keep_available"}`)); err == nil {
 		t.Fatal("schema accepted a multi-report failure mode without report endpoints")
 	}
-	headerQuotaOptions := json.RawMessage(`{"scope":"connection","headerWindows":[{"name":"requests","limitHeader":"x-ratelimit-limit-requests","remainingHeader":"x-ratelimit-remaining-requests","resetHeader":"x-ratelimit-reset-requests"}]}`)
+	headerQuotaOptions := json.RawMessage(`{"scope":"connection","headerWindows":[{"name":"requests","limitHeader":"x-ratelimit-limit-requests","remainingHeader":"x-ratelimit-remaining-requests","resetHeader":"x-ratelimit-reset-requests","routingEffect":"observe"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, headerQuotaOptions); err != nil {
 		t.Fatalf("typed response-header quota options rejected by registered schema: %v", err)
 	}
 	usedPercentOptions := json.RawMessage(`{"scope":"connection","windows":[{"itemsPath":"/usage","usedPercentPath":"/percent","resetAtPath":"/resetsAt"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, usedPercentOptions); err != nil {
 		t.Fatalf("typed used-percent quota options rejected by registered schema: %v", err)
+	}
+	observeQuotaOptions := json.RawMessage(`{"windows":[{"name":"balance","remainingPath":"/balance","routingEffect":"observe"}]}`)
+	if err := snapshot.ValidateOptions(quotaRef, observeQuotaOptions); err != nil {
+		t.Fatalf("typed non-enforcing quota window rejected by registered schema: %v", err)
 	}
 	invalidHeaderQuotaOptions := json.RawMessage(`{"headerWindows":[{"name":"requests","remainingHeader":"invalid header"}]}`)
 	if err := snapshot.ValidateOptions(quotaRef, invalidHeaderQuotaOptions); err == nil {
@@ -1376,8 +1385,14 @@ func TestPrimitiveOptionsSchemaAllowsHTTPHeaderLimitBindings(t *testing.T) {
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"scope":"provider"}`)); err == nil {
 		t.Fatal("schema accepted an unsupported provider-wide credential quota scope")
 	}
+	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"headerWindows":[{"name":"balance","remainingHeader":"x-balance","routingEffect":"dashboard"}]}`)); err == nil {
+		t.Fatal("schema accepted an unsupported response-header quota effect")
+	}
 	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"windows":[{"name":"rolling","usedPercentPath":"/used","remainingPercentPath":"/remaining"}]}`)); err == nil {
 		t.Fatal("schema accepted contradictory used- and remaining-percent mappings")
+	}
+	if err := snapshot.ValidateOptions(quotaRef, json.RawMessage(`{"windows":[{"name":"balance","remainingPath":"/balance","routingEffect":"ignore"}]}`)); err == nil {
+		t.Fatal("schema accepted an unknown quota routing effect")
 	}
 }
 

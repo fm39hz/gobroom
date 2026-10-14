@@ -8,6 +8,13 @@ import (
 
 type EvidenceAuthority uint8
 
+type RoutingEffect string
+
+const (
+	RoutingEffectEnforce RoutingEffect = "enforce"
+	RoutingEffectObserve RoutingEffect = "observe"
+)
+
 const (
 	AuthorityUnknown EvidenceAuthority = iota
 	AuthorityInferred
@@ -18,9 +25,9 @@ const (
 	AuthorityExplicit
 )
 
-// Snapshot is routing state, not merely display telemetry. A scheduler can
-// reject a candidate when Remaining is zero until ResetAt, or prefer a route
-// with more remaining budget.
+// Snapshot holds normalized provider budget evidence. By default, a zero
+// Remaining gates the route until ResetAt; RoutingEffectObserve retains a
+// balance/usage observation without treating it as an entitlement limit.
 type Snapshot struct {
 	ProviderNodeID string
 	ConnectionID   string
@@ -34,9 +41,13 @@ type Snapshot struct {
 	Remaining      *float64
 	ResetAt        *time.Time
 	Source         string
+	RoutingEffect  RoutingEffect `json:"routingEffect,omitempty"`
 }
 
 func (s Snapshot) Exhausted(now time.Time) bool {
+	if s.RoutingEffect == RoutingEffectObserve {
+		return false
+	}
 	if s.Remaining == nil || *s.Remaining > 0 {
 		return false
 	}

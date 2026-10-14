@@ -167,13 +167,16 @@ LimitWindow {
   resetsAt?
   retryAfter?
   source: response_header | success_body | error_body | quota_api | inferred
+  routingEffect: enforce (default) | observe
   confidence
   observedAt
 }
 ```
 
 Several windows can apply simultaneously. A route is blocked when an applicable
-blocking window is exhausted; non-blocking low headroom may influence ranking.
+`enforce` window is exhausted; `observe` windows are retained and exposed but
+never block. A later real attempt with enforced response evidence can still
+override an older advisory report for the same window.
 
 ## Passive limit collection
 

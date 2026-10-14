@@ -171,6 +171,14 @@ selection, cross-report joins, or different auth per endpoint can register a
 dedicated `QuotaSource` module; the daemon's poller, generation fencing and
 persistence remain shared.
 
+Each JSON or response-header window also accepts
+`routingEffect: "enforce" | "observe"` (default `enforce`). Observations are
+persisted and visible but cannot exclude a route;
+this is for billing/usage balances that are not evidence of an entitlement cap.
+The Vercel AI Gateway preset records the raw `/credits` balance and total spend
+as connection-scoped observations. It deliberately does not infer the fixed
+monthly promotional amount used by the dashboard implementation.
+
 Quota source scope is `model` (the default) or `connection`. Connection-scoped
 reports persist with an empty `modelRef`, gate all models for that credential,
 and are polled/enriched once per source and connection. Use it when the

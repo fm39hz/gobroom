@@ -137,7 +137,10 @@ live credentials are not required for deterministic acceptance.
    through the quota operation and its shared JSON/header extraction contract;
    add representative fixtures for auth semantics and report authority. These
    are quota-report capabilities, not a separate generic `usage` operation.
-   Keep unsupported operations absent rather than routing them to a default.
+   The shared window contract distinguishes enforced limits from observational
+   billing balances; the Vercel `/credits` report is stored as `observe`, not
+   mistaken for a hard cap. Keep unsupported operations absent rather than
+   routing them to a default.
 
 M11's individual transformations remain deferred and M12 implementations
 remain outside initial core. Alternate database and log

@@ -1334,12 +1334,26 @@
           "id": "openai-models",
           "contractVersion": 1
         }
+      },
+      "quota": {
+        "endpoint": {"kind":"endpoint","id":"http-json","contractVersion":1},
+        "endpointOptions": {"path":"/credits"},
+        "transport": {"kind":"transport","id":"http","contractVersion":1},
+        "quotaSource": {"kind":"quota_source","id":"http-json-quota","contractVersion":1},
+        "quotaSourceOptions": {
+          "scope": "connection",
+          "windows": [
+            {"name":"balance-usd","remainingPath":"/balance","routingEffect":"observe"},
+            {"name":"spend-usd","usedPath":"/total_used","routingEffect":"observe"}
+          ]
+        }
       }
     },
     "capabilities": {
       "chat": true,
       "streaming": true,
-      "tools": true
+      "tools": true,
+      "quota": true
     },
     "contractVersion": 1
   },

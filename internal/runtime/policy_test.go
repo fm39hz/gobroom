@@ -21,6 +21,19 @@ func TestPolicyGateBlocksExhaustedQuota(t *testing.T) {
 	}
 }
 
+func TestPolicyGateRetainsObservedBalanceWithoutHardBlocking(t *testing.T) {
+	gate := NewPolicyGate()
+	route := kernel.Route{ID: "route", NodeID: "gateway", CredentialID: "account", ExternalModel: "provider/model", Enabled: true}
+	remaining := float64(0)
+	gate.SetQuota(quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, WindowName: "balance-usd", Remaining: &remaining, RoutingEffect: quota.RoutingEffectObserve, Source: "http-json-quota"})
+	if !gate.Usable(route, time.Now()) {
+		t.Fatal("an observed credit balance should remain visible without blocking pay-as-you-go routing")
+	}
+	if snapshot := gate.Quotas()[quotaKey(quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, WindowName: "balance-usd"})]; snapshot.RoutingEffect != quota.RoutingEffectObserve {
+		t.Fatalf("observed routing effect was not retained in policy state: %#v", snapshot)
+	}
+}
+
 func TestPolicyGateClearsQuotaEvidenceAfterConfigurationRecovery(t *testing.T) {
 	gate := NewPolicyGate()
 	first := kernel.Route{ID: "route-a", NodeID: "provider", CredentialID: "connection-a", ExternalModel: "model"}

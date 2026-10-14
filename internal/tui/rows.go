@@ -119,6 +119,7 @@ type quotaSnapshot struct {
 	Source         string
 	Authority      string    `json:"authority"`
 	ObservedAt     time.Time `json:"observedAt"`
+	RoutingEffect  string    `json:"routingEffect,omitempty"`
 }
 
 type usageRecord struct {
@@ -415,7 +416,14 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 			if !value.ObservedAt.IsZero() {
 				observed = value.ObservedAt.Format(time.RFC3339)
 			}
-			detail := fmt.Sprintf("Quota\n\nModel      %s\nWindow     %s\nUsed       %.2f\nRemaining  %s\nReset      %s\nAuthority  %s\nObserved   %s\nSource     %s\n\nProvider node ID\n%s\nConnection ID\n%s", value.ModelRef, value.WindowName, value.Used, remaining, reset, value.Authority, observed, value.Source, value.ProviderNodeID, value.ConnectionID)
+			routingEffect := value.RoutingEffect
+			if routingEffect == "" {
+				routingEffect = "enforce"
+			}
+			if routingEffect == "observe" {
+				remaining += " · observe only"
+			}
+			detail := fmt.Sprintf("Quota\n\nModel      %s\nWindow     %s\nUsed       %.2f\nRemaining  %s\nRouting    %s\nReset      %s\nAuthority  %s\nObserved   %s\nSource     %s\n\nProvider node ID\n%s\nConnection ID\n%s", value.ModelRef, value.WindowName, value.Used, remaining, routingEffect, reset, value.Authority, observed, value.Source, value.ProviderNodeID, value.ConnectionID)
 			entries = append(entries, entry{key: value.ProviderNodeID + value.ConnectionID + value.ModelRef + value.WindowName, title: name, summary: remaining, detail: detail, parentID: value.ProviderNodeID, payload: value})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })

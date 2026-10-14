@@ -45,6 +45,7 @@ type StaticModelSourceOptions = core.StaticModelSourceOptions
 type StaticModelCatalogSource = core.StaticModelCatalogSource
 type QuotaRequest = core.QuotaRequest
 type QuotaSnapshot = core.QuotaSnapshot
+type QuotaRoutingEffect = core.QuotaRoutingEffect
 type HTTPJSONQuotaOptions = core.HTTPJSONQuotaOptions
 type HTTPJSONQuotaReport = core.HTTPJSONQuotaReport
 type HTTPJSONQuotaWindow = core.HTTPJSONQuotaWindow
@@ -135,6 +136,8 @@ const (
 	QuotaReportsKeepAvailable      = core.QuotaReportsKeepAvailable
 	QuotaScopeModel                = core.QuotaScopeModel
 	QuotaScopeConnection           = core.QuotaScopeConnection
+	QuotaRoutingEnforce            = core.QuotaRoutingEnforce
+	QuotaRoutingObserve            = core.QuotaRoutingObserve
 
 	PrimitiveEndpoint        = core.PrimitiveEndpoint
 	PrimitiveTransport       = core.PrimitiveTransport

@@ -68,6 +68,9 @@ Quota/usage state is useful only when it influences routing or policy, not
 merely a dashboard. Limit windows identify scope, source, observation/reset
 time, confidence and evidence. Authoritative reset times remain distinguishable
 from estimates and are not capped. Unknown/stale data has explicit semantics.
+When a provider reports billable balance or spend rather than a hard entitlement,
+the window must opt into `routingEffect: observe`; zero balance is then preserved
+as evidence without being interpreted as route exhaustion.
 
 Static user priority is never rewritten by runtime feedback. Adaptive ranking
 uses bounded, decaying evidence only after capability/limit/health eligibility;

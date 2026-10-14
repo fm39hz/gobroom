@@ -137,6 +137,12 @@ type QuotaRequest struct {
 
 // QuotaSnapshot is the normalized public result type for provider quota sources.
 type QuotaSnapshot = quota.Snapshot
+type QuotaRoutingEffect = quota.RoutingEffect
+
+const (
+	QuotaRoutingEnforce = quota.RoutingEffectEnforce
+	QuotaRoutingObserve = quota.RoutingEffectObserve
+)
 
 type UsageSource interface {
 	kernel.UsageEnricher
@@ -1258,7 +1264,7 @@ func DecodeQuotaHeaders(headers http.Header, route kernel.Route, mappings []HTTP
 		if limit == nil && used == nil && remaining == nil && resetAt == nil {
 			continue
 		}
-		snapshots = append(snapshots, quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: mapping.Name, Used: valueOrZero(used), Limit: limit, Remaining: remaining, ResetAt: resetAt, Source: "http-header-quota"})
+		snapshots = append(snapshots, quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: mapping.Name, Used: valueOrZero(used), Limit: limit, Remaining: remaining, ResetAt: resetAt, Source: "http-header-quota", RoutingEffect: mapping.RoutingEffect})
 	}
 	return snapshots, nil
 }
@@ -1346,7 +1352,7 @@ func DecodeQuotaJSONWithOptions(data []byte, route kernel.Route, defaultWindow s
 			snapshots = append(snapshots, quota.Snapshot{
 				ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID,
 				ModelRef: route.ExternalModel, WindowName: mapping.Name, Used: used,
-				Limit: floatPointer(1), Remaining: floatPointer(remaining), Source: "http-json-quota",
+				Limit: floatPointer(1), Remaining: floatPointer(remaining), Source: "http-json-quota", RoutingEffect: mapping.RoutingEffect,
 			})
 			continue
 		}
@@ -1418,7 +1424,7 @@ func DecodeQuotaJSONWithOptions(data []byte, route kernel.Route, defaultWindow s
 			snapshots = append(snapshots, quota.Snapshot{
 				ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID,
 				ModelRef: route.ExternalModel, WindowName: name, Used: valueOrZero(used),
-				Limit: limit, Remaining: remaining, ResetAt: resetAt, Source: "http-json-quota",
+				Limit: limit, Remaining: remaining, ResetAt: resetAt, Source: "http-json-quota", RoutingEffect: mapping.RoutingEffect,
 			})
 		}
 	}

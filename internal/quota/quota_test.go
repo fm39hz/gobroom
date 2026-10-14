@@ -40,6 +40,26 @@ func TestActiveExhaustedQuotaIsBlocked(t *testing.T) {
 	}
 }
 
+func TestObservedZeroBalanceDoesNotActAsRoutingEntitlement(t *testing.T) {
+	remaining := float64(0)
+	reset := time.Now().Add(time.Hour)
+	snapshot := Snapshot{Remaining: &remaining, ResetAt: &reset, RoutingEffect: RoutingEffectObserve}
+	if snapshot.Exhausted(time.Now()) || !snapshot.Usable(time.Now()) {
+		t.Fatal("an observed billing balance must not be treated as an exhausted hard quota")
+	}
+}
+
+func TestEnforcedAttemptEvidenceOverridesAdvisoryQuotaSource(t *testing.T) {
+	zero := float64(0)
+	at := time.Now()
+	observed := Snapshot{Remaining: &zero, RoutingEffect: RoutingEffectObserve, Authority: AuthorityQuotaAPI, ObservedAt: at.Add(-time.Second)}
+	attempt := Snapshot{Remaining: &zero, Authority: AuthorityResponseHeader, ObservedAt: at}
+	merged := MergeSnapshot(observed, attempt)
+	if merged.RoutingEffect == RoutingEffectObserve || !merged.Exhausted(time.Now()) {
+		t.Fatalf("advisory report suppressed an exhausted limit observed on a real attempt: %#v", merged)
+	}
+}
+
 func TestMergeSnapshotPrefersNewerObservationBeforeAuthority(t *testing.T) {
 	newer := time.Now()
 	older := newer.Add(-time.Second)

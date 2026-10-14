@@ -103,6 +103,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
     "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "remainingPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "remainingFromLimitUsed":{"type":"boolean"},
+    "routingEffect":{"enum":["enforce","observe"]},
     "usedPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "remainingPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "resetAtPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
@@ -119,7 +120,8 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
     "limitHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
     "usedHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
     "remainingHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
-    "resetHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"}
+    "resetHeader":{"type":"string","pattern":"^[!#$%&'*+.^_\\x60|~0-9A-Za-z-]+$"},
+    "routingEffect":{"enum":["enforce","observe"]}
   },"anyOf":[{"required":["limitHeader"]},{"required":["usedHeader"]},{"required":["remainingHeader"]},{"required":["resetHeader"]}],"additionalProperties":false}},
   "reports":{"type":"array","maxItems":8,"items":{"type":"object","required":["windows"],"properties":{
     "endpointOptions":{"type":"object","properties":{"path":{"type":"string"},"query":{"type":"object","additionalProperties":{"type":"string"}}},"anyOf":[{"required":["path"]},{"required":["query"]}],"additionalProperties":false},
@@ -135,6 +137,7 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
       "limitPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "remainingPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "remainingFromLimitUsed":{"type":"boolean"},
+      "routingEffect":{"enum":["enforce","observe"]},
       "usedPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "remainingPercentPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
       "resetAtPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},

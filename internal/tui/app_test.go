@@ -36,6 +36,13 @@ func TestQuotaEntryShowsEvidenceAuthorityAndObservationTime(t *testing.T) {
 	}
 }
 
+func TestQuotaEntryLabelsObservationalBalanceAsNonEnforcing(t *testing.T) {
+	entries, err := makeEntries("quota.list", json.RawMessage(`[{"ProviderNodeID":"gateway","ConnectionID":"account","WindowName":"balance-usd","Remaining":0,"RoutingEffect":"observe"}]`), nil)
+	if err != nil || len(entries) != 1 || !strings.Contains(entries[0].summary, "observe only") || !strings.Contains(entries[0].detail, "Routing    observe") {
+		t.Fatalf("observational credit balance entry=%#v err=%v", entries, err)
+	}
+}
+
 func TestPhysicalModelEntryUsesProviderPrefixAndKeepsCatalogIDInInspector(t *testing.T) {
 	providers := []providerNode{{ID: "node-secret-id", Name: "Orca", Prefix: "orca"}}
 	raw := json.RawMessage(`[{

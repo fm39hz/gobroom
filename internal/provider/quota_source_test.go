@@ -127,6 +127,23 @@ func TestHTTPHeaderQuotaSourceMapsGroqModelResponseWindows(t *testing.T) {
 	}
 }
 
+func TestHTTPHeaderQuotaSupportsNonEnforcingBillingWindows(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("X-Credit-Balance", "0")
+	transport := &quotaTransportFixture{body: `{}`, headers: headers}
+	route := kernel.Route{NodeID: "provider", CredentialID: "account", ExternalModel: "model", BaseURL: "https://provider.test/v1"}
+	source := HTTPJSONQuotaSource{Options: HTTPJSONQuotaOptions{HeaderWindows: []HTTPHeaderQuotaWindow{{
+		Name: "billing-balance", RemainingHeader: "x-credit-balance", RoutingEffect: QuotaRoutingObserve,
+	}}}}
+	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
+		Credential: kernel.Credential{Secret: "key"}, Route: route, Endpoint: kernel.HTTPJSONEndpoint{},
+		Transport: transport, EndpointOptions: kernel.EndpointOptions{Path: "/credits"},
+	})
+	if err != nil || len(snapshots) != 1 || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 0 || snapshots[0].RoutingEffect != QuotaRoutingObserve || snapshots[0].Exhausted(time.Now()) {
+		t.Fatalf("billing header observation=%#v err=%v", snapshots, err)
+	}
+}
+
 func TestHTTPJSONQuotaSourceMapsOpenCodeGoUsedPercentWindows(t *testing.T) {
 	reset := time.Now().Add(90 * time.Minute).UTC().Truncate(time.Second)
 	body := `{"usage":{"rolling":{"percent":34.5,"resetsAt":"` + reset.Format(time.RFC3339) + `"},"weekly":{"percent":"105"},"monthly":{"label":"no numeric quota"}}}`
@@ -151,6 +168,29 @@ func TestHTTPJSONQuotaSourceMapsOpenCodeGoUsedPercentWindows(t *testing.T) {
 	}
 	if snapshots[1].WindowName != "weekly" || snapshots[1].Remaining == nil || *snapshots[1].Remaining != 0 || snapshots[1].Used != 100 {
 		t.Fatalf("OpenCode Go clamped weekly usage window=%#v", snapshots[1])
+	}
+}
+
+func TestVercelCreditsAreObservableWithoutHardQuotaEnforcement(t *testing.T) {
+	transport := &quotaTransportFixture{body: `{"balance":"0","total_used":"5.31"}`}
+	source := HTTPJSONQuotaSource{Options: HTTPJSONQuotaOptions{Scope: QuotaScopeConnection, Windows: []HTTPJSONQuotaWindow{
+		{Name: "balance-usd", RemainingPath: "/balance", RoutingEffect: QuotaRoutingObserve},
+		{Name: "spend-usd", UsedPath: "/total_used", RoutingEffect: QuotaRoutingObserve},
+	}}}
+	route := kernel.Route{NodeID: "vercel-ai-gateway", CredentialID: "account", ExternalModel: "provider/model", BaseURL: "https://ai-gateway.vercel.sh/v1"}
+	snapshots, err := source.Fetch(context.Background(), QuotaRequest{
+		Credential: kernel.Credential{Secret: "key"}, Route: route,
+		Endpoint: kernel.HTTPJSONEndpoint{}, Transport: transport,
+		EndpointOptions: kernel.EndpointOptions{Path: "/credits"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 || snapshots[0].WindowName != "balance-usd" || snapshots[0].ModelRef != "" || snapshots[0].Remaining == nil || *snapshots[0].Remaining != 0 || snapshots[0].RoutingEffect != QuotaRoutingObserve || snapshots[0].Exhausted(time.Now()) {
+		t.Fatalf("Vercel billing balance was not retained as non-enforcing observation: %#v", snapshots)
+	}
+	if snapshots[1].WindowName != "spend-usd" || snapshots[1].Used != 5.31 || snapshots[1].RoutingEffect != QuotaRoutingObserve {
+		t.Fatalf("Vercel spend observation=%#v", snapshots[1])
 	}
 }
 

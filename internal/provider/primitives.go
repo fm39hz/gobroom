@@ -17,6 +17,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
+	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 type Operation string
@@ -340,11 +341,12 @@ type HTTPJSONQuotaOptions struct {
 
 // HTTPHeaderQuotaWindow maps one response-header set into a normalized quota window.
 type HTTPHeaderQuotaWindow struct {
-	Name            string `json:"name"`
-	LimitHeader     string `json:"limitHeader,omitempty"`
-	UsedHeader      string `json:"usedHeader,omitempty"`
-	RemainingHeader string `json:"remainingHeader,omitempty"`
-	ResetHeader     string `json:"resetHeader,omitempty"`
+	Name            string              `json:"name"`
+	LimitHeader     string              `json:"limitHeader,omitempty"`
+	UsedHeader      string              `json:"usedHeader,omitempty"`
+	RemainingHeader string              `json:"remainingHeader,omitempty"`
+	ResetHeader     string              `json:"resetHeader,omitempty"`
+	RoutingEffect   quota.RoutingEffect `json:"routingEffect,omitempty"`
 }
 
 type QuotaReportFailureMode string
@@ -369,24 +371,25 @@ type HTTPJSONQuotaReport struct {
 // has a positive AggregationValuePath; an optional status gate can override
 // that result using the root report object.
 type HTTPJSONQuotaWindow struct {
-	Name                    string   `json:"name,omitempty"`
-	ItemsPath               string   `json:"itemsPath,omitempty"`
-	Aggregation             string   `json:"aggregation,omitempty"`
-	AggregationValuePath    string   `json:"aggregationValuePath,omitempty"`
-	AggregationStatusPath   string   `json:"aggregationStatusPath,omitempty"`
-	AggregationStatusValues []string `json:"aggregationStatusValues,omitempty"`
-	NamePath                string   `json:"namePath,omitempty"`
-	UsedPath                string   `json:"usedPath,omitempty"`
-	LimitPath               string   `json:"limitPath,omitempty"`
-	RemainingPath           string   `json:"remainingPath,omitempty"`
-	RemainingFromLimitUsed  bool     `json:"remainingFromLimitUsed,omitempty"`
-	UsedPercentPath         string   `json:"usedPercentPath,omitempty"`
-	RemainingPercentPath    string   `json:"remainingPercentPath,omitempty"`
-	ResetAtPath             string   `json:"resetAtPath,omitempty"`
-	ExhaustedStatusPath     string   `json:"exhaustedStatusPath,omitempty"`
-	ExhaustedStatusValues   []string `json:"exhaustedStatusValues,omitempty"`
-	IgnoreWhenPath          string   `json:"ignoreWhenPath,omitempty"`
-	IgnoreWhenValues        []string `json:"ignoreWhenValues,omitempty"`
+	Name                    string              `json:"name,omitempty"`
+	ItemsPath               string              `json:"itemsPath,omitempty"`
+	Aggregation             string              `json:"aggregation,omitempty"`
+	AggregationValuePath    string              `json:"aggregationValuePath,omitempty"`
+	AggregationStatusPath   string              `json:"aggregationStatusPath,omitempty"`
+	AggregationStatusValues []string            `json:"aggregationStatusValues,omitempty"`
+	NamePath                string              `json:"namePath,omitempty"`
+	UsedPath                string              `json:"usedPath,omitempty"`
+	LimitPath               string              `json:"limitPath,omitempty"`
+	RemainingPath           string              `json:"remainingPath,omitempty"`
+	RemainingFromLimitUsed  bool                `json:"remainingFromLimitUsed,omitempty"`
+	UsedPercentPath         string              `json:"usedPercentPath,omitempty"`
+	RemainingPercentPath    string              `json:"remainingPercentPath,omitempty"`
+	ResetAtPath             string              `json:"resetAtPath,omitempty"`
+	ExhaustedStatusPath     string              `json:"exhaustedStatusPath,omitempty"`
+	ExhaustedStatusValues   []string            `json:"exhaustedStatusValues,omitempty"`
+	IgnoreWhenPath          string              `json:"ignoreWhenPath,omitempty"`
+	IgnoreWhenValues        []string            `json:"ignoreWhenValues,omitempty"`
+	RoutingEffect           quota.RoutingEffect `json:"routingEffect,omitempty"`
 }
 
 func (o HTTPJSONQuotaOptions) Validate() error {
@@ -415,6 +418,9 @@ func (o HTTPJSONQuotaOptions) Validate() error {
 	for i, window := range o.HeaderWindows {
 		if strings.TrimSpace(window.Name) == "" {
 			return fmt.Errorf("quota header window %d requires a name", i)
+		}
+		if window.RoutingEffect != "" && window.RoutingEffect != quota.RoutingEffectEnforce && window.RoutingEffect != quota.RoutingEffectObserve {
+			return fmt.Errorf("quota header window %d routingEffect %q is unsupported", i, window.RoutingEffect)
 		}
 		key := strings.ToLower(strings.TrimSpace(window.Name))
 		if _, exists := seenHeaderWindows[key]; exists {
@@ -464,6 +470,9 @@ func validateHTTPJSONQuotaWindows(windows []HTTPJSONQuotaWindow) error {
 		}
 		if window.ItemsPath != "" && window.Name != "" && window.Aggregation != "any_positive" {
 			return fmt.Errorf("quota window %d cannot combine a static name with itemsPath", index)
+		}
+		if window.RoutingEffect != "" && window.RoutingEffect != quota.RoutingEffectEnforce && window.RoutingEffect != quota.RoutingEffectObserve {
+			return fmt.Errorf("quota window %d routingEffect %q is unsupported", index, window.RoutingEffect)
 		}
 		for _, item := range []struct{ field, path string }{
 			{"itemsPath", window.ItemsPath}, {"aggregationValuePath", window.AggregationValuePath},
