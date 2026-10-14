@@ -88,6 +88,7 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
     "quotaCodes":{"type":"array","items":{"type":"string","minLength":1}},
     "quotaTypes":{"type":"array","items":{"type":"string","minLength":1}},
     "quotaStatuses":{"type":"array","items":{"type":"string","minLength":1}},
+    "quotaHTTPStatuses":{"type":"array","uniqueItems":true,"items":{"type":"integer","minimum":400,"maximum":599}},
     "quotaMessageTokens":{"type":"array","items":{"type":"string","minLength":1}}
   },
   "additionalProperties":false

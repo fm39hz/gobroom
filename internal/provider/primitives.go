@@ -93,6 +93,7 @@ type HTTPJSONErrorClassifierOptions struct {
 	QuotaCodes          []string            `json:"quotaCodes,omitempty"`
 	QuotaTypes          []string            `json:"quotaTypes,omitempty"`
 	QuotaStatuses       []string            `json:"quotaStatuses,omitempty"`
+	QuotaHTTPStatuses   []int               `json:"quotaHTTPStatuses,omitempty"`
 	QuotaMessageTokens  []string            `json:"quotaMessageTokens,omitempty"`
 }
 
@@ -101,7 +102,7 @@ func (o ErrorClassifierOptions) Empty() bool {
 }
 
 func (o HTTPJSONErrorClassifierOptions) Empty() bool {
-	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaMessageTokens) == 0
+	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0
 }
 
 func (o HTTPJSONErrorClassifierOptions) Validate() error {
@@ -130,6 +131,16 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 				return fmt.Errorf("error classifier match values must not be empty")
 			}
 		}
+	}
+	seenQuotaHTTPStatuses := make(map[int]struct{}, len(o.QuotaHTTPStatuses))
+	for _, status := range o.QuotaHTTPStatuses {
+		if status < 400 || status > 599 {
+			return fmt.Errorf("error classifier quota HTTP statuses must be between 400 and 599, got %d", status)
+		}
+		if _, duplicate := seenQuotaHTTPStatuses[status]; duplicate {
+			return fmt.Errorf("error classifier quota HTTP status %d is duplicated", status)
+		}
+		seenQuotaHTTPStatuses[status] = struct{}{}
 	}
 	return nil
 }

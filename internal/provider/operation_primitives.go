@@ -134,20 +134,34 @@ func (HTTPJSONErrorClassifier) WithOptions(options ErrorClassifierOptions) (Erro
 	return HTTPJSONErrorClassifier{Options: &copy}, nil
 }
 func (c HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorClass {
-	message := strings.ToLower(string(body))
 	quotaEvidence := decodeHTTPErrorEvidence(body, c.Options).QuotaExhausted
 	switch {
+	case quotaEvidence && isQuotaHTTPStatus(status, c.Options):
+		return kernel.ErrorCooldown
 	case status == 401 || status == 403:
 		return kernel.ErrorAuth
-	case strings.Contains(message, "invalid api key"), strings.Contains(message, "unauthorized"), strings.Contains(message, "authentication"):
-		return kernel.ErrorAuth
-	case status == 408 || status == 409 || status == 429 || status >= 500, strings.Contains(message, "rate limit"), status == http.StatusPaymentRequired && quotaEvidence:
+	case status == 408 || status == 409 || status == 429 || status >= 500:
 		return kernel.ErrorCooldown
 	case status >= 400:
 		return kernel.ErrorTerminal
 	default:
 		return kernel.ErrorRetryable
 	}
+}
+
+func isQuotaHTTPStatus(status int, options *HTTPJSONErrorClassifierOptions) bool {
+	switch status {
+	case http.StatusPaymentRequired, http.StatusForbidden, http.StatusConflict, http.StatusTooManyRequests:
+		return true
+	}
+	if options != nil {
+		for _, configured := range options.QuotaHTTPStatuses {
+			if status == configured {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ClassifyOutcome adds provider-neutral evidence that the coarse class
@@ -162,16 +176,20 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	outcome := kernel.ClassifiedOutcome{Class: c.Classify(status, body), Scope: scope, Confidence: 0.7, Evidence: []kernel.EvidenceSource{kernel.EvidenceErrorBody}, StatusCode: status, Message: message}
 	errorEvidence := decodeHTTPErrorEvidence(body, c.Options)
 	switch {
+	case errorEvidence.QuotaExhausted && isQuotaHTTPStatus(status, c.Options):
+		outcome.Cause, outcome.Retry = kernel.CauseQuotaExhausted, kernel.RetryAfter
 	case status == 401:
 		outcome.Cause, outcome.Retry = kernel.CauseAuth, kernel.RetryNever
 	case status == 403:
 		outcome.Cause, outcome.Retry = kernel.CausePermission, kernel.RetryNever
 	case status == 404:
 		outcome.Cause, outcome.Retry = kernel.CauseModelNotFound, kernel.RetryNever
-	case (status == http.StatusTooManyRequests || status == http.StatusPaymentRequired) && errorEvidence.QuotaExhausted:
-		outcome.Cause, outcome.Retry = kernel.CauseQuotaExhausted, kernel.RetryAfter
+	case status == http.StatusRequestTimeout:
+		outcome.Cause, outcome.Retry = kernel.CauseTimeout, kernel.RetryAfter
 	case status == http.StatusTooManyRequests:
 		outcome.Cause, outcome.Retry = kernel.CauseRateLimited, kernel.RetryAfter
+	case status == http.StatusConflict:
+		outcome.Cause, outcome.Retry = kernel.CauseOverloaded, kernel.RetryAfter
 	case status >= 500:
 		outcome.Cause, outcome.Retry = kernel.CauseCapacity, kernel.RetryAfter
 	case status >= 400:
@@ -201,7 +219,7 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 			if c.Options.RateLimitScope != "" {
 				outcome.Scope = c.Options.RateLimitScope
 			}
-		case kernel.CauseCapacity:
+		case kernel.CauseCapacity, kernel.CauseOverloaded:
 			if c.Options.CapacityScope != "" {
 				outcome.Scope = c.Options.CapacityScope
 			}

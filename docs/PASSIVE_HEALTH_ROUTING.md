@@ -196,9 +196,12 @@ The generic HTTP/JSON classifier recognizes `Retry-After` (delta or
 HTTP-date), common rate-limit headers, and common JSON error-envelope fields
 for quota codes, reset timestamps and retry delays. Typed manifest options can
 override JSON pointers, add quota code/type/message signals and name a limit
-window, without changing the kernel or duplicating the classifier. The runtime
-registry preserves `ClassifyOutcome`; tests prove evidence reaches route
-eligibility and expires at reset. Shapes requiring transformations beyond
+window, or declare provider-specific quota HTTP status codes, without changing
+the kernel or duplicating the classifier. Explicit quota evidence on configured
+4xx statuses overrides generic auth/conflict classification; ordinary
+401/403/404/408/409/429/5xx behavior remains distinct and its coarse class
+matches the richer cause. The runtime registry preserves `ClassifyOutcome`;
+tests prove evidence reaches route eligibility and expires at reset. Shapes requiring transformations beyond
 these common options still need a reusable extractor primitive, not a
 provider-name branch in the kernel.
 

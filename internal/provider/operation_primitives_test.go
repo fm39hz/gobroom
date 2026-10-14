@@ -185,4 +185,53 @@ func TestHTTPJSONErrorClassifierKeepsCoarseClassAlignedWithRichCause(t *testing.
 	if authOutcome.Cause != kernel.CauseAuth || authOutcome.Scope != kernel.ScopeConnection || authOutcome.Retry != kernel.RetryNever || authOutcome.Effect != kernel.EffectRejected {
 		t.Fatalf("authentication failure did not carry permanent connection-scoped evidence: %#v", authOutcome)
 	}
+	for _, fixture := range []struct {
+		status int
+		body   string
+		cause  kernel.OutcomeCause
+		class  kernel.ErrorClass
+	}{
+		{status: http.StatusNotFound, body: `{"error":"invalid api key"}`, cause: kernel.CauseModelNotFound, class: kernel.ErrorTerminal},
+		{status: http.StatusInternalServerError, body: `{"error":"unauthorized"}`, cause: kernel.CauseCapacity, class: kernel.ErrorCooldown},
+		{status: http.StatusBadRequest, body: `{"error":"authentication parameter invalid"}`, cause: kernel.CauseRequestInvalid, class: kernel.ErrorTerminal},
+	} {
+		outcome := classifier.ClassifyOutcome(fixture.status, nil, []byte(fixture.body))
+		if outcome.Class != fixture.class || outcome.Cause != fixture.cause {
+			t.Fatalf("HTTP status/body precedence mismatch: status=%d class=%s/%s cause=%s/%s", fixture.status, outcome.Class, fixture.class, outcome.Cause, fixture.cause)
+		}
+	}
+}
+
+func TestHTTPJSONErrorClassifierHandlesTypedQuotaStatusesAndGenericConflict(t *testing.T) {
+	classifier := HTTPJSONErrorClassifier{}
+	reset := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
+	quotaBody := []byte(`{"error":{"code":"PLAN_EXHAUSTED","message":"weekly quota exhausted","reset_at":"` + reset.Format(time.RFC3339) + `"}}`)
+	for _, status := range []int{http.StatusConflict, http.StatusForbidden} {
+		class := classifier.Classify(status, quotaBody)
+		outcome := classifier.ClassifyOutcome(status, nil, quotaBody)
+		if class != kernel.ErrorCooldown || outcome.Class != class || outcome.Cause != kernel.CauseQuotaExhausted || outcome.Retry != kernel.RetryAfter {
+			t.Fatalf("typed quota evidence did not override HTTP %d default: class=%s outcome=%#v", status, class, outcome)
+		}
+	}
+
+	custom := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{QuotaHTTPStatuses: []int{418}, CodePath: "/error/code", QuotaCodes: []string{"ACCOUNT_DRY"}, ResetAtPath: "/error/reset_at"}}
+	customBody := []byte(`{"error":{"code":"ACCOUNT_DRY","message":"balance exhausted","reset_at":"` + reset.Format(time.RFC3339) + `"}}`)
+	class := custom.Classify(http.StatusTeapot, customBody)
+	outcome := custom.ClassifyOutcome(http.StatusTeapot, nil, customBody)
+	if class != kernel.ErrorCooldown || outcome.Class != class || outcome.Cause != kernel.CauseQuotaExhausted || !outcome.RetryAt.Equal(reset) {
+		t.Fatalf("manifest quota HTTP status was not honored: class=%s outcome=%#v", class, outcome)
+	}
+
+	conflict := classifier.ClassifyOutcome(http.StatusConflict, nil, []byte(`{"error":{"message":"resource conflict"}}`))
+	if conflict.Class != kernel.ErrorCooldown || conflict.Cause != kernel.CauseOverloaded || conflict.Retry != kernel.RetryAfter || conflict.Effect != kernel.EffectUnknown {
+		t.Fatalf("generic 409 outcome disagrees with coarse cooldown: %#v", conflict)
+	}
+	scoped := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{CapacityScope: kernel.ScopeProvider}}
+	conflict = scoped.ClassifyOutcome(http.StatusConflict, nil, []byte(`{"error":{"message":"resource conflict"}}`))
+	if conflict.Cause != kernel.CauseOverloaded || conflict.Scope != kernel.ScopeProvider {
+		t.Fatalf("configured capacity scope was not applied to overloaded conflict: %#v", conflict)
+	}
+	if _, err := (HTTPJSONErrorClassifier{}).WithOptions(ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{QuotaHTTPStatuses: []int{399}}}); err == nil {
+		t.Fatal("invalid quota HTTP status was accepted")
+	}
 }

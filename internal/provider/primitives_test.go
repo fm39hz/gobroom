@@ -389,7 +389,7 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 			ErrorClassifierOptions: ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{
 				CodePath: "/failure/reason", MessagePath: "/failure/explanation", ResetAtPath: "/failure/reopens_at",
 				WindowNamePath: "/failure/window", WindowLimitPath: "/failure/budget", WindowUsedPath: "/failure/spent", WindowRemainingPath: "/failure/left",
-				QuotaWindowKind: "tokens", QuotaCodes: []string{"BALANCE_EMPTY"}, QuotaMessageTokens: []string{"credits exhausted"},
+				QuotaWindowKind: "tokens", QuotaCodes: []string{"BALANCE_EMPTY"}, QuotaHTTPStatuses: []int{409}, QuotaMessageTokens: []string{"credits exhausted"},
 			}},
 		}},
 	}
@@ -430,6 +430,10 @@ func TestManifestBindsTypedHTTPJSONErrorPathsToSharedClassifier(t *testing.T) {
 	window := outcome.Limits[0]
 	if window.Name != "weekly" || window.Kind != "tokens" || window.Limit == nil || *window.Limit != 1000 || window.Used == nil || *window.Used != 1000 || window.Remaining == nil || *window.Remaining != 0 || window.ResetAt == nil || !window.ResetAt.Equal(reset) {
 		t.Fatalf("configured named limit window=%#v", window)
+	}
+	conflict := classifier.ClassifyOutcome(http.StatusConflict, nil, body)
+	if conflict.Class != kernel.ErrorCooldown || conflict.Cause != kernel.CauseQuotaExhausted {
+		t.Fatalf("manifest-selected quota HTTP status was not applied after JSON binding: %#v", conflict)
 	}
 }
 
