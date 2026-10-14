@@ -21,6 +21,7 @@ import (
 
 const (
 	SchemaKind            = "schema"
+	ClientIngressKind     = "client-ingress"
 	schemaHost            = "schemas.gobroom.invalid"
 	draft2020             = "https://json-schema.org/draft/2020-12/schema"
 	DependencyLockVersion = 2

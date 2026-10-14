@@ -19,6 +19,9 @@ import (
 
 type RuntimeModule = core.RuntimeModule
 type RuntimeModuleFunc = core.RuntimeModuleFunc
+type ClientIngress = core.ClientIngress
+type ClientIngressRoute = core.ClientIngressRoute
+type JSONOperationIngress = core.JSONOperationIngress
 type ModuleRef = extensions.ModuleRef
 type RuntimeRegistry = core.RuntimeRegistry
 type RuntimeBinding = core.RuntimeBinding
@@ -216,6 +219,8 @@ func NewRuntimeRegistry() (*RuntimeRegistry, error) { return core.NewRuntimeRegi
 func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, error) {
 	return core.NewRuntimeRegistryWithModules(modules...)
 }
+
+func ValidateClientIngress(codec ClientIngress) error { return core.ValidateClientIngress(codec) }
 
 func ProviderDefinitionRef(id string, contractVersion uint64) Ref {
 	return core.ProviderDefinitionRef(id, contractVersion)

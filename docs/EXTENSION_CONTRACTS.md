@@ -29,6 +29,14 @@ may register implementations and descriptors; adding one must not edit the
 kernel's model types, provider dispatch, storage columns or generic frontend
 workflow. Built-in and user definitions resolve through the same catalog.
 
+Client wire formats use the same extension boundary. A module may register a
+versioned `ClientIngress` with exact routes and an exact operation ref; it
+decodes client bytes into the shared operation request IR. The daemon installs
+those routes into its existing API server, which retains authentication,
+request bounds, executor, cancellation and error mapping. A client ingress
+cannot call a provider directly or bypass compatibility planning. Its
+descriptor depends on the operation contract it produces.
+
 Each linked module declares an opaque, exact build version and a positive
 GoBroom host-contract version. GoBroom does not infer semver compatibility:
 the pair is compared exactly. Descriptors registered during module setup carry

@@ -308,7 +308,13 @@ func TestRuntimeRegistryLoadsExternalManifest(t *testing.T) {
 func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *testing.T) {
 	operationRef := extensions.Ref{Kind: "operation", ID: "audio.transcribe", ContractVersion: 1}
 	module := RuntimeModuleFunc{Name: "fixture.audio", Version: "test-1", HostContractVersion: RuntimeModuleHostContractVersion, Init: func(runtime *RuntimeRegistry) error {
-		return runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio transcription", "Transcribe a declared audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1},"language":{"type":"string"}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever)
+		if err := runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio transcription", "Transcribe a declared audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1},"language":{"type":"string"}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
+			return err
+		}
+		return runtime.RegisterClientIngress(JSONOperationIngress{
+			CodecID: "fixture-audio-json", IngressContractVersion: 1, Operation: "audio.transcribe", OperationContractVersion: 1,
+			Endpoints: []ClientIngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}},
+		})
 	}}
 	runtime, err := NewRuntimeRegistryWithModules(module)
 	if err != nil {
@@ -338,6 +344,9 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 	if err := runtime.LoadDefinitionFile(manifestPath); err != nil {
 		t.Fatal(err)
 	}
+	if ingresses := runtime.ClientIngresses(); len(ingresses) != 1 || ingresses[0].ID() != "fixture-audio-json" {
+		t.Fatalf("module client ingress was not retained by the runtime: %#v", ingresses)
+	}
 	snapshot, err := runtime.FreezeCatalog()
 	if err != nil {
 		t.Fatal(err)
@@ -349,6 +358,11 @@ func TestStaticProviderModuleAddsOperationUsedByManifestWithoutKernelChanges(t *
 	wantModule := extensions.ModuleRef{ID: "fixture.audio", Version: "test-1", HostContractVersion: RuntimeModuleHostContractVersion}
 	if len(lock.Modules) != 1 || lock.Modules[0] != wantModule {
 		t.Fatalf("operation dependency did not pin its owning static module: %#v", lock.Modules)
+	}
+	ingressRef := extensions.Ref{Kind: extensions.ClientIngressKind, ID: "fixture-audio-json", ContractVersion: 1}
+	ingressLock, err := snapshot.LockDependencies([]extensions.Ref{ingressRef})
+	if err != nil || len(ingressLock.Modules) != 1 || ingressLock.Modules[0] != wantModule {
+		t.Fatalf("client-ingress dependency did not pin its owning module: lock=%#v err=%v", ingressLock, err)
 	}
 	bindings, err := runtime.BuildBindings()
 	if err != nil {

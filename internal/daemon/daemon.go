@@ -245,6 +245,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return fmt.Errorf("bind data-plane operation catalog: %w", err)
 	}
+	for _, ingress := range runtimeRegistry.ClientIngresses() {
+		if err := d.server.RegisterOperationIngress(ingress); err != nil {
+			_ = s.Close()
+			return fmt.Errorf("register client ingress %q: %w", ingress.IngressRef().Key(), err)
+		}
+	}
 	d.server.SetDataPlaneToken(d.config.HTTPToken)
 	ctx, cancel := context.WithCancel(ctx)
 	d.runCtx = ctx

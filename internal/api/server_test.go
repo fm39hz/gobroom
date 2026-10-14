@@ -438,7 +438,7 @@ func TestNamespacedOperationIngressRegistersWithoutServerRouteBranch(t *testing.
 	if err := server.SetOperationSnapshot(operationSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	codec := JSONOperationIngress{CodecID: "audio-transcription-v1", Operation: "audio.transcribe.v1", OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}
+	codec := JSONOperationIngress{CodecID: "audio-transcription-v1", IngressContractVersion: 1, Operation: "audio.transcribe.v1", OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}
 	if err := server.RegisterOperationIngress(codec); err != nil {
 		t.Fatal(err)
 	}
@@ -493,7 +493,7 @@ func TestOperationSchemaFailureUsesClientErrorBoundary(t *testing.T) {
 	if err := server.SetOperationSnapshot(operationSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	if err := server.RegisterOperationIngress(JSONOperationIngress{CodecID: "audio-json", Operation: operationID, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}); err != nil {
+	if err := server.RegisterOperationIngress(JSONOperationIngress{CodecID: "audio-json", IngressContractVersion: 1, Operation: operationID, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}}}); err != nil {
 		t.Fatal(err)
 	}
 	server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {

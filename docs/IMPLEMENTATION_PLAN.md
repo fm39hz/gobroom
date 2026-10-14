@@ -187,9 +187,10 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    lock v2 pins each reachable module's exact opaque build and host-contract
    versions; executable code remains statically linked. Public
    `pkg/provider` and `pkg/daemon` APIs let a separate Go module register a
-   non-chat task, bind a JSON manifest to shared primitives, and host the
-   daemon; `make test-external-provider-module` proves a schema-validated
-   request through that boundary with no kernel or storage-schema change.
+   non-chat task and client ingress, bind a JSON manifest to shared primitives,
+   and host the daemon; `make test-external-provider-module` proves a
+   schema-validated request through that boundary with no kernel or
+   storage-schema change.
    Provider definitions resolve by exact ref and may run side-by-side under
    one ID; provider-node storage, route selection and bundle v9 preserve that
    exact ref. `TestProviderDefinitionVersionsBindSideBySideByExactRef` and
@@ -278,8 +279,8 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    payload/result through the shared graph executor while preserving the
    pre/post-client-commit boundary.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
-   compiles against public provider/daemon APIs, adds an audio task/codec,
-   loads its manifest and executes a schema-validated request over ordinary
+   compiles against public provider/daemon APIs, adds an audio task/codec and
+   versioned client ingress, loads its manifest and executes a schema-validated request over ordinary
    IPC/daemon/HTTP boundaries. It also binds a custom AuthFactory, passes
    bounded credential AuthContext to an external request codec, and includes a
    source-derived Qoder COSY fixture that encodes then signs its body bytes and

@@ -1684,6 +1684,12 @@ func TestDaemonCompositionRootRegistersStaticProviderModule(t *testing.T) {
 		if err := runtime.Primitives.Operations.RegisterRawPayload(operationRef, "Audio inspection", "Inspect an audio resource.", json.RawMessage(`{"type":"object","properties":{"audio_url":{"type":"string","minLength":1}},"required":["audio_url"],"additionalProperties":false}`), operations.ReplayNever); err != nil {
 			return err
 		}
+		if err := runtime.RegisterClientIngress(provider.JSONOperationIngress{
+			CodecID: "fixture-audio-http", IngressContractVersion: 1, Operation: "fixture.audio.inspect", OperationContractVersion: 1,
+			Endpoints: []provider.ClientIngressRoute{{Method: http.MethodPost, Path: "/v1/fixture/audio"}},
+		}); err != nil {
+			return err
+		}
 		return runtime.Primitives.RegisterDefinition(provider.ProviderDefinition{
 			ContractVersion: 1, ID: "fixture-audio-provider", Version: "1", DisplayName: "Fixture Audio Provider",
 			Capabilities:          provider.CapabilitySet{AudioInput: true},
@@ -1705,6 +1711,27 @@ func TestDaemonCompositionRootRegistersStaticProviderModule(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer d.Stop(context.Background())
+	ingressResponse := httptest.NewRecorder()
+	ingressRequest := httptest.NewRequest(http.MethodPost, "/v1/fixture/audio", strings.NewReader(`not-json`))
+	ingressRequest.Header.Set("Content-Type", "application/json")
+	d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}).ServeHTTP(ingressResponse, ingressRequest)
+	if ingressResponse.Code != http.StatusBadRequest {
+		t.Fatalf("module-owned endpoint was not routed through the data plane: status=%d body=%q", ingressResponse.Code, ingressResponse.Body.String())
+	}
+	var decodedIngress normalize.Request
+	d.server.SetExecutor(func(_ context.Context, request normalize.Request, writer http.ResponseWriter) error {
+		decodedIngress = request
+		writer.WriteHeader(http.StatusOK)
+		_, err := io.WriteString(writer, `{"accepted":true}`)
+		return err
+	})
+	validIngress := httptest.NewRequest(http.MethodPost, "/v1/fixture/audio", strings.NewReader(`{"model":"fixture-role","operationPayload":{"audio_url":"https://audio.test/sample.wav"}}`))
+	validIngress.Header.Set("Content-Type", "application/json")
+	validResponse := httptest.NewRecorder()
+	d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}).ServeHTTP(validResponse, validIngress)
+	if validResponse.Code != http.StatusOK || decodedIngress.Operation != normalize.Operation("fixture.audio.inspect") || decodedIngress.OperationContractVersion != 1 || string(decodedIngress.OperationPayload) != `{"audio_url":"https://audio.test/sample.wav"}` {
+		t.Fatalf("module ingress did not produce the exact semantic request: status=%d request=%#v body=%q", validResponse.Code, decodedIngress, validResponse.Body.String())
+	}
 	response := d.handleIPC(ctx, IPCRequest{ID: "catalog", Method: "providers.catalog"})
 	if !response.OK {
 		t.Fatalf("provider catalog IPC failed: %s", response.Error)

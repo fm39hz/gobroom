@@ -39,6 +39,13 @@ func (AudioModule) Register(runtime *provider.RuntimeRegistry) error {
 	if err := runtime.RegisterResponseDecoder(audioResponseDecoder{}); err != nil {
 		return err
 	}
+	if err := runtime.RegisterClientIngress(provider.JSONOperationIngress{
+		CodecID: "example-audio-json", IngressContractVersion: 1,
+		Operation: "audio.transcribe", OperationContractVersion: 1,
+		Endpoints: []provider.ClientIngressRoute{{Method: http.MethodPost, Path: "/v1/audio/transcriptions"}},
+	}); err != nil {
+		return err
+	}
 	return runtime.RegisterQuotaSource(audioQuotaSource{})
 }
 

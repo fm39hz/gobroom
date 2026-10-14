@@ -76,9 +76,9 @@ func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.R
 	manager, err := controlplane.NewManagerWithRuntimeBindings(s, bindings, strategies...)
 	operationSnapshot, _ := operations.BuiltinSnapshot()
 	server := &Server{store: s, control: manager, controlErr: err, started: time.Now(), ingress: map[string]OperationIngress{}, operations: operationSnapshot}
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
 	return server
 }
 
@@ -551,6 +551,11 @@ func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
 		}
 		if request.Operation == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "ingress codec returned no semantic operation"}})
+			return
+		}
+		operationRef := codec.OperationRef()
+		if string(request.Operation) != operationRef.ID || request.OperationContractVersion != operationRef.ContractVersion {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "ingress codec returned a different operation contract than declared"}})
 			return
 		}
 		if state, ok := r.Context().Value(accessLogContextKey{}).(*accessLogState); ok {

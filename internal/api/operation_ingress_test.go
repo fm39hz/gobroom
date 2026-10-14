@@ -18,7 +18,46 @@ import (
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
+	"github.com/fm39hz/gobroom/internal/store"
 )
+
+type mismatchedClientIngress struct{}
+
+func (mismatchedClientIngress) ID() string { return "fixture-mismatch" }
+func (mismatchedClientIngress) IngressRef() extensions.Ref {
+	return extensions.Ref{Kind: extensions.ClientIngressKind, ID: "fixture-mismatch", ContractVersion: 1}
+}
+func (mismatchedClientIngress) OperationRef() extensions.Ref {
+	return extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}
+}
+func (mismatchedClientIngress) Routes() []IngressRoute {
+	return []IngressRoute{{Method: http.MethodPost, Path: "/v1/fixture/mismatch"}}
+}
+func (mismatchedClientIngress) Decode(*http.Request) (normalize.Request, error) {
+	return normalize.Request{Model: "fixture", Operation: "unregistered.operation", OperationContractVersion: 1}, nil
+}
+
+func TestClientIngressCannotReturnDifferentOperationThanDeclared(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/mismatched-ingress.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewServer(db)
+	if err := server.RegisterOperationIngress(mismatchedClientIngress{}); err != nil {
+		t.Fatal(err)
+	}
+	executorCalls := 0
+	server.SetExecutor(func(context.Context, normalize.Request, http.ResponseWriter) error {
+		executorCalls++
+		return nil
+	})
+	response := httptest.NewRecorder()
+	server.HandlerWithOptions(HandlerOptions{DataPlane: true}).ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/fixture/mismatch", nil))
+	if response.Code != http.StatusBadRequest || executorCalls != 0 {
+		t.Fatalf("mismatched operation crossed ingress boundary: status=%d calls=%d body=%q", response.Code, executorCalls, response.Body.String())
+	}
+}
 
 func TestMultipartOperationIngressSpoolsDeclaredArtifact(t *testing.T) {
 	store, err := artifacts.NewStore(t.TempDir(), artifacts.Limits{MaxBytes: 128, MaxBodyBytes: 128, DefaultTTL: time.Minute})
@@ -48,7 +87,7 @@ func TestMultipartOperationIngressSpoolsDeclaredArtifact(t *testing.T) {
 	}
 
 	codec := MultipartOperationIngress{
-		CodecID: "fixture-multipart", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		CodecID: "fixture-multipart", IngressContractVersion: 1, Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
 		Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/fixture"}},
 		Bindings: []MultipartArtifactBinding{{
 			Field: "source", Role: "source-document",
@@ -107,7 +146,7 @@ func TestMultipartOperationIngressReleasesPartialSpoolsOnDecodeFailure(t *testin
 		t.Fatal(err)
 	}
 	codec := MultipartOperationIngress{
-		CodecID: "fixture-multipart", Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
+		CodecID: "fixture-multipart", IngressContractVersion: 1, Operation: normalize.OperationChatGenerate, OperationContractVersion: 1,
 		Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/fixture"}},
 		Bindings:  []MultipartArtifactBinding{{Field: "source", Role: "source-document", TypeRef: extensions.Ref{Kind: extensions.ArtifactKind, ID: "fixture.document", ContractVersion: 1}, MaxBytes: 32}},
 	}
@@ -132,7 +171,7 @@ func TestMultipartOperationIngressReleasesPartialSpoolsOnDecodeFailure(t *testin
 func TestMultipartIngressBindingsMustMatchOperationArtifactPorts(t *testing.T) {
 	snapshot, artifactRef, _ := multipartTestOperationSnapshot(t)
 	codec := MultipartOperationIngress{
-		CodecID: "fixture-multipart", Operation: "fixture.inspect", OperationContractVersion: 1,
+		CodecID: "fixture-multipart", IngressContractVersion: 1, Operation: "fixture.inspect", OperationContractVersion: 1,
 		Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/fixture"}},
 		Bindings:  []MultipartArtifactBinding{{Field: "source", Role: "source-document", TypeRef: artifactRef, MaxBytes: 32}},
 	}
@@ -327,7 +366,7 @@ func TestMultipartOperationExecutesThroughHTTPKernelAndAdapter(t *testing.T) {
 	gateway.ArtifactStore = bodyStore
 
 	codec := MultipartOperationIngress{
-		CodecID: "fixture-inspection-multipart", Operation: "fixture.inspect", OperationContractVersion: 1,
+		CodecID: "fixture-inspection-multipart", IngressContractVersion: 1, Operation: "fixture.inspect", OperationContractVersion: 1,
 		Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/fixture/inspect"}},
 		Bindings:  []MultipartArtifactBinding{{Field: "source", Role: "source-document", TypeRef: artifactType, MaxBytes: 32}},
 	}

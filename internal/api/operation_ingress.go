@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,67 +13,13 @@ import (
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
+	"github.com/fm39hz/gobroom/internal/provider"
 )
 
-// OperationIngress binds client paths and methods to operation-neutral input.
-// New endpoint families register here and share the daemon's existing data
-// plane authentication, execution and error boundary.
-type OperationIngress interface {
-	ID() string
-	OperationRef() extensions.Ref
-	Routes() []IngressRoute
-	Decode(*http.Request) (normalize.Request, error)
-}
-
-type IngressRoute struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
-}
-
-type JSONOperationIngress struct {
-	CodecID                  string
-	Operation                normalize.Operation
-	OperationContractVersion uint64
-	Endpoints                []IngressRoute
-}
-
-func (c JSONOperationIngress) ID() string { return c.CodecID }
-func (c JSONOperationIngress) OperationRef() extensions.Ref {
-	return extensions.Ref{Kind: "operation", ID: string(c.Operation), ContractVersion: c.OperationContractVersion}
-}
-func (c JSONOperationIngress) Routes() []IngressRoute {
-	return append([]IngressRoute(nil), c.Endpoints...)
-}
-func (c JSONOperationIngress) Decode(request *http.Request) (normalize.Request, error) {
-	body, err := io.ReadAll(request.Body)
-	if err != nil {
-		return normalize.Request{}, err
-	}
-	return c.decodeJSON(request, body)
-}
-
-func (c JSONOperationIngress) decodeJSON(request *http.Request, body []byte) (normalize.Request, error) {
-	result, err := normalize.JSON(request.URL.Path, request.Header, body)
-	if err != nil {
-		return normalize.Request{}, err
-	}
-	if c.Operation == "" {
-		return normalize.Request{}, fmt.Errorf("ingress codec %q has no semantic operation", c.CodecID)
-	}
-	result.Request.Operation = c.Operation
-	if c.OperationContractVersion == 0 {
-		return normalize.Request{}, fmt.Errorf("ingress codec %q has no operation contract version", c.CodecID)
-	}
-	result.Request.OperationContractVersion = c.OperationContractVersion
-	var envelope struct {
-		Payload json.RawMessage `json:"operationPayload"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return normalize.Request{}, fmt.Errorf("decode operation payload envelope: %w", err)
-	}
-	result.Request.OperationPayload = append(json.RawMessage(nil), envelope.Payload...)
-	return result.Request, nil
-}
+// These API names remain aliases for the shared extension-owned contracts.
+type OperationIngress = provider.ClientIngress
+type IngressRoute = provider.ClientIngressRoute
+type JSONOperationIngress = provider.JSONOperationIngress
 
 // MultipartArtifactBinding maps one declared form field to an exact artifact
 // contract. Role identifies the semantic use of that artifact within an
@@ -93,6 +38,7 @@ type MultipartArtifactBinding struct {
 // byte slices.
 type MultipartOperationIngress struct {
 	CodecID                  string
+	IngressContractVersion   uint64
 	Operation                normalize.Operation
 	OperationContractVersion uint64
 	Endpoints                []IngressRoute
@@ -101,6 +47,9 @@ type MultipartOperationIngress struct {
 }
 
 func (c MultipartOperationIngress) ID() string { return c.CodecID }
+func (c MultipartOperationIngress) IngressRef() extensions.Ref {
+	return extensions.Ref{Kind: extensions.ClientIngressKind, ID: c.CodecID, ContractVersion: c.IngressContractVersion}
+}
 func (c MultipartOperationIngress) OperationRef() extensions.Ref {
 	return extensions.Ref{Kind: "operation", ID: string(c.Operation), ContractVersion: c.OperationContractVersion}
 }
@@ -211,7 +160,7 @@ func (c MultipartOperationIngress) Decode(request *http.Request) (normalize.Requ
 	if len(requestJSON) == 0 {
 		return normalize.Request{}, fmt.Errorf("multipart request field %q is required", requestField)
 	}
-	decoded, err := (JSONOperationIngress{CodecID: c.CodecID, Operation: c.Operation, OperationContractVersion: c.OperationContractVersion}).decodeJSON(request, requestJSON)
+	decoded, err := (JSONOperationIngress{CodecID: c.CodecID, Operation: string(c.Operation), OperationContractVersion: c.OperationContractVersion}).DecodeBody(request, requestJSON)
 	if err != nil {
 		return normalize.Request{}, err
 	}
@@ -256,34 +205,12 @@ func validateMultipartOperationBindings(codec MultipartOperationIngress, snapsho
 }
 
 func validateOperationIngress(codec OperationIngress) error {
-	if codec == nil || strings.TrimSpace(codec.ID()) == "" {
-		return fmt.Errorf("operation ingress codec requires an ID")
-	}
-	if err := codec.OperationRef().Validate(); err != nil || codec.OperationRef().Kind != "operation" {
-		return fmt.Errorf("operation ingress codec %q requires an exact operation reference", codec.ID())
-	}
-	routes := codec.Routes()
-	if len(routes) == 0 {
-		return fmt.Errorf("operation ingress codec %q has no endpoint routes", codec.ID())
-	}
-	seen := map[string]bool{}
-	for _, route := range routes {
-		method := strings.ToUpper(strings.TrimSpace(route.Method))
-		if method != http.MethodGet && method != http.MethodPost {
-			return fmt.Errorf("operation ingress codec %q has unsupported method %q", codec.ID(), route.Method)
-		}
-		if !strings.HasPrefix(route.Path, "/") || strings.ContainsAny(route.Path, "{}*? ") {
-			return fmt.Errorf("operation ingress codec %q has invalid exact path %q", codec.ID(), route.Path)
-		}
-		key := method + " " + route.Path
-		if seen[key] {
-			return fmt.Errorf("operation ingress codec %q repeats route %q", codec.ID(), key)
-		}
-		seen[key] = true
+	if err := provider.ValidateClientIngress(codec); err != nil {
+		return err
 	}
 	if multipartCodec, ok := codec.(MultipartOperationIngress); ok {
-		if multipartCodec.OperationContractVersion == 0 || len(multipartCodec.Bindings) == 0 {
-			return fmt.Errorf("multipart operation ingress %q requires an exact operation version and artifact bindings", codec.ID())
+		if multipartCodec.IngressContractVersion == 0 || multipartCodec.OperationContractVersion == 0 || len(multipartCodec.Bindings) == 0 {
+			return fmt.Errorf("multipart operation ingress %q requires exact ingress/operation versions and artifact bindings", codec.ID())
 		}
 		fieldNames := map[string]bool{}
 		for _, binding := range multipartCodec.Bindings {

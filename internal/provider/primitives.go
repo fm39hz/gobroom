@@ -677,6 +677,7 @@ type RuntimeRegistry struct {
 	sessionStores     map[extensions.Ref]kernel.SessionStore
 	errorClassifiers  map[extensions.Ref]ErrorClassifier
 	quotaSources      map[extensions.Ref]QuotaSource
+	clientIngresses   map[extensions.Ref]ClientIngress
 }
 
 // RuntimeModule adds reusable provider operations and primitive
@@ -799,6 +800,61 @@ func (r *RuntimeRegistry) RegisterExtension(descriptor extensions.Descriptor, fa
 	return r.Primitives.catalog.Register(descriptor, factory)
 }
 
+// RegisterClientIngress adds a versioned client-wire decoder to the daemon's
+// HTTP data plane. Its descriptor records the exact semantic operation it
+// produces; the API server then installs only its routes into the shared
+// authentication, execution and error-handling path.
+func (r *RuntimeRegistry) RegisterClientIngress(codec ClientIngress) error {
+	if err := r.ensureReady(); err != nil {
+		return err
+	}
+	if err := ValidateClientIngress(codec); err != nil {
+		return err
+	}
+	ref, operationRef := codec.IngressRef(), codec.OperationRef()
+	routes := codec.Routes()
+	for _, route := range routes {
+		method := strings.ToUpper(strings.TrimSpace(route.Method))
+		key := method + " " + route.Path
+		for existingRef, existing := range r.clientIngresses {
+			for _, existingRoute := range existing.Routes() {
+				if strings.ToUpper(strings.TrimSpace(existingRoute.Method)) == method && existingRoute.Path == route.Path {
+					return fmt.Errorf("client ingress route %q is already registered by %q", key, existingRef.Key())
+				}
+			}
+		}
+	}
+	if _, duplicate := r.clientIngresses[ref]; duplicate {
+		return fmt.Errorf("client ingress %q is already registered", ref.Key())
+	}
+	descriptor := extensions.Descriptor{
+		Ref: ref, ImplementationVersion: fmt.Sprint(ref.ContractVersion), DisplayName: codec.ID(),
+		Description: "Client wire decoder producing a versioned semantic operation.", Dependencies: []extensions.Ref{operationRef},
+		LifecycleCapabilities: []string{"client.ingress"},
+	}
+	if err := r.Primitives.catalog.Register(descriptor, func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
+		return err
+	}
+	r.clientIngresses[ref] = codec
+	return nil
+}
+
+func (r *RuntimeRegistry) ClientIngresses() []ClientIngress {
+	if r == nil {
+		return nil
+	}
+	refs := make([]extensions.Ref, 0, len(r.clientIngresses))
+	for ref := range r.clientIngresses {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].Key() < refs[j].Key() })
+	result := make([]ClientIngress, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, r.clientIngresses[ref])
+	}
+	return result
+}
+
 func NewRuntimeRegistry() (*RuntimeRegistry, error) {
 	return NewRuntimeRegistryWithModules()
 }
@@ -811,7 +867,7 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 	if err != nil {
 		return nil, err
 	}
-	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[extensions.Ref]kernel.Endpoint{}, transports: map[extensions.Ref]kernel.Transport{}, requestCodecs: map[extensions.Ref]kernel.RequestCodec{}, responseDecoders: map[extensions.Ref]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[extensions.Ref]ModelSource{}, usageSources: map[extensions.Ref]UsageSource{}, sessionStores: map[extensions.Ref]kernel.SessionStore{}, errorClassifiers: map[extensions.Ref]ErrorClassifier{}, quotaSources: map[extensions.Ref]QuotaSource{}}
+	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[extensions.Ref]kernel.Endpoint{}, transports: map[extensions.Ref]kernel.Transport{}, requestCodecs: map[extensions.Ref]kernel.RequestCodec{}, responseDecoders: map[extensions.Ref]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[extensions.Ref]ModelSource{}, usageSources: map[extensions.Ref]UsageSource{}, sessionStores: map[extensions.Ref]kernel.SessionStore{}, errorClassifiers: map[extensions.Ref]ErrorClassifier{}, quotaSources: map[extensions.Ref]QuotaSource{}, clientIngresses: map[extensions.Ref]ClientIngress{}}
 	if err := registerMultipartRequestCodec(runtime); err != nil {
 		return nil, fmt.Errorf("register generic multipart request codec: %w", err)
 	}
