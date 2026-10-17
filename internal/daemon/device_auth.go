@@ -38,6 +38,9 @@ func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID stri
 	if err != nil {
 		return deviceAuthorizationView{}, err
 	}
+	if !connection.Owner.Matches(node.ID, node.DefinitionRef()) {
+		return deviceAuthorizationView{}, fmt.Errorf("provider binding changed while starting authorization")
+	}
 	flowID := d.authFlowID(node.DefinitionRef(), connection.Type)
 	flow, ok := d.authFlows[flowID]
 	if flowID == "" || !ok {

@@ -748,6 +748,22 @@ restart, but pending authorization remains ephemeral. No global lock spans auth
 network I/O. Post-commit route/health reconciliation can still fail separately;
 an error after that boundary does not imply the durable token was rolled back.
 
+Credential ownership is the typed provider-node identity plus exact provider
+definition ref, alongside the selected credential mode. Reads project state,
+revision and owner in one SQL snapshot. Serving, quota polling and opportunistic
+quota share the same resolver; a pinned route whose node/ref/mode/auth binding
+no longer matches the current owner is rejected before invoking its auth driver.
+Discovery and connection probes use the same typed owner/mode guard before
+credential resolution, rejecting mixed reads across a concurrent rebind.
+Setup captures the same owner, and final CAS checks it atomically in SQL.
+Changing a provider definition ID/version rotates child connection revisions
+in that transaction, including A → B → A and v1 → v2 → v1; provider-node renames
+and unchanged definition values do not revoke work. Raw SQL and bundle writes
+cannot bypass the SQLite revision trigger, and rollback restores it. The old
+session may finish its bounded driver exchange, but cannot persist its state;
+a newly started session for the current owner remains usable. No global lock
+or network round trip is added to enforce ownership.
+
 ## 6. Attempt replay and commitment
 
 Client commitment and upstream effects are separate boundaries. Each operation

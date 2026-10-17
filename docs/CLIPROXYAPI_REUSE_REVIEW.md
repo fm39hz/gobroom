@@ -63,6 +63,14 @@ the auth primitive. Its daemon validates through `Resolve` before revision CAS;
 its kernel sees only an ephemeral credential/generation. No metadata bag or
 CLIProxyAPI persistence/conductor implementation is copied into the kernel.
 
+Auth-owner follow-up: `conductor_lifecycle.go` fences refresh/prepare merges
+against `RegistrationEpoch`, including re-registration under an existing auth
+ID. Gobroom applies that stale-owner problem to a provider definition/version
+rebind: typed node/definition ownership is read with credential state, child
+revisions rotate in SQLite, and owner/revision CAS rejects late old-driver
+results. Existing SQL transactions and exact refs do the work; no auth conductor
+or process-local epoch registry is imported or duplicated.
+
 CLIProxyAPI separates API handlers, a translator pipeline, auth/conductor
 selection and provider executors. `sdk/cliproxy/auth/conductor_execution.go`
 owns attempt orchestration (`Execute`, `ExecuteCount`, `ExecuteStream`), while

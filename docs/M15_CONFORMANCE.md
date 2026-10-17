@@ -223,6 +223,22 @@ second connection or issuing a second request outside kernel replay policy.
 
 ## Full semantic closure gate
 
+Auth-owner rebinding evidence: `TestCredentialOwnerProjectionAndCAS` covers
+typed node/definition projection, privacy, forged-owner rejection and current-owner
+CAS. Store fixtures exercise raw-SQL and repository definition/version ABA,
+unrelated nodes, rename/no-op preservation and transaction rollback.
+`TestCredentialOwnerRejectsPinnedRoutesAfterDefinitionRebind` and incorrect-binding
+fixtures reject before driver invocation; in-flight refresh and code/device
+completion fixtures reject old revision/owner commits. The independent-module
+`TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges` performs
+version rebind and v1 → v2 → v1 through the daemon, rejects the old device token,
+then completes a new current-owner setup and authenticates an operation with it.
+Serving and both quota paths share that same owner-checked resolver. This is the
+identified owner-rebind slice, not universal auth-driver/lease lifecycle proof.
+`TestDiscoveryCredentialBindingRequiresExactOwnerAndMode` covers the pure guard
+used before model-discovery and connection-probe auth resolution; their existing
+vertical fixtures continue exercising the valid-owner paths.
+
 Auth-state isolation evidence: `TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate`
 uses a provider-defined `opaque_ticket` mode with typed ticket/subject/workspace
 metadata. Successful device setup and a real HTTP-401 refresh persist its exact

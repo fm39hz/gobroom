@@ -367,17 +367,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		Sources:    runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
 		Endpoints:  runtimeRegistry.Endpoints(),
 		Transports: runtimeRegistry.Transports(),
-		Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
-			credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
-			if !ok {
-				return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
-			}
-			flow, ok := d.authFlows[route.AuthFlowID]
-			if !ok {
-				return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
-			}
-			return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
-		},
+		Credential: d.resolveCredential,
 		Record: func(snapshot quota.Snapshot) {
 			resolved, accepted := d.policy.UpsertQuota(snapshot)
 			if !accepted {
@@ -405,17 +395,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			Endpoints:  runtimeRegistry.Endpoints(),
 			Transports: runtimeRegistry.Transports(),
 			Snapshot:   func() kernel.Snapshot { return d.kernel.Snapshots.Load() },
-			Credential: func(ctx context.Context, route kernel.Route) (kernel.Credential, error) {
-				credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
-				if !ok {
-					return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
-				}
-				flow, ok := d.authFlows[route.AuthFlowID]
-				if !ok {
-					return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
-				}
-				return flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
-			},
+			Credential: d.resolveCredential,
 			Record: func(snapshot quota.Snapshot) {
 				resolved, accepted := d.policy.UpsertQuota(snapshot)
 				if !accepted {

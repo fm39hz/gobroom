@@ -54,7 +54,10 @@ func credentialRefreshRoute(t *testing.T, d *Daemon, connectionID string) kernel
 	if err != nil {
 		t.Fatal(err)
 	}
-	return kernel.Route{AuthFlowID: "oauth:oauth2", CredentialID: connectionID, NodeID: node.ID}
+	return kernel.Route{
+		AuthFlowID: "oauth:oauth2", CredentialID: connectionID, NodeID: node.ID,
+		DefinitionRef: node.DefinitionRef(), CredentialType: "oauth2",
+	}
 }
 
 func TestResolveCredentialReturnsCallerCancellationAfterLateSuccess(t *testing.T) {

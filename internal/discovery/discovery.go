@@ -173,6 +173,9 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 	if selected.ID == "" {
 		return OperationTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
 	}
+	if err := validateCredentialBinding(node, selected, credential); err != nil {
+		return OperationTestResult{}, err
+	}
 	operation := provider.Operation(operationID)
 	definitionRef := node.DefinitionRef()
 	binding, ok := s.Bindings[provider.RuntimeBindingKey(definitionRef, operation)]
@@ -322,8 +325,12 @@ func (s Service) OperationProbeContract(input OperationProbeInput) (extensions.R
 	if err != nil {
 		return extensions.Ref{}, extensions.Ref{}, nil, err
 	}
-	if _, ok := s.Store.ConnectionCredentialByID(input.ConnectionID); !ok {
+	credential, ok := s.Store.ConnectionCredentialByID(input.ConnectionID)
+	if !ok {
 		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("enabled probe connection is unavailable")
+	}
+	if !credential.Owner.Matches(node.ID, node.DefinitionRef()) {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("probe credential owner changed")
 	}
 	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionRef(), provider.Operation(input.OperationID))]
 	if !ok || binding.Adapter == nil || binding.TaskRef.ID == string(normalize.OperationChatGenerate) {
@@ -371,6 +378,9 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	}
 	if selected.ID == "" {
 		return InferenceTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
+	}
+	if err := validateCredentialBinding(node, selected, credential); err != nil {
+		return InferenceTestResult{}, err
 	}
 	var binding provider.RuntimeBinding
 	for _, operation := range []provider.Operation{provider.OperationChat, provider.OperationResponses, provider.OperationMessages} {
@@ -548,6 +558,9 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	if !found {
 		return fetchedModelCatalog{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
 	}
+	if err := validateCredentialBinding(node, selected, credential); err != nil {
+		return fetchedModelCatalog{}, err
+	}
 	authMode, authModeExists := binding.AuthModes[credential.Type]
 	if !authModeExists || authMode.Flow == nil {
 		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q does not bind credential type %q for model discovery", node.DefinitionID, credential.Type)
@@ -584,6 +597,13 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 		catalog.Evidence = provider.ModelCatalogConnectionObserved
 	}
 	return fetchedModelCatalog{Node: node, Endpoint: endpoint, Snapshot: catalog}, nil
+}
+
+func validateCredentialBinding(node store.ProviderNode, selected store.ConnectionRecord, credential store.Credential) error {
+	if credential.ID != selected.ID || credential.Type != selected.CredentialType || !credential.Owner.Matches(node.ID, node.DefinitionRef()) {
+		return fmt.Errorf("connection auth binding changed; retry the connection operation")
+	}
+	return nil
 }
 
 func endpointSummary(raw string) string {

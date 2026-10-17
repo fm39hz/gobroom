@@ -39,6 +39,8 @@ test: test-external-provider-module ## unit and integration tests, including the
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./internal/daemon -run '^TestCallOperationProbe' -count=1
 	go test ./internal/store ./internal/daemon -run '^Test(Credential|CanceledCredential|ResolveCredential|RefreshCredential|DeviceAuthorizationDoesNotOverwrite)' -count=1
+	go test ./internal/store ./internal/daemon -run '^(TestProviderDefinitionChangesRevokeCredentialRevision|TestProviderRenameAndNoopDefinitionDoNotRotateCredentialRevision|TestProviderDefinitionRollbackRestoresCredentialRevisionAndOwner|TestAuthorizationCompletionRejectsProviderDefinitionRebind)$$' -count=1
+	go test ./internal/discovery -run '^TestDiscoveryCredentialBindingRequiresExactOwnerAndMode$$' -count=1
 	go test ./internal/provider -run '^TestOAuthAuthRefreshesAgainstTokenEndpoint$$' -count=1
 	go test ./internal/provider -run '^Test(CredentialState|CustomAuthRefreshState)' -count=1
 	go test ./internal/kernel -run '^TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges$$' -count=1

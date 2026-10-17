@@ -40,6 +40,12 @@ refreshed metadata survived, while config/IPC omit it. With `GOBROOM_TEST_CLI`,
 successful device setup and post-restart inference also use the installed CLI.
 The module host contract is v2; no v1 auth-interface adapter is maintained.
 
+The auth-owner fixture holds device setup across provider-definition v1 → v2
+and v1 → v2 → v1 updates. The old token cannot commit; an operation still uses
+the retained credential. A fresh setup for the current owner then completes
+and authenticates another operation. `GOBROOM_TEST_CLI` covers these provider
+updates, device commands and probes through the installed control client.
+
 The COSY signing fixture additionally uses the public `PrepareBytesRequest`
 and `PreparedAuthorization` contracts. It encodes the business payload once,
 then renews body-bound authorization for replay without changing those bytes

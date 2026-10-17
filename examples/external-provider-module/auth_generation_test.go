@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,8 +23,9 @@ const (
 )
 
 type deviceRaceBarrier struct {
-	entered chan struct{}
-	release chan struct{}
+	entered     chan struct{}
+	release     chan struct{}
+	enteredOnce sync.Once
 }
 
 type deviceRaceModule struct{ barrier *deviceRaceBarrier }
@@ -59,7 +61,7 @@ func (a deviceRaceAuth) BeginDeviceAuthorization(context.Context) (provider.Devi
 	return provider.DeviceAuthorization{DeviceCode: "private-test-device-code", UserCode: "TEST-CODE", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 func (a deviceRaceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
-	close(a.barrier.entered)
+	a.barrier.enteredOnce.Do(func() { close(a.barrier.entered) })
 	select {
 	case <-a.barrier.release:
 		return provider.NewCredentialState("late-device-token")

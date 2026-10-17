@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/api"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/runtime"
@@ -68,7 +69,10 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 		store:     state,
 		server:    api.NewServer(state),
 		authFlows: map[string]provider.AuthFlow{"credential-fixture:api_key": flow},
-		policy:    runtime.NewPolicyGate(),
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{
+			node.DefinitionRef(): {"api_key": "credential-fixture:api_key"},
+		},
+		policy: runtime.NewPolicyGate(),
 	}
 	initial := d.server.Control().Snapshot()
 	d.policy.SetGenerations(initial.Routes)
@@ -87,7 +91,7 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 	current := kernel.Credential{Type: "api_key", Secret: "original-secret"}
 	route := kernel.Route{
 		AuthFlowID: "credential-fixture:api_key", CredentialID: connection.ID,
-		NodeID: node.ID, CredentialType: "api_key",
+		NodeID: node.ID, DefinitionRef: node.DefinitionRef(), CredentialType: "api_key",
 	}
 	results := make(chan kernel.Credential, callers)
 	errorsByCall := make(chan error, callers)
@@ -167,5 +171,96 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 	d.credentialRefreshMu.Unlock()
 	if lockRemained {
 		t.Fatal("refresh lock entry remained after all callers completed")
+	}
+}
+
+type ownerCompletionGateFlow struct {
+	callbackOAuthFixture
+	entered     chan struct{}
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func (f *ownerCompletionGateFlow) releaseToken() {
+	f.releaseOnce.Do(func() { close(f.release) })
+}
+
+func (f *ownerCompletionGateFlow) awaitToken() (provider.CredentialState, error) {
+	close(f.entered)
+	<-f.release
+	return provider.NewCredentialState("new-token")
+}
+
+func (f *ownerCompletionGateFlow) ExchangeAuthorizationCode(context.Context, string, string) (provider.CredentialState, error) {
+	return f.awaitToken()
+}
+
+func (*ownerCompletionGateFlow) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
+	return provider.DeviceAuthorization{
+		DeviceCode: "private-device-code", UserCode: "USER-CODE",
+		VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute),
+	}, nil
+}
+
+func (f *ownerCompletionGateFlow) WaitForDeviceAuthorization(context.Context, provider.DeviceAuthorization) (provider.CredentialState, error) {
+	return f.awaitToken()
+}
+
+func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
+	for _, kind := range []string{"code", "device"} {
+		t.Run(kind, func(t *testing.T) {
+			flow := &ownerCompletionGateFlow{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://client.test/callback"}, entered: make(chan struct{}), release: make(chan struct{})}
+			d, connectionID := cancellationAuthDaemon(t, flow)
+			t.Cleanup(flow.releaseToken)
+			before, ok := d.store.ConnectionCredentialByID(connectionID)
+			if !ok {
+				t.Fatal("fixture connection credential is unavailable")
+			}
+			var sessionID string
+			if kind == "code" {
+				challenge, err := d.startAuthorization(connectionID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sessionID = challenge.SessionID
+				result := make(chan error, 1)
+				go func() {
+					_, completeErr := d.completeAuthorization(context.Background(), sessionID, sessionID, "approved", "")
+					result <- completeErr
+				}()
+				awaitAuthorizationSignal(t, flow.entered)
+				rebindCredentialDefinition(t, d, connectionID, "different-definition")
+				rebindCredentialDefinition(t, d, connectionID, "oauth")
+				flow.releaseToken()
+				if err := <-result; err == nil {
+					t.Fatal("authorization code completion committed after provider definition changed away and back")
+				}
+				status, err := d.authorizationStatus(sessionID)
+				if err != nil || status.Status != "failed" {
+					t.Fatalf("authorization status=%+v err=%v; want failed", status, err)
+				}
+			} else {
+				challenge, err := d.startDeviceAuthorization(context.Background(), connectionID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sessionID = challenge.SessionID
+				awaitAuthorizationSignal(t, flow.entered)
+				rebindCredentialDefinition(t, d, connectionID, "different-definition")
+				rebindCredentialDefinition(t, d, connectionID, "oauth")
+				flow.releaseToken()
+				drained := make(chan struct{})
+				go func() { d.authWG.Wait(); close(drained) }()
+				awaitAuthorizationSignal(t, drained)
+				status, err := d.deviceAuthorizationStatus(sessionID)
+				if err != nil || status.Status != "failed" {
+					t.Fatalf("device authorization status=%+v err=%v; want failed", status, err)
+				}
+			}
+			stored, ok := d.store.ConnectionCredentialByID(connectionID)
+			if !ok || stored.Secret != before.Secret || stored.Revision == before.Revision {
+				t.Fatalf("definition rebind committed token or failed to rotate revision: %#v, exists=%v", stored, ok)
+			}
+		})
 	}
 }

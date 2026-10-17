@@ -78,6 +78,9 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 	if err != nil {
 		return authorizationChallenge{}, err
 	}
+	if !connection.Owner.Matches(node.ID, node.DefinitionRef()) {
+		return authorizationChallenge{}, fmt.Errorf("provider binding changed while starting authorization")
+	}
 	flowID := d.authFlowID(node.DefinitionRef(), connection.Type)
 	flow, ok := d.authFlows[flowID]
 	if flowID == "" || !ok {

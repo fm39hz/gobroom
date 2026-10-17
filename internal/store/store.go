@@ -85,6 +85,14 @@ CREATE TRIGGER IF NOT EXISTS connection_credential_revision_update
 AFTER UPDATE OF provider_node_id,credential_type,secret_ref,enabled ON connections BEGIN
   UPDATE connection_credential_revisions SET revision=lower(hex(randomblob(16))) WHERE connection_id=NEW.id;
 END;
+CREATE TRIGGER IF NOT EXISTS provider_credential_owner_update
+AFTER UPDATE OF definition_id,definition_contract_version ON provider_nodes
+WHEN OLD.definition_id IS NOT NEW.definition_id
+  OR OLD.definition_contract_version IS NOT NEW.definition_contract_version
+BEGIN
+  UPDATE connection_credential_revisions SET revision=lower(hex(randomblob(16)))
+  WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=NEW.id);
+END;
 INSERT OR IGNORE INTO connection_credential_revisions(connection_id) SELECT id FROM connections;
 CREATE TABLE IF NOT EXISTS model_catalog (
   id TEXT PRIMARY KEY, provider_node_id TEXT REFERENCES provider_nodes(id) ON DELETE CASCADE,
@@ -1048,26 +1056,44 @@ func (s *Store) SetCompatibilityLossCeiling(ceiling kernel.LossPolicyCeiling) er
 	return s.SetSetting(CompatibilityLossCeilingSetting, string(encoded))
 }
 
+type CredentialOwner struct {
+	ProviderNodeID string
+	Definition     extensions.Ref
+}
+
+func (o CredentialOwner) Validate() error {
+	if o.ProviderNodeID == "" || o.Definition.Kind != "provider-definition" || o.Definition.Validate() != nil {
+		return fmt.Errorf("credential owner requires a provider node and exact definition contract")
+	}
+	return nil
+}
+
+func (o CredentialOwner) Matches(nodeID string, definition extensions.Ref) bool {
+	return o.Validate() == nil && o.ProviderNodeID == nodeID && o.Definition == definition
+}
+
 type Credential struct {
 	ID, Type, Secret string
-	Revision         string `json:"-"`
+	Revision         string          `json:"-"`
+	Owner            CredentialOwner `json:"-"`
 }
 
 func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id WHERE c.provider_node_id=? AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1`, nodeID)
-	var c Credential
-	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision); err != nil {
-		return Credential{}, false
-	}
-	return c, true
+	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.provider_node_id=? AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1`, nodeID)
+	return scanCredential(row)
 }
 
 func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id WHERE c.id=? AND c.enabled=1`, id)
+	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, id)
+	return scanCredential(row)
+}
+
+func scanCredential(row *sql.Row) (Credential, bool) {
 	var c Credential
-	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision); err != nil {
+	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision, &c.Owner.ProviderNodeID, &c.Owner.Definition.ID, &c.Owner.Definition.ContractVersion); err != nil {
 		return Credential{}, false
 	}
+	c.Owner.Definition.Kind = "provider-definition"
 	return c, true
 }
 
@@ -1077,12 +1103,15 @@ func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected
 	if expected.ID == "" || expected.Type == "" || expected.Revision == "" || secret == "" {
 		return fmt.Errorf("connection credential revision and replacement secret are required")
 	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND credential_type=? AND enabled=1 AND EXISTS(SELECT 1 FROM connection_credential_revisions r WHERE r.connection_id=connections.id AND r.revision=?)`, secret, expected.ID, expected.Type, expected.Revision)
+	if err := expected.Owner.Validate(); err != nil {
+		return err
+	}
+	result, err := s.DB.ExecContext(ctx, `UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND credential_type=? AND enabled=1 AND provider_node_id=? AND EXISTS(SELECT 1 FROM provider_nodes p WHERE p.id=connections.provider_node_id AND p.definition_id=? AND p.definition_contract_version=?) AND EXISTS(SELECT 1 FROM connection_credential_revisions r WHERE r.connection_id=connections.id AND r.revision=?)`, secret, expected.ID, expected.Type, expected.Owner.ProviderNodeID, expected.Owner.Definition.ID, expected.Owner.Definition.ContractVersion, expected.Revision)
 	if err != nil {
 		return err
 	}
 	if changed, _ := result.RowsAffected(); changed == 0 {
-		return fmt.Errorf("connection %q credential changed, was disabled or removed during authorization", expected.ID)
+		return fmt.Errorf("connection %q credential or auth owner changed, was disabled or removed during authorization", expected.ID)
 	}
 	return nil
 }

@@ -19,12 +19,9 @@ func (d *Daemon) resolveCredential(ctx context.Context, route kernel.Route) (ker
 	if !ok {
 		return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
 	}
-	if route.CredentialType != "" && credential.Type != route.CredentialType {
-		return kernel.Credential{}, fmt.Errorf("connection credential mode changed; reload the route")
-	}
-	flow, ok := d.authFlows[route.AuthFlowID]
-	if !ok {
-		return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
+	flow, err := d.credentialFlowForRoute(route, credential)
+	if err != nil {
+		return kernel.Credential{}, err
 	}
 	resolved, err := flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
 	if err := d.credentialContextError(ctx); err != nil {
@@ -49,12 +46,9 @@ func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, curr
 	if !ok {
 		return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
 	}
-	if route.CredentialType != "" && stored.Type != route.CredentialType {
-		return kernel.Credential{}, fmt.Errorf("connection credential mode changed; reload the route")
-	}
-	flow, ok := d.authFlows[route.AuthFlowID]
-	if !ok {
-		return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
+	flow, err := d.credentialFlowForRoute(route, stored)
+	if err != nil {
+		return kernel.Credential{}, err
 	}
 	latest, err := flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: stored.Type, Secret: stored.Secret})
 	if err := d.credentialContextError(ctx); err != nil {
@@ -91,7 +85,7 @@ func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, curr
 		return kernel.Credential{}, err
 	}
 	committed, ok := d.store.ConnectionCredentialByID(stored.ID)
-	if !ok || committed.Secret != state.Encoded() {
+	if !ok || committed.Secret != state.Encoded() || committed.Owner != stored.Owner || committed.Type != stored.Type {
 		// A newer manual update won after our commit. Never label stale runtime
 		// authorization with that newer revision.
 		return d.resolveCredential(ctx, route)
@@ -105,6 +99,23 @@ func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, curr
 		return kernel.Credential{}, fmt.Errorf("credential refreshed but route generation reload failed: %w", err)
 	}
 	return refreshed, nil
+}
+
+// The route pins the auth binding. Read state and its current owner together;
+// an old snapshot must not reinterpret a new owner's state with its old driver.
+func (d *Daemon) credentialFlowForRoute(route kernel.Route, credential store.Credential) (provider.AuthFlow, error) {
+	if !credential.Owner.Matches(route.NodeID, route.DefinitionRef) || credential.Type != route.CredentialType {
+		return nil, fmt.Errorf("connection auth owner or mode changed; reload the route")
+	}
+	flowID := d.authFlowID(credential.Owner.Definition, credential.Type)
+	if flowID == "" || flowID != route.AuthFlowID {
+		return nil, fmt.Errorf("route auth binding does not match the connection owner")
+	}
+	flow, ok := d.authFlows[flowID]
+	if !ok || flow == nil {
+		return nil, fmt.Errorf("connection auth primitive is unavailable")
+	}
+	return flow, nil
 }
 
 // Auth primitives own durable serialization. Resolve validates the replacement

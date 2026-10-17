@@ -27,6 +27,23 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+The auth-owner rebind slice now guards credential state by exact provider node,
+definition ref, selected mode and auth binding. One SQL read returns state with
+its revision/owner; final CAS validates both. Definition ID/version changes
+rotate child revisions transactionally, including ABA, without revoking work
+for provider-node renames/no-op definitions. Serving, polling and opportunistic
+quota use the same resolver. Stale pinned routes are rejected before driver
+work; old code/device/refresh completion cannot write after a rebind. The
+public daemon fixture rejects the old session, retains the previous credential,
+then accepts a fresh setup and executes an operation for the current owner.
+This strengthens account/configuration correctness and extension isolation.
+It does not add provider catalog breadth, finish TUI curation, establish full
+harness compatibility, or provide the still-missing resource/load baseline.
+Full C4/SG2/M15 remains open for generic setup actions, leases, reconciliation
+and the remaining composition matrix.
+
+Previous integrated milestone:
+
 The auth-state boundary now separates provider-owned persisted state from the
 ephemeral kernel credential. Code/device setup and refresh return a bounded,
 redacted `CredentialState`; the daemon validates through the selected `Resolve`
@@ -41,10 +58,9 @@ This improves provider extensibility and account operation, not catalog breadth,
 TUI model curation, full harness compatibility or resource-performance evidence.
 Generic action-based setup, opaque lease isolation and post-commit reconciliation
 remain open; this slice does not close full C4/SG2 or M15.
-Source review also identified an unclosed ownership case: provider-definition
-rebinding does not currently rotate child credential revisions. Exact old-driver
-commit fencing across that rebind needs its own implementation and acceptance;
-the current state-preservation fixture deliberately keeps its definition fixed.
+At that checkpoint, provider-definition rebind fencing was still missing; the
+subsequent owner milestone above closes that identified slice. The earlier
+opaque-state preservation fixture itself keeps its definition fixed.
 Implementation checkpoint: `30a066e`. Full tests/vet, conformance composition
 and repeated focused root/external race tests passed. After `make install-all`,
 the installed CLI completed custom device setup and post-restart inference;

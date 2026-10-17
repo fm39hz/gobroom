@@ -294,13 +294,31 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    and opaque leases remain auth-driver work. Validate full
    lifecycle fixtures, not token-only stubs.
 
-   Auth-state ownership follow-up: provider-node definition/version rebinding
-   updates the node without rotating child connection revisions. A pending
-   setup or a request pinned to an old definition must not persist that old
-   driver's state after such a rebind. Add exact auth-owner/definition fencing
-   at credential read/commit boundaries and fixture the in-flight rebind race;
-   do not equate connection secret/mode revision checks with this proof. Current
-   opaque-state fixtures keep the selected provider definition fixed.
+   Auth-owner fencing is implemented: state/revision/exact node-definition owner
+   are read together, pinned route mode/auth bindings are checked before the
+   driver, and final SQL CAS checks ownership. Definition ID/version changes
+   transactionally rotate child revisions, including ABA; provider-node renames
+   and unchanged definition values do not. Serving and quota share one resolver.
+   Unit fixtures cover stale route/code/device/refresh rejection, forged owner,
+   rollback and unrelated-node isolation; a public daemon fixture rejects old
+   setup after version rebind/ABA, then accepts a fresh current-owner setup and
+   executes an operation. This closes the identified rebind slice, not all
+   credential leases, universal setup actions or post-commit reconciliation.
+
+   Next activation slice: refresh/code/device currently commit a credential
+   before resetting routing state/reloading. A later reset/reload error must not
+   masquerade as a rolled-back secret. `Manager.Reload` can publish its control
+   snapshot before snapshot-version persistence fails; API reload hooks add a
+   separate serving-publication boundary. Model committed/control-published/
+   serving-published outcomes explicitly and share post-commit activation across
+   all auth paths. Add bounded, daemon-owned, revision/owner-fenced reconciliation
+   rather than retrying the token exchange or repurposing telemetry queues.
+   Acceptance must inject reset failure, reload failure before/after publication,
+   later requests using a newer credential, and code/device status after commit.
+   Session continuity is scoped by connection/exact definition/operation/model/
+   client session, not token revision; preserve that intentional refresh behavior
+   while retaining cross-owner isolation. This is identified work, not a claim
+   that the activation split is already repaired.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

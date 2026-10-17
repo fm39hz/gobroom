@@ -66,6 +66,15 @@ Resolve/refresh and lock waits honor caller and daemon cancellation; exchanges
 on unrelated connections remain independent. A token already committed is not
 rolled back by a later route/health reconciliation failure.
 
+Changing a provider's definition ID or contract version invalidates outstanding
+credential work for its connections, even if the definition is changed back.
+An old setup completion reports failure; start a new setup for the current
+definition. Provider-node renames and unchanged definition values do not revoke
+pending work. Existing secret bytes are retained, not converted into the new
+driver's schema; that driver's `Resolve` validates them, and incompatible state
+needs fresh credentials. Old pinned serving/quota bindings cannot reinterpret
+state under a different current owner.
+
 ## Operation probes with local files
 
 `gobroom connections test-operation` accepts `--payload-file payload.json`
