@@ -90,6 +90,7 @@ type Daemon struct {
 	logMu               sync.RWMutex
 	logs                []LogRecord
 	stop                func()
+	stopErr             error
 }
 
 type LogRecord struct {
@@ -166,6 +167,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if d.stop != nil {
 		return fmt.Errorf("daemon is already started")
 	}
+	d.stopErr = nil
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -565,6 +567,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	d.ipc = NewIPCServer(d.config.IPCPath, d.handleIPC)
+	d.ipc.afterReply = func(request IPCRequest, response IPCResponse) {
+		if request.Method == "shutdown" && response.OK {
+			go d.Stop(context.Background())
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		d.stop()
 		d.stop = nil
@@ -790,7 +797,19 @@ func refreshedCredentialSecret(credential kernel.Credential) (string, error) {
 	return provider.EncodeOAuthCredential(credential)
 }
 
-func (d *Daemon) Wait(ctx context.Context) error { <-ctx.Done(); return d.Stop(context.Background()) }
+func (d *Daemon) Wait(ctx context.Context) error {
+	d.mu.Lock()
+	runCtx := d.runCtx
+	d.mu.Unlock()
+	if runCtx == nil {
+		return fmt.Errorf("daemon has not started")
+	}
+	select {
+	case <-ctx.Done():
+	case <-runCtx.Done():
+	}
+	return d.Stop(context.Background())
+}
 
 func newDaemonHTTPServer(address string, handler http.Handler, base context.Context) *http.Server {
 	return &http.Server{
@@ -814,7 +833,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.stop == nil {
-		return nil
+		return d.stopErr
 	}
 	// Cancel active request contexts before Shutdown waits for in-flight
 	// handlers. Otherwise an unbounded streaming request can prevent Stop (and
@@ -852,6 +871,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.oauthMu.Lock()
 	d.oauth = nil
 	d.oauthMu.Unlock()
+	d.stopErr = ipcErr
 	return ipcErr
 }
 
@@ -1657,7 +1677,6 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		return success(request, map[string]string{"deleted": id})
 	case "shutdown":
-		go d.Stop(context.Background())
 		return IPCResponse{ID: request.ID, OK: true, Result: map[string]string{"status": "stopping"}}
 	default:
 		return IPCResponse{ID: request.ID, OK: false, Error: "unknown method: " + request.Method}

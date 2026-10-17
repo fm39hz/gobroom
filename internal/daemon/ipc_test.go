@@ -191,7 +191,7 @@ func TestIPCServerCancellationReleasesOwnership(t *testing.T) {
 	if err := server.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	closed := server.closed
+	closed := server.run.closed
 	cancel()
 	select {
 	case <-closed:

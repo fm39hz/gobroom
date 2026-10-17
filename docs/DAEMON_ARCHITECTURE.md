@@ -36,15 +36,18 @@ Both the IPC and HTTP boundaries delegate to daemon-owned services. They must
 not implement their own combo traversal, route selection or credential logic.
 Likewise, CLI/TUI are clients and do not access SQLite or perform routing.
 
-The local IPC protocol currently uses request/response JSON over a Unix socket.
-Keep the method and payload contract typed/versionable as it grows. Socket file
+The local IPC protocol is HTTP/1.1 `POST /ipc/v1` over the Unix socket, carrying
+the typed `IPCRequest`/`IPCResponse` JSON envelopes. `CallIPC` uses Go's HTTP
+transport with a Unix dialer; the server uses Go's request contexts and shutdown
+handling. Requests and client responses are capped at 32 MiB, and one envelope
+is accepted per request. Socket file
 permissions provide the local access boundary; any non-loopback HTTP exposure
 requires explicit operator configuration and appropriate network protection.
 
 ## Lifecycle expectations
 
 The daemon owns database open/migration, snapshot construction, listeners,
-bounded event/persistence workers, signal handling and bounded shutdown. A bad configuration
+bounded event/persistence workers, signal handling and cancellation-aware shutdown. A bad configuration
 reload must leave the last valid snapshot active. Provider discovery failures
 should affect the relevant provider operation, not make an otherwise valid
 daemon unusable.
@@ -64,6 +67,17 @@ before pathname removal. Binding is separate from serving: the accept loop
 starts after runtime initialization, and readiness is verified by a status
 response. A standalone `IPCServer` releases ownership on Close or context
 cancellation; an embedded daemon retains its reservation through final cleanup.
+
+Each IPC generation owns a separate context and shared drain result. Client
+cancellation closes the HTTP request and cancels the matching handler; it does
+not stop the daemon. Closing IPC cancels accepted connections, including
+partial request bodies, and waits for handlers to return before releasing the
+standalone socket or permitting daemon store cleanup. Concurrent Close calls
+wait for the same drain; an old generation cannot cancel a restart. Handlers
+must cooperate with context cancellation. `gobroom shutdown` sends its complete
+acknowledgement before initiating Stop, and daemon Wait observes that internal
+shutdown as well as process signals. The shutdown result is retained so Wait
+also reports a cleanup failure initiated by another caller.
 
 No network healthcheck or daemon-wide quota poll runs by default. Real attempts
 feed passive runtime state; provider quota enrichment is evidence-triggered and

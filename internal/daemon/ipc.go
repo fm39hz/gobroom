@@ -1,12 +1,21 @@
 package daemon
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"strconv"
 	"sync"
+)
+
+const (
+	ipcEndpointPath    = "/ipc/v1"
+	maxIPCMessageBytes = 32 << 20
 )
 
 type IPCRequest struct {
@@ -27,21 +36,32 @@ type IPCHandler func(context.Context, IPCRequest) IPCResponse
 type IPCServer struct {
 	path       string
 	handler    IPCHandler
+	afterReply func(IPCRequest, IPCResponse)
 	mu         sync.Mutex
-	socket     *ipcSocket
-	ownsSocket bool
-	closed     chan struct{}
+	run        *ipcRun
 }
 
 func NewIPCServer(path string, handler IPCHandler) *IPCServer {
 	return &IPCServer{path: path, handler: handler}
 }
 
+func (s *IPCServer) runningLocked() bool {
+	if s.run == nil {
+		return false
+	}
+	select {
+	case <-s.run.closed:
+		return false
+	default:
+		return true
+	}
+}
+
 func (s *IPCServer) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.socket != nil {
-		return fmt.Errorf("IPC server is already started")
+	if s.runningLocked() {
+		return fmt.Errorf("IPC server is already started or draining")
 	}
 	socket, err := acquireIPCSocket(ctx, s.path)
 	if err != nil {
@@ -57,8 +77,8 @@ func (s *IPCServer) Start(ctx context.Context) error {
 func (s *IPCServer) startReserved(ctx context.Context, socket *ipcSocket) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.socket != nil {
-		return fmt.Errorf("IPC server is already started")
+	if s.runningLocked() {
+		return fmt.Errorf("IPC server is already started or draining")
 	}
 	return s.startLocked(ctx, socket, false)
 }
@@ -67,83 +87,142 @@ func (s *IPCServer) startLocked(ctx context.Context, socket *ipcSocket, ownsSock
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.socket = socket
-	s.ownsSocket = ownsSocket
-	closed := make(chan struct{})
-	s.closed = closed
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = s.closeSocket(socket)
-		case <-closed:
-		}
-	}()
-	go s.acceptLoop(ctx, socket.listener)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST "+ipcEndpointPath, s.serveRequest)
+	s.run = newIPCRun(ctx, socket, ownsSocket, mux)
 	return nil
 }
 
-func (s *IPCServer) acceptLoop(ctx context.Context, listener net.Listener) {
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		go s.serveConn(ctx, conn)
-	}
-}
-
-func (s *IPCServer) serveConn(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-	decoder := json.NewDecoder(bufio.NewReader(conn))
-	encoder := json.NewEncoder(conn)
-	var request IPCRequest
-	if err := decoder.Decode(&request); err != nil {
-		_ = encoder.Encode(IPCResponse{OK: false, Error: err.Error()})
+func (s *IPCServer) serveRequest(writer http.ResponseWriter, request *http.Request) {
+	if request.ContentLength > maxIPCMessageBytes {
+		_ = writeIPCResponse(writer, http.StatusRequestEntityTooLarge, IPCResponse{Error: "IPC request exceeds size limit"})
 		return
 	}
-	response := s.handler(ctx, request)
-	_ = encoder.Encode(response)
+	request.Body = http.MaxBytesReader(writer, request.Body, maxIPCMessageBytes)
+	var envelope IPCRequest
+	if err := decodeIPCEnvelope(request.Body, &envelope); err != nil {
+		status := http.StatusBadRequest
+		var oversized *http.MaxBytesError
+		if errors.As(err, &oversized) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		_ = writeIPCResponse(writer, status, IPCResponse{ID: envelope.ID, Error: err.Error()})
+		return
+	}
+	response := s.handler(request.Context(), envelope)
+	if err := request.Context().Err(); err != nil {
+		response = IPCResponse{ID: envelope.ID, Error: err.Error()}
+	}
+	_ = writeIPCResponse(writer, http.StatusOK, response)
+	if s.afterReply != nil {
+		s.afterReply(envelope, response)
+	}
 }
 
+func writeIPCResponse(writer http.ResponseWriter, status int, response IPCResponse) error {
+	payload, err := json.Marshal(response)
+	if err != nil || len(payload) > maxIPCMessageBytes {
+		status = http.StatusInternalServerError
+		message := "IPC response cannot be encoded"
+		if err == nil {
+			message = "IPC response exceeds size limit"
+		}
+		payload, _ = json.Marshal(IPCResponse{ID: response.ID, Error: message})
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	// An explicit length lets shutdown acknowledge its response completely
+	// before cancellation closes the connection; no final chunk is required.
+	writer.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+	writer.WriteHeader(status)
+	if _, err := writer.Write(payload); err != nil {
+		return err
+	}
+	return http.NewResponseController(writer).Flush()
+}
+
+func decodeIPCEnvelope(reader io.Reader, target any) error {
+	decoder := json.NewDecoder(reader)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("only one IPC envelope is allowed per request")
+		}
+		return err
+	}
+	return nil
+}
+
+// Close cancels request contexts, closes connections and waits for handlers to
+// return. Concurrent closes share the same drain; ownership remains held until
+// that drain completes (and, for a daemon reservation, until store cleanup).
 func (s *IPCServer) Close() error {
-	return s.closeSocket(nil)
-}
-
-func (s *IPCServer) closeSocket(expected *ipcSocket) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.socket == nil || expected != nil && s.socket != expected {
+	run := s.run
+	s.mu.Unlock()
+	if run == nil {
 		return nil
 	}
-	var err error
-	if s.ownsSocket {
-		err = s.socket.close()
-	} else {
-		// A daemon reservation remains owned until its workers/store have drained.
-		err = s.socket.stopAccepting()
-	}
-	s.socket = nil
-	close(s.closed)
-	s.closed = nil
-	return err
+	return run.close()
 }
 
 func CallIPC(ctx context.Context, path string, request IPCRequest) (IPCResponse, error) {
-	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "unix", path)
+	if err := ctx.Err(); err != nil {
+		return IPCResponse{}, err
+	}
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return IPCResponse{}, err
 	}
-	defer conn.Close()
-	if err := json.NewEncoder(conn).Encode(request); err != nil {
+	if len(payload) > maxIPCMessageBytes {
+		return IPCResponse{}, fmt.Errorf("IPC request exceeds size limit")
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://gobroom.local"+ipcEndpointPath, bytes.NewReader(payload))
+	if err != nil {
 		return IPCResponse{}, err
 	}
-	var response IPCResponse
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&response); err != nil {
+	httpRequest.Header.Set("Content-Type", "application/json")
+	var dialer net.Dialer
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", path)
+		},
+		DisableKeepAlives: true,
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	httpResponse, err := client.Do(httpRequest)
+	if err != nil {
+		if ctx.Err() != nil {
+			return IPCResponse{}, ctx.Err()
+		}
 		return IPCResponse{}, err
+	}
+	defer httpResponse.Body.Close()
+	limited := &io.LimitedReader{R: httpResponse.Body, N: maxIPCMessageBytes + 1}
+	var response IPCResponse
+	decodeErr := decodeIPCEnvelope(limited, &response)
+	if ctx.Err() != nil {
+		return IPCResponse{}, ctx.Err()
+	}
+	if limited.N == 0 {
+		return IPCResponse{}, fmt.Errorf("IPC response exceeds size limit")
+	}
+	if decodeErr != nil {
+		return IPCResponse{}, decodeErr
 	}
 	if !response.OK {
 		return response, fmt.Errorf("IPC %s: %s", request.Method, response.Error)
+	}
+	if httpResponse.StatusCode != http.StatusOK {
+		return response, fmt.Errorf("IPC %s: HTTP status %d", request.Method, httpResponse.StatusCode)
 	}
 	return response, nil
 }

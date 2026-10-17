@@ -36,6 +36,19 @@ Socket existence alone is not readiness: initialization reserves it before
 starting the accept loop. `make install-all` waits for a successful CLI `status`
 request before reporting the restarted daemon ready.
 
+IPC uses versioned HTTP/JSON framing on the Unix socket (`POST /ipc/v1`). CLI
+and TUI use `CallIPC`; its context applies to dialing, writing and reading the
+reply. Canceling the client request cancels the daemon handler. IPC shutdown
+closes partial connections and drains active handlers before closing SQLite.
+Handlers are required to honor cancellation; the daemon waits for their return.
+Cancellation does not undo an already committed mutation; clients can read
+daemon state to reconcile an interrupted command. IPC calls are not replayed
+or redirected automatically.
+
+`gobroom shutdown` acknowledges the command and then drains/stops the daemon.
+The bundled user service restarts only on failure, so this clean shutdown
+leaves it stopped until `systemctl --user start gobroomd` or `make install-all`.
+
 ## Service and logs
 
 The user service writes operational messages to stdout/stderr, so a service

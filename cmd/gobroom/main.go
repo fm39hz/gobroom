@@ -50,6 +50,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 
 	root.AddCommand(simpleCommand("status", "show daemon status", "status", nil))
 	root.AddCommand(simpleCommand("reload", "reload daemon snapshot", "reload", nil))
+	root.AddCommand(simpleCommand("shutdown", "stop daemon after draining requests", "shutdown", nil))
 	var resolveModel string
 	resolve := &cobra.Command{Use: "resolve", Short: "resolve a published model", RunE: func(*cobra.Command, []string) error {
 		return invoke("resolve", map[string]any{"model": resolveModel})

@@ -197,6 +197,38 @@ func TestDaemonRetainsIPCOwnershipUntilCleanupCompletes(t *testing.T) {
 	defer successor.Close()
 }
 
+func TestDaemonWaitPreservesCleanupError(t *testing.T) {
+	config := listenerTestConfig(t)
+	config.HTTPEnabled, config.HTTPControl = false, false
+	service := New(config)
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Stop(context.Background())
+	waited := make(chan error, 1)
+	go func() { waited <- service.Wait(context.Background()) }()
+	if err := os.Remove(config.IPCPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.IPCPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "changed ownership") {
+		t.Fatalf("expected IPC cleanup ownership error: %v", err)
+	}
+	select {
+	case err := <-waited:
+		if err == nil || !strings.Contains(err.Error(), "changed ownership") {
+			t.Fatalf("Wait lost the shutdown failure: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Wait did not finish after shutdown failure")
+	}
+	if data, err := os.ReadFile(config.IPCPath); err != nil || string(data) != "replacement" {
+		t.Fatalf("shutdown removed the replacement path: data=%q err=%v", data, err)
+	}
+}
+
 func TestDaemonPublishesBoundListenersAndReleasesThemOnStop(t *testing.T) {
 	config := listenerTestConfig(t)
 	service := New(config)

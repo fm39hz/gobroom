@@ -298,8 +298,10 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    initialization, preserves active/non-socket paths, recovers crash residue
    and retains the lock through worker/store cleanup. Real subprocess fixtures
    verify contention and forced-crash recovery; status responses, rather than
-   socket existence, gate installation readiness. Remaining: IPC request
-   cancellation/draining still needs coverage beyond listener ownership.
+   socket existence, gate installation readiness. IPC now uses Go's HTTP/JSON
+   transport on the Unix socket: client cancellation reaches handlers, partial
+   connections unblock on Stop and a shared generation drain completes before
+   store/ownership cleanup. Acknowledged CLI shutdown also wakes daemon Wait.
    Complete the full SG1–SG7 compatibility, auth, artifact, transform, replay,
    reload and bundle cases through that module, then run installed CLI/control
    acceptance.

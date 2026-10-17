@@ -117,6 +117,7 @@ test-conformance-transform-boundaries:
 	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
 	go test ./internal/daemon -run '^(TestDaemonHTTPBindFailureDoesNotPublishOrInitialize|TestDaemonControlBindFailureRollsBackDataPort|TestDaemonIPCFailureRollsBackHTTPAndAllowsRetry|TestDaemonPublishesBoundListenersAndReleasesThemOnStop)$$' -count=1
 	go test ./internal/daemon -run '^(TestIPCSocketOwnershipSurvivesContentionAndOwnerCrash|TestIPCServerPreservesNonSocketPaths|TestIPCServerPreservesActiveUnmanagedSocket|TestIPCServerClosePreservesReplacementPath|TestIPCServerCancellationReleasesOwnership|TestDaemonIPCConflictDoesNotInitializeAnotherDatabase|TestDaemonInitializationFailureReleasesReservedSockets|TestDaemonRetainsIPCOwnershipUntilCleanupCompletes)$$' -count=1
+	go test ./internal/daemon -run '^(TestCallIPCCancellationReachesHandler|TestIPCCloseDrainsHandlersBeforeReleasingOwnership|TestIPCCloseUnblocksPartialRequestBody|TestIPCRejectsInvalidOrOversizedEnvelopeBeforeDispatch|TestDaemonStopDrainsIPCBeforeClosingStore|TestDaemonIPCShutdownAcknowledgesAndWaitReturns|TestDaemonWaitPreservesCleanupError)$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream$$' -count=1
 
 test-external-provider-module: ## compile a separate Go module against the public provider/daemon APIs
