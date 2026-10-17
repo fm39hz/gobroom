@@ -48,6 +48,13 @@ rejected access token is expired, still within its recorded lifetime, or has no
 expiry. Gobroom seeds `x/oauth2` with refresh state only: its caching TokenSource
 must not hand back the rejected token just because its local expiry looks valid.
 
+Installed acceptance (`2abe99c`): after `make install-all`, run
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test ./... -run '^TestExternalDeviceAuthorizationCannotOverwriteNewerConnectionCredential$' -count=1`
+inside `examples/external-provider-module`. This passed device-start, update,
+device-get (failed stale generation), and an operation probe authenticated with
+the replacement credential through the installed CLI. The main daemon remained
+`ok`; installed config export → validate passed. No live provider is called.
+
 | Change simulation | Executable evidence |
 |---|---|
 | API-key provider, `/models`, operation bindings and reusable primitives | `TestGenericProviderManifestBindsProtocolsAndSemanticTasks`; daemon manifest/discovery path in `TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart` |

@@ -43,6 +43,14 @@ expiry, using the pinned `x/oauth2` grant implementation rather than cached-toke
 reuse or a handwritten refresh exchange.
 It does not close live OAuth acceptance, every lifecycle race, or post-commit
 route/health reconciliation failure acceptance.
+Implementation checkpoint: `2abe99c`. Full tests/vet, the conformance composition
+suite and repeated focused race tests passed; the explicit-refresh fix was
+additionally followed by full tests/vet and provider/external-module race runs.
+After `make install-all`, the installed CLI passed device-start → connection
+update → failed stale-device completion → successful operation probe with the
+new credential. The main service reported `ok` at snapshot 464; installed
+config export → validate passed (bundle v9). These checks use fake providers,
+not live accounts, and do not close full M7 or M15.
 
 Previous integrated milestone:
 
