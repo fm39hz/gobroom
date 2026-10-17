@@ -87,7 +87,7 @@ func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, curr
 	if err != nil {
 		return kernel.Credential{}, err
 	}
-	commit, err := d.store.CompareAndSwapConnectionCredential(ctx, stored, state.Encoded())
+	commit, err := d.store.CompareAndSwapConnectionCredential(ctx, stored, state.Encoded(), store.CredentialRenewal)
 	if err != nil {
 		return kernel.Credential{}, err
 	}
@@ -103,6 +103,9 @@ func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, curr
 func (d *Daemon) credentialFlowForRoute(route kernel.Route, credential store.Credential) (provider.AuthFlow, error) {
 	if !credential.Owner.Matches(route.NodeID, route.DefinitionRef) || credential.Type != route.CredentialType {
 		return nil, fmt.Errorf("connection auth owner or mode changed; reload the route")
+	}
+	if credential.OperationalGeneration() != route.HealthGeneration.Connection {
+		return nil, fmt.Errorf("connection principal changed; reload the route")
 	}
 	flowID := d.authFlowID(credential.Owner.Definition, credential.Type)
 	if flowID == "" || flowID != route.AuthFlowID {

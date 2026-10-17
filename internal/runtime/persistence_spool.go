@@ -399,12 +399,14 @@ func HealthSpoolKey(observation HealthObservation) string {
 	identity := healthObservationIdentity(observation)
 	key, _ := json.Marshal(struct {
 		Scope      string         `json:"scope"`
+		Lane       string         `json:"lane"`
+		Generation string         `json:"generation"`
 		Provider   string         `json:"provider"`
 		Connection string         `json:"connection"`
 		Model      string         `json:"model"`
 		Route      string         `json:"route"`
 		Operation  extensions.Ref `json:"operation,omitzero"`
-	}{identity.scope, identity.provider, identity.connection, identity.model, identity.route, identity.operation})
+	}{identity.scope, identity.lane, identity.generation, identity.provider, identity.connection, identity.model, identity.route, identity.operation})
 	return spoolHealthKind + ":" + string(key)
 }
 

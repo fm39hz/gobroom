@@ -12,9 +12,16 @@ const credentialActivationAttempts = 5
 const credentialActivationInterval = time.Second
 
 type CredentialActivationProgress = store.CredentialActivationProgress
+type CredentialTransition = store.CredentialTransition
+
+const (
+	CredentialRenewal    = store.CredentialRenewal
+	PrincipalReplacement = store.PrincipalReplacement
+)
 
 type CredentialActivationView struct {
 	ConnectionID        string                       `json:"connectionId"`
+	Transition          store.CredentialTransition   `json:"transition"`
 	CredentialCommitted bool                         `json:"credentialCommitted"`
 	Status              string                       `json:"status"`
 	Attempts            int                          `json:"attempts"`
@@ -24,11 +31,11 @@ type CredentialActivationView struct {
 }
 
 func activationView(a store.CredentialActivation) CredentialActivationView {
-	return CredentialActivationView{ConnectionID: a.Commit.ConnectionID, CredentialCommitted: true, Status: a.Status, Attempts: a.Attempts, NextAttempt: a.NextAttempt, ErrorCode: a.ErrorCode, Progress: a.Progress}
+	return CredentialActivationView{ConnectionID: a.Commit.ConnectionID, Transition: a.Commit.Transition, CredentialCommitted: true, Status: a.Status, Attempts: a.Attempts, NextAttempt: a.NextAttempt, ErrorCode: a.ErrorCode, Progress: a.Progress}
 }
 
 func commitMatchesCredential(key store.CredentialCommit, current store.Credential) bool {
-	return key.ConnectionID == current.ID && key.CredentialType == current.Type && key.Revision == current.Revision && key.Owner == current.Owner
+	return key.ConnectionID == current.ID && key.CredentialType == current.Type && key.Revision == current.Revision && key.PrincipalGeneration == current.PrincipalGeneration && key.Owner == current.Owner
 }
 
 func (d *Daemon) credentialActivationView(ctx context.Context, key store.CredentialCommit) CredentialActivationView {
@@ -41,7 +48,7 @@ func (d *Daemon) credentialActivationView(ctx context.Context, key store.Credent
 	if err != nil {
 		status, code = store.ActivationPending, "activation_status_unavailable"
 	}
-	return CredentialActivationView{ConnectionID: key.ConnectionID, CredentialCommitted: true, Status: status, ErrorCode: code}
+	return CredentialActivationView{ConnectionID: key.ConnectionID, Transition: key.Transition, CredentialCommitted: true, Status: status, ErrorCode: code}
 }
 
 func (d *Daemon) currentActivationView(a store.CredentialActivation) CredentialActivationView {

@@ -19,7 +19,7 @@ func TestDurablePersistenceSpoolReplaysAndAcknowledgesHealthAndQuota(t *testing.
 		t.Fatal(err)
 	}
 	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", BaseURL: "https://secret-in-url.invalid", HealthGeneration: kernel.RouteHealthGeneration{Provider: "p1", Connection: "c1", Model: "m1"}}
-	health := HealthObservation{Route: route, State: RouteHealth{Invalid: true, LastCause: kernel.CauseAuth, LastScope: kernel.ScopeConnection, Generation: route.HealthGeneration.For(kernel.ScopeConnection)}}
+	health := HealthObservation{Route: route, State: RouteHealth{Lane: HealthAuthentication, Invalid: true, LastCause: kernel.CauseAuth, LastScope: kernel.ScopeConnection, Generation: route.HealthGeneration.ForAuthentication(kernel.ScopeConnection)}}
 	dead, err := spool.DeferHealth(health, 1, errors.New("database busy"))
 	if err != nil || dead {
 		t.Fatalf("defer health dead=%t err=%v", dead, err)
@@ -49,7 +49,7 @@ func TestDurablePersistenceSpoolReplaysAndAcknowledgesHealthAndQuota(t *testing.
 	var gotHealth, gotQuota bool
 	for _, record := range pending {
 		if observation, ok := record.HealthObservation(); ok {
-			gotHealth = observation.Route.ID == route.ID && observation.Route.BaseURL == "" && observation.State.Invalid && observation.State.Generation == health.State.Generation
+			gotHealth = observation.Route.ID == route.ID && observation.Route.BaseURL == "" && observation.State.Invalid && observation.State.Lane == HealthAuthentication && observation.State.Generation == health.State.Generation
 		}
 		if snapshot, ok := record.QuotaSnapshot(); ok {
 			gotQuota = snapshot.Generation == quotaSnapshot.Generation && snapshot.Remaining != nil && *snapshot.Remaining == 0
@@ -63,6 +63,25 @@ func TestDurablePersistenceSpoolReplaysAndAcknowledgesHealthAndQuota(t *testing.
 	}
 	if len(reopened.Pending()) != 1 {
 		t.Fatalf("acknowledged spool record remained pending: %#v", reopened.Pending())
+	}
+}
+
+func TestHealthSpoolIdentityIncludesLane(t *testing.T) {
+	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider", Connection: "principal", Credential: "revision-1", Model: "model"}}
+	op := HealthObservation{Route: route, State: RouteHealth{LastScope: kernel.ScopeConnection, Lane: HealthOperational}}
+	auth := HealthObservation{Route: route, State: RouteHealth{LastScope: kernel.ScopeConnection, Lane: HealthAuthentication}}
+	if HealthSpoolKey(op) == HealthSpoolKey(auth) {
+		t.Fatal("operational and authentication spool records share an identity")
+	}
+	rotated := op
+	rotated.Route.HealthGeneration.Credential = "revision-2"
+	if HealthSpoolKey(op) != HealthSpoolKey(rotated) {
+		t.Fatal("operational spool identity split across credential epochs")
+	}
+	rotatedAuth := auth
+	rotatedAuth.Route.HealthGeneration.Credential = "revision-2"
+	if HealthSpoolKey(auth) == HealthSpoolKey(rotatedAuth) {
+		t.Fatal("authentication spool identity did not change across credential epochs")
 	}
 }
 

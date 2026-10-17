@@ -51,7 +51,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 		sessions.mu.Unlock()
 		return CredentialActivationView{}, d.runCtx.Err()
 	}
-	commit, err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, state.Encoded())
+	commit, err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, state.Encoded(), store.PrincipalReplacement)
 	if err != nil {
 		sessions.mu.Unlock()
 		return CredentialActivationView{}, err

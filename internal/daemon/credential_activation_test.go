@@ -137,7 +137,7 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 func TestCredentialActivationExhaustsAndCannotClearNewCredentialState(t *testing.T) {
 	d, id := cancellationAuthDaemon(t, callbackOAuthFixture{})
 	expected, _ := d.store.ConnectionCredentialByID(id)
-	key, err := d.store.CompareAndSwapConnectionCredential(context.Background(), expected, "committed-state")
+	key, err := d.store.CompareAndSwapConnectionCredential(context.Background(), expected, "committed-state", store.PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestCredentialActivationExhaustsAndCannotClearNewCredentialState(t *testing
 func TestCredentialActivationWorkerDrainsOnShutdown(t *testing.T) {
 	d, id := cancellationAuthDaemon(t, callbackOAuthFixture{})
 	expected, _ := d.store.ConnectionCredentialByID(id)
-	key, err := d.store.CompareAndSwapConnectionCredential(context.Background(), expected, "worker-state")
+	key, err := d.store.CompareAndSwapConnectionCredential(context.Background(), expected, "worker-state", store.PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -333,11 +333,12 @@ func (g *PolicyGate) ReplayHealthObservation(observation HealthObservation, enqu
 	g.generationMu.RLock()
 	defer g.generationMu.RUnlock()
 	scope := observation.State.LastScope
-	if !g.Health.AcceptsOutcome(observation.Route, scope) || observation.State.Generation != observation.Route.HealthGeneration.For(scope) {
+	lane := observation.State.Lane.normalized()
+	if !g.Health.AcceptsLaneOutcome(observation.Route, scope, lane) || observation.State.Generation != laneGeneration(observation.Route, scope, lane) {
 		return false, false
 	}
 	g.Health.Restore(observation.Route, observation.State)
-	state, exists := g.Health.ScopedState(observation.Route, scope)
+	state, exists := g.Health.ScopedLaneState(observation.Route, scope, lane)
 	if !exists || state.Generation != observation.State.Generation {
 		return false, false
 	}

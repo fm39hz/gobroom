@@ -54,10 +54,12 @@ func credentialRefreshRoute(t *testing.T, d *Daemon, connectionID string) kernel
 	if err != nil {
 		t.Fatal(err)
 	}
+	credential, _ := d.store.ConnectionCredentialByID(connectionID)
 	return kernel.Route{
 		AuthFlowID: "oauth:oauth2", CredentialID: connectionID, NodeID: node.ID,
 		DefinitionRef: node.DefinitionRef(), CredentialType: "oauth2",
 		CredentialRecovery: kernel.CredentialRecoveryRefresh,
+		HealthGeneration:   kernel.RouteHealthGeneration{Connection: credential.OperationalGeneration(), Credential: credential.Revision},
 	}
 }
 

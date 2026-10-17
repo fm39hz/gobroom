@@ -170,6 +170,19 @@ pane or with `gobroom logs --limit 100`; this in-memory ring is not a replacemen
 for durable journal storage. Use `X-Request-ID` to supply a safe correlation ID;
 otherwise the daemon generates one and returns it in the response header.
 
+## Credential recovery
+
+Credential refresh is a `renewal`: it invalidates old-token authentication
+failures without resetting configured-principal quota or active rate-limit
+cooldowns. Interactive reauthorization is a `replacement`: it starts a new
+principal epoch and discards the former connection's health/quota evidence.
+Activation views report that transition separately from readiness. Health views
+and the inspector display authentication evidence independently from operational
+restrictions. A successful request or model discovery is not proof that an
+existing quota/rate restriction has ended. Provider-wide auth failures are not
+cleared by renewing a single account. Cross-connection shared identity is not
+inferred. Explicit operator resets remain separate recovery actions.
+
 ## Data-plane exposure
 
 Loopback HTTP requires no token by default. When serving beyond a trusted

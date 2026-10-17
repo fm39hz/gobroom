@@ -3,15 +3,18 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 func TestCredentialActivationRequiresEvidenceBeforeActive(t *testing.T) {
 	s, connection := newCredentialRevisionFixture(t)
 	defer s.Close()
 	expected, _ := s.ConnectionCredentialByID(connection.ID)
-	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "new-state")
+	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "new-state", PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +39,7 @@ func TestCredentialActivationCASIsAtomicAndSurvivesRestart(t *testing.T) {
 	if _, err := s.DB.Exec(`CREATE TRIGGER fail_credential_activation BEFORE INSERT ON credential_activations BEGIN SELECT RAISE(ABORT,'injected activation failure'); END`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-failed"); err == nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-failed", PrincipalReplacement); err == nil {
 		t.Fatal("CAS succeeded despite activation write failure")
 	}
 	unchanged, ok := s.ConnectionCredentialByID(connection.ID)
@@ -49,7 +52,7 @@ func TestCredentialActivationCASIsAtomicAndSurvivesRestart(t *testing.T) {
 	if _, err := s.DB.Exec(`DROP TRIGGER fail_credential_activation`); err != nil {
 		t.Fatal(err)
 	}
-	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-b")
+	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-b", PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +70,13 @@ func TestCredentialActivationCASIsAtomicAndSurvivesRestart(t *testing.T) {
 	}
 	if _, exists := fields["Commit"]; exists {
 		t.Fatalf("activation exposed commit: %s", encoded)
+	}
+	var envelope string
+	if err := s.DB.QueryRow(`SELECT progress_json FROM credential_activations WHERE connection_id=?`, connection.ID).Scan(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(envelope, "secret-b") || !strings.Contains(envelope, `"transition":"replacement"`) || !strings.Contains(envelope, commit.PrincipalGeneration) {
+		t.Fatalf("activation envelope leaked credential or missed generation metadata: %s", envelope)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -86,7 +96,7 @@ func TestCredentialActivationSaveAndRoutingResetAreFenced(t *testing.T) {
 	s, connection := newCredentialRevisionFixture(t)
 	defer s.Close()
 	expected, _ := s.ConnectionCredentialByID(connection.ID)
-	first, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-b")
+	first, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-b", PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +116,7 @@ func TestCredentialActivationSaveAndRoutingResetAreFenced(t *testing.T) {
 		t.Fatalf("stale activation supersede: saved=%v err=%v", saved, err)
 	}
 	secondExpected, _ := s.ConnectionCredentialByID(connection.ID)
-	second, err := s.CompareAndSwapConnectionCredential(context.Background(), secondExpected, "secret-c")
+	second, err := s.CompareAndSwapConnectionCredential(context.Background(), secondExpected, "secret-c", PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +164,7 @@ func TestCredentialActivationOrdersNanosecondDeadlinesAndRoundTripsZero(t *testi
 	s, connection := newCredentialRevisionFixture(t)
 	defer s.Close()
 	firstExpected, _ := s.ConnectionCredentialByID(connection.ID)
-	firstCommit, err := s.CompareAndSwapConnectionCredential(context.Background(), firstExpected, "secret-b")
+	firstCommit, err := s.CompareAndSwapConnectionCredential(context.Background(), firstExpected, "secret-b", PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +173,7 @@ func TestCredentialActivationOrdersNanosecondDeadlinesAndRoundTripsZero(t *testi
 		t.Fatal(err)
 	}
 	secondExpected, _ := s.ConnectionCredentialByID(secondConnection.ID)
-	secondCommit, err := s.CompareAndSwapConnectionCredential(context.Background(), secondExpected, "secret-second-b")
+	secondCommit, err := s.CompareAndSwapConnectionCredential(context.Background(), secondExpected, "secret-second-b", PrincipalReplacement)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +224,7 @@ func TestPendingCredentialActivationsAndGenerationRotate(t *testing.T) {
 	}
 	beforeGeneration := routes[0].ConnectionGeneration
 	expected, _ := s.ConnectionCredentialByID(connection.ID)
-	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, expected.Secret); err != nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, expected.Secret, PrincipalReplacement); err != nil {
 		t.Fatal(err)
 	}
 	routes, err = s.Routes()
@@ -228,5 +238,91 @@ func TestPendingCredentialActivationsAndGenerationRotate(t *testing.T) {
 	next, found, err := s.NextCredentialActivation(context.Background())
 	if err != nil || !found || next.IsZero() {
 		t.Fatalf("next activation=%v found=%v err=%v", next, found, err)
+	}
+}
+
+func TestCredentialRenewalPreservesPrincipalAndOperationalState(t *testing.T) {
+	s, connection := newCredentialRevisionFixture(t)
+	defer s.Close()
+	expected, _ := s.ConnectionCredentialByID(connection.ID)
+	if err := s.SaveConnectionRuntime(ConnectionRuntime{ConnectionID: connection.ID, Status: "cooldown", ConsecutiveFailures: 3, CooldownUntil: "later"}); err != nil {
+		t.Fatal(err)
+	}
+	remaining := 4.0
+	if err := s.SaveQuotaSnapshot(quota.Snapshot{ProviderNodeID: connection.ProviderNodeID, ConnectionID: connection.ID, ModelRef: "m", WindowName: "daily", Generation: "g", Remaining: &remaining}); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "renewed-secret", CredentialRenewal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit.PrincipalGeneration != expected.PrincipalGeneration {
+		t.Fatalf("renewal changed principal generation: %q -> %q", expected.PrincipalGeneration, commit.PrincipalGeneration)
+	}
+	if reset, err := s.ResetCredentialRoutingState(context.Background(), commit); err != nil || !reset {
+		t.Fatalf("renewal reset: %v %v", reset, err)
+	}
+	runtime, found, err := s.ConnectionRuntime(connection.ID)
+	if err != nil || !found || runtime.Status != "cooldown" || runtime.ConsecutiveFailures != 3 {
+		t.Fatalf("operational runtime changed: %#v found=%v err=%v", runtime, found, err)
+	}
+	snapshots, err := s.QuotaSnapshots()
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("quota snapshots=%#v err=%v", snapshots, err)
+	}
+	unknown := commit
+	unknown.Transition = "unknown"
+	if reset, err := s.ResetCredentialRoutingState(context.Background(), unknown); err == nil || reset {
+		t.Fatalf("unknown transition accepted: reset=%v err=%v", reset, err)
+	}
+}
+
+func TestPrincipalReplacementRotatesAndClearsRoutingState(t *testing.T) {
+	s, connection := newCredentialRevisionFixture(t)
+	defer s.Close()
+	expected, _ := s.ConnectionCredentialByID(connection.ID)
+	if err := s.SaveConnectionRuntime(ConnectionRuntime{ConnectionID: connection.ID, Status: "cooldown", ConsecutiveFailures: 3}); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, expected.Secret, PrincipalReplacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit.PrincipalGeneration == expected.PrincipalGeneration {
+		t.Fatal("replacement did not rotate principal generation")
+	}
+	if reset, err := s.ResetCredentialRoutingState(context.Background(), commit); err != nil || !reset {
+		t.Fatalf("replacement reset: %v %v", reset, err)
+	}
+	runtime, found, err := s.ConnectionRuntime(connection.ID)
+	if err != nil || !found || runtime.ConsecutiveFailures != 0 || runtime.CooldownUntil != "" {
+		t.Fatalf("runtime not cleared: %#v found=%v err=%v", runtime, found, err)
+	}
+}
+
+func TestRouteGenerationsSeparateCredentialRevisionFromPrincipal(t *testing.T) {
+	s, connection := newCredentialRevisionFixture(t)
+	defer s.Close()
+	if err := s.UpsertCatalogModel(UpsertCatalogModelInput{ID: "generation-route", ProviderNodeID: connection.ProviderNodeID, Kind: "custom", ExternalID: "model", DisplayName: "Model", ConnectionIDs: []string{connection.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.Routes()
+	if err != nil || len(before) != 1 {
+		t.Fatalf("routes=%#v err=%v", before, err)
+	}
+	credential, _ := s.ConnectionCredentialByID(connection.ID)
+	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), credential, "renewed", CredentialRenewal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Routes()
+	if err != nil || len(after) != 1 {
+		t.Fatalf("routes=%#v err=%v", after, err)
+	}
+	if before[0].ConnectionGeneration != after[0].ConnectionGeneration {
+		t.Fatal("renewal changed operational connection generation")
+	}
+	if before[0].CredentialGeneration == after[0].CredentialGeneration || after[0].CredentialGeneration != commit.Revision {
+		t.Fatalf("credential generation was not the raw credential revision: before=%q after=%q commit=%q", before[0].CredentialGeneration, after[0].CredentialGeneration, commit.Revision)
 	}
 }

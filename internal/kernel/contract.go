@@ -75,7 +75,21 @@ type Route struct {
 type RouteHealthGeneration struct {
 	Provider   string
 	Connection string
+	Credential string
 	Model      string
+}
+
+// Authentication evidence follows the credential epoch. Operational cooldown
+// and quota evidence follows the stable principal epoch in Connection.
+func (g RouteHealthGeneration) ForAuthentication(scope OutcomeScope) string {
+	if scope == ScopeProvider {
+		return g.Provider
+	}
+	base := g.Provider + "\x00" + g.Connection + "\x00" + g.Credential
+	if scope == ScopeConnection {
+		return base
+	}
+	return base + "\x00" + g.Model
 }
 
 func (g RouteHealthGeneration) For(scope OutcomeScope) string {

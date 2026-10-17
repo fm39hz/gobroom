@@ -322,23 +322,25 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    closed for refresh/code/device; universal setup actions, credential leases,
    broader fault composition and live-provider acceptance remain separate gates.
 
-   Follow-up auth semantics: distinguish token renewal from principal/account
-   replacement for quota/evidence generations. The activation slice retains
-   the existing connection recovery reset semantics; it does not establish
-   renewal-preserved quota. CLIProxyAPI's refresh path preserves unexpired
-   credential-quota evidence, which motivates a typed principal/renewal scope
-   rather than a provider-name rule. The recovery trigger slice is now implemented:
+   Follow-up auth semantics: token renewal and configured principal replacement
+   now have typed transitions, independent durable epochs and separate auth versus
+   operational health lanes. CLIProxyAPI's `UpdateRefreshedAuth`/`updateInternal`
+   in `sdk/cliproxy/auth/conductor_lifecycle.go` separates refresh/replacement,
+   fences stale refresh and preserves unexpired `credential_quota` evidence.
+   Gobroom reuses its own SQLite CAS/outbox and scoped persistence primitives
+   for these semantics rather than importing that manager and its runtime graph.
+   The recovery trigger slice is implemented:
    normalized auth recovery plus explicit mode opt-in replaces kernel 401/403
    checks, and replay/issuer safety remains independent. Generic structured
    classifier options plus a public-module HTTP498 fixture prove recovery without
    provider kernel branches; 403 permission/quota and recovery-disabled 401 do not
-   refresh. Host contract v3 rejects old recovery semantics. Quota continuity
-   still needs a durable principal generation independent of token revision,
-   renewal/replacement transition kinds, and separate auth failure versus
-   operational cooldown state. Acceptance must preserve exhausted quota with
-   unknown reset, active rate-limit cooldown, and queued evidence through renewal,
-   while replacement invalidates the former principal. Do not treat this as
-   implementation-only parity until that separate gate is proved.
+   refresh. Host contract v3 rejects old recovery semantics. Store/runtime/daemon
+   fixtures and the separate-module renewal vertical preserve exhausted quota
+   with unknown reset, active rate-limit cooldown and queued operational evidence
+   through renewal and restart; replacement invalidates the former principal.
+   New-credential auth failures survive delayed renewal activation. This closes
+   that narrow continuity gate, not C4/SG2/M15: generic setup actions, credential
+   leases, provider-reported identity and broader fault/live acceptance remain.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

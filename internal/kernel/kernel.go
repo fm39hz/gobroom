@@ -468,6 +468,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					continue
 				}
 			}
+			if selectedCredential.Generation != "" {
+				candidate.HealthGeneration.Credential = selectedCredential.Generation
+			}
 			if err := selectedCredential.ValidateRuntimeContext(); err != nil {
 				k.Scheduler.Release(candidate)
 				failureClass, memberErr = ErrorAuth, err
@@ -610,6 +613,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						}
 						_ = response.Body.Close()
 						selectedCredential = refreshedCredential
+						if selectedCredential.Generation != "" {
+							candidate.HealthGeneration.Credential = selectedCredential.Generation
+						}
 						refreshed = true
 						if replaySafety == operations.ReplayWithKey && idempotencyKey != "" {
 							idempotencyRetried = true

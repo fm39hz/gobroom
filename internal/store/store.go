@@ -41,6 +41,8 @@ func Open(path string) (*Store, error) {
 // withConnectionPragmas installs settings in the driver's DSN so every
 // physical connection opened by database/sql receives them. Executing PRAGMA
 // statements once through *sql.DB configures only one pooled connection.
+// Explicit store transactions mutate state: reserve the WAL writer before
+// validation reads, avoiding SQLITE_BUSY_SNAPSHOT on deferred read/write upgrade.
 func withConnectionPragmas(path string) string {
 	dsn := path
 	if dsn == ":memory:" {
@@ -50,7 +52,7 @@ func withConnectionPragmas(path string) string {
 	if strings.Contains(dsn, "?") {
 		separator = "&"
 	}
-	return dsn + separator + "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)"
+	return dsn + separator + "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_txlock=immediate"
 }
 
 func (s *Store) Close() error { return s.DB.Close() }
@@ -76,6 +78,10 @@ CREATE TABLE IF NOT EXISTS connection_credential_revisions (
   connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
   revision TEXT NOT NULL DEFAULT (lower(hex(randomblob(16))))
 );
+CREATE TABLE IF NOT EXISTS connection_principals (
+  connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL DEFAULT (lower(hex(randomblob(16))))
+);
 CREATE TABLE IF NOT EXISTS credential_activations (
   connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
   provider_node_id TEXT NOT NULL, definition_id TEXT NOT NULL, definition_contract_version INTEGER NOT NULL,
@@ -93,6 +99,15 @@ CREATE TRIGGER IF NOT EXISTS connection_credential_revision_update
 AFTER UPDATE OF provider_node_id,credential_type,secret_ref,enabled ON connections BEGIN
   UPDATE connection_credential_revisions SET revision=lower(hex(randomblob(16))) WHERE connection_id=NEW.id;
 END;
+CREATE TRIGGER IF NOT EXISTS connection_principal_revision_insert
+AFTER INSERT ON connections BEGIN
+  INSERT INTO connection_principals(connection_id) VALUES(NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS connection_principal_revision_update
+AFTER UPDATE OF provider_node_id,credential_type,secret_ref ON connections
+WHEN OLD.provider_node_id IS NOT NEW.provider_node_id OR OLD.credential_type IS NOT NEW.credential_type OR OLD.secret_ref IS NOT NEW.secret_ref BEGIN
+  UPDATE connection_principals SET revision=lower(hex(randomblob(16))) WHERE connection_id=NEW.id;
+END;
 CREATE TRIGGER IF NOT EXISTS provider_credential_owner_update
 AFTER UPDATE OF definition_id,definition_contract_version ON provider_nodes
 WHEN OLD.definition_id IS NOT NEW.definition_id
@@ -101,7 +116,16 @@ BEGIN
   UPDATE connection_credential_revisions SET revision=lower(hex(randomblob(16)))
   WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=NEW.id);
 END;
+CREATE TRIGGER IF NOT EXISTS provider_principal_owner_update
+AFTER UPDATE OF definition_id,definition_contract_version ON provider_nodes
+WHEN OLD.definition_id IS NOT NEW.definition_id
+  OR OLD.definition_contract_version IS NOT NEW.definition_contract_version
+BEGIN
+  UPDATE connection_principals SET revision=lower(hex(randomblob(16)))
+  WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=NEW.id);
+END;
 INSERT OR IGNORE INTO connection_credential_revisions(connection_id) SELECT id FROM connections;
+INSERT OR IGNORE INTO connection_principals(connection_id) SELECT id FROM connections;
 CREATE TABLE IF NOT EXISTS model_catalog (
   id TEXT PRIMARY KEY, provider_node_id TEXT REFERENCES provider_nodes(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, external_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL,
@@ -175,6 +199,19 @@ CREATE TABLE IF NOT EXISTS operation_runtime (
   last_attempt TEXT NOT NULL, last_success TEXT NOT NULL, observed_at_ns INTEGER NOT NULL,
   PRIMARY KEY(connection_id,model_ref,operation_id,operation_version)
 );
+CREATE TABLE IF NOT EXISTS auth_runtime (
+  scope TEXT NOT NULL, provider_node_id TEXT NOT NULL REFERENCES provider_nodes(id) ON DELETE CASCADE, connection_id TEXT NOT NULL, model_ref TEXT NOT NULL,
+  route_id TEXT NOT NULL, operation_id TEXT NOT NULL, operation_version INTEGER NOT NULL,
+  generation TEXT NOT NULL, credential_revision TEXT NOT NULL, status TEXT NOT NULL, failures INTEGER NOT NULL, successes INTEGER NOT NULL,
+  blocked_until TEXT NOT NULL, last_error TEXT NOT NULL, cause TEXT NOT NULL, evidence TEXT NOT NULL,
+  confidence REAL NOT NULL, last_attempt TEXT NOT NULL, last_success TEXT NOT NULL, observed_at_ns INTEGER NOT NULL,
+  PRIMARY KEY(scope,provider_node_id,connection_id,route_id,model_ref,operation_id,operation_version)
+);
+CREATE INDEX IF NOT EXISTS idx_auth_runtime_connection ON auth_runtime(connection_id);
+CREATE TRIGGER IF NOT EXISTS auth_runtime_connection_delete
+AFTER DELETE ON connections BEGIN
+  DELETE FROM auth_runtime WHERE connection_id=OLD.id;
+END;
 CREATE TABLE IF NOT EXISTS connection_model_catalog (
   connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
   provider_node_id TEXT NOT NULL REFERENCES provider_nodes(id) ON DELETE CASCADE,
@@ -840,6 +877,9 @@ func (s *Store) ResetConnectionRoutingState(connectionID string) error {
 }
 
 func resetConnectionRoutingStateTx(tx *sql.Tx, connectionID string) error {
+	if _, err := tx.Exec(`DELETE FROM auth_runtime WHERE connection_id=?`, connectionID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM operation_runtime WHERE connection_id=?`, connectionID); err != nil {
 		return err
 	}
@@ -869,6 +909,9 @@ func (s *Store) ResetProviderRoutingState(providerNodeID string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM auth_runtime WHERE provider_node_id=?`, providerNodeID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`DELETE FROM operation_runtime WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
 		return err
 	}
@@ -1088,24 +1131,29 @@ func (o CredentialOwner) Matches(nodeID string, definition extensions.Ref) bool 
 }
 
 type Credential struct {
-	ID, Type, Secret string
-	Revision         string          `json:"-"`
-	Owner            CredentialOwner `json:"-"`
+	ID, Type, Secret    string
+	Revision            string          `json:"-"`
+	PrincipalGeneration string          `json:"-"`
+	Owner               CredentialOwner `json:"-"`
+}
+
+func (c Credential) OperationalGeneration() string {
+	return configGeneration(c.ID, c.Type, c.PrincipalGeneration)
 }
 
 func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.provider_node_id=? AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1`, nodeID)
+	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN connection_principals cp ON cp.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.provider_node_id=? AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1`, nodeID)
 	return scanCredential(row)
 }
 
 func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, id)
+	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN connection_principals cp ON cp.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, id)
 	return scanCredential(row)
 }
 
 func scanCredential(row *sql.Row) (Credential, bool) {
 	var c Credential
-	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision, &c.Owner.ProviderNodeID, &c.Owner.Definition.ID, &c.Owner.Definition.ContractVersion); err != nil {
+	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision, &c.PrincipalGeneration, &c.Owner.ProviderNodeID, &c.Owner.Definition.ID, &c.Owner.Definition.ContractVersion); err != nil {
 		return Credential{}, false
 	}
 	c.Owner.Definition.Kind = "provider-definition"
@@ -1463,6 +1511,7 @@ type RouteRecord struct {
 	BaseURL, AuthMode, CredentialID, CredentialType           string
 	ProviderGeneration                                        string `json:"-"`
 	ConnectionGeneration                                      string `json:"-"`
+	CredentialGeneration                                      string `json:"-"`
 	ModelGeneration                                           string `json:"-"`
 	Profile                                                   kernel.CapabilityProfile
 	Limits                                                    kernel.TokenLimits
@@ -1475,10 +1524,11 @@ func (r RouteRecord) DefinitionRef() extensions.Ref {
 
 func (s *Store) Routes() ([]RouteRecord, error) {
 	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.definition_contract_version,1),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),COALESCE(n.models_path,'/models'),m.external_id,m.enabled,
-	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(cr.revision,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
+	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(cr.revision,''),COALESCE(cp.revision,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
 LEFT JOIN connection_credential_revisions cr ON cr.connection_id=c.id
+LEFT JOIN connection_principals cp ON cp.connection_id=c.id
 LEFT JOIN connection_model_catalog e ON e.connection_id=c.id AND e.provider_node_id=m.provider_node_id AND e.external_model_id=m.external_id
 LEFT JOIN model_connection_assignments assignment ON assignment.model_id=m.id AND assignment.connection_id=c.id
 WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL) OR (m.kind<>'custom' AND (e.status='available' OR (assignment.connection_id IS NOT NULL AND e.connection_id IS NULL)))) ORDER BY m.id,c.priority,c.id`)
@@ -1490,10 +1540,9 @@ WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL
 	for rows.Next() {
 		var r RouteRecord
 		var enabled int
-		var capabilities, limits, modelsPath, credentialRevision string
+		var capabilities, limits, modelsPath, credentialRevision, principalRevision string
 		var modelID string
-		var credentialSecret string
-		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.DefinitionContractVersion, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &credentialRevision, &capabilities, &limits); err != nil {
+		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.DefinitionContractVersion, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialRevision, &principalRevision, &capabilities, &limits); err != nil {
 			return nil, err
 		}
 		r.ID = modelID
@@ -1501,7 +1550,8 @@ WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL
 		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
 		_ = json.Unmarshal([]byte(limits), &r.Limits)
 		r.ProviderGeneration = configGeneration(r.NodeID, r.BaseURL, r.Protocol, r.DefinitionID, fmt.Sprint(r.DefinitionContractVersion), r.AuthMode, modelsPath)
-		r.ConnectionGeneration = configGeneration(r.CredentialID, r.CredentialType, credentialSecret, credentialRevision)
+		r.ConnectionGeneration = configGeneration(r.CredentialID, r.CredentialType, principalRevision)
+		r.CredentialGeneration = credentialRevision
 		r.ModelGeneration = configGeneration(modelID, r.ExternalModel, capabilities, limits)
 		if r.CredentialID != "" {
 			r.ID = r.ID + "@" + r.CredentialID

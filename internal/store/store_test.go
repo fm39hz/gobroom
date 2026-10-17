@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -11,7 +12,56 @@ import (
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/quota"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+func TestSQLiteWriteTransactionsReserveBeforeReading(t *testing.T) {
+	s, err := Open(t.TempDir() + "/write-reservation.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB.Exec(`CREATE TABLE reservation_fixture(value INTEGER); INSERT INTO reservation_fixture VALUES(0)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	other, err := s.DB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if _, err := other.ExecContext(ctx, `PRAGMA busy_timeout=0`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	var value int
+	// WAL readers remain available even while a write transaction is reserved.
+	if err := other.QueryRowContext(ctx, `SELECT value FROM reservation_fixture`).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	_, err = other.ExecContext(ctx, `UPDATE reservation_fixture SET value=99`)
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code() != sqlite3.SQLITE_BUSY {
+		t.Fatalf("transaction must reserve its writer before validation reads; concurrent write error=%v", err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM reservation_fixture`).Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != 0 {
+		t.Fatalf("concurrent writer changed validation snapshot: %d", value)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE reservation_fixture SET value=1`); err != nil {
+		t.Fatalf("validation read could not upgrade to write: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestSQLitePragmasApplyToEveryPooledConnection(t *testing.T) {
 	s, err := Open(t.TempDir() + "/pooled.db")
@@ -145,11 +195,11 @@ func TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential(t *testing.T) {
 	if _, err := s.UpdateConnection(UpdateConnectionInput{ID: connection.ID, Secret: "generation-b"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expectedA, "stale-oauth-result"); err == nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expectedA, "stale-oauth-result", PrincipalReplacement); err == nil {
 		t.Fatal("stale authorization result overwrote a newer connection credential")
 	}
 	expectedB, _ := s.ConnectionCredentialByID(connection.ID)
-	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expectedB, "generation-c"); err != nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expectedB, "generation-c", PrincipalReplacement); err != nil {
 		t.Fatal(err)
 	}
 	stored, ok := s.ConnectionCredentialByID(connection.ID)

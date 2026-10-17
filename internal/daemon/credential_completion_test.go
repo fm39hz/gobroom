@@ -89,10 +89,12 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 	// A missing ConnectionID in the request snapshot distinguishes the
 	// connection-scoped resolved credential from the stale caller snapshot.
 	current := kernel.Credential{Type: "api_key", Secret: "original-secret"}
+	configured, _ := state.ConnectionCredentialByID(connection.ID)
 	route := kernel.Route{
 		AuthFlowID: "credential-fixture:api_key", CredentialID: connection.ID,
 		NodeID: node.ID, DefinitionRef: node.DefinitionRef(), CredentialType: "api_key",
 		CredentialRecovery: kernel.CredentialRecoveryRefresh,
+		HealthGeneration:   kernel.RouteHealthGeneration{Connection: configured.OperationalGeneration(), Credential: configured.Revision},
 	}
 	results := make(chan kernel.Credential, callers)
 	errorsByCall := make(chan error, callers)

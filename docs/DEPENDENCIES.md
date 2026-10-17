@@ -125,6 +125,23 @@ already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 
+Credential renewal/replacement uses existing SQLite transactions/triggers,
+typed CAS/outbox and health persistence, with Go's `testing/synctest` for virtual
+cooldown time. No new runtime dependency is needed. The behavior was checked
+against the adjacent CLIProxyAPI source (`sdk/cliproxy/auth/conductor_lifecycle.go`,
+`UpdateRefreshedAuth`/`updateInternal`): stale refresh fencing and preserving active
+credential-quota evidence are useful precedents; importing its auth manager would
+also import a second ownership, persistence and scheduler model. This is reuse of
+existing Gobroom primitives with source-backed semantics, not a copied manager.
+
+Explicit store transactions reserve the SQLite WAL writer using the existing
+modernc driver option `_txlock=immediate` (verified in the pinned v1.59.0 source,
+`sqlite.go` connection options). This prevents deferred validation-read/write
+upgrade failures when activation and model editing overlap, without an application
+retry loop. WAL readers remain concurrent; writes still obey SQLite's single-writer
+and configured busy-timeout limits. The reservation regression fails with the old
+DSN and passes with the driver option.
+
 Do not add:
 
 ```text

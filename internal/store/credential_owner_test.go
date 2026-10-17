@@ -50,12 +50,12 @@ func TestCredentialOwnerProjectionAndCAS(t *testing.T) {
 		t.Run("forged "+name, func(t *testing.T) {
 			expected := fresh
 			forge(&expected)
-			if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-b"); err == nil {
+			if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expected, "secret-b", PrincipalReplacement); err == nil {
 				t.Fatal("compare-and-swap accepted forged owner")
 			}
 		})
 	}
-	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), fresh, "secret-b"); err != nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), fresh, "secret-b", PrincipalReplacement); err != nil {
 		t.Fatalf("compare-and-swap with current owner failed: %v", err)
 	}
 }
@@ -107,7 +107,7 @@ func TestProviderDefinitionChangesRevokeCredentialRevision(t *testing.T) {
 				if !ok || current.Revision == stale.Revision || current.Secret != stale.Secret {
 					t.Fatalf("definition change did not rotate revision: before=%#v after=%#v found=%v", stale, current, ok)
 				}
-				if _, err := s.CompareAndSwapConnectionCredential(context.Background(), stale, stale.Secret); err == nil {
+				if _, err := s.CompareAndSwapConnectionCredential(context.Background(), stale, stale.Secret, PrincipalReplacement); err == nil {
 					t.Fatal("old credential revision remained valid after definition change")
 				}
 				if got, ok := s.ConnectionCredentialByID(otherConnection.ID); !ok || got.Revision != unrelated.Revision {

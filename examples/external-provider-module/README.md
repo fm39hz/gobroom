@@ -65,6 +65,15 @@ then renews body-bound authorization for replay without changing those bytes
 or the resolved endpoint. Request codecs without a prepared replay factory
 cannot receive an automatic scoped retry after ambiguous dispatch.
 
+`TestExternalPrincipalRenewalPreservesOperationalHealthAndQuota` holds an actual
+upstream request across another role's auth rejection, refreshes its opaque ticket,
+and waits for activation. Authentication recovers, while independent rate-limit
+and unknown-reset exhausted-quota evidence survive renewal and daemon restart.
+Explicit credential replacement then makes all three blocked roles usable.
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom` also verifies installed health/quota/
+activation/status views and performs replacement through the control client.
+This fixture uses only a local fake provider and temporary database.
+
 `JobModule` demonstrates async create/status/cancel as independent operations,
 with schema-validated results and a client-held, connection-scoped inline handle.
 The lifecycle test loses create/cancel responses, proves no duplicate job or

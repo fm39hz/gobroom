@@ -27,6 +27,22 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Credential renewal now preserves configured-principal operational evidence.
+Typed renewal/replacement transitions separate private credential revisions from
+durable principal epochs. Authentication failures have a separate persistence,
+queue/spool and inspector lane; neither refresh activation nor an in-flight
+success erases active rate/quota restrictions. A separate-module fake provider
+proves auth recovery while zero-remaining quota with unknown reset and a rate
+cooldown survive renewal and restart. Explicit principal replacement makes those
+roles usable again. Store/runtime fixtures cover stale auth writes, current-token
+failure during activation, discovery/auth isolation and queued evidence identity.
+This improves safe consumption and headless recovery, not provider catalog
+breadth, universal harness compatibility or measured performance. Generic setup
+actions/leases, provider-attested/shared identity, catalog UX and full C4/SG2/M15
+closure remain open. Installed-client acceptance is recorded after verification.
+
+Previous integrated milestone:
+
 Credential recovery is now driven by normalized auth evidence and an explicit
 per-mode policy rather than a kernel HTTP-status shortcut. Mode/binding/metadata/
 route projections preserve that policy; the generic HTTP/JSON classifier accepts

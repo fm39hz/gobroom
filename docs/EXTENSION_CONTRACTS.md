@@ -764,10 +764,12 @@ apart, lead to `exhausted`; explicit retry grants a new budget. Storage failures
 that prevent recording progress also have a bounded in-memory retry budget and
 emit a diagnostic before waiting for an explicit wake/restart. Fenced SQL reset
 and progress writes cannot clear a newer owner's state or overwrite its job.
-Snapshot connection generations include the durable credential revision, so
-publication prunes superseded in-memory health/quota through the existing policy
-gate rather than an unscoped clear. Provider session keys intentionally do not
-include token revision, preserving same-connection refresh continuity.
+Snapshot generations separate the configured connection's principal epoch from
+its credential revision. Operational health and quota use the principal epoch;
+authentication health additionally uses the credential revision. Provider session
+keys intentionally do not include token revision, preserving same-connection
+refresh continuity. A pinned route cannot resolve a replacement principal under
+its former operational generation.
 
 Typed reload receipts distinguish control publication, persisted version and
 actual serving publication/version, including errors after publication. A
@@ -801,9 +803,29 @@ provider statuses can normalize to the same contract without a kernel branch.
 One public classifier call decodes evidence once; existing typed JSON/schema
 and standard slice helpers are reused.
 
-This does not yet distinguish credential renewal from principal replacement
-for quota/operational cooldown generations. That requires stable principal
-scope and separate credential-auth failure state, not deleting quota on renewal.
+Credential CAS requires a typed transition: `renewal` for refresh and
+`replacement` for interactive authorization. Both rotate the private credential
+revision; renewal retains the principal epoch, while replacement rotates it even
+when the serialized state is identical. Activation receipts expose the transition
+but neither private epoch. Renewal clears only authentication evidence for older
+credential revisions; a failure already observed for the new credential survives
+activation. Replacement clears the former connection's authentication and
+operational health/quota. Definition or connection-owner changes rotate principal
+identity; a same-value secret resave still revokes in-flight CAS without claiming
+a new principal. An explicit operator reset remains a separate action.
+
+Authentication health has a separate persisted lane, queue/spool identity and
+runtime projection. It cannot overwrite operational rate-limit/quota evidence.
+Successful in-flight calls do not erase an unexpired authoritative rate/quota
+cooldown, and discovery success does not clear authentication rejection. Provider-
+scoped authentication evidence is not cleared by renewal of one connection.
+Queued operational observations coalesce by principal generation, not token
+revision; authentication observations are fenced by the live credential revision.
+The external-module fixture preserves zero remaining quota with unknown reset
+and an active rate-limit cooldown across renewal and restart, then exercises
+replacement recovery. This is configured-connection identity, not inferred shared
+account identity across connections or provider-reported identity attestation.
+Generic setup actions and credential leases remain separate unfinished contracts.
 
 Credential ownership is the typed provider-node identity plus exact provider
 definition ref, alongside the selected credential mode. Reads project state,

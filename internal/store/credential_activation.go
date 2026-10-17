@@ -20,18 +20,30 @@ const (
 	maxActivationLimit     = 1024
 )
 
+type CredentialTransition string
+
+const (
+	CredentialRenewal    CredentialTransition = "renewal"
+	PrincipalReplacement CredentialTransition = "replacement"
+)
+
 var activationErrorCodePattern = regexp.MustCompile(`^[a-zA-Z0-9_.-]{0,64}$`)
 
 type CredentialCommit struct {
-	ConnectionID   string
-	CredentialType string
-	Revision       string
-	Owner          CredentialOwner `json:"-"`
+	ConnectionID        string
+	CredentialType      string
+	Revision            string
+	Transition          CredentialTransition
+	PrincipalGeneration string
+	Owner               CredentialOwner `json:"-"`
 }
 
 func (c CredentialCommit) Validate() error {
-	if c.ConnectionID == "" || c.CredentialType == "" || c.Revision == "" {
+	if c.ConnectionID == "" || c.CredentialType == "" || c.Revision == "" || c.PrincipalGeneration == "" {
 		return fmt.Errorf("credential commit requires connection, credential type, and revision")
+	}
+	if c.Transition != CredentialRenewal && c.Transition != PrincipalReplacement {
+		return fmt.Errorf("invalid credential transition")
 	}
 	return c.Owner.Validate()
 }
@@ -54,6 +66,12 @@ type CredentialActivation struct {
 	Progress    CredentialActivationProgress `json:"progress"`
 }
 
+type credentialActivationEnvelope struct {
+	Transition          CredentialTransition         `json:"transition"`
+	PrincipalGeneration string                       `json:"principalGeneration"`
+	Progress            CredentialActivationProgress `json:"progress"`
+}
+
 func (a CredentialActivation) Validate() error {
 	if err := a.Commit.Validate(); err != nil {
 		return err
@@ -74,9 +92,12 @@ func (a CredentialActivation) Validate() error {
 
 // CompareAndSwapConnectionCredential stores the new credential and its durable
 // activation work as one transaction. The returned commit contains no secret.
-func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected Credential, secret string) (CredentialCommit, error) {
-	if expected.ID == "" || expected.Type == "" || expected.Revision == "" || secret == "" {
+func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected Credential, secret string, transition CredentialTransition) (CredentialCommit, error) {
+	if expected.ID == "" || expected.Type == "" || expected.Revision == "" || expected.PrincipalGeneration == "" || secret == "" {
 		return CredentialCommit{}, fmt.Errorf("connection credential revision and replacement secret are required")
+	}
+	if transition != CredentialRenewal && transition != PrincipalReplacement {
+		return CredentialCommit{}, fmt.Errorf("invalid credential transition")
 	}
 	if err := expected.Owner.Validate(); err != nil {
 		return CredentialCommit{}, err
@@ -86,7 +107,7 @@ func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected
 		return CredentialCommit{}, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, `UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND credential_type=? AND enabled=1 AND provider_node_id=? AND EXISTS(SELECT 1 FROM provider_nodes p WHERE p.id=connections.provider_node_id AND p.definition_id=? AND p.definition_contract_version=?) AND EXISTS(SELECT 1 FROM connection_credential_revisions r WHERE r.connection_id=connections.id AND r.revision=?)`, secret, expected.ID, expected.Type, expected.Owner.ProviderNodeID, expected.Owner.Definition.ID, expected.Owner.Definition.ContractVersion, expected.Revision)
+	result, err := tx.ExecContext(ctx, `UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND credential_type=? AND enabled=1 AND provider_node_id=? AND EXISTS(SELECT 1 FROM provider_nodes p WHERE p.id=connections.provider_node_id AND p.definition_id=? AND p.definition_contract_version=?) AND EXISTS(SELECT 1 FROM connection_credential_revisions r WHERE r.connection_id=connections.id AND r.revision=?) AND EXISTS(SELECT 1 FROM connection_principals cp WHERE cp.connection_id=connections.id AND cp.revision=?)`, secret, expected.ID, expected.Type, expected.Owner.ProviderNodeID, expected.Owner.Definition.ID, expected.Owner.Definition.ContractVersion, expected.Revision, expected.PrincipalGeneration)
 	if err != nil {
 		return CredentialCommit{}, err
 	}
@@ -97,15 +118,24 @@ func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected
 	if changed == 0 {
 		return CredentialCommit{}, fmt.Errorf("connection %q credential or auth owner changed, was disabled or removed during authorization", expected.ID)
 	}
-	updated, ok := scanCredential(tx.QueryRowContext(ctx, `SELECT c.id,c.credential_type,c.secret_ref,r.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, expected.ID))
+	if transition == CredentialRenewal {
+		if _, err := tx.ExecContext(ctx, `UPDATE connection_principals SET revision=? WHERE connection_id=?`, expected.PrincipalGeneration, expected.ID); err != nil {
+			return CredentialCommit{}, err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `UPDATE connection_principals SET revision=lower(hex(randomblob(16))) WHERE connection_id=?`, expected.ID); err != nil {
+			return CredentialCommit{}, err
+		}
+	}
+	updated, ok := scanCredential(tx.QueryRowContext(ctx, `SELECT c.id,c.credential_type,c.secret_ref,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN connection_principals cp ON cp.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, expected.ID))
 	if !ok {
 		return CredentialCommit{}, fmt.Errorf("read updated credential commit")
 	}
-	commit := CredentialCommit{ConnectionID: updated.ID, CredentialType: updated.Type, Revision: updated.Revision, Owner: updated.Owner}
+	commit := CredentialCommit{ConnectionID: updated.ID, CredentialType: updated.Type, Revision: updated.Revision, PrincipalGeneration: updated.PrincipalGeneration, Transition: transition, Owner: updated.Owner}
 	if err := commit.Validate(); err != nil {
 		return CredentialCommit{}, err
 	}
-	progress, err := json.Marshal(CredentialActivationProgress{})
+	progress, err := json.Marshal(credentialActivationEnvelope{Transition: transition, PrincipalGeneration: commit.PrincipalGeneration, Progress: CredentialActivationProgress{}})
 	if err != nil {
 		return CredentialCommit{}, err
 	}
@@ -161,15 +191,15 @@ func (s *Store) SaveCredentialActivation(ctx context.Context, a CredentialActiva
 	if err := a.Validate(); err != nil {
 		return false, err
 	}
-	progress, err := json.Marshal(a.Progress)
+	progress, err := json.Marshal(credentialActivationEnvelope{Transition: a.Commit.Transition, PrincipalGeneration: a.Commit.PrincipalGeneration, Progress: a.Progress})
 	if err != nil {
 		return false, err
 	}
-	query := `UPDATE credential_activations SET status=?,attempts=?,next_attempt_ns=?,error_code=?,progress_json=?,updated_at=CURRENT_TIMESTAMP WHERE connection_id=? AND provider_node_id=? AND definition_id=? AND definition_contract_version=? AND credential_type=? AND revision=?`
-	args := []any{a.Status, a.Attempts, activationTimeValue(a.NextAttempt), a.ErrorCode, string(progress), a.Commit.ConnectionID, a.Commit.Owner.ProviderNodeID, a.Commit.Owner.Definition.ID, a.Commit.Owner.Definition.ContractVersion, a.Commit.CredentialType, a.Commit.Revision}
+	query := `UPDATE credential_activations SET status=?,attempts=?,next_attempt_ns=?,error_code=?,progress_json=?,updated_at=CURRENT_TIMESTAMP WHERE connection_id=? AND provider_node_id=? AND definition_id=? AND definition_contract_version=? AND credential_type=? AND revision=? AND json_extract(progress_json,'$.transition')=? AND json_extract(progress_json,'$.principalGeneration')=?`
+	args := []any{a.Status, a.Attempts, activationTimeValue(a.NextAttempt), a.ErrorCode, string(progress), a.Commit.ConnectionID, a.Commit.Owner.ProviderNodeID, a.Commit.Owner.Definition.ID, a.Commit.Owner.Definition.ContractVersion, a.Commit.CredentialType, a.Commit.Revision, a.Commit.Transition, a.Commit.PrincipalGeneration}
 	if a.Status != ActivationSuperseded {
-		query += ` AND EXISTS(SELECT 1 FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=credential_activations.connection_id AND c.enabled=1 AND c.credential_type=? AND c.provider_node_id=? AND p.definition_id=? AND p.definition_contract_version=? AND r.revision=?)`
-		args = append(args, a.Commit.CredentialType, a.Commit.Owner.ProviderNodeID, a.Commit.Owner.Definition.ID, a.Commit.Owner.Definition.ContractVersion, a.Commit.Revision)
+		query += ` AND EXISTS(SELECT 1 FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN connection_principals cp ON cp.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=credential_activations.connection_id AND c.enabled=1 AND c.credential_type=? AND c.provider_node_id=? AND p.definition_id=? AND p.definition_contract_version=? AND r.revision=? AND cp.revision=?)`
+		args = append(args, a.Commit.CredentialType, a.Commit.Owner.ProviderNodeID, a.Commit.Owner.Definition.ID, a.Commit.Owner.Definition.ContractVersion, a.Commit.Revision, a.Commit.PrincipalGeneration)
 	}
 	result, err := s.DB.ExecContext(ctx, query, args...)
 	if err != nil {
@@ -189,14 +219,18 @@ func (s *Store) ResetCredentialRoutingState(ctx context.Context, commit Credenti
 	}
 	defer tx.Rollback()
 	var found int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1 AND c.credential_type=? AND c.provider_node_id=? AND p.definition_id=? AND p.definition_contract_version=? AND r.revision=?`, commit.ConnectionID, commit.CredentialType, commit.Owner.ProviderNodeID, commit.Owner.Definition.ID, commit.Owner.Definition.ContractVersion, commit.Revision).Scan(&found)
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN connection_principals cp ON cp.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id JOIN credential_activations a ON a.connection_id=c.id WHERE c.id=? AND c.enabled=1 AND c.credential_type=? AND c.provider_node_id=? AND p.definition_id=? AND p.definition_contract_version=? AND r.revision=? AND cp.revision=? AND a.revision=? AND a.credential_type=? AND a.provider_node_id=? AND a.definition_id=? AND a.definition_contract_version=? AND json_extract(a.progress_json,'$.transition')=? AND json_extract(a.progress_json,'$.principalGeneration')=?`, commit.ConnectionID, commit.CredentialType, commit.Owner.ProviderNodeID, commit.Owner.Definition.ID, commit.Owner.Definition.ContractVersion, commit.Revision, commit.PrincipalGeneration, commit.Revision, commit.CredentialType, commit.Owner.ProviderNodeID, commit.Owner.Definition.ID, commit.Owner.Definition.ContractVersion, commit.Transition, commit.PrincipalGeneration).Scan(&found)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if err := resetConnectionRoutingStateTx(tx, commit.ConnectionID); err != nil {
+	if commit.Transition == CredentialRenewal {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM auth_runtime WHERE connection_id=? AND credential_revision<>?`, commit.ConnectionID, commit.Revision); err != nil {
+			return false, err
+		}
+	} else if err := resetConnectionRoutingStateTx(tx, commit.ConnectionID); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -220,9 +254,11 @@ func scanCredentialActivation(row *sql.Row) (CredentialActivation, bool, error) 
 	}
 	a.Commit.Owner.Definition = extensionsRef(definitionID, contractVersion)
 	a.NextAttempt = activationTimeFromValue(nextAttempt)
-	if err := json.Unmarshal([]byte(progress), &a.Progress); err != nil {
-		return CredentialActivation{}, false, err
+	var envelope credentialActivationEnvelope
+	if err := json.Unmarshal([]byte(progress), &envelope); err != nil {
+		return a, false, err
 	}
+	a.Commit.Transition, a.Commit.PrincipalGeneration, a.Progress = envelope.Transition, envelope.PrincipalGeneration, envelope.Progress
 	return a, true, a.Validate()
 }
 
@@ -238,9 +274,11 @@ func readCredentialActivations(rows *sql.Rows) ([]CredentialActivation, error) {
 		}
 		a.Commit.Owner.Definition = extensionsRef(definitionID, contractVersion)
 		a.NextAttempt = activationTimeFromValue(nextAttempt)
-		if err := json.Unmarshal([]byte(progress), &a.Progress); err != nil {
+		var envelope credentialActivationEnvelope
+		if err := json.Unmarshal([]byte(progress), &envelope); err != nil {
 			return nil, err
 		}
+		a.Commit.Transition, a.Commit.PrincipalGeneration, a.Progress = envelope.Transition, envelope.PrincipalGeneration, envelope.Progress
 		if err := a.Validate(); err != nil {
 			return nil, err
 		}

@@ -541,6 +541,19 @@ func (d *Daemon) Start(ctx context.Context) error {
 }
 
 func persistHealthState(stateStore *store.Store, route kernel.Route, state runtimehealth.RouteHealth) error {
+	if state.Lane == runtimehealth.HealthAuthentication {
+		record := store.AuthRuntime{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, RouteID: route.ID, Scope: state.LastScope, OperationRef: state.OperationRef, Generation: state.Generation, CredentialRevision: route.HealthGeneration.Credential, Status: healthStatus(state), Failures: state.Failures, Successes: state.Successes, BlockedUntil: formatTime(state.CooldownUntil), LastError: state.LastError, Cause: string(state.LastCause), Evidence: string(state.LastEvidence), Confidence: state.Confidence, LastAttempt: formatTime(state.LastAttempt), LastSuccess: formatTime(state.LastSuccess), ObservedAt: state.LastAttempt}
+		switch state.LastScope {
+		case kernel.ScopeProvider:
+			record.ConnectionID, record.ModelRef, record.RouteID = "", "", ""
+		case kernel.ScopeConnection:
+			record.ModelRef, record.RouteID = "", ""
+		}
+		return stateStore.SaveAuthRuntime(record)
+	}
+	if state.LastCause == kernel.CauseAuth {
+		return fmt.Errorf("authentication evidence requires the authentication health lane")
+	}
 	switch state.LastScope {
 	case kernel.ScopeOperation:
 		return stateStore.SaveOperationRuntime(store.OperationRuntime{ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, OperationRef: state.OperationRef, Status: healthStatus(state), BlockedUntil: formatTime(state.CooldownUntil), LastError: state.LastError, Cause: string(state.LastCause), Evidence: string(state.LastEvidence), Confidence: state.Confidence, Generation: state.Generation, Failures: state.Failures, Successes: state.Successes, LastAttempt: formatTime(state.LastAttempt), LastSuccess: formatTime(state.LastSuccess), ObservedAt: state.LastAttempt})
@@ -556,11 +569,17 @@ func persistHealthState(stateStore *store.Store, route kernel.Route, state runti
 }
 
 func (d *Daemon) restoreHealthForRoutes(routes map[string]kernel.Route) error {
+	if err := d.restoreAuthenticationHealth(routes); err != nil {
+		return err
+	}
 	operations, err := d.store.OperationRuntimes()
 	if err != nil {
 		return err
 	}
 	for _, item := range operations {
+		if kernel.OutcomeCause(item.Cause) == kernel.CauseAuth {
+			continue
+		}
 		for _, route := range routes {
 			binding, exists := route.OperationBindings[normalize.Operation(item.OperationRef.ID)]
 			if !exists || binding.ContractVersion != item.OperationRef.ContractVersion || route.CredentialID != item.ConnectionID || route.ExternalModel != item.ModelRef || item.Generation != route.HealthGeneration.For(kernel.ScopeOperation) {
@@ -575,6 +594,9 @@ func (d *Daemon) restoreHealthForRoutes(routes map[string]kernel.Route) error {
 		return err
 	}
 	for _, item := range connections {
+		if kernel.OutcomeCause(item.ErrorCode) == kernel.CauseAuth {
+			continue
+		}
 		for _, route := range routes {
 			if route.CredentialID != item.ConnectionID || item.Generation != route.HealthGeneration.For(kernel.ScopeConnection) {
 				continue
@@ -587,6 +609,9 @@ func (d *Daemon) restoreHealthForRoutes(routes map[string]kernel.Route) error {
 		return err
 	}
 	for _, item := range providers {
+		if kernel.OutcomeCause(item.ErrorCode) == kernel.CauseAuth {
+			continue
+		}
 		for _, route := range routes {
 			if route.NodeID != item.ProviderNodeID || item.Generation != route.HealthGeneration.For(kernel.ScopeProvider) {
 				continue
@@ -599,6 +624,9 @@ func (d *Daemon) restoreHealthForRoutes(routes map[string]kernel.Route) error {
 		return err
 	}
 	for _, item := range availability {
+		if kernel.OutcomeCause(item.Reason) == kernel.CauseAuth {
+			continue
+		}
 		blockedUntil := parseTime(item.BlockedUntil)
 		invalid := item.Status == "invalid"
 		if !invalid && (blockedUntil.IsZero() || !blockedUntil.After(time.Now())) {

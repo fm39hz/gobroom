@@ -96,6 +96,7 @@ type comboModel struct {
 }
 
 type routeHealth struct {
+	Lane          string         `json:"lane"`
 	OperationRef  extensions.Ref `json:"operationRef"`
 	Failures      int
 	Successes     int
@@ -112,7 +113,8 @@ type routeHealth struct {
 
 type routeHealthView struct {
 	routeHealth
-	Operations []routeHealth `json:"operations"`
+	Operations     []routeHealth `json:"operations"`
+	Authentication []routeHealth `json:"authentication"`
 }
 
 type quotaSnapshot struct {
@@ -401,6 +403,18 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 						status = "cooldown until " + operation.CooldownUntil.Format(time.RFC3339)
 					}
 					detail += fmt.Sprintf("\n%s · %s · %s · %d failures", operation.OperationRef.Key(), status, operation.LastCause, operation.Failures)
+				}
+			}
+			if len(value.Authentication) > 0 {
+				detail += "\n\nAuthentication health (credential epoch)"
+				for _, authentication := range value.Authentication {
+					status := "healthy"
+					if authentication.Invalid {
+						status = "invalid"
+					} else if authentication.CooldownUntil.After(time.Now()) {
+						status = "cooldown until " + authentication.CooldownUntil.Format(time.RFC3339)
+					}
+					detail += fmt.Sprintf("\n%s · %s · %s · %d failures", authentication.LastScope, status, authentication.LastCause, authentication.Failures)
 				}
 			}
 			entries = append(entries, entry{key: routeID, title: state, summary: fmt.Sprintf("%s · %d failures", value.LastCause, value.Failures), detail: detail, payload: value})

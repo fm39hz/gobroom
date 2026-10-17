@@ -478,3 +478,19 @@ coverage than its assertions provide.
 See the [implementation roadmap](IMPLEMENTATION_PLAN.md) for ordered slices.
 Vendor completeness and measured resource/latency performance remain separate
 gates even after semantic closure passes.
+
+### Renewal/principal continuity evidence
+
+`TestExternalPrincipalRenewalPreservesOperationalHealthAndQuota` exercises an
+opaque custom credential through real HTTP rejection, refresh, activation and
+restart, retaining independent rate cooldown and exhausted quota without reset.
+Replacement then restores auth, rate-limited and quota-limited roles. The optional
+installed CLI path covers safe views and connection replacement. Lower-level
+fixtures include `TestCredentialRenewalPreservesPrincipalAndOperationalState`,
+`TestPrincipalReplacementRotatesAndClearsRoutingState`,
+`TestRenewalResetDoesNotClearFailureOfCurrentCredential`,
+`TestHealthLanesKeepAuthenticationAndOperationalBlocksIndependent`,
+`TestDiscoveryRecoveryDoesNotClearAuthenticationFailure` and
+`TestAuthHealthPersistenceCannotOverwriteOperationalCooldown`. These close the
+configured-principal renewal slice only; generic setup actions/leases and the
+full SG composition gate remain open.

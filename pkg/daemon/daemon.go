@@ -18,6 +18,12 @@ type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec
 type CredentialActivationView = core.CredentialActivationView
 type CredentialActivationProgress = core.CredentialActivationProgress
+type CredentialTransition = core.CredentialTransition
+
+const (
+	CredentialRenewal    = core.CredentialRenewal
+	PrincipalReplacement = core.PrincipalReplacement
+)
 
 var ErrIPCInUse = core.ErrIPCInUse
 

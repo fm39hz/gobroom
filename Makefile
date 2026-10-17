@@ -43,6 +43,8 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/discovery -run '^TestDiscoveryCredentialBindingRequiresExactOwnerAndMode$$' -count=1
 	go test ./internal/controlplane ./internal/api ./internal/daemon ./internal/tui ./cmd/gobroom -run '^Test(Reload|ModelsProjection|SuccessfulHook|NoHookStatus|StatusDegrades|AuthorizationCommitReports|AuthCompletion|ConnectionActivation)' -count=1
 	go test ./internal/kernel ./internal/provider ./internal/daemon -run '^Test(CredentialRecovery|HTTPJSONAuthRecovery|AuthModeRecovery)' -count=1
+	go test ./internal/store ./internal/runtime ./internal/daemon -run '^Test(CredentialRenewal|PrincipalReplacement|RouteGenerationsSeparate|RenewalReset|AuthRuntime|ProviderAuthRuntime|ConnectionAuthRuntime|HealthLanes|DiscoveryRecovery|HealthAuthentication|HealthGenerationReplacement|ReplayHealthObservation|HealthHalfOpen|AuthHealthPersistence|RenewalCommit)' -count=1
+	go test ./internal/store ./internal/runtime -run '^Test(SQLiteWriteTransactions|HealthObservation|HealthSpoolIdentity)' -count=1
 	go test ./internal/provider -run '^TestOAuthAuthRefreshesAgainstTokenEndpoint$$' -count=1
 	go test ./internal/provider -run '^Test(CredentialState|CustomAuthRefreshState)' -count=1
 	go test ./internal/kernel -run '^TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges$$' -count=1

@@ -49,6 +49,45 @@ func TestHealthObservationQueueBoundsDistinctScopes(t *testing.T) {
 	}
 }
 
+func TestHealthObservationQueueKeepsLanesDistinct(t *testing.T) {
+	var saved []HealthObservation
+	queue := NewHealthObservationQueue(2, func(observation HealthObservation) error { saved = append(saved, observation); return nil }, nil)
+	route := kernel.Route{ID: "route", CredentialID: "connection"}
+	operational := HealthObservation{Route: route, State: RouteHealth{LastScope: kernel.ScopeConnection, Lane: HealthOperational}}
+	authentication := HealthObservation{Route: route, State: RouteHealth{LastScope: kernel.ScopeConnection, Lane: HealthAuthentication}}
+	if !queue.Enqueue(operational) || !queue.Enqueue(authentication) {
+		t.Fatal("independent lanes did not fit in queue")
+	}
+	queue.Close()
+	done := make(chan struct{})
+	go func() { queue.Run(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("queue did not flush")
+	}
+	if len(saved) != 2 {
+		t.Fatalf("lane observations coalesced: %#v", saved)
+	}
+}
+
+func TestHealthObservationIdentityUsesLaneGeneration(t *testing.T) {
+	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", HealthGeneration: kernel.RouteHealthGeneration{Provider: "p1", Connection: "principal", Credential: "credential-r1", Model: "m1"}}
+	first := HealthObservation{Route: route, State: RouteHealth{LastScope: kernel.ScopeConnection, Lane: HealthOperational}}
+	newCredential := route
+	newCredential.HealthGeneration.Credential = "credential-r2"
+	second := first
+	second.Route = newCredential
+	if healthObservationIdentity(first) != healthObservationIdentity(second) {
+		t.Fatal("operational observations split across credential epochs")
+	}
+	first.State.Lane = HealthAuthentication
+	second.State.Lane = HealthAuthentication
+	if healthObservationIdentity(first) == healthObservationIdentity(second) {
+		t.Fatal("authentication epochs shared a queue identity")
+	}
+}
+
 func TestHealthObservationQueueReportsSinkFailure(t *testing.T) {
 	wantErr := errors.New("store unavailable")
 	failed := make(chan error, 1)

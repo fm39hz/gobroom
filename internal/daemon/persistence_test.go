@@ -19,9 +19,10 @@ func TestRuntimePersistenceSpoolsFailuresAndReplaysAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := state.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('provider','Provider','http://provider','openai_chat','p'); INSERT INTO connections(id,provider_node_id,name,credential_type) VALUES('connection','provider','Account','api_key')`); err != nil {
+	if _, err := state.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix,definition_id) VALUES('provider','Provider','http://provider','openai_chat','p','openai-compatible-chat'); INSERT INTO connections(id,provider_node_id,name,credential_type) VALUES('connection','provider','Account','api_key')`); err != nil {
 		t.Fatal(err)
 	}
+	credential, _ := state.ConnectionCredentialByID("connection")
 	if err := state.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +38,8 @@ func TestRuntimePersistenceSpoolsFailuresAndReplaysAfterRestart(t *testing.T) {
 	if err := closedStore.Close(); err != nil {
 		t.Fatal(err)
 	}
-	route := kernel.Route{ID: "route@connection", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "connection-v1", Model: "model-v1"}}
-	health := runtimehealth.RouteHealth{Invalid: true, LastCause: kernel.CauseAuth, LastScope: kernel.ScopeConnection, Generation: route.HealthGeneration.For(kernel.ScopeConnection), LastAttempt: time.Now()}
+	route := kernel.Route{ID: "route@connection", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", HealthGeneration: kernel.RouteHealthGeneration{Provider: "provider-v1", Connection: "connection-v1", Credential: credential.Revision, Model: "model-v1"}}
+	health := runtimehealth.RouteHealth{Lane: runtimehealth.HealthAuthentication, Invalid: true, LastCause: kernel.CauseAuth, LastScope: kernel.ScopeConnection, Generation: route.HealthGeneration.ForAuthentication(kernel.ScopeConnection), LastAttempt: time.Now()}
 	d := &Daemon{store: closedStore, persistenceSpool: spool}
 	if err := d.persistHealthObservation(runtimehealth.HealthObservation{Route: route, State: health}); err != nil {
 		t.Fatalf("failed DB write was not durably spooled: %v", err)
@@ -60,7 +61,13 @@ func TestRuntimePersistenceSpoolsFailuresAndReplaysAfterRestart(t *testing.T) {
 	defer reopened.Close()
 	d.policy = runtimehealth.NewPolicyGate()
 	d.policy.SetGenerations(map[string]kernel.Route{route.ID: route})
-	healthQueue := runtimehealth.NewHealthObservationQueue(16, d.persistHealthObservation, nil)
+	healthQueue := runtimehealth.NewHealthObservationQueue(16, func(observation runtimehealth.HealthObservation) error {
+		current, ok := reopened.ConnectionCredentialByID("connection")
+		if !ok || observation.Route.HealthGeneration.Credential != current.Revision {
+			t.Errorf("replayed auth credential epoch mismatch: current=%q replay=%q found=%v", current.Revision, observation.Route.HealthGeneration.Credential, ok)
+		}
+		return d.persistHealthObservation(observation)
+	}, nil)
 	quotaQueue := runtimehealth.NewQuotaSnapshotQueue(quotaSnapshotSinkFunc(d.persistQuotaSnapshot), 16, nil)
 	healthDone, quotaDone := make(chan struct{}), make(chan struct{})
 	go func() { healthQueue.Run(); close(healthDone) }()
@@ -76,17 +83,20 @@ func TestRuntimePersistenceSpoolsFailuresAndReplaysAfterRestart(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	d.replayPersistenceSpool(healthQueue, quotaQueue)
+	if state, ok := d.policy.Health.ScopedAuthState(route, kernel.ScopeConnection); !ok || !state.Invalid {
+		t.Fatalf("auth spool did not restore runtime lane: %+v %v", state, ok)
+	}
 	for time.Now().Before(deadline) {
-		healthRows, healthErr := reopened.ConnectionRuntimes()
+		healthRows, healthErr := reopened.AuthRuntimes()
 		quotaRows, quotaErr := reopened.QuotaSnapshots()
-		if healthErr == nil && quotaErr == nil && len(healthRows) == 1 && healthRows[0].Status == "invalid" && healthRows[0].Generation == route.HealthGeneration.For(kernel.ScopeConnection) && len(quotaRows) == 1 && quotaRows[0].Generation == quotaState.Generation {
+		if healthErr == nil && quotaErr == nil && len(healthRows) == 1 && healthRows[0].Status == "invalid" && healthRows[0].Generation == route.HealthGeneration.ForAuthentication(kernel.ScopeConnection) && len(quotaRows) == 1 && quotaRows[0].Generation == quotaState.Generation {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	healthRows, healthErr := reopened.ConnectionRuntimes()
+	healthRows, healthErr := reopened.AuthRuntimes()
 	quotaRows, quotaErr := reopened.QuotaSnapshots()
-	if healthErr != nil || quotaErr != nil || len(healthRows) != 1 || healthRows[0].Status != "invalid" || healthRows[0].Generation != route.HealthGeneration.For(kernel.ScopeConnection) || len(quotaRows) != 1 || quotaRows[0].Generation != quotaState.Generation {
+	if healthErr != nil || quotaErr != nil || len(healthRows) != 1 || healthRows[0].Status != "invalid" || healthRows[0].Generation != route.HealthGeneration.ForAuthentication(kernel.ScopeConnection) || len(quotaRows) != 1 || quotaRows[0].Generation != quotaState.Generation {
 		t.Fatalf("spool replay health=%#v err=%v quota=%#v err=%v", healthRows, healthErr, quotaRows, quotaErr)
 	}
 	if len(spool.Pending()) != 0 {

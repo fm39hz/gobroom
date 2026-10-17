@@ -16,8 +16,9 @@ type HealthObservationSink func(HealthObservation) error
 type HealthObservationErrorHandler func(HealthObservation, error)
 
 type healthObservationKey struct {
-	scope, provider, connection, model, route string
-	operation                                 extensions.Ref
+	scope, lane, provider, connection, model, route string
+	operation                                       extensions.Ref
+	generation                                      string
 }
 
 // HealthObservationQueue keeps inference independent of storage latency while
@@ -63,6 +64,10 @@ func (q *HealthObservationQueue) Enqueue(observation HealthObservation) bool {
 	if _, exists := q.pending[key]; !exists && len(q.pending) >= q.capacity {
 		q.mu.Unlock()
 		return false
+	}
+	if previous, exists := q.pending[key]; exists && previous.State.LastAttempt.After(observation.State.LastAttempt) {
+		q.mu.Unlock()
+		return true
 	}
 	q.pending[key] = observation
 	q.mu.Unlock()
@@ -119,7 +124,7 @@ func (q *HealthObservationQueue) flush() {
 
 func healthObservationIdentity(observation HealthObservation) healthObservationKey {
 	route := observation.Route
-	key := healthObservationKey{scope: string(observation.State.LastScope)}
+	key := healthObservationKey{scope: string(observation.State.LastScope), lane: string(observation.State.Lane.normalized()), generation: laneGeneration(route, observation.State.LastScope, observation.State.Lane)}
 	switch observation.State.LastScope {
 	case kernel.ScopeOperation:
 		key.connection, key.model, key.route, key.operation = route.CredentialID, route.ExternalModel, route.ID, route.SessionOperationRef
