@@ -32,6 +32,22 @@ Expiry remains visible rather than being overwritten by exchange completion.
 holds the initial device acquisition after daemon cancellation and proves it is
 drained without spawning a poller, even when its driver returns a valid challenge.
 
+Credential lifecycle evidence now also covers context-cancellable per-connection
+serialization, late successful Resolve/Refresh after cancellation, concurrent
+refresh callers sharing one persisted replacement, and delayed device completion
+after replacement/mode/disable/removal. `TestCredentialRevisionRejectsStaleCompareAndSwap`
+uses durable revisions to reject A → B → A, same-secret resaves, disable/enable
+and same-ID recreation; revision rotation/persistence and canceled SQL CAS have
+separate tests. This strengthens SG2's setup/refresh generation contract, not
+live OAuth-provider coverage. Post-commit reload/health reconciliation failures
+still need explicit operational acceptance; a durable credential is not rolled
+back by that failure.
+
+`TestOAuthAuthRefreshesAgainstTokenEndpoint` covers explicit refresh when the
+rejected access token is expired, still within its recorded lifetime, or has no
+expiry. Gobroom seeds `x/oauth2` with refresh state only: its caching TokenSource
+must not hand back the rejected token just because its local expiry looks valid.
+
 | Change simulation | Executable evidence |
 |---|---|
 | API-key provider, `/models`, operation bindings and reusable primitives | `TestGenericProviderManifestBindsProtocolsAndSemanticTasks`; daemon manifest/discovery path in `TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart` |

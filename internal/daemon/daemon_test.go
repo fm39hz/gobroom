@@ -1324,11 +1324,17 @@ func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *test
 
 func TestCredentialRefreshLocksAreScopedPerConnection(t *testing.T) {
 	d := &Daemon{}
-	releaseFirst := d.lockCredentialRefresh("account-a")
+	releaseFirst, err := d.lockCredentialRefresh(context.Background(), "account-a")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer releaseFirst()
 	acquiredOther := make(chan struct{})
 	go func() {
-		release := d.lockCredentialRefresh("account-b")
+		release, err := d.lockCredentialRefresh(context.Background(), "account-b")
+		if err != nil {
+			return
+		}
 		close(acquiredOther)
 		release()
 	}()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 // Commit and cancellation share a linearization point. A driver returning a
@@ -24,7 +25,10 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	if err != nil {
 		return err
 	}
-	unlock := d.lockCredentialRefresh(session.connectionID)
+	unlock, err := d.lockCredentialRefresh(ctx, session.connectionID)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	sessions.mu.Lock()
 	current, exists := sessions.byID[sessionID]
@@ -46,7 +50,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 		sessions.mu.Unlock()
 		return d.runCtx.Err()
 	}
-	if err := d.store.UpdateConnectionSecretIfUnchanged(current.connectionID, current.expectedSecret, encoded); err != nil {
+	if err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, encoded); err != nil {
 		sessions.mu.Unlock()
 		return err
 	}
@@ -58,7 +62,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	}
 	current.status = "completed"
 	current.expiresAt = time.Now().Add(authorizationSessionRetention)
-	current.expectedSecret = ""
+	current.expectedCredential = store.Credential{}
 	current.verifier = ""
 	current.device.DeviceCode = ""
 	current.deviceFlow = nil

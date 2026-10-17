@@ -57,6 +57,15 @@ to stop it explicitly. Both flows reject a late token from a cancelled driver
 before credential commit. Cancellation cannot reverse an already committed
 credential; inspect the connection/session when commands race completion.
 
+Credential setup/refresh uses a durable internal revision, not token equality.
+Replacing a token and later restoring it, resaving the same token, changing mode,
+or disabling/re-enabling the connection supersedes any older exchange. An old
+device flow cannot write into a disabled/deleted/recreated account. Revision
+metadata is local state and is never included in portable config bundles.
+Resolve/refresh and lock waits honor caller and daemon cancellation; exchanges
+on unrelated connections remain independent. A token already committed is not
+rolled back by a later route/health reconciliation failure.
+
 ## Operation probes with local files
 
 `gobroom connections test-operation` accepts `--payload-file payload.json`

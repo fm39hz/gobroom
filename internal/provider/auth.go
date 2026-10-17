@@ -195,7 +195,10 @@ func (a OAuthAuth) Refresh(ctx context.Context, credential kernel.Credential) (k
 	if credential.ClientSecret != "" {
 		config.ClientSecret = credential.ClientSecret
 	}
-	token := config.Config().TokenSource(ctx, &oauth2.Token{AccessToken: credential.Secret, RefreshToken: credential.RefreshToken, Expiry: credential.ExpiresAt})
+	// Refresh is an explicit replacement request (for example after HTTP 401),
+	// not a validity check. A valid seed would make TokenSource reuse the
+	// rejected access token, even when its recorded expiry is still in future.
+	token := config.Config().TokenSource(ctx, &oauth2.Token{RefreshToken: credential.RefreshToken})
 	refreshed, err := token.Token()
 	if err != nil {
 		return kernel.Credential{}, err

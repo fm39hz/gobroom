@@ -26,6 +26,12 @@ spool cleanup and unchanged catalog/health/quota/usage. Set
 `GOBROOM_TEST_CLI=/absolute/path/to/gobroom` to exercise the installed
 `connections test-operation --artifacts-file` command against that daemon too.
 
+The auth-generation fixture supplies its own device auth primitive using public
+`DeviceAuthorizationFlow`/`DeviceAuthorization` types. A late token races a
+connection update through Unix IPC; stale setup must fail, and the next operation
+must authenticate with the newer credential. The same `GOBROOM_TEST_CLI` switch
+exercises installed CLI device-start/get, connection update and operation probe.
+
 The COSY signing fixture additionally uses the public `PrepareBytesRequest`
 and `PreparedAuthorization` contracts. It encodes the business payload once,
 then renews body-bound authorization for replay without changing those bytes

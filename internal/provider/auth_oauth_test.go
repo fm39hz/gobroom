@@ -69,12 +69,16 @@ func TestOAuthAuthRefreshesAgainstTokenEndpoint(t *testing.T) {
 	go server.Serve(listener)
 	defer server.Close()
 	flow := OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", ClientSecret: "secret", TokenURL: "http://" + listener.Addr().String()}}
-	credential, err := flow.Refresh(context.Background(), kernel.Credential{ConnectionID: "conn", Type: "oauth2", Secret: "old", RefreshToken: "refresh", ExpiresAt: time.Now().Add(-time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if credential.Secret != "new-access" || credential.RefreshToken != "new-refresh" || !credential.ExpiresAt.After(time.Now()) {
-		t.Fatalf("credential=%#v", credential)
+	for name, expiry := range map[string]time.Time{"expired": time.Now().Add(-time.Hour), "not expired": time.Now().Add(time.Hour), "no expiry": {}} {
+		t.Run(name, func(t *testing.T) {
+			credential, err := flow.Refresh(context.Background(), kernel.Credential{ConnectionID: "conn", Type: "oauth2", Secret: "old", RefreshToken: "refresh", ExpiresAt: expiry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if credential.Secret != "new-access" || credential.RefreshToken != "new-refresh" || !credential.ExpiresAt.After(time.Now()) {
+				t.Fatal("explicit refresh did not replace the rejected access token")
+			}
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -72,6 +73,19 @@ CREATE TABLE IF NOT EXISTS connections (
   state_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS connection_credential_revisions (
+  connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+  revision TEXT NOT NULL DEFAULT (lower(hex(randomblob(16))))
+);
+CREATE TRIGGER IF NOT EXISTS connection_credential_revision_insert
+AFTER INSERT ON connections BEGIN
+  INSERT INTO connection_credential_revisions(connection_id) VALUES(NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS connection_credential_revision_update
+AFTER UPDATE OF provider_node_id,credential_type,secret_ref,enabled ON connections BEGIN
+  UPDATE connection_credential_revisions SET revision=lower(hex(randomblob(16))) WHERE connection_id=NEW.id;
+END;
+INSERT OR IGNORE INTO connection_credential_revisions(connection_id) SELECT id FROM connections;
 CREATE TABLE IF NOT EXISTS model_catalog (
   id TEXT PRIMARY KEY, provider_node_id TEXT REFERENCES provider_nodes(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, external_id TEXT NOT NULL DEFAULT '', display_name TEXT NOT NULL,
@@ -1034,53 +1048,41 @@ func (s *Store) SetCompatibilityLossCeiling(ceiling kernel.LossPolicyCeiling) er
 	return s.SetSetting(CompatibilityLossCeilingSetting, string(encoded))
 }
 
-type Credential struct{ ID, Type, Secret string }
+type Credential struct {
+	ID, Type, Secret string
+	Revision         string `json:"-"`
+}
 
 func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT id,credential_type,secret_ref FROM connections WHERE provider_node_id=? AND enabled=1 ORDER BY priority,id LIMIT 1`, nodeID)
+	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id WHERE c.provider_node_id=? AND c.enabled=1 ORDER BY c.priority,c.id LIMIT 1`, nodeID)
 	var c Credential
-	if err := row.Scan(&c.ID, &c.Type, &c.Secret); err != nil {
+	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision); err != nil {
 		return Credential{}, false
 	}
 	return c, true
 }
 
 func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT id,credential_type,secret_ref FROM connections WHERE id=? AND enabled=1`, id)
+	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id WHERE c.id=? AND c.enabled=1`, id)
 	var c Credential
-	if err := row.Scan(&c.ID, &c.Type, &c.Secret); err != nil {
+	if err := row.Scan(&c.ID, &c.Type, &c.Secret, &c.Revision); err != nil {
 		return Credential{}, false
 	}
 	return c, true
 }
 
-func (s *Store) UpdateConnectionSecret(id, secret string) error {
-	if id == "" || secret == "" {
-		return fmt.Errorf("connection ID and secret are required")
+// CompareAndSwapConnectionCredential uses the durable, non-exported revision,
+// not secret equality: replacing A with B then A still supersedes old work.
+func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected Credential, secret string) error {
+	if expected.ID == "" || expected.Type == "" || expected.Revision == "" || secret == "" {
+		return fmt.Errorf("connection credential revision and replacement secret are required")
 	}
-	result, err := s.DB.Exec(`UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, secret, id)
+	result, err := s.DB.ExecContext(ctx, `UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND credential_type=? AND enabled=1 AND EXISTS(SELECT 1 FROM connection_credential_revisions r WHERE r.connection_id=connections.id AND r.revision=?)`, secret, expected.ID, expected.Type, expected.Revision)
 	if err != nil {
 		return err
 	}
 	if changed, _ := result.RowsAffected(); changed == 0 {
-		return fmt.Errorf("connection %q not found", id)
-	}
-	return nil
-}
-
-// UpdateConnectionSecretIfUnchanged performs a credential-generation fence:
-// a delayed OAuth exchange or refresh cannot overwrite a credential that was
-// changed while its network request was in flight.
-func (s *Store) UpdateConnectionSecretIfUnchanged(id, expected, secret string) error {
-	if id == "" || secret == "" {
-		return fmt.Errorf("connection ID and replacement secret are required")
-	}
-	result, err := s.DB.Exec(`UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND secret_ref=?`, secret, id, expected)
-	if err != nil {
-		return err
-	}
-	if changed, _ := result.RowsAffected(); changed == 0 {
-		return fmt.Errorf("connection %q credential changed or connection was removed during authorization", id)
+		return fmt.Errorf("connection %q credential changed, was disabled or removed during authorization", expected.ID)
 	}
 	return nil
 }

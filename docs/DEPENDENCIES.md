@@ -21,6 +21,13 @@ The operation-probe upload uses `mime/multipart`, `io.Pipe` and the existing
 Unix HTTP transport, multipart ingress and artifact store. CLI/TUI share one
 strict JSON manifest decoder; no second upload/storage framework is introduced.
 
+Per-connection auth serialization uses `semaphore.Weighted.Acquire(ctx, 1)`
+from the already-pinned `golang.org/x/sync v0.24.0`. The library owns cancellable
+waiter coordination; Gobroom only owns connection-key scoping and entry lifetime.
+Durable credential revision CAS and revision rotation use SQLite transactions
+and triggers, covering every credential writer rather than duplicating counters
+in setup, refresh and configuration paths.
+
 ## Adopt
 
 | Area | Library/tool | Version checked | Decision | Why |

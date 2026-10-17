@@ -28,6 +28,7 @@ import (
 	sessionruntime "github.com/fm39hz/gobroom/internal/runtime/sessionstore"
 	"github.com/fm39hz/gobroom/internal/store"
 	usageworker "github.com/fm39hz/gobroom/internal/usage"
+	"golang.org/x/sync/semaphore"
 )
 
 type Config struct {
@@ -86,7 +87,7 @@ type Daemon struct {
 	runCancel           context.CancelFunc
 	authWG              sync.WaitGroup
 	credentialRefreshMu sync.Mutex
-	credentialRefreshes map[string]*sync.Mutex
+	credentialRefreshes map[string]*credentialRefreshLock
 	logMu               sync.RWMutex
 	logs                []LogRecord
 	stop                func()
@@ -430,55 +431,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 			Enabled: d.config.QuotaPolling,
 		}).Run(ctx)
 	}()
-	d.kernel.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
-		credential, ok := d.store.ConnectionCredentialByID(route.CredentialID)
-		if !ok {
-			return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
-		}
-		flow, ok := d.authFlows[route.AuthFlowID]
-		if !ok {
-			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
-		}
-		return flow.Resolve(context.Background(), provider.AuthInput{ConnectionID: route.CredentialID, Type: credential.Type, Secret: credential.Secret})
-	}
-	d.kernel.RefreshCredential = func(ctx context.Context, route kernel.Route, current kernel.Credential) (kernel.Credential, error) {
-		unlock := d.lockCredentialRefresh(route.CredentialID)
-		defer unlock()
-		stored, ok := d.store.ConnectionCredentialByID(route.CredentialID)
-		if !ok {
-			return kernel.Credential{}, fmt.Errorf("connection %q is unavailable", route.CredentialID)
-		}
-		flow, ok := d.authFlows[route.AuthFlowID]
-		if !ok {
-			return kernel.Credential{}, fmt.Errorf("auth flow %q is unavailable", route.AuthFlowID)
-		}
-		latest, err := flow.Resolve(ctx, provider.AuthInput{ConnectionID: route.CredentialID, Type: stored.Type, Secret: stored.Secret})
-		if err != nil {
-			return kernel.Credential{}, err
-		}
-		if latest.Secret != "" && latest.Secret != current.Secret {
-			return latest, nil
-		}
-		refreshed, err := flow.Refresh(ctx, current)
-		if err != nil {
-			return kernel.Credential{}, err
-		}
-		secret, err := refreshedCredentialSecret(refreshed)
-		if err != nil {
-			return kernel.Credential{}, err
-		}
-		if err := d.store.UpdateConnectionSecretIfUnchanged(route.CredentialID, stored.Secret, secret); err != nil {
-			return kernel.Credential{}, err
-		}
-		if err := d.resetConnectionRoutingState(route.CredentialID); err != nil {
-			return kernel.Credential{}, fmt.Errorf("credential refreshed but health reset failed: %w", err)
-		}
-		resetConnectionHealth(d.policy.Health, d.kernel.Snapshots.Load().Routes, route.CredentialID, route.NodeID)
-		if err := d.server.Reload(); err != nil {
-			return kernel.Credential{}, fmt.Errorf("credential refreshed but route generation reload failed: %w", err)
-		}
-		return refreshed, nil
-	}
+	d.kernel.ResolveCredential = d.resolveCredential
+	d.kernel.RefreshCredential = d.refreshCredential
 	healthQueue := runtimehealth.NewHealthObservationQueue(8192, func(observation runtimehealth.HealthObservation) error {
 		return d.persistHealthObservation(observation)
 	}, func(observation runtimehealth.HealthObservation, err error) {
@@ -776,19 +730,36 @@ func (d *Daemon) loadStoredProviderDefinitions(runtimeRegistry *provider.Runtime
 	return nil
 }
 
-func (d *Daemon) lockCredentialRefresh(connectionID string) func() {
+type credentialRefreshLock struct {
+	semaphore *semaphore.Weighted
+	users     int
+}
+
+func (d *Daemon) lockCredentialRefresh(ctx context.Context, connectionID string) (func(), error) {
 	d.credentialRefreshMu.Lock()
 	if d.credentialRefreshes == nil {
-		d.credentialRefreshes = make(map[string]*sync.Mutex)
+		d.credentialRefreshes = make(map[string]*credentialRefreshLock)
 	}
 	lock := d.credentialRefreshes[connectionID]
 	if lock == nil {
-		lock = &sync.Mutex{}
+		lock = &credentialRefreshLock{semaphore: semaphore.NewWeighted(1)}
 		d.credentialRefreshes[connectionID] = lock
 	}
+	lock.users++
 	d.credentialRefreshMu.Unlock()
-	lock.Lock()
-	return lock.Unlock
+	drop := func() {
+		d.credentialRefreshMu.Lock()
+		lock.users--
+		if lock.users == 0 {
+			delete(d.credentialRefreshes, connectionID)
+		}
+		d.credentialRefreshMu.Unlock()
+	}
+	if err := lock.semaphore.Acquire(ctx, 1); err != nil {
+		drop()
+		return nil, err
+	}
+	return func() { lock.semaphore.Release(1); drop() }, nil
 }
 
 func (d *Daemon) providerNodeForConnection(connectionID string) (string, error) {

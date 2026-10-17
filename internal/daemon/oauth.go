@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/store"
 )
 
 const (
@@ -25,22 +26,22 @@ const (
 var errOAuthAuthorizationDenied = errors.New("OAuth authorization was denied")
 
 type authorizationSession struct {
-	kind           string
-	connectionID   string
-	flow           provider.AuthorizationCodeFlow
-	state          string
-	verifier       string
-	redirectURL    string
-	callbackKey    string
-	callbackMode   string
-	expectedSecret string
-	expiresAt      time.Time
-	deviceFlow     provider.DeviceAuthorizationFlow
-	device         provider.DeviceAuthorization
-	status         string
-	statusError    string
-	cancel         context.CancelFunc
-	timer          *time.Timer
+	kind               string
+	connectionID       string
+	flow               provider.AuthorizationCodeFlow
+	state              string
+	verifier           string
+	redirectURL        string
+	callbackKey        string
+	callbackMode       string
+	expectedCredential store.Credential
+	expiresAt          time.Time
+	deviceFlow         provider.DeviceAuthorizationFlow
+	device             provider.DeviceAuthorization
+	status             string
+	statusError        string
+	cancel             context.CancelFunc
+	timer              *time.Timer
 }
 
 type authorizationChallenge struct {
@@ -128,7 +129,7 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 		d.releaseOAuthCallbackListener(callbackKey)
 		return authorizationChallenge{}, fmt.Errorf("maximum pending authorization sessions (%d) reached", maxAuthorizationSessions)
 	}
-	session := authorizationSession{kind: "authorization_code", connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, callbackKey: callbackKey, callbackMode: callbackMode, expectedSecret: connection.Secret, expiresAt: expiresAt, status: "awaiting_user"}
+	session := authorizationSession{kind: "authorization_code", connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, callbackKey: callbackKey, callbackMode: callbackMode, expectedCredential: connection, expiresAt: expiresAt, status: "awaiting_user"}
 	session.timer = time.AfterFunc(time.Until(expiresAt), func() { d.expireAuthorizationSession(state) })
 	sessions.byID[state] = session
 	sessions.byConnection[connection.ID] = state

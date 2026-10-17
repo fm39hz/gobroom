@@ -286,7 +286,7 @@ INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VAL
 	if oldGeneration.Provider == "" || oldGeneration.Connection == "" || oldGeneration.Model == "" {
 		t.Fatalf("route is missing scope generations: %#v", oldGeneration)
 	}
-	if err := s.UpdateConnectionSecret("account-a", "secret-b"); err != nil {
+	if _, err := s.UpdateConnection(store.UpdateConnectionInput{ID: "account-a", Secret: "secret-b"}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err = loader.LoadSnapshot(3)

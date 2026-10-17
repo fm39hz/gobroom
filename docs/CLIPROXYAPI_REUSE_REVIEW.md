@@ -45,6 +45,16 @@ it does not copy the scheduler, import the auth conductor or add a job branch.
 
 ### Request path and execution
 
+Auth lifecycle follow-up: `sdk/cliproxy/auth/conductor_refresh.go` rereads an
+account after acquiring its per-auth lock, reuses a newer access token and fences
+late refresh merges by registration epoch/generation. This identifies the
+superseded-result problem; Gobroom solves it using its own durable SQLite
+credential revision CAS shared by interactive setup and refresh. Waiting uses
+the existing `x/sync/semaphore` context contract, not a copied auth conductor.
+Unlike a cancellation-detached persistence policy, Gobroom rejects late success
+before its commit boundary when the request or daemon context is canceled.
+Post-commit reconciliation errors remain observable and do not roll back tokens.
+
 CLIProxyAPI separates API handlers, a translator pipeline, auth/conductor
 selection and provider executors. `sdk/cliproxy/auth/conductor_execution.go`
 owns attempt orchestration (`Execute`, `ExecuteCount`, `ExecuteStream`), while

@@ -656,7 +656,7 @@ worker using `golang.org/x/oauth2` device authorization support. The frontend
 receives only user code, verification URLs, expiry and public status; polling
 continues if the UI disconnects. Cancellation and daemon shutdown stop the
 worker. A delayed authorization or refresh persists through a compare-and-swap
-against the connection secret observed at start, so a newer credential is not
+against the connection revision observed at start, so a newer credential is not
 overwritten. On success the daemon reloads serving state.
 
 The CLI and TUI expose both flows. For an HTTP loopback redirect URI, the
@@ -702,10 +702,20 @@ restart. Session resumption is an optional declared lifecycle capability with
 its own fixtures; it is never inferred from having a refresh token. Terminal
 sessions are retained only for a bounded diagnostic period.
 
-Credential refresh is single-flight per connection. Refresh never overrides
-attempt replay restrictions. A refreshed key is persisted only with the
-expected credential generation, so concurrent setup/refresh cannot restore
-superseded credentials. No global lock spans auth network I/O.
+Credential refresh is single-flight per connection. Waiting for that connection
+is context-cancellable; another connection never waits on its network exchange.
+Resolve and refresh receive the request context linked to daemon shutdown, and
+late success after cancellation cannot grant a credential or commit a replacement.
+Refresh never overrides attempt replay restrictions. A refreshed key is persisted
+only with the expected durable credential revision and an enabled matching mode.
+The internal revision changes atomically on credential/mode/enabled/provider-assignment
+updates, including same-secret resaves and A → B → A changes; deleting and
+recreating an ID does not restore its previous revision. It is not a bearer
+credential, config field, portable generation or secret-equality heuristic.
+Interactive setup and refresh use the same CAS fence. Revisions survive process
+restart, but pending authorization remains ephemeral. No global lock spans auth
+network I/O. Post-commit route/health reconciliation can still fail separately;
+an error after that boundary does not imply the durable token was rolled back.
 
 ## 6. Attempt replay and commitment
 

@@ -27,6 +27,25 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+The M7/SG2 credential lifecycle slice replaces secret-equality guards with a
+durable, non-exported credential revision. Setup/device completion and refresh
+share a context-aware CAS; same-secret resave, A → B → A, disabled/re-enabled
+and recreated accounts cannot accept stale tokens. Resolve/refresh use caller
+and daemon cancellation; waiting is per connection through the existing
+`x/sync/semaphore`, with idle lock entries reclaimed. Focused repeated race
+tests cover cancellation, late success, generation changes and eight callers
+sharing one provider refresh. A separate-module daemon fixture implements its
+own device auth via the public API, rejects a token arriving after a control
+update, then successfully probes with the newer credential. This closes a
+public auth-type export gap without provider-name branches in the kernel.
+Explicit OAuth refresh also replaces a rejected token regardless of recorded
+expiry, using the pinned `x/oauth2` grant implementation rather than cached-token
+reuse or a handwritten refresh exchange.
+It does not close live OAuth acceptance, every lifecycle race, or post-commit
+route/health reconciliation failure acceptance.
+
+Previous integrated milestone:
+
 The M2 operation-probe slice now carries local file artifacts from CLI/TUI
 over Unix IPC without requiring a public listener. A separate provider-module
 fixture verifies exact bytes/MIME, interpreter rejection before dispatch,
