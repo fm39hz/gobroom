@@ -145,11 +145,11 @@ func TestCredentialCompareAndSwapDoesNotOverwriteNewerCredential(t *testing.T) {
 	if _, err := s.UpdateConnection(UpdateConnectionInput{ID: connection.ID, Secret: "generation-b"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompareAndSwapConnectionCredential(context.Background(), expectedA, "stale-oauth-result"); err == nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expectedA, "stale-oauth-result"); err == nil {
 		t.Fatal("stale authorization result overwrote a newer connection credential")
 	}
 	expectedB, _ := s.ConnectionCredentialByID(connection.ID)
-	if err := s.CompareAndSwapConnectionCredential(context.Background(), expectedB, "generation-c"); err != nil {
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), expectedB, "generation-c"); err != nil {
 		t.Fatal(err)
 	}
 	stored, ok := s.ConnectionCredentialByID(connection.ID)

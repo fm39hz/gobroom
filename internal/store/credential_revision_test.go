@@ -77,7 +77,7 @@ func TestCredentialRevisionRejectsStaleCompareAndSwap(t *testing.T) {
 				t.Fatal("initial credential not found")
 			}
 			tt.mutate(t, s, connection)
-			if err := s.CompareAndSwapConnectionCredential(context.Background(), stale, "stale-write"); err == nil {
+			if _, err := s.CompareAndSwapConnectionCredential(context.Background(), stale, "stale-write"); err == nil {
 				t.Fatal("stale credential revision was accepted")
 			}
 		})
@@ -91,14 +91,18 @@ func TestCredentialCompareAndSwapRotatesRevision(t *testing.T) {
 	if !ok {
 		t.Fatal("credential not found")
 	}
-	if err := s.CompareAndSwapConnectionCredential(context.Background(), old, "secret-b"); err != nil {
+	commit, err := s.CompareAndSwapConnectionCredential(context.Background(), old, "secret-b")
+	if err != nil {
 		t.Fatalf("fresh compare-and-swap failed: %v", err)
 	}
 	current, ok := s.ConnectionCredentialByID(connection.ID)
 	if !ok || current.Secret != "secret-b" || current.Revision == old.Revision {
 		t.Fatalf("credential after compare-and-swap = %#v, found=%v", current, ok)
 	}
-	if err := s.CompareAndSwapConnectionCredential(context.Background(), old, "secret-c"); err == nil {
+	if commit.Revision != current.Revision || commit.ConnectionID != old.ID || commit.CredentialType != old.Type || commit.Owner != old.Owner {
+		t.Fatalf("commit = %#v; credential = %#v", commit, current)
+	}
+	if _, err := s.CompareAndSwapConnectionCredential(context.Background(), old, "secret-c"); err == nil {
 		t.Fatal("old revision was reusable after a successful compare-and-swap")
 	}
 }
@@ -134,7 +138,7 @@ func TestCanceledCredentialCompareAndSwapDoesNotWrite(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := s.CompareAndSwapConnectionCredential(ctx, expected, "should-not-write"); !errors.Is(err, context.Canceled) {
+	if _, err := s.CompareAndSwapConnectionCredential(ctx, expected, "should-not-write"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled compare-and-swap error = %v, want context.Canceled", err)
 	}
 	current, ok := s.ConnectionCredentialByID(connection.ID)

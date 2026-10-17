@@ -2,7 +2,6 @@ package store
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -77,6 +76,15 @@ CREATE TABLE IF NOT EXISTS connection_credential_revisions (
   connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
   revision TEXT NOT NULL DEFAULT (lower(hex(randomblob(16))))
 );
+CREATE TABLE IF NOT EXISTS credential_activations (
+  connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+  provider_node_id TEXT NOT NULL, definition_id TEXT NOT NULL, definition_contract_version INTEGER NOT NULL,
+  credential_type TEXT NOT NULL, revision TEXT NOT NULL, status TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_ns INTEGER NOT NULL DEFAULT 0, error_code TEXT NOT NULL DEFAULT '',
+  progress_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_credential_activations_due
+ON credential_activations(status,next_attempt_ns,connection_id);
 CREATE TRIGGER IF NOT EXISTS connection_credential_revision_insert
 AFTER INSERT ON connections BEGIN
   INSERT INTO connection_credential_revisions(connection_id) VALUES(NEW.id);
@@ -825,6 +833,13 @@ func (s *Store) ResetConnectionRoutingState(connectionID string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := resetConnectionRoutingStateTx(tx, connectionID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func resetConnectionRoutingStateTx(tx *sql.Tx, connectionID string) error {
 	if _, err := tx.Exec(`DELETE FROM operation_runtime WHERE connection_id=?`, connectionID); err != nil {
 		return err
 	}
@@ -840,7 +855,7 @@ func (s *Store) ResetConnectionRoutingState(connectionID string) error {
 	if _, err := tx.Exec(`DELETE FROM quota_snapshots WHERE connection_id=?`, connectionID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 // ResetProviderRoutingState clears health and quota observations scoped to a
@@ -1095,25 +1110,6 @@ func scanCredential(row *sql.Row) (Credential, bool) {
 	}
 	c.Owner.Definition.Kind = "provider-definition"
 	return c, true
-}
-
-// CompareAndSwapConnectionCredential uses the durable, non-exported revision,
-// not secret equality: replacing A with B then A still supersedes old work.
-func (s *Store) CompareAndSwapConnectionCredential(ctx context.Context, expected Credential, secret string) error {
-	if expected.ID == "" || expected.Type == "" || expected.Revision == "" || secret == "" {
-		return fmt.Errorf("connection credential revision and replacement secret are required")
-	}
-	if err := expected.Owner.Validate(); err != nil {
-		return err
-	}
-	result, err := s.DB.ExecContext(ctx, `UPDATE connections SET secret_ref=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND credential_type=? AND enabled=1 AND provider_node_id=? AND EXISTS(SELECT 1 FROM provider_nodes p WHERE p.id=connections.provider_node_id AND p.definition_id=? AND p.definition_contract_version=?) AND EXISTS(SELECT 1 FROM connection_credential_revisions r WHERE r.connection_id=connections.id AND r.revision=?)`, secret, expected.ID, expected.Type, expected.Owner.ProviderNodeID, expected.Owner.Definition.ID, expected.Owner.Definition.ContractVersion, expected.Revision)
-	if err != nil {
-		return err
-	}
-	if changed, _ := result.RowsAffected(); changed == 0 {
-		return fmt.Errorf("connection %q credential or auth owner changed, was disabled or removed during authorization", expected.ID)
-	}
-	return nil
 }
 
 func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
@@ -1479,9 +1475,10 @@ func (r RouteRecord) DefinitionRef() extensions.Ref {
 
 func (s *Store) Routes() ([]RouteRecord, error) {
 	rows, err := s.DB.Query(`SELECT m.id,COALESCE(m.provider_node_id,''),COALESCE(n.prefix,''),COALESCE(n.protocol,''),COALESCE(n.definition_id,''),COALESCE(n.definition_contract_version,1),COALESCE(n.base_url,''),COALESCE(n.auth_mode,''),COALESCE(n.models_path,'/models'),m.external_id,m.enabled,
-	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
+	COALESCE(c.id,''),COALESCE(c.credential_type,''),COALESCE(c.secret_ref,''),COALESCE(cr.revision,''),COALESCE(m.capabilities_json,'{}'),COALESCE(m.limits_json,'{}')
 FROM model_catalog m LEFT JOIN provider_nodes n ON n.id=m.provider_node_id
 LEFT JOIN connections c ON c.provider_node_id=m.provider_node_id AND c.enabled=1
+LEFT JOIN connection_credential_revisions cr ON cr.connection_id=c.id
 LEFT JOIN connection_model_catalog e ON e.connection_id=c.id AND e.provider_node_id=m.provider_node_id AND e.external_model_id=m.external_id
 LEFT JOIN model_connection_assignments assignment ON assignment.model_id=m.id AND assignment.connection_id=c.id
 WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL) OR (m.kind<>'custom' AND (e.status='available' OR (assignment.connection_id IS NOT NULL AND e.connection_id IS NULL)))) ORDER BY m.id,c.priority,c.id`)
@@ -1493,10 +1490,10 @@ WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL
 	for rows.Next() {
 		var r RouteRecord
 		var enabled int
-		var capabilities, limits, modelsPath string
+		var capabilities, limits, modelsPath, credentialRevision string
 		var modelID string
 		var credentialSecret string
-		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.DefinitionContractVersion, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &capabilities, &limits); err != nil {
+		if err := rows.Scan(&modelID, &r.NodeID, &r.Prefix, &r.Protocol, &r.DefinitionID, &r.DefinitionContractVersion, &r.BaseURL, &r.AuthMode, &modelsPath, &r.ExternalModel, &enabled, &r.CredentialID, &r.CredentialType, &credentialSecret, &credentialRevision, &capabilities, &limits); err != nil {
 			return nil, err
 		}
 		r.ID = modelID
@@ -1504,7 +1501,7 @@ WHERE m.enabled=1 AND ((m.kind='custom' AND assignment.connection_id IS NOT NULL
 		_ = json.Unmarshal([]byte(capabilities), &r.Profile)
 		_ = json.Unmarshal([]byte(limits), &r.Limits)
 		r.ProviderGeneration = configGeneration(r.NodeID, r.BaseURL, r.Protocol, r.DefinitionID, fmt.Sprint(r.DefinitionContractVersion), r.AuthMode, modelsPath)
-		r.ConnectionGeneration = configGeneration(r.CredentialID, r.CredentialType, credentialSecret)
+		r.ConnectionGeneration = configGeneration(r.CredentialID, r.CredentialType, credentialSecret, credentialRevision)
 		r.ModelGeneration = configGeneration(modelID, r.ExternalModel, capabilities, limits)
 		if r.CredentialID != "" {
 			r.ID = r.ID + "@" + r.CredentialID

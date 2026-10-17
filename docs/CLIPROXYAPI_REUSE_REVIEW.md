@@ -71,6 +71,19 @@ revisions rotate in SQLite, and owner/revision CAS rejects late old-driver
 results. Existing SQL transactions and exact refs do the work; no auth conductor
 or process-local epoch registry is imported or duplicated.
 
+Activation follow-up: `conductor_lifecycle.go:updateInternal` saves credential
+changes before runtime publication, and `conductor_refresh.go` explicitly warns
+when persisting a rotated token fails. Gobroom treats that split as a business
+boundary: credential CAS and activation intent commit together in SQLite;
+local reconciliation has typed publication receipts and never repeats the
+provider exchange. This is not a port of the conductor or a remote queue.
+
+The same source also preserves an unexpired `credential_quota` observation
+across auth refresh. That is a separate semantic lesson still to close in
+Gobroom: credential renewal, account replacement and principal-scoped quota
+evidence must not be conflated. Activation correctness alone does not prove
+quota continuity across token renewal.
+
 CLIProxyAPI separates API handlers, a translator pipeline, auth/conductor
 selection and provider executors. `sdk/cliproxy/auth/conductor_execution.go`
 owns attempt orchestration (`Execute`, `ExecuteCount`, `ExecuteStream`), while

@@ -745,8 +745,38 @@ recreating an ID does not restore its previous revision. It is not a bearer
 credential, config field, portable generation or secret-equality heuristic.
 Interactive setup and refresh use the same CAS fence. Revisions survive process
 restart, but pending authorization remains ephemeral. No global lock spans auth
-network I/O. Post-commit route/health reconciliation can still fail separately;
-an error after that boundary does not imply the durable token was rolled back.
+network I/O. Credential commit and runtime activation are separate outcomes;
+an activation error after commit does not roll back the durable token.
+
+Credential CAS and a per-connection activation outbox entry commit in one SQLite
+transaction. The secret-free commit key pins node/definition/mode/revision.
+Refresh returns the resolved replacement immediately and wakes the daemon worker;
+it does not compile routing configuration on the inference latency path. Code
+and device setup try local activation once and retain `completed` authorization
+with an activation receipt when application is pending. Reconciliation never
+repeats a token exchange or provider request.
+
+The worker resumes pending entries after restart, uses indexed integer-nanosecond
+deadlines and stops its timer when idle. One row per configured connection bounds
+retained work; due batches are limited to 32. Five automatic attempts, one second
+apart, lead to `exhausted`; explicit retry grants a new budget. Storage failures
+that prevent recording progress also have a bounded in-memory retry budget and
+emit a diagnostic before waiting for an explicit wake/restart. Fenced SQL reset
+and progress writes cannot clear a newer owner's state or overwrite its job.
+Snapshot connection generations include the durable credential revision, so
+publication prunes superseded in-memory health/quota through the existing policy
+gate rather than an unscoped clear. Provider session keys intentionally do not
+include token revision, preserving same-connection refresh continuity.
+
+Typed reload receipts distinguish control publication, persisted version and
+actual serving publication/version, including errors after publication. A
+published control snapshot may still reach serving when version metadata cannot
+be written; that receipt remains degraded until reconciled. `/models` projects
+the actual reported serving snapshot rather than an unapplied control candidate.
+`status` exposes `controlSnapshotVersion`, `servingSnapshotVersion` and
+`lastReload`; the ambiguous `snapshotVersion` alias is removed. CLI activation
+list/get/retry and retained auth views expose safe progress, not secret bytes or
+the private revision. TUI completion is ready only with activation evidence.
 
 Credential ownership is the typed provider-node identity plus exact provider
 definition ref, alongside the selected credential mode. Reads project state,

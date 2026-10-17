@@ -158,6 +158,51 @@ type actionMsg struct {
 	err    error
 }
 
+type authActivationResult struct {
+	Status              string `json:"status"`
+	CredentialCommitted bool   `json:"credentialCommitted"`
+	Progress            struct {
+		RoutingReset     bool   `json:"routingReset"`
+		ControlVersion   uint64 `json:"controlVersion"`
+		ControlPublished bool   `json:"controlPublished"`
+		VersionPersisted bool   `json:"versionPersisted"`
+		ServingVersion   uint64 `json:"servingVersion"`
+		ServingPublished bool   `json:"servingPublished"`
+	} `json:"progress"`
+}
+
+func authActivationCompletion(flow, connectionID string, activation *authActivationResult) (message string, poll bool, retryHint string) {
+	ready := flow + " completed · connection credential saved"
+	if activation == nil {
+		return flow + " completed · activation status unavailable", false, "Inspect with gobroom connections activation-get --connection-id " + connectionID
+	}
+	switch activation.Status {
+	case "pending":
+		if activation.CredentialCommitted {
+			return flow + " completed · credential committed; activation pending", true, ""
+		}
+		return flow + " completed · credential commit status unavailable; activation pending", true, ""
+	case "exhausted":
+		command := "gobroom connections activation-retry --connection-id " + connectionID
+		if activation.CredentialCommitted {
+			return flow + " completed · credential committed; activation exhausted", false, "Retry activation with: " + command
+		}
+		return flow + " completed · activation exhausted", false, "Retry activation with: " + command
+	case "active":
+		if !activation.CredentialCommitted {
+			return flow + " completed · credential commit status unavailable", true, ""
+		}
+		if !activation.Progress.ServingPublished {
+			return flow + " completed · credential committed; waiting for serving publication", true, ""
+		}
+		return ready, false, ""
+	}
+	if !activation.CredentialCommitted {
+		return flow + " completed · credential commit status unavailable", false, ""
+	}
+	return flow + " completed · activation " + activation.Status, false, ""
+}
+
 type deviceAuthorizationPollTick struct{ sessionID string }
 type authorizationCodePollTick struct{ sessionID string }
 
@@ -806,12 +851,14 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.method == "auth.authorization.start" || message.method == "auth.authorization.get" {
 			var result struct {
-				SessionID        string    `json:"sessionId"`
-				AuthorizationURL string    `json:"authorizationUrl,omitempty"`
-				CallbackMode     string    `json:"callbackMode"`
-				Status           string    `json:"status"`
-				ExpiresAt        time.Time `json:"expiresAt"`
-				Error            string    `json:"error,omitempty"`
+				SessionID        string                `json:"sessionId"`
+				ConnectionID     string                `json:"connectionId"`
+				AuthorizationURL string                `json:"authorizationUrl,omitempty"`
+				CallbackMode     string                `json:"callbackMode"`
+				Status           string                `json:"status"`
+				ExpiresAt        time.Time             `json:"expiresAt"`
+				Error            string                `json:"error,omitempty"`
+				Activation       *authActivationResult `json:"activation,omitempty"`
 			}
 			if err := json.Unmarshal(message.result, &result); err != nil {
 				m.status = "decode authorization-code state: " + err.Error()
@@ -832,7 +879,16 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = "OAuth authorization " + result.Status
 			if result.Status == "completed" {
-				m.status = "OAuth authorization completed · connection credential saved"
+				var poll bool
+				var retryHint string
+				m.status, poll, retryHint = authActivationCompletion("OAuth authorization", result.ConnectionID, result.Activation)
+				if retryHint != "" {
+					m.previewExtra += "\n\n" + retryHint
+				}
+				if poll {
+					m.syncDetail()
+					return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return authorizationCodePollTick{sessionID: result.SessionID} })
+				}
 				m.authCodeSessionID = ""
 			} else if result.Status == "failed" || result.Status == "expired" {
 				if result.Error != "" {
@@ -852,12 +908,14 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if message.method == "auth.device.start" || message.method == "auth.device.get" {
 			var result struct {
-				SessionID       string    `json:"sessionId"`
-				Status          string    `json:"status"`
-				UserCode        string    `json:"userCode"`
-				VerificationURL string    `json:"verificationUrl"`
-				ExpiresAt       time.Time `json:"expiresAt"`
-				Error           string    `json:"error,omitempty"`
+				SessionID       string                `json:"sessionId"`
+				ConnectionID    string                `json:"connectionId"`
+				Status          string                `json:"status"`
+				UserCode        string                `json:"userCode"`
+				VerificationURL string                `json:"verificationUrl"`
+				ExpiresAt       time.Time             `json:"expiresAt"`
+				Error           string                `json:"error,omitempty"`
+				Activation      *authActivationResult `json:"activation,omitempty"`
 			}
 			if err := json.Unmarshal(message.result, &result); err != nil {
 				m.status = "decode device authorization state: " + err.Error()
@@ -874,7 +932,16 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = "OAuth device authorization " + result.Status
 			if result.Status == "completed" {
-				m.status = "OAuth device authorization completed · connection credential saved"
+				var poll bool
+				var retryHint string
+				m.status, poll, retryHint = authActivationCompletion("OAuth device authorization", result.ConnectionID, result.Activation)
+				if retryHint != "" {
+					m.previewExtra += "\n\n" + retryHint
+				}
+				if poll {
+					m.syncDetail()
+					return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return deviceAuthorizationPollTick{sessionID: result.SessionID} })
+				}
 				m.deviceAuthSessionID = ""
 			} else if result.Status == "failed" || result.Status == "expired" || result.Status == "cancelled" {
 				if result.Error != "" {

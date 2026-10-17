@@ -41,6 +41,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/store ./internal/daemon -run '^Test(Credential|CanceledCredential|ResolveCredential|RefreshCredential|DeviceAuthorizationDoesNotOverwrite)' -count=1
 	go test ./internal/store ./internal/daemon -run '^(TestProviderDefinitionChangesRevokeCredentialRevision|TestProviderRenameAndNoopDefinitionDoNotRotateCredentialRevision|TestProviderDefinitionRollbackRestoresCredentialRevisionAndOwner|TestAuthorizationCompletionRejectsProviderDefinitionRebind)$$' -count=1
 	go test ./internal/discovery -run '^TestDiscoveryCredentialBindingRequiresExactOwnerAndMode$$' -count=1
+	go test ./internal/controlplane ./internal/api ./internal/daemon ./internal/tui ./cmd/gobroom -run '^Test(Reload|ModelsProjection|SuccessfulHook|NoHookStatus|StatusDegrades|AuthorizationCommitReports|AuthCompletion|ConnectionActivation)' -count=1
 	go test ./internal/provider -run '^TestOAuthAuthRefreshesAgainstTokenEndpoint$$' -count=1
 	go test ./internal/provider -run '^Test(CredentialState|CustomAuthRefreshState)' -count=1
 	go test ./internal/kernel -run '^TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges$$' -count=1

@@ -75,6 +75,37 @@ driver's schema; that driver's `Resolve` validates them, and incompatible state
 needs fresh credentials. Old pinned serving/quota bindings cannot reinterpret
 state under a different current owner.
 
+## Credential activation and reload receipts
+
+Saving an OAuth/device/refresh credential and applying its runtime configuration
+are separate stages. A successful authorization can report `completed` with
+`activation.status=pending`: its credential is committed, not rolled back.
+The daemon reconciles locally without repeating the provider exchange, even
+when no frontend remains connected. Refresh does not reload configuration on
+the inference request's critical path.
+
+```bash
+gobroom connections activation-list --limit 128
+gobroom connections activation-get --connection-id CONNECTION
+gobroom connections activation-retry --connection-id CONNECTION
+```
+
+Jobs are retained once per configured connection, resume after restart, and
+attempt activation up to five times one second apart before `exhausted`.
+Explicit retry starts a new attempt budget for the current credential only;
+superseded generations cannot reset a newer owner's state. The worker stops
+its timer when idle. If storage prevents recording progress, bounded retry
+failure is logged and an explicit retry or restart is required.
+
+Receipts expose routing reset, control publication, persisted version and actual
+serving publication/version. `status` now reports `controlSnapshotVersion`,
+`servingSnapshotVersion` and `lastReload`, with no ambiguous `snapshotVersion`
+alias. A failure after publication remains `degraded` even when versions match.
+`/models` follows the actual reported serving snapshot, not an unapplied control
+candidate. Activation views exclude secret bytes and private revision keys;
+they are runtime state, not part of a portable config bundle. The TUI keeps
+polling pending activation and provides a retry hint when attempts exhaust.
+
 ## Operation probes with local files
 
 `gobroom connections test-operation` accepts `--payload-file payload.json`

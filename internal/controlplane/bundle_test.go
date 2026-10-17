@@ -91,7 +91,7 @@ func TestTransformBindingsRoundTripThroughTypedConfigBundle(t *testing.T) {
 	if err != nil || len(after) != 1 || after[0].Enabled {
 		t.Fatalf("applied transform binding=%#v err=%v", after, err)
 	}
-	if err := manager.Reload(); err != nil {
+	if _, err := manager.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	if loaded := manager.Snapshot().TransformBindings; len(loaded) != 1 || loaded[0].Enabled {

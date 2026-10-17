@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
@@ -11,12 +12,13 @@ import (
 )
 
 type Manager struct {
-	store      *store.Store
-	snapshots  *kernel.SnapshotStore
-	mu         sync.Mutex
-	version    uint64
-	bindings   map[string]provider.RuntimeBinding
-	strategies *kernel.StrategyCatalog
+	store          *store.Store
+	snapshots      *kernel.SnapshotStore
+	mu             sync.Mutex
+	version        uint64
+	controlVersion atomic.Uint64
+	bindings       map[string]provider.RuntimeBinding
+	strategies     *kernel.StrategyCatalog
 }
 
 func NewManager(s *store.Store) (*Manager, error) {
@@ -37,28 +39,36 @@ func NewManagerWithRuntimeBindings(s *store.Store, bindings map[string]provider.
 	if raw, ok, err := s.Setting("snapshot_version"); err == nil && ok {
 		m.version, _ = strconv.ParseUint(raw, 10, 64)
 	}
-	if err := m.Reload(); err != nil {
+	if _, err := m.Reload(); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func (m *Manager) Reload() error {
+type ReloadResult struct {
+	Version          uint64 `json:"version"`
+	Published        bool   `json:"published"`
+	VersionPersisted bool   `json:"versionPersisted"`
+	FailureStage     string `json:"failureStage"`
+}
+
+func (m *Manager) Reload() (ReloadResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	nextVersion := m.version + 1
 	snapshot, err := (Loader{Store: m.store, Bindings: m.bindings, Strategies: m.strategies}).LoadSnapshot(nextVersion)
 	if err != nil {
-		return err
+		return ReloadResult{Version: m.snapshots.Load().Version, FailureStage: "load"}, err
 	}
 	if err := m.snapshots.Publish(snapshot); err != nil {
-		return err
+		return ReloadResult{Version: m.snapshots.Load().Version, FailureStage: "control_publish"}, err
 	}
 	m.version = nextVersion
+	m.controlVersion.Store(nextVersion)
 	if err := m.store.SetSetting("snapshot_version", strconv.FormatUint(m.version, 10)); err != nil {
-		return err
+		return ReloadResult{Version: nextVersion, Published: true, FailureStage: "version_persist"}, err
 	}
-	return nil
+	return ReloadResult{Version: nextVersion, Published: true, VersionPersisted: true}, nil
 }
 
 func selectStrategyCatalog(catalogs []*kernel.StrategyCatalog) (*kernel.StrategyCatalog, error) {
@@ -72,7 +82,7 @@ func selectStrategyCatalog(catalogs []*kernel.StrategyCatalog) (*kernel.Strategy
 }
 
 func (m *Manager) Snapshot() kernel.Snapshot { return m.snapshots.Load() }
-func (m *Manager) Version() uint64           { m.mu.Lock(); defer m.mu.Unlock(); return m.version }
+func (m *Manager) Version() uint64           { return m.controlVersion.Load() }
 func (m *Manager) Resolve(name string) (kernel.ResolvedModel, error) {
 	return kernel.ResolvePublic(m.snapshots.Load(), name)
 }

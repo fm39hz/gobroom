@@ -36,6 +36,7 @@ type authorizationSession struct {
 	callbackKey        string
 	callbackMode       string
 	expectedCredential store.Credential
+	activationCommit   store.CredentialCommit
 	expiresAt          time.Time
 	deviceFlow         provider.DeviceAuthorizationFlow
 	device             provider.DeviceAuthorization
@@ -53,12 +54,19 @@ type authorizationChallenge struct {
 }
 
 type authorizationStatusView struct {
-	SessionID    string    `json:"sessionId"`
-	ConnectionID string    `json:"connectionId"`
-	Status       string    `json:"status"`
-	CallbackMode string    `json:"callbackMode"`
-	ExpiresAt    time.Time `json:"expiresAt"`
-	Error        string    `json:"error,omitempty"`
+	SessionID    string                    `json:"sessionId"`
+	ConnectionID string                    `json:"connectionId"`
+	Status       string                    `json:"status"`
+	CallbackMode string                    `json:"callbackMode"`
+	ExpiresAt    time.Time                 `json:"expiresAt"`
+	Error        string                    `json:"error,omitempty"`
+	Activation   *CredentialActivationView `json:"activation,omitempty"`
+}
+
+type authorizationCompletion struct {
+	ConnectionID string                   `json:"connectionId"`
+	Status       string                   `json:"status"`
+	Activation   CredentialActivationView `json:"activation"`
 }
 
 type authorizationSessions struct {
@@ -141,12 +149,12 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 	return authorizationChallenge{SessionID: state, AuthorizationURL: authorizationURL, CallbackMode: callbackMode, ExpiresAt: expiresAt}, nil
 }
 
-func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, code, callbackURL string) (map[string]string, error) {
+func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, code, callbackURL string) (authorizationCompletion, error) {
 	if len(code) == 0 || len(code) > maxOAuthCodeBytes {
-		return nil, fmt.Errorf("OAuth authorization code must be between 1 and %d bytes", maxOAuthCodeBytes)
+		return authorizationCompletion{}, fmt.Errorf("OAuth authorization code must be between 1 and %d bytes", maxOAuthCodeBytes)
 	}
 	if len(state) == 0 || len(state) > 256 || len(sessionID) == 0 || len(sessionID) > 256 {
-		return nil, fmt.Errorf("OAuth session ID and state must be between 1 and 256 bytes")
+		return authorizationCompletion{}, fmt.Errorf("OAuth session ID and state must be between 1 and 256 bytes")
 	}
 	sessions := d.authorizationSessions()
 	d.pruneAuthorizationSessions(sessions, time.Now())
@@ -154,15 +162,15 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 	session, exists := sessions.byID[sessionID]
 	if sessions.closed || !exists || session.kind != "authorization_code" || session.status != "awaiting_user" || session.state != state {
 		sessions.mu.Unlock()
-		return nil, fmt.Errorf("authorization session is missing, expired or has invalid state")
+		return authorizationCompletion{}, fmt.Errorf("authorization session is missing, expired or has invalid state")
 	}
 	if callbackURL != "" && !sameOAuthCallbackTarget(session.redirectURL, callbackURL) {
 		sessions.mu.Unlock()
-		return nil, fmt.Errorf("OAuth callback URL does not match the redirect URI bound to this session")
+		return authorizationCompletion{}, fmt.Errorf("OAuth callback URL does not match the redirect URI bound to this session")
 	}
 	if sessions.inFlight[sessionID] {
 		sessions.mu.Unlock()
-		return nil, fmt.Errorf("authorization session is already completing")
+		return authorizationCompletion{}, fmt.Errorf("authorization session is already completing")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -203,18 +211,15 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 			status, message := classifyAuthorizationError(exchangeCtx, err)
 			d.finishAuthorizationSession(sessionID, status, message)
 		}
-		return nil, err
+		return authorizationCompletion{}, err
 	}
-	if err := d.commitAuthorizationCredential(exchangeCtx, sessions, sessionID, credential); err != nil {
+	activation, err := d.commitAuthorizationCredential(exchangeCtx, sessions, sessionID, credential)
+	if err != nil {
 		status, message := authorizationCommitFailure(exchangeCtx, err)
 		d.finishAuthorizationSession(sessionID, status, message)
-		return nil, fmt.Errorf("persist OAuth credential: %w", err)
+		return authorizationCompletion{}, fmt.Errorf("persist OAuth credential: %w", err)
 	}
-	if err := d.server.Reload(); err != nil {
-		d.finishAuthorizationSession(sessionID, "failed", "credential stored but serving snapshot reload failed")
-		return nil, fmt.Errorf("credential stored but serving snapshot reload failed: %w", err)
-	}
-	return map[string]string{"connectionId": session.connectionID, "status": "authorized"}, nil
+	return authorizationCompletion{ConnectionID: session.connectionID, Status: "authorized", Activation: activation}, nil
 }
 
 func (d *Daemon) authorizationStatus(sessionID string) (authorizationStatusView, error) {
@@ -226,7 +231,12 @@ func (d *Daemon) authorizationStatus(sessionID string) (authorizationStatusView,
 	if !exists || session.kind != "authorization_code" {
 		return authorizationStatusView{}, fmt.Errorf("authorization session %q not found", sessionID)
 	}
-	return authorizationStatusView{SessionID: sessionID, ConnectionID: session.connectionID, Status: session.status, CallbackMode: session.callbackMode, ExpiresAt: session.expiresAt, Error: session.statusError}, nil
+	view := authorizationStatusView{SessionID: sessionID, ConnectionID: session.connectionID, Status: session.status, CallbackMode: session.callbackMode, ExpiresAt: session.expiresAt, Error: session.statusError}
+	if session.activationCommit.ConnectionID != "" {
+		activation := d.credentialActivationView(d.activationContext(), session.activationCommit)
+		view.Activation = &activation
+	}
+	return view, nil
 }
 
 func (d *Daemon) finishAuthorizationSession(sessionID, status, message string) {

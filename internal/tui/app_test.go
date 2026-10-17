@@ -238,7 +238,7 @@ func TestTUIDeviceAuthorizationShowsPublicInstructionsAndPollsDaemon(t *testing.
 	if model.deviceAuthSessionID != "auth-session-1" || poll == nil || !strings.Contains(model.status, "ABCD-EFGH") || !strings.Contains(model.previewExtra, "identity.test/activate") || strings.Contains(model.previewExtra, "device_code") {
 		t.Fatalf("device instructions/status are incomplete or private: status=%q preview=%q session=%q", model.status, model.previewExtra, model.deviceAuthSessionID)
 	}
-	completed := json.RawMessage(`{"sessionId":"auth-session-1","status":"completed","userCode":"ABCD-EFGH","verificationUrl":"https://identity.test/activate"}`)
+	completed := json.RawMessage(`{"sessionId":"auth-session-1","status":"completed","userCode":"ABCD-EFGH","verificationUrl":"https://identity.test/activate","activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
 	updatedModel, next := model.Update(actionMsg{method: "auth.device.get", result: completed})
 	model = updatedModel.(*app)
 	if next != nil || model.deviceAuthSessionID != "" || !strings.Contains(model.status, "credential saved") {
@@ -264,7 +264,7 @@ func TestTUIAuthorizationCodeFlowShowsLoopbackModeAndPollsTerminalStatus(t *test
 	if model.authCodeSessionID != "code-session-1" || poll == nil || !strings.Contains(model.status, "loopback callback") || !strings.Contains(model.previewExtra, "identity.test/authorize") {
 		t.Fatalf("loopback authorization instructions were not displayed: status=%q preview=%q session=%q", model.status, model.previewExtra, model.authCodeSessionID)
 	}
-	completed := json.RawMessage(`{"sessionId":"code-session-1","status":"completed","callbackMode":"loopback"}`)
+	completed := json.RawMessage(`{"sessionId":"code-session-1","status":"completed","callbackMode":"loopback","activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
 	updatedModel, next := model.Update(actionMsg{method: "auth.authorization.get", result: completed})
 	model = updatedModel.(*app)
 	if next != nil || model.authCodeSessionID != "" || !strings.Contains(model.status, "credential saved") {
@@ -889,7 +889,7 @@ func TestComboEditorSaveAndExposureReachOpenAIModelsProjection(t *testing.T) {
 		if err := db.UpsertComboModel(combo); err != nil {
 			return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 		}
-		if err := server.Control().Reload(); err != nil {
+		if _, err := server.Control().Reload(); err != nil {
 			return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 		}
 		return daemon.IPCResponse{ID: request.ID, OK: true, Result: combo}
@@ -1001,7 +1001,7 @@ func TestDiscoveredPhysicalComboOnboardingPublishesThroughModelsAPI(t *testing.T
 			if err := db.UpsertPhysicalModel(value); err != nil {
 				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 			}
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 			}
 			return daemon.IPCResponse{ID: request.ID, OK: true, Result: value}
@@ -1013,7 +1013,7 @@ func TestDiscoveredPhysicalComboOnboardingPublishesThroughModelsAPI(t *testing.T
 			if err := db.UpsertComboModel(value); err != nil {
 				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 			}
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return daemon.IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 			}
 			return daemon.IPCResponse{ID: request.ID, OK: true, Result: value}
@@ -1192,7 +1192,7 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 				return fail(err)
 			}
 			nodes = append(nodes, item)
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return fail(err)
 			}
 			return success(item)
@@ -1206,7 +1206,7 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 				return fail(err)
 			}
 			connections = append(connections, item)
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return fail(err)
 			}
 			return success(item)
@@ -1240,7 +1240,7 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			if err != nil {
 				return fail(err)
 			}
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return fail(err)
 			}
 			return success(result)
@@ -1282,7 +1282,7 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			if err := db.UpsertPhysicalModel(value); err != nil {
 				return fail(err)
 			}
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return fail(err)
 			}
 			return success(value)
@@ -1300,7 +1300,7 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 			if err := db.UpsertComboModel(value); err != nil {
 				return fail(err)
 			}
-			if err := apiServer.Control().Reload(); err != nil {
+			if _, err := apiServer.Control().Reload(); err != nil {
 				return fail(err)
 			}
 			return success(value)

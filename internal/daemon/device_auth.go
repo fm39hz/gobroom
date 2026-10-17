@@ -18,15 +18,16 @@ const (
 )
 
 type deviceAuthorizationView struct {
-	SessionID               string    `json:"sessionId"`
-	ConnectionID            string    `json:"connectionId"`
-	Status                  string    `json:"status"`
-	UserCode                string    `json:"userCode"`
-	VerificationURL         string    `json:"verificationUrl"`
-	VerificationURLComplete string    `json:"verificationUrlComplete,omitempty"`
-	ExpiresAt               time.Time `json:"expiresAt"`
-	PollIntervalSeconds     int64     `json:"pollIntervalSeconds"`
-	Error                   string    `json:"error,omitempty"`
+	SessionID               string                    `json:"sessionId"`
+	ConnectionID            string                    `json:"connectionId"`
+	Status                  string                    `json:"status"`
+	UserCode                string                    `json:"userCode"`
+	VerificationURL         string                    `json:"verificationUrl"`
+	VerificationURLComplete string                    `json:"verificationUrlComplete,omitempty"`
+	ExpiresAt               time.Time                 `json:"expiresAt"`
+	PollIntervalSeconds     int64                     `json:"pollIntervalSeconds"`
+	Error                   string                    `json:"error,omitempty"`
+	Activation              *CredentialActivationView `json:"activation,omitempty"`
 }
 
 func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID string) (deviceAuthorizationView, error) {
@@ -181,17 +182,11 @@ func (d *Daemon) pollDeviceAuthorization(ctx context.Context, sessionID string, 
 		d.finishDeviceAuthorization(sessionID, status, message)
 		return
 	}
-	err = d.commitAuthorizationCredential(ctx, d.authorizationSessions(), sessionID, credential)
+	_, err = d.commitAuthorizationCredential(ctx, d.authorizationSessions(), sessionID, credential)
 	if err != nil {
 		status, message := authorizationCommitFailure(ctx, err)
 		d.finishDeviceAuthorization(sessionID, status, message)
 		return
-	}
-	if d.server != nil {
-		if err := d.server.Reload(); err != nil {
-			d.finishDeviceAuthorization(sessionID, "failed", "credential stored but serving snapshot reload failed")
-			return
-		}
 	}
 	d.finishDeviceAuthorization(sessionID, "completed", "")
 }
@@ -242,7 +237,12 @@ func (d *Daemon) deviceAuthorizationStatus(sessionID string) (deviceAuthorizatio
 	if !exists || session.kind != "device_code" {
 		return deviceAuthorizationView{}, fmt.Errorf("device authorization session %q not found", sessionID)
 	}
-	return publicDeviceAuthorization(sessionID, session), nil
+	view := publicDeviceAuthorization(sessionID, session)
+	if session.activationCommit.ConnectionID != "" {
+		activation := d.credentialActivationView(d.activationContext(), session.activationCommit)
+		view.Activation = &activation
+	}
+	return view, nil
 }
 
 func (d *Daemon) cancelDeviceAuthorization(sessionID string) error {

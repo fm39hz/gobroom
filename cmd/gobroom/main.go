@@ -129,6 +129,22 @@ func resourceCommands() []*cobra.Command {
 	var nodeID, connID, connName, credentialType, secret, authorizationSessionID, callbackURL string
 	var priority int
 	connections.AddCommand(listCommand("list", "connections.list", map[string]*string{"nodeID": &nodeID}))
+	var activationLimit int
+	activationList := &cobra.Command{Use: "activation-list", Short: "list credential activation jobs", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("credential_activation.list", map[string]any{"limit": activationLimit})
+	}}
+	activationList.Flags().IntVar(&activationLimit, "limit", 128, "maximum activation jobs to return")
+	connections.AddCommand(activationList)
+	activationGet := &cobra.Command{Use: "activation-get", Short: "show a connection's credential activation", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("credential_activation.get", map[string]any{"connectionID": connID})
+	}}
+	activationGet.Flags().StringVar(&connID, "connection-id", "", "connection ID")
+	connections.AddCommand(activationGet)
+	activationRetry := &cobra.Command{Use: "activation-retry", Short: "retry a connection's credential activation", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
+		return invoke("credential_activation.retry", map[string]any{"connectionID": connID})
+	}}
+	activationRetry.Flags().StringVar(&connID, "connection-id", "", "connection ID")
+	connections.AddCommand(activationRetry)
 	createConn := &cobra.Command{Use: "create", Short: "create connection", RunE: func(*cobra.Command, []string) error {
 		return invoke("connections.create", map[string]any{"providerNodeID": nodeID, "name": connName, "credentialType": credentialType, "secret": secret, "priority": priority})
 	}}

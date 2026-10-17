@@ -16,6 +16,8 @@ type IPCResponse = core.IPCResponse
 type ListenerAddresses = core.ListenerAddresses
 type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec
+type CredentialActivationView = core.CredentialActivationView
+type CredentialActivationProgress = core.CredentialActivationProgress
 
 var ErrIPCInUse = core.ErrIPCInUse
 

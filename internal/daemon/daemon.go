@@ -88,6 +88,8 @@ type Daemon struct {
 	authWG              sync.WaitGroup
 	credentialRefreshMu sync.Mutex
 	credentialRefreshes map[string]*credentialRefreshLock
+	activationWake      chan struct{}
+	activationDone      chan struct{}
 	logMu               sync.RWMutex
 	logs                []LogRecord
 	stop                func()
@@ -446,26 +448,27 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return d.kernel.Execute(ctx, request, kernel.Credential{}, writer)
 	})
-	d.server.SetReloadHook(func() error {
-		snapshot := d.server.Control().Snapshot()
+	d.server.SetReloadHook(func(snapshot kernel.Snapshot) (kernel.Snapshot, error) {
 		if err := d.kernel.ValidateTransformBindings(snapshot.TransformBindings); err != nil {
-			return err
+			return d.kernel.Snapshots.Load(), err
 		}
 		if err := kernel.ValidateSnapshot(snapshot); err != nil {
-			return err
+			return d.kernel.Snapshots.Load(), err
 		}
 		previous := d.kernel.Snapshots.Load()
 		d.policy.SetGenerations(snapshot.Routes)
 		if err := d.restoreHealthForRoutes(snapshot.Routes); err != nil {
 			d.policy.SetGenerations(previous.Routes)
-			return err
+			return d.kernel.Snapshots.Load(), err
 		}
 		if err := d.kernel.PublishSnapshot(snapshot); err != nil {
 			d.policy.SetGenerations(previous.Routes)
-			return err
+			return d.kernel.Snapshots.Load(), err
 		}
-		return nil
+		return d.kernel.Snapshots.Load(), nil
 	})
+	d.activationWake, d.activationDone = make(chan struct{}, 1), make(chan struct{})
+	go d.runCredentialActivations(ctx)
 	usageCtx, usageCancel := context.WithCancel(ctx)
 	d.usageCancel = usageCancel
 	go (usageworker.Worker{Store: s, Events: d.kernel.Events}).Run(usageCtx)
@@ -479,6 +482,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		cancel()
 		d.cancelAuthorizationSessions()
 		d.authWG.Wait()
+		<-d.activationDone
 		d.closeOAuthCallbackListeners()
 		if d.usageCancel != nil {
 			d.usageCancel()
@@ -840,6 +844,47 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 	switch request.Method {
 	case "status":
 		return IPCResponse{ID: request.ID, OK: true, Result: d.server.Status()}
+	case "credential_activation.list":
+		var input struct {
+			Limit int `json:"limit"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		items, err := d.store.CredentialActivations(ctx, input.Limit)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		views := make([]CredentialActivationView, 0, len(items))
+		for _, item := range items {
+			views = append(views, d.currentActivationView(item))
+		}
+		return success(request, views)
+	case "credential_activation.get", "credential_activation.retry":
+		var input struct {
+			ConnectionID string `json:"connectionID"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, err.Error())
+		}
+		if input.ConnectionID == "" {
+			return fail(request, "connectionID is required")
+		}
+		if request.Method == "credential_activation.retry" {
+			view, err := d.retryCredentialActivation(ctx, input.ConnectionID)
+			if err != nil {
+				return fail(request, err.Error())
+			}
+			return success(request, view)
+		}
+		a, ok, err := d.store.CredentialActivation(ctx, input.ConnectionID)
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		if !ok {
+			return fail(request, "credential activation not found")
+		}
+		return success(request, d.currentActivationView(a))
 	case "compatibility.loss-ceiling.get":
 		ceiling, configured, err := d.store.CompatibilityLossCeiling()
 		if err != nil {
@@ -854,7 +899,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.SetCompatibilityLossCeiling(ceiling); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, d.server.Status())
@@ -941,13 +986,13 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			d.appendLog("warn", "portable provider definitions applied; daemon restart required to bind the new frozen catalog")
 			return success(request, map[string]any{"status": "applied", "restartRequired": true, "message": "restart gobroomd to activate provider definitions"})
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		d.appendLog("info", "typed config bundle applied")
 		return success(request, d.server.Status())
 	case "reload":
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return IPCResponse{ID: request.ID, OK: false, Error: err.Error()}
 		}
 		d.appendLog("info", "snapshot reloaded")
@@ -1048,7 +1093,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 				d.policy.Health.ClearInvalid(route, kernel.ScopeRouteConnection)
 			}
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, result)
@@ -1238,7 +1283,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1298,7 +1343,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 				resetProviderHealth(d.policy.Health, d.kernel.Snapshots.Load().Routes, connections, item.ID)
 			}
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1313,7 +1358,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.DeleteProviderNode(id); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": id})
@@ -1448,7 +1493,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1494,7 +1539,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			}
 			resetConnectionHealth(d.policy.Health, d.kernel.Snapshots.Load().Routes, item.ID, existing.ProviderNodeID)
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1506,7 +1551,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.DeleteConnection(id); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": id})
@@ -1563,7 +1608,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.UpsertPhysicalModel(item); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1575,7 +1620,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.DeletePhysicalModel(name); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": name})
@@ -1601,7 +1646,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.UpsertComboModel(item); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1613,7 +1658,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.DeleteComboModel(name); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": name})
@@ -1625,7 +1670,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.UpsertCatalogModel(item); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, item)
@@ -1637,7 +1682,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err := d.store.DeleteCatalogModel(id); err != nil {
 			return fail(request, err.Error())
 		}
-		if err := d.server.Reload(); err != nil {
+		if _, err := d.server.Reload(); err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"deleted": id})
@@ -1679,7 +1724,8 @@ func (d *Daemon) upsertTransformBinding(binding kernel.TransformBinding) error {
 		return err
 	}
 	if d.server != nil {
-		return d.server.Reload()
+		_, reloadErr := d.server.Reload()
+		return reloadErr
 	}
 	return nil
 }
@@ -1713,7 +1759,8 @@ func (d *Daemon) deleteTransformBinding(id string) error {
 		return err
 	}
 	if d.server != nil {
-		return d.server.Reload()
+		_, reloadErr := d.server.Reload()
+		return reloadErr
 	}
 	return nil
 }

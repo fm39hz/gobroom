@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/artifacts"
@@ -31,7 +33,11 @@ type Server struct {
 	controlErr       error
 	started          time.Time
 	executor         func(context.Context, normalize.Request, http.ResponseWriter) error
-	reloadHook       func() error
+	reloadHook       func(kernel.Snapshot) (kernel.Snapshot, error)
+	reloadMu         sync.Mutex
+	hasReloadHook    atomic.Bool
+	servingSnapshot  atomic.Pointer[kernel.Snapshot]
+	lastReload       atomic.Pointer[ReloadResult]
 	dataPlaneToken   string
 	ingress          map[string]OperationIngress
 	providerCatalog  []provider.DefinitionMetadata
@@ -56,6 +62,13 @@ type AccessLogRecord struct {
 	Operation  normalize.Operation `json:"operation,omitempty"`
 }
 
+type ReloadResult struct {
+	Control          controlplane.ReloadResult `json:"control"`
+	ServingVersion   uint64                    `json:"servingVersion"`
+	ServingPublished bool                      `json:"servingPublished"`
+	FailureStage     string                    `json:"failureStage"`
+}
+
 type accessLogContextKey struct{}
 
 type accessLogState struct {
@@ -77,6 +90,10 @@ func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.R
 	manager, err := controlplane.NewManagerWithRuntimeBindings(s, bindings, strategies...)
 	operationSnapshot, _ := operations.BuiltinSnapshot()
 	server := &Server{store: s, control: manager, controlErr: err, started: time.Now(), ingress: map[string]OperationIngress{}, operations: operationSnapshot}
+	if manager != nil {
+		initial := manager.Snapshot()
+		server.servingSnapshot.Store(&initial)
+	}
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
@@ -211,11 +228,26 @@ func (s *Server) dataPlane(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) Status() map[string]any {
-	version := uint64(0)
+	controlVersion := uint64(0)
 	if s.control != nil {
-		version = s.control.Version()
+		controlVersion = s.control.Version()
 	}
-	return map[string]any{"name": "gobroomd", "status": "ok", "snapshotVersion": version}
+	servingVersion := s.dataPlaneSnapshot().Version
+	if !s.hasReloadHook.Load() {
+		servingVersion = controlVersion
+	}
+	status := "ok"
+	if s.control == nil || s.controlErr != nil || controlVersion != servingVersion {
+		status = "degraded"
+	}
+	result := map[string]any{"name": "gobroomd", "status": status, "controlSnapshotVersion": controlVersion, "servingSnapshotVersion": servingVersion}
+	if last := s.lastReload.Load(); last != nil {
+		result["lastReload"] = *last
+		if last.FailureStage != "" {
+			result["status"] = "degraded"
+		}
+	}
+	return result
 }
 func (s *Server) Control() *controlplane.Manager { return s.control }
 func (s *Server) InitializationError() error {
@@ -227,35 +259,78 @@ func (s *Server) InitializationError() error {
 func (s *Server) SetExecutor(executor func(context.Context, normalize.Request, http.ResponseWriter) error) {
 	s.executor = executor
 }
-func (s *Server) SetReloadHook(hook func() error) { s.reloadHook = hook }
-func (s *Server) Reload() error {
+func (s *Server) SetReloadHook(hook func(kernel.Snapshot) (kernel.Snapshot, error)) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	s.reloadHook = hook
+	s.hasReloadHook.Store(hook != nil)
+}
+func (s *Server) Reload() (ReloadResult, error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	var result ReloadResult
 	if s.control == nil {
-		return fmt.Errorf("control plane unavailable")
+		err := fmt.Errorf("control plane unavailable")
+		result.FailureStage = "control_reload"
+		s.lastReload.Store(&result)
+		return result, err
 	}
-	if err := s.control.Reload(); err != nil {
-		return err
+	controlResult, err := s.control.Reload()
+	result.Control = controlResult
+	result.ServingVersion = s.dataPlaneSnapshot().Version
+	if controlResult.Published {
+		if s.reloadHook != nil {
+			actual, hookErr := s.reloadHook(s.control.Snapshot())
+			result.ServingVersion = actual.Version
+			s.servingSnapshot.Store(&actual)
+			result.ServingPublished = actual.Version == controlResult.Version
+			if hookErr != nil {
+				result.FailureStage = "serve_publish"
+				err = errors.Join(err, hookErr)
+			}
+			if hookErr == nil && actual.Version != controlResult.Version {
+				result.FailureStage = "serve_publish"
+				err = errors.Join(err, fmt.Errorf("serving version %d does not match control version %d", actual.Version, controlResult.Version))
+			}
+		} else {
+			result.ServingVersion = controlResult.Version
+			actual := s.control.Snapshot()
+			s.servingSnapshot.Store(&actual)
+			result.ServingPublished = true
+		}
 	}
-	if s.reloadHook != nil {
-		return s.reloadHook()
+	if result.FailureStage == "" && err != nil {
+		result.FailureStage = controlResult.FailureStage
 	}
-	return nil
+	if err != nil && result.FailureStage == "" {
+		result.FailureStage = "reload"
+	}
+	s.lastReload.Store(&result)
+	return result, err
+}
+
+// Model discovery must describe the serving publication, not an unapplied
+// control candidate. Standalone servers serve their control snapshot directly.
+func (s *Server) dataPlaneSnapshot() kernel.Snapshot {
+	if !s.hasReloadHook.Load() && s.control != nil {
+		return s.control.Snapshot()
+	}
+	if snapshot := s.servingSnapshot.Load(); snapshot != nil {
+		return *snapshot
+	}
+	return kernel.Snapshot{}
 }
 
 func (s *Server) status(w http.ResponseWriter, _ *http.Request) {
-	version := uint64(0)
-	if s.control != nil {
-		version = s.control.Version()
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": "gobroomd", "status": "ok", "uptimeSeconds": int(time.Since(s.started).Seconds()), "snapshotVersion": version})
+	status := s.Status()
+	status["uptimeSeconds"] = int(time.Since(s.started).Seconds())
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) reloadSnapshot(w http.ResponseWriter) bool {
-	if s.control == nil {
-		writeError(w, fmt.Errorf("control plane unavailable"))
-		return false
-	}
-	if err := s.control.Reload(); err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+	result, err := s.Reload()
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": err.Error(), "reload": result})
 		return false
 	}
 	return true
@@ -469,7 +544,7 @@ func mustProviderNodes(s *store.Store) []store.ProviderNode {
 func (s *Server) models(w http.ResponseWriter, _ *http.Request) {
 	public := map[string]kernel.PublicModel{}
 	if s.control != nil {
-		public = s.control.Snapshot().PublicModels
+		public = s.dataPlaneSnapshot().PublicModels
 	}
 	names := make([]string, 0, len(public))
 	for name := range public {
@@ -600,7 +675,7 @@ func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, reque
 		return
 	}
 	if s.control != nil {
-		if item, ok := s.control.Snapshot().PublicModels[requestModel]; ok {
+		if item, ok := s.dataPlaneSnapshot().PublicModels[requestModel]; ok {
 			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": map[string]string{"message": "model is exposed; provider execution is not configured", "model": item.Name, "target": item.TargetRef}})
 			return
 		}

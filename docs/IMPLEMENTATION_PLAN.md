@@ -305,20 +305,33 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    executes an operation. This closes the identified rebind slice, not all
    credential leases, universal setup actions or post-commit reconciliation.
 
-   Next activation slice: refresh/code/device currently commit a credential
-   before resetting routing state/reloading. A later reset/reload error must not
-   masquerade as a rolled-back secret. `Manager.Reload` can publish its control
-   snapshot before snapshot-version persistence fails; API reload hooks add a
-   separate serving-publication boundary. Model committed/control-published/
-   serving-published outcomes explicitly and share post-commit activation across
-   all auth paths. Add bounded, daemon-owned, revision/owner-fenced reconciliation
-   rather than retrying the token exchange or repurposing telemetry queues.
-   Acceptance must inject reset failure, reload failure before/after publication,
-   later requests using a newer credential, and code/device status after commit.
+   Credential activation is implemented as a transactional per-connection outbox
+   written with CAS. Refresh wakes the daemon worker and returns its replacement
+   without routing reload on the inference critical path; code/device retain
+   successful credential completion plus explicit pending/active activation.
+   Typed reload receipts distinguish control publication, persisted version and
+   actual serving snapshot. `/models` projects that serving snapshot, and status
+   exposes separate control/serving versions. Fenced resets/progress, restart
+   recovery, five-attempt budgets, idle-timer suppression, CLI list/get/retry and
+   TUI pending/exhausted readiness are implemented. Fault fixtures cover reset
+   failure, reload failure before/after publication, durable commit/status and
+   HTTP 401 refresh followed by explicit retry or restart without another exchange.
    Session continuity is scoped by connection/exact definition/operation/model/
    client session, not token revision; preserve that intentional refresh behavior
-   while retaining cross-owner isolation. This is identified work, not a claim
-   that the activation split is already repaired.
+   while retaining cross-owner isolation. The identified activation split is
+   closed for refresh/code/device; universal setup actions, credential leases,
+   broader fault composition and live-provider acceptance remain separate gates.
+
+   Follow-up auth semantics: distinguish token renewal from principal/account
+   replacement for quota/evidence generations. The activation slice retains
+   the existing connection recovery reset semantics; it does not establish
+   renewal-preserved quota. CLIProxyAPI's refresh path preserves unexpired
+   credential-quota evidence, which motivates a typed principal/renewal scope
+   rather than a provider-name rule. Also replace the kernel's hardcoded
+   401/403 refresh trigger with a declared/normalized auth-recovery contract:
+   permission/quota errors must not be mistaken for expired credentials, and
+   a provider-specific token failure need not use those two HTTP statuses.
+   Prove these separately before treating auth/limit parity as implementation-only.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

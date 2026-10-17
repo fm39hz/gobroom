@@ -223,6 +223,22 @@ second connection or issuing a second request outside kernel replay policy.
 
 ## Full semantic closure gate
 
+Activation evidence: credential CAS and its secret-free outbox commit atomically;
+store fixtures cover rollback, restart, deadline ordering, evidence requirements
+for `active`, superseding and conditional reset/progress writes. Root daemon
+fixtures inject reset, version-persistence and serving-hook errors before/after
+publication: code/device stay committed/completed with explicit activation
+progress and retry without re-exchanging tokens. Worker exhaustion and shutdown
+drain are exercised. Typed control/API receipts preserve actual publication
+outcomes; `TestModelsProjectionFollowsActualServingPublication` keeps discovery
+on the serving snapshot across a rejected publication. CLI command and TUI
+readiness fixtures cover active/pending/exhausted and missing evidence. The
+public-module `TestExternalCredentialRefreshActivationRetryAndRestartRecovery`
+executes real HTTP 401 → refresh → successful response while activation cannot
+persist its version, then repairs the durable job through retry or restart.
+This closes the identified refresh/code/device activation slice, not universal
+auth actions, leases, full fault composition or live-provider acceptance.
+
 Auth-owner rebinding evidence: `TestCredentialOwnerProjectionAndCAS` covers
 typed node/definition projection, privacy, forged-owner rejection and current-owner
 CAS. Store fixtures exercise raw-SQL and repository definition/version ABA,

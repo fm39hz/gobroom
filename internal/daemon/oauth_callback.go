@@ -145,7 +145,7 @@ func (d *Daemon) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = result
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("Authorization complete. You can close this page and return to GoBroom.\n"))
+	_, _ = w.Write([]byte("Authorization complete. Return to GoBroom to check activation status.\n"))
 }
 
 func (d *Daemon) callbackTargetMatchesSession(sessionID, callbackURL string) bool {

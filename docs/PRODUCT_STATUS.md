@@ -27,6 +27,25 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Credential commit and activation now have distinct observable outcomes. A
+transactional, secret-free per-connection outbox resumes after restart; its
+daemon worker applies owner/revision-fenced reset/reload with bounded retries
+and no idle polling. Refresh returns the new credential without compiling the
+routing graph on the inference latency path. Code/device completion remains
+successful after commit even if activation is pending. Typed receipts distinguish
+control publication, version persistence and actual serving publication;
+`/models` follows serving, and status exposes both versions instead of a single
+ambiguous counter. CLI list/get/retry and TUI pending/exhausted/readiness states
+are implemented. The external fake-provider fixture completes an HTTP 401 refresh
+despite a version-write failure, then recovers through retry or daemon restart
+without repeating provider calls. These changes improve consume latency shape,
+headless operations and configuration correctness; they do not establish a
+resource baseline, finish model curation UX, widen provider catalog coverage or
+close the full harness/protocol matrix. Generic setup actions/leases and full
+C4/SG2/M15 composition remain open.
+
+Previous integrated milestone:
+
 The auth-owner rebind slice now guards credential state by exact provider node,
 definition ref, selected mode and auth binding. One SQL read returns state with
 its revision/owner; final CAS validates both. Definition ID/version changes

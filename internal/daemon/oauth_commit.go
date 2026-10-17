@@ -12,49 +12,51 @@ import (
 
 // Commit and cancellation share a linearization point. A driver returning a
 // token after cancellation does not grant permission to persist that token.
-func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *authorizationSessions, sessionID string, state provider.CredentialState) error {
+func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *authorizationSessions, sessionID string, state provider.CredentialState) (CredentialActivationView, error) {
 	sessions.mu.Lock()
 	session, exists := sessions.byID[sessionID]
 	sessions.mu.Unlock()
 	if !exists {
-		return fmt.Errorf("authorization session is no longer active: %w", context.Canceled)
+		return CredentialActivationView{}, fmt.Errorf("authorization session is no longer active: %w", context.Canceled)
 	}
 	flow := session.authFlow
 	if flow == nil {
-		return fmt.Errorf("authorization auth primitive is unavailable")
+		return CredentialActivationView{}, fmt.Errorf("authorization auth primitive is unavailable")
 	}
 	if _, err := d.resolveReplacementCredential(ctx, flow, session.expectedCredential, state); err != nil {
-		return err
+		return CredentialActivationView{}, err
 	}
 	unlock, err := d.lockCredentialRefresh(ctx, session.connectionID)
 	if err != nil {
-		return err
+		return CredentialActivationView{}, err
 	}
 	defer unlock()
 	sessions.mu.Lock()
 	current, exists := sessions.byID[sessionID]
 	if sessions.closed || !exists || current.status != "awaiting_user" {
 		sessions.mu.Unlock()
-		return fmt.Errorf("authorization session is no longer active: %w", context.Canceled)
+		return CredentialActivationView{}, fmt.Errorf("authorization session is no longer active: %w", context.Canceled)
 	}
 	if !current.expiresAt.After(time.Now()) {
 		sessions.mu.Unlock()
-		return context.DeadlineExceeded
+		return CredentialActivationView{}, context.DeadlineExceeded
 	}
 	if err := ctx.Err(); err != nil {
 		sessions.mu.Unlock()
-		return err
+		return CredentialActivationView{}, err
 	}
 	// AfterFunc cancellation propagation may still be scheduled; check the
 	// daemon root directly at the commit boundary as well.
 	if d.runCtx != nil && d.runCtx.Err() != nil {
 		sessions.mu.Unlock()
-		return d.runCtx.Err()
+		return CredentialActivationView{}, d.runCtx.Err()
 	}
-	if err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, state.Encoded()); err != nil {
+	commit, err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, state.Encoded())
+	if err != nil {
 		sessions.mu.Unlock()
-		return err
+		return CredentialActivationView{}, err
 	}
+	current.activationCommit = commit
 	callbackKey := current.callbackKey
 	current.callbackKey = ""
 	if current.timer != nil {
@@ -74,7 +76,13 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	}
 	sessions.mu.Unlock()
 	d.releaseOAuthCallbackListener(callbackKey)
-	return nil
+	view, activationErr := d.activateCredentialLocked(d.activationContext(), commit)
+	if activationErr != nil {
+		d.appendLog("warn", "credential committed; activation progress requires reconciliation")
+		view = d.credentialActivationView(d.activationContext(), commit)
+	}
+	d.signalCredentialActivation()
+	return view, nil
 }
 
 func authorizationCommitFailure(ctx context.Context, err error) (string, string) {

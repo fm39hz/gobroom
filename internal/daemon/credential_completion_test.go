@@ -80,10 +80,10 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.server.SetReloadHook(func() error {
-		next := d.server.Control().Snapshot()
+	d.server.SetReloadHook(func(next kernel.Snapshot) (kernel.Snapshot, error) {
 		d.policy.SetGenerations(next.Routes)
-		return d.kernel.PublishSnapshot(next)
+		err := d.kernel.PublishSnapshot(next)
+		return d.kernel.Snapshots.Load(), err
 	})
 
 	// A missing ConnectionID in the request snapshot distinguishes the
@@ -162,6 +162,14 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 	stored, ok := state.ConnectionCredentialByID(connection.ID)
 	if !ok || stored.Secret != "refreshed-secret" {
 		t.Fatalf("stored credential = %#v, exists=%v; want persisted replacement", stored, ok)
+	}
+	// Request refresh only commits/wakes; local activation is a separate daemon
+	// task. Drive that task explicitly in this unit fixture without a running daemon.
+	if d.kernel.Snapshots.Load().Version != initial.Version {
+		t.Fatal("request refresh synchronously reloaded the routing graph")
+	}
+	if view, err := d.retryCredentialActivation(context.Background(), connection.ID); err != nil || view.Status != store.ActivationActive {
+		t.Fatalf("activate committed refresh: %+v %v", view, err)
 	}
 	if d.kernel.Snapshots.Load().Version == initial.Version {
 		t.Fatalf("serving snapshot version remained %d after successful post-CAS reload", initial.Version)

@@ -81,23 +81,14 @@ func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, curr
 	if err != nil {
 		return kernel.Credential{}, err
 	}
-	if err := d.store.CompareAndSwapConnectionCredential(ctx, stored, state.Encoded()); err != nil {
+	commit, err := d.store.CompareAndSwapConnectionCredential(ctx, stored, state.Encoded())
+	if err != nil {
 		return kernel.Credential{}, err
 	}
-	committed, ok := d.store.ConnectionCredentialByID(stored.ID)
-	if !ok || committed.Secret != state.Encoded() || committed.Owner != stored.Owner || committed.Type != stored.Type {
-		// A newer manual update won after our commit. Never label stale runtime
-		// authorization with that newer revision.
-		return d.resolveCredential(ctx, route)
-	}
-	refreshed.Generation = committed.Revision
-	if err := d.resetConnectionRoutingState(route.CredentialID); err != nil {
-		return kernel.Credential{}, fmt.Errorf("credential refreshed but health reset failed: %w", err)
-	}
-	resetConnectionHealth(d.policy.Health, d.kernel.Snapshots.Load().Routes, route.CredentialID, route.NodeID)
-	if err := d.server.Reload(); err != nil {
-		return kernel.Credential{}, fmt.Errorf("credential refreshed but route generation reload failed: %w", err)
-	}
+	refreshed.Generation = commit.Revision
+	// Durable activation is daemon-owned. Never rebuild configuration or repeat
+	// the token exchange on the inference request's latency-critical path.
+	d.signalCredentialActivation()
 	return refreshed, nil
 }
 

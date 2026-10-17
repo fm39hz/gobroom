@@ -32,6 +32,13 @@ Auth state uses provider-owned typed serde and standard `fmt`/JSON redaction,
 not a kernel metadata-bag parser. Public OAuth encode/decode/factory helpers let
 modules compose the pinned `x/oauth2` flow without copying its exchange logic.
 
+Credential activation reuses SQLite transactions/indexes for its durable outbox,
+`time.Timer` for due work (disabled when idle), existing per-connection
+`x/sync/semaphore` ownership, and atomic immutable snapshot publication. Its
+fixed bounded local retry policy is application behavior, not a new provider
+retry framework. No queue service, scheduler dependency or periodic provider
+health check is introduced.
+
 ## Adopt
 
 | Area | Library/tool | Version checked | Decision | Why |

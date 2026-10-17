@@ -46,6 +46,14 @@ the retained credential. A fresh setup for the current owner then completes
 and authenticates another operation. `GOBROOM_TEST_CLI` covers these provider
 updates, device commands and probes through the installed control client.
 
+The activation fixture injects failure in persisted snapshot-version writes
+after credential CAS. A real 401 refresh still serves the replacement ticket;
+the durable activation receipt records which stages applied. Explicit retry
+or daemon restart repairs activation without another provider exchange. With
+`GOBROOM_TEST_CLI`, it also checks activation list/get/retry and separate
+control/serving status versions through the installed CLI. Public
+`daemon.CredentialActivationView` is used instead of a second response schema.
+
 The COSY signing fixture additionally uses the public `PrepareBytesRequest`
 and `PreparedAuthorization` contracts. It encodes the business payload once,
 then renews body-bound authorization for replay without changing those bytes
