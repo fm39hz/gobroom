@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/extensions"
 )
 
 type EvidenceAuthority uint8
@@ -29,6 +31,7 @@ const (
 // Remaining gates the route until ResetAt; RoutingEffectObserve retains a
 // balance/usage observation without treating it as an entitlement limit.
 type Snapshot struct {
+	OperationRef   extensions.Ref `json:"operationRef,omitzero"`
 	ProviderNodeID string
 	ConnectionID   string
 	ModelRef       string
@@ -42,6 +45,32 @@ type Snapshot struct {
 	ResetAt        *time.Time
 	Source         string
 	RoutingEffect  RoutingEffect `json:"routingEffect,omitempty"`
+}
+
+// Identity is shared by in-memory state, write coalescing and durable spools.
+// OperationRef is zero only for explicitly operation-independent evidence.
+type Identity struct {
+	Provider, Connection, Model, Window string
+	Operation                           extensions.Ref `json:"operation,omitzero"`
+}
+
+func (s Snapshot) Identity() Identity {
+	return Identity{Provider: s.ProviderNodeID, Connection: s.ConnectionID, Model: s.ModelRef, Window: s.WindowName, Operation: s.OperationRef}
+}
+
+func (i Identity) MarshalText() ([]byte, error) {
+	type wire Identity
+	return json.Marshal(wire(i))
+}
+
+func (s Snapshot) ValidateOperation() error {
+	if s.OperationRef == (extensions.Ref{}) {
+		return nil
+	}
+	if s.OperationRef.Kind != "operation" || s.OperationRef.Validate() != nil {
+		return fmt.Errorf("quota requires an exact operation ref or an operation-independent scope")
+	}
+	return nil
 }
 
 func (s Snapshot) Exhausted(now time.Time) bool {
@@ -157,6 +186,6 @@ func mergeKnownWindowFields(current, incoming Snapshot) Snapshot {
 // Gate is intentionally small so provider-specific quota APIs can feed the
 // scheduler without coupling the scheduler to a provider implementation.
 type Gate interface {
-	Snapshot(providerNodeID, connectionID, modelRef, window string) (Snapshot, bool)
+	Snapshot(Identity) (Snapshot, bool)
 	Record(snapshot Snapshot)
 }

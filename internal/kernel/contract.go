@@ -275,6 +275,7 @@ type OutcomeScope string
 const (
 	ScopeRequest         OutcomeScope = "request"
 	ScopeRoute           OutcomeScope = "route"
+	ScopeOperation       OutcomeScope = "operation"
 	ScopeRouteConnection OutcomeScope = "route_connection"
 	ScopeConnection      OutcomeScope = "connection"
 	ScopeProvider        OutcomeScope = "provider"

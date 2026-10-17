@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/quota"
 )
@@ -16,12 +17,17 @@ type PolicyGate struct {
 	Performance   *PerformanceBook
 	generationMu  sync.RWMutex
 	mu            sync.RWMutex
-	quotas        map[string]quota.Snapshot
+	quotas        map[quota.Identity]quota.Snapshot
 	enrich        func(context.Context, kernel.Route)
 	enrichCtx     context.Context
 	quotaObserver func(quota.Snapshot)
 	affinityMu    sync.Mutex
-	affinity      map[string]sessionRoute
+	affinity      map[affinityKey]sessionRoute
+}
+
+type affinityKey struct {
+	session   string
+	operation extensions.Ref
 }
 
 type sessionRoute struct {
@@ -40,7 +46,7 @@ type RouteExplanation struct {
 }
 
 func NewPolicyGate() *PolicyGate {
-	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[string]quota.Snapshot{}, affinity: map[string]sessionRoute{}, enrichCtx: context.Background()}
+	return &PolicyGate{Health: NewHealthGate(), Performance: NewPerformanceBook(), quotas: map[quota.Identity]quota.Snapshot{}, affinity: map[affinityKey]sessionRoute{}, enrichCtx: context.Background()}
 }
 
 func (g *PolicyGate) SetGenerations(routes map[string]kernel.Route) {
@@ -60,7 +66,7 @@ func (g *PolicyGate) Usable(route kernel.Route, now time.Time) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	for _, snapshot := range g.quotas {
-		if snapshot.ProviderNodeID == route.NodeID && (snapshot.ModelRef == "" || snapshot.ModelRef == route.ExternalModel) && (snapshot.ConnectionID == "" || snapshot.ConnectionID == route.CredentialID) && snapshot.Exhausted(now) {
+		if snapshot.ProviderNodeID == route.NodeID && (snapshot.ModelRef == "" || snapshot.ModelRef == route.ExternalModel) && (snapshot.ConnectionID == "" || snapshot.ConnectionID == route.CredentialID) && (snapshot.OperationRef.ID == "" || snapshot.OperationRef == route.SessionOperationRef) && snapshot.Exhausted(now) {
 			return false
 		}
 	}
@@ -115,6 +121,9 @@ func (g *PolicyGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 			authority = quota.AuthorityInferred
 		}
 		snapshot := quota.Snapshot{ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, WindowName: limit.Name, Source: string(limit.Source), Authority: authority, ObservedAt: time.Now(), Generation: route.HealthGeneration.ForQuota(route.CredentialID, route.ExternalModel)}
+		if outcome.Scope == kernel.ScopeOperation {
+			snapshot.OperationRef = route.SessionOperationRef
+		}
 		snapshot.Limit, snapshot.Remaining, snapshot.ResetAt = limit.Limit, limit.Remaining, limit.ResetAt
 		if limit.Used != nil {
 			snapshot.Used = *limit.Used
@@ -146,7 +155,7 @@ func (g *PolicyGate) ObserveUsage(route kernel.Route, event kernel.UsageEvent) {
 		if len(g.affinity) >= 2048 {
 			g.expireAffinity(time.Now(), true)
 		}
-		g.affinity[event.SessionID] = sessionRoute{RouteID: route.ID, SeenAt: time.Now()}
+		g.affinity[affinityKey{session: event.SessionID, operation: route.SessionOperationRef}] = sessionRoute{RouteID: route.ID, SeenAt: time.Now()}
 		g.affinityMu.Unlock()
 	}
 }
@@ -161,14 +170,8 @@ func (g *PolicyGate) RankRoutes(routes []kernel.Route, now time.Time) []kernel.R
 func (g *PolicyGate) RankRoutesFor(routes []kernel.Route, now time.Time, requestClass string) []kernel.Route {
 	g.generationMu.RLock()
 	defer g.generationMu.RUnlock()
-	states := g.Health.Snapshot()
-	performance := map[string]PerformanceStats{}
-	if g.Performance != nil {
-		performance = g.Performance.Snapshot()
-	}
-	result := append([]kernel.Route(nil), routes...)
 	score := func(route kernel.Route) float64 {
-		state := states[route.ID]
+		state := g.Health.StateFor(route)
 		if !state.LastAttempt.IsZero() && now.Sub(state.LastAttempt) > 30*time.Minute {
 			return 0
 		}
@@ -177,7 +180,11 @@ func (g *PolicyGate) RankRoutesFor(routes []kernel.Route, now time.Time, request
 			value += 0.25
 		}
 		if g.Performance != nil {
-			perf, ok := performance[route.ID]
+			var perf PerformanceStats
+			var ok bool
+			if route.SessionOperationRef.ID == "" {
+				perf, ok = g.Performance.RouteSnapshot(route.ID)
+			}
 			if requestClass != "" {
 				if classPerf, classOK := g.Performance.ClassSnapshot(route.ID, requestClass); classOK && classPerf.Samples >= 2 {
 					perf, ok = classPerf, true
@@ -193,7 +200,20 @@ func (g *PolicyGate) RankRoutesFor(routes []kernel.Route, now time.Time, request
 		}
 		return value
 	}
-	sort.SliceStable(result, func(i, j int) bool { return score(result[i]) > score(result[j]) })
+	// Freeze each score once: live feedback must not change a sort comparator,
+	// and the hot path need not re-lock health/performance for every comparison.
+	ranked := make([]struct {
+		index int
+		score float64
+	}, len(routes))
+	for index, route := range routes {
+		ranked[index].index, ranked[index].score = index, score(route)
+	}
+	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	result := make([]kernel.Route, len(routes))
+	for index, rankedRoute := range ranked {
+		result[index] = routes[rankedRoute.index]
+	}
 	return result
 }
 
@@ -205,7 +225,16 @@ func (g *PolicyGate) RankRoutesForSession(routes []kernel.Route, now time.Time, 
 	g.affinityMu.Lock()
 	defer g.affinityMu.Unlock()
 	g.expireAffinity(now, false)
-	affinity, ok := g.affinity[sessionID]
+	operation := extensions.Ref{}
+	if len(routes) > 0 {
+		operation = routes[0].SessionOperationRef
+	}
+	for _, route := range routes {
+		if route.SessionOperationRef != operation {
+			return result
+		}
+	}
+	affinity, ok := g.affinity[affinityKey{session: sessionID, operation: operation}]
 	if !ok || now.Sub(affinity.SeenAt) > 30*time.Minute {
 		return result
 	}
@@ -219,14 +248,13 @@ func (g *PolicyGate) RankRoutesForSession(routes []kernel.Route, now time.Time, 
 
 func (g *PolicyGate) ExplainRoutes(routes []kernel.Route, now time.Time, requestClass, sessionID string) []RouteExplanation {
 	ordered := g.RankRoutesForSession(routes, now, requestClass, sessionID)
-	health := g.Health.Snapshot()
 	performance := map[string]PerformanceStats{}
 	if g.Performance != nil {
 		performance = g.Performance.Snapshot()
 	}
 	result := make([]RouteExplanation, 0, len(ordered))
 	for index, route := range ordered {
-		state := health[route.ID]
+		state := g.Health.StateFor(route)
 		reason := "eligible; static order"
 		if !g.Usable(route, now) {
 			reason = "blocked by health/quota"
@@ -257,7 +285,9 @@ func (g *PolicyGate) expireAffinity(now time.Time, forceOne bool) {
 	}
 }
 func (g *PolicyGate) SetQuota(snapshot quota.Snapshot) {
-	_ = normalizeQuotaObservation(&snapshot, quota.AuthorityExplicit)
+	if normalizeQuotaObservation(&snapshot, quota.AuthorityExplicit) != nil {
+		return
+	}
 	g.setQuota(snapshot)
 }
 
@@ -331,6 +361,9 @@ func (g *PolicyGate) upsertQuotaAtCurrentGeneration(snapshot quota.Snapshot) (qu
 func normalizeQuotaObservation(snapshot *quota.Snapshot, fallback quota.EvidenceAuthority) error {
 	if snapshot == nil {
 		return fmt.Errorf("quota snapshot is required")
+	}
+	if err := snapshot.ValidateOperation(); err != nil {
+		return err
 	}
 	if snapshot.ObservedAt.IsZero() {
 		snapshot.ObservedAt = time.Now()
@@ -412,15 +445,15 @@ func (g *PolicyGate) resetRouteGenerations(routeIDs []string) {
 	}
 	g.affinityMu.Unlock()
 }
-func (g *PolicyGate) Quotas() map[string]quota.Snapshot {
+func (g *PolicyGate) Quotas() map[quota.Identity]quota.Snapshot {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	result := make(map[string]quota.Snapshot, len(g.quotas))
+	result := make(map[quota.Identity]quota.Snapshot, len(g.quotas))
 	for key, value := range g.quotas {
 		result[key] = value
 	}
 	return result
 }
-func quotaKey(snapshot quota.Snapshot) string {
-	return snapshot.ProviderNodeID + "\x00" + snapshot.ConnectionID + "\x00" + snapshot.ModelRef + "\x00" + snapshot.WindowName
+func quotaKey(snapshot quota.Snapshot) quota.Identity {
+	return snapshot.Identity()
 }

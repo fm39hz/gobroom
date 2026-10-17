@@ -793,11 +793,14 @@ The external job fixture creates a job, loses its response and replays the same
 prepared keyed request without creating another job. It restarts the daemon,
 then reads/cancels the job through its retained scoped handle. An ambiguous
 unsafe cancellation is not retried: the caller reads status to reconcile it.
-The current passive health gate may cool down the whole route after such a
-failure, including status actions; the fixture waits for the actual deadline
-reported by `health.list`, without resetting the gate or probing repeatedly.
-Operation-specific health/quota evidence remains an explicit follow-up, not a
-provider/job exception in the kernel.
+Passive transport/stream evidence is operation-scoped: a lost cancel response
+does not delay status reconciliation. Typed health and quota identities carry
+the exact operation ref through eligibility, half-open trials, persistence and
+restart. Classifier options can declare operation-specific HTTP limits, while
+actual account/provider failures remain broader. Quota-source modules may
+return operation-qualified snapshots; a zero operation ref deliberately means
+a shared budget. Workload ranking and affinity keep operation versions separate
+as well. This is a general dimension, not a job-status bypass.
 
 ## Closure criterion
 

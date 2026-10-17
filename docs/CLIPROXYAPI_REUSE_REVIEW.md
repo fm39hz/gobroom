@@ -26,6 +26,14 @@ notice and have an independent Gobroom fixture.
 
 ## Implementation map
 
+Scope-isolation lesson for the operation feedback slice: the auth scheduler's
+targeted model updates (`sdk/cliproxy/auth/scheduler.go` and the targeted-update/
+cooldown-rebuild fixtures) keep one suppressed model from starving another.
+Gobroom extends that problem statement to independent operations on one model
+route. It uses exact typed operation refs in its own breaker/quota identities,
+immutable snapshot generation fences and persistence queue/spool contracts;
+it does not copy the scheduler, import the auth conductor or add a job branch.
+
 ### Request path and execution
 
 CLIProxyAPI separates API handlers, a translator pipeline, auth/conductor

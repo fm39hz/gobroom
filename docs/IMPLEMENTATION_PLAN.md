@@ -5,6 +5,11 @@ Status is based on the repository implementation and tests inspected on
 status. Architecture and compatibility documents describe contracts/evidence;
 they do not override this status table.
 
+The [product progress snapshot](PRODUCT_STATUS.md) reviews the complete user
+journey across these milestones. Update it at integrated milestones; do not
+report only the feature currently being changed or infer product completeness
+from a green architecture subset.
+
 ## Status vocabulary
 
 - **Done** — implemented in the repository and covered by tests for the stated
@@ -292,7 +297,7 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fixture now executes both JSON and bounded multipart non-chat operations
    through module-owned ingress, assigned model, Physical/Combo graph, shared
    multipart provider codec, decoder and client renderer. Remaining: real
-   provider idempotency guarantees, operation-aware health/quota evidence and broader
+   provider idempotency guarantees and broader
    commit/cancellation/replay stress cases.
    Scoped retry now requires a prepared replay factory instead of rerunning
    the semantic codec. The byte helper freezes encoded payload/headers and
@@ -315,10 +320,14 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    without a second job, wrong role/expiry/issuer fail before upstream dispatch,
    cancellation with a lost response is not repeated, and explicit status reads
    reconcile cancelled or completed jobs. No daemon poller/job database is added.
-   The fixture exposed an open policy dimension: network feedback currently
-   cools down every operation on that route. It respects the observed deadline
-   through control IPC; the next C5 slice must model operation-aware health and
-   quota scope generically rather than granting job-status a bypass.
+   Operation-aware feedback now carries exact refs through typed breaker/quota
+   identities, eligibility/ranking, half-open trials, SQLite, asynchronous writes
+   and durable spools. The job fixture no longer waits for cancel cooldown before
+   status: the two actions are independent across restart. Operation-qualified
+   rate/quota windows can suppress create while status remains usable; an eligible
+   different account can still be selected. Shared account/provider evidence
+   remains broad. Comparable workload statistics and affinity are partitioned
+   by operation/version, and CLI/TUI project the operation-level state.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and
    versioned JSON/multipart ingress, loads its manifest, builds an assigned

@@ -3,6 +3,7 @@ package runtime
 import (
 	"sync"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
@@ -16,6 +17,7 @@ type HealthObservationErrorHandler func(HealthObservation, error)
 
 type healthObservationKey struct {
 	scope, provider, connection, model, route string
+	operation                                 extensions.Ref
 }
 
 // HealthObservationQueue keeps inference independent of storage latency while
@@ -119,6 +121,8 @@ func healthObservationIdentity(observation HealthObservation) healthObservationK
 	route := observation.Route
 	key := healthObservationKey{scope: string(observation.State.LastScope)}
 	switch observation.State.LastScope {
+	case kernel.ScopeOperation:
+		key.connection, key.model, key.route, key.operation = route.CredentialID, route.ExternalModel, route.ID, route.SessionOperationRef
 	case kernel.ScopeProvider:
 		key.provider = route.NodeID
 	case kernel.ScopeConnection:

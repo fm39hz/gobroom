@@ -30,7 +30,9 @@ cannot receive an automatic scoped retry after ambiguous dispatch.
 with schema-validated results and a client-held, connection-scoped inline handle.
 The lifecycle test loses create/cancel responses, proves no duplicate job or
 unsafe cancel replay, restarts the daemon, and rejects handles on another
-account's role or after expiry/issuer changes. It follows the reported passive
-cooldown before reconciling cancellation; no background job worker is needed.
+account's role or after expiry/issuer changes. Operation-scoped cancel cooldown
+survives restart without delaying status. A create-only HTTP rate limit remains
+scoped to its operation/account across restart; other eligible accounts may
+still be selected and status remains usable. No background job worker is needed.
 To verify the installed control client too, run the lifecycle test with
 `GOBROOM_TEST_CLI=/absolute/path/to/gobroom`.

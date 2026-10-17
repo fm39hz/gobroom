@@ -107,6 +107,13 @@ CREATE TABLE IF NOT EXISTS quota_snapshots (
   metadata_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_quota_lookup ON quota_snapshots(provider_node_id,connection_id,model_ref,window_name);
+CREATE TABLE IF NOT EXISTS operation_quota_snapshots (
+  provider_node_id TEXT NOT NULL, connection_id TEXT NOT NULL, model_ref TEXT NOT NULL,
+  operation_id TEXT NOT NULL, operation_version INTEGER NOT NULL CHECK(operation_version>0), window_name TEXT NOT NULL,
+  generation TEXT NOT NULL, authority INTEGER NOT NULL, observed_at_ns INTEGER NOT NULL,
+  used REAL NOT NULL, limit_value REAL, remaining REAL, reset_at TEXT, source TEXT NOT NULL, metadata_json TEXT NOT NULL,
+  PRIMARY KEY(provider_node_id,connection_id,model_ref,operation_id,operation_version,window_name)
+);
 CREATE TABLE IF NOT EXISTS connection_runtime (
   connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'active', consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -129,6 +136,15 @@ CREATE TABLE IF NOT EXISTS model_availability (
   PRIMARY KEY(connection_id, model_ref)
 );
 CREATE INDEX IF NOT EXISTS idx_model_availability_until ON model_availability(blocked_until);
+CREATE TABLE IF NOT EXISTS operation_runtime (
+  connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+  model_ref TEXT NOT NULL, operation_id TEXT NOT NULL, operation_version INTEGER NOT NULL CHECK(operation_version>0),
+  status TEXT NOT NULL, failures INTEGER NOT NULL, successes INTEGER NOT NULL,
+  blocked_until TEXT NOT NULL, last_error TEXT NOT NULL, cause TEXT NOT NULL,
+  evidence TEXT NOT NULL, confidence REAL NOT NULL, generation TEXT NOT NULL,
+  last_attempt TEXT NOT NULL, last_success TEXT NOT NULL, observed_at_ns INTEGER NOT NULL,
+  PRIMARY KEY(connection_id,model_ref,operation_id,operation_version)
+);
 CREATE TABLE IF NOT EXISTS connection_model_catalog (
   connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
   provider_node_id TEXT NOT NULL REFERENCES provider_nodes(id) ON DELETE CASCADE,
@@ -787,6 +803,12 @@ func (s *Store) ResetConnectionRoutingState(connectionID string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM operation_runtime WHERE connection_id=?`, connectionID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM operation_quota_snapshots WHERE connection_id=?`, connectionID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`UPDATE connection_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,rate_limited_until=NULL,backoff_level=0,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE connection_id=?`, connectionID); err != nil {
 		return err
 	}
@@ -810,6 +832,12 @@ func (s *Store) ResetProviderRoutingState(providerNodeID string) error {
 		return err
 	}
 	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM operation_runtime WHERE connection_id IN (SELECT id FROM connections WHERE provider_node_id=?)`, providerNodeID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM operation_quota_snapshots WHERE provider_node_id=?`, providerNodeID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`UPDATE provider_runtime SET status='available',consecutive_failures=0,cooldown_until=NULL,last_error=NULL,error_code=NULL,generation='',updated_at=CURRENT_TIMESTAMP WHERE provider_node_id=?`, providerNodeID); err != nil {
 		return err
 	}
@@ -1162,6 +1190,9 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 }
 
 func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
+	if err := snapshot.ValidateOperation(); err != nil {
+		return err
+	}
 	metadataJSON, err := json.Marshal(struct {
 		RoutingEffect quota.RoutingEffect `json:"routingEffect,omitempty"`
 	}{RoutingEffect: snapshot.RoutingEffect})
@@ -1181,12 +1212,16 @@ func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
 		snapshot.Source = snapshot.Authority.String()
 	}
 	observedAt := snapshot.ObservedAt.UTC()
+	if snapshot.OperationRef.ID != "" {
+		return s.saveOperationQuotaSnapshot(snapshot, metadataJSON)
+	}
 	_, err = s.DB.Exec(`INSERT INTO quota_snapshots(id,provider_node_id,connection_id,model_ref,window_name,generation,authority,observed_at,observed_at_ns,used,limit_value,remaining,reset_at,source,metadata_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,authority=excluded.authority,observed_at=excluded.observed_at,observed_at_ns=excluded.observed_at_ns,used=excluded.used,limit_value=COALESCE(excluded.limit_value,quota_snapshots.limit_value),remaining=COALESCE(excluded.remaining,quota_snapshots.remaining),reset_at=COALESCE(excluded.reset_at,quota_snapshots.reset_at),source=excluded.source,metadata_json=excluded.metadata_json,updated_at=CURRENT_TIMESTAMP WHERE excluded.observed_at_ns>quota_snapshots.observed_at_ns OR (excluded.observed_at_ns=quota_snapshots.observed_at_ns AND (excluded.authority>quota_snapshots.authority OR (excluded.authority=quota_snapshots.authority AND excluded.source>=quota_snapshots.source)))`, quotaID(snapshot), snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.Generation, int(snapshot.Authority), observedAt.Format(time.RFC3339Nano), observedAt.UnixNano(), snapshot.Used, snapshot.Limit, snapshot.Remaining, timeString(snapshot.ResetAt), snapshot.Source, string(metadataJSON))
 	return err
 }
 
 func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
-	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,generation,authority,observed_at_ns,used,limit_value,remaining,COALESCE(reset_at,''),source,metadata_json FROM quota_snapshots`)
+	rows, err := s.DB.Query(`SELECT provider_node_id,COALESCE(connection_id,''),COALESCE(model_ref,''),window_name,generation,authority,observed_at_ns,used,limit_value,remaining,COALESCE(reset_at,''),source,metadata_json,'',0 FROM quota_snapshots
+UNION ALL SELECT provider_node_id,connection_id,model_ref,window_name,generation,authority,observed_at_ns,used,limit_value,remaining,COALESCE(reset_at,''),source,metadata_json,operation_id,operation_version FROM operation_quota_snapshots`)
 	if err != nil {
 		return nil, err
 	}
@@ -1198,8 +1233,11 @@ func (s *Store) QuotaSnapshots() ([]quota.Snapshot, error) {
 		var observedAt int64
 		var limit, remaining sql.NullFloat64
 		var reset, source, metadata string
-		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Generation, &authority, &observedAt, &p.Used, &limit, &remaining, &reset, &source, &metadata); err != nil {
+		if err := rows.Scan(&p.ProviderNodeID, &p.ConnectionID, &p.ModelRef, &p.WindowName, &p.Generation, &authority, &observedAt, &p.Used, &limit, &remaining, &reset, &source, &metadata, &p.OperationRef.ID, &p.OperationRef.ContractVersion); err != nil {
 			return nil, err
+		}
+		if p.OperationRef.ID != "" {
+			p.OperationRef.Kind = "operation"
 		}
 		var policy struct {
 			RoutingEffect quota.RoutingEffect `json:"routingEffect,omitempty"`

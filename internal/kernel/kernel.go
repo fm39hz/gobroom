@@ -331,7 +331,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			continue
 		}
-		routes := k.Scheduler.RankRoutesForSession(resolveRouteMember(snapshot, member), time.Now(), requestClass(req), req.Session.ID)
+		candidates := resolveRouteMember(snapshot, member)
+		for index := range candidates {
+			candidates[index].SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(req.Operation), ContractVersion: req.OperationContractVersion}
+		}
+		routes := k.Scheduler.RankRoutesForSession(candidates, time.Now(), requestClass(req), req.Session.ID)
 		if node.Kind == ModelPhysical && !PhysicalSourceAllowed(node, member) {
 			routes = nil
 		}
@@ -560,13 +564,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					idempotencyRetried = true
 					goto retryUpstream
 				}
-				k.Scheduler.Release(candidate)
 				failureClass, memberErr = kernelErrorClass(err), err
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Effect: EffectUnknown, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: failureClass, Cause: CauseNetwork, Effect: EffectUnknown, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 0.8, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, kernelErrorClass(err), err)
 				}
+				k.Scheduler.Release(candidate)
 				return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: err}
 			}
 			if response.Status >= 400 {
@@ -607,7 +611,6 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						goto retryUpstream
 					}
 				}
-				k.Scheduler.Release(candidate)
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, outcome)
 				}
@@ -619,6 +622,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						feedback.MarkFailureAfter(candidate, class, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))), retryAfter)
 					}
 				}
+				k.Scheduler.Release(candidate)
 				_ = response.Body.Close()
 				if !canReplayAfterDispatch(replaySafety, outcome.Effect) {
 					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: outcome.Effect, Cause: memberErr}
@@ -746,15 +750,15 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 			}
 			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
-				releaseAttempt()
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
 				}
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Effect: EffectAccepted, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Effect: EffectAccepted, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
 				}
+				releaseAttempt()
 			}, ValidateEvent: validateEvent, OnEvent: func(event ResponseEvent) {
 				if event.ResponseID != "" {
 					sessionState.ResponseID = event.ResponseID
@@ -778,6 +782,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					emitEvent(ResponseEvent{At: at, Kind: EventResponseStarted})
 				}
 			}, OnComplete: func(event UsageEvent) {
+				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Effect: EffectAccepted, Scope: ScopeOperation, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
+				}
 				event.CompatibilityFidelity = compatibilityPlan.Fidelity
 				event.CompatibilityLosses = cloneLossRecords(compatibilityPlan.Losses)
 				responseTransformFailuresMu.Lock()
@@ -795,9 +802,6 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					if enriched, enrichErr := source.EnrichUsage(ctx, candidate, response.Headers, event); enrichErr == nil {
 						event = enriched
 					}
-				}
-				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Effect: EffectAccepted, Scope: ScopeRoute, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
 				}
 				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
 					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
@@ -861,7 +865,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if !attemptReleased {
 				releaseAttempt()
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseProtocol, Scope: ScopeRoute, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: renderErr.Error()})
+					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseProtocol, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: renderErr.Error()})
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, ErrorRetryable, renderErr)
 				}
@@ -980,7 +984,14 @@ func requestClass(req NormalizedRequest) string {
 	} else if len(req.Messages) > 0 {
 		contextBucket = "small"
 	}
-	return fmt.Sprintf("format=%s;stream=%t;vision=%t;audio=%t;video=%t;pdf=%t;tools=%t;thinking=%s;context=%s", req.SourceFormat, req.Stream, req.Modalities.Vision, req.Modalities.AudioInput, req.Modalities.VideoInput, req.Modalities.PDF, len(req.Tools) > 0, req.Thinking.Effort, contextBucket)
+	class := struct {
+		Operation                                extensions.Ref   `json:"operation"`
+		Format                                   normalize.Format `json:"format"`
+		Stream, Vision, Audio, Video, PDF, Tools bool
+		Thinking, Context                        string
+	}{extensions.Ref{Kind: "operation", ID: string(req.Operation), ContractVersion: req.OperationContractVersion}, req.SourceFormat, req.Stream, req.Modalities.Vision, req.Modalities.AudioInput, req.Modalities.VideoInput, req.Modalities.PDF, len(req.Tools) > 0, req.Thinking.Effort, contextBucket}
+	encoded, _ := json.Marshal(class)
+	return string(encoded)
 }
 
 func retryAfterDuration(value string) time.Duration {
@@ -1009,6 +1020,7 @@ func classifyOutcome(adapter ProviderAdapter, status int, headers http.Header, b
 	switch {
 	case status == 401 || status == 403:
 		outcome.Cause, outcome.Retry = CauseAuth, RetryNever
+		outcome.Scope = ScopeConnection
 	case status == 429:
 		outcome.Cause, outcome.Retry = CauseRateLimited, RetryAfter
 	case status >= 500:

@@ -75,6 +75,13 @@ func (b *PerformanceBook) ClassSnapshot(routeID, requestClass string) (Performan
 	return stats, ok
 }
 
+func (b *PerformanceBook) RouteSnapshot(routeID string) (PerformanceStats, bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	stats, ok := b.byRoute[routeID]
+	return stats, ok
+}
+
 func (b *PerformanceBook) Snapshot() map[string]PerformanceStats {
 	b.mu.RLock()
 	defer b.mu.RUnlock()

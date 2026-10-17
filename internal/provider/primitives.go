@@ -269,7 +269,7 @@ func validOutcomeCause(cause kernel.OutcomeCause) bool {
 
 func validOutcomeScope(scope kernel.OutcomeScope) bool {
 	switch scope {
-	case kernel.ScopeRequest, kernel.ScopeRoute, kernel.ScopeRouteConnection, kernel.ScopeConnection, kernel.ScopeProvider:
+	case kernel.ScopeRequest, kernel.ScopeRoute, kernel.ScopeRouteConnection, kernel.ScopeOperation, kernel.ScopeConnection, kernel.ScopeProvider:
 		return true
 	default:
 		return false

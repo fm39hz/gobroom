@@ -159,14 +159,15 @@ func quotaSourceOptionsSchema() (json.RawMessage, error) {
 func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
 	return bindSchemaDocument(errorOptionsSchemaRef, json.RawMessage(`{
 "type":"object",
+"$defs":{"scope":{"enum":["request","route","route_connection","operation","connection","provider"]}},
 "properties":{"httpJson":{
   "type":"object",
   "properties":{
-    "defaultScope":{"enum":["request","route","route_connection","connection","provider"]},
-    "authScope":{"enum":["request","route","route_connection","connection","provider"]},
-    "quotaScope":{"enum":["request","route","route_connection","connection","provider"]},
-    "rateLimitScope":{"enum":["request","route","route_connection","connection","provider"]},
-    "capacityScope":{"enum":["request","route","route_connection","connection","provider"]},
+    "defaultScope":{"$ref":"#/$defs/scope"},
+    "authScope":{"$ref":"#/$defs/scope"},
+    "quotaScope":{"$ref":"#/$defs/scope"},
+    "rateLimitScope":{"$ref":"#/$defs/scope"},
+    "capacityScope":{"$ref":"#/$defs/scope"},
     "codePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "typePath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
     "statusPath":{"type":"string","pattern":"^/([^~]|~[01])*$"},
@@ -208,7 +209,7 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
         "equals":{"type":"array","items":{"type":"string","minLength":1}},
         "contains":{"type":"array","items":{"type":"string","minLength":1}}
       },"additionalProperties":false}},
-      "scope":{"enum":["request","route","route_connection","connection","provider"]}
+      "scope":{"enum":["request","route","route_connection","operation","connection","provider"]}
     },"additionalProperties":false}}
   },
   "additionalProperties":false

@@ -603,6 +603,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 func persistHealthState(stateStore *store.Store, route kernel.Route, state runtimehealth.RouteHealth) error {
 	switch state.LastScope {
+	case kernel.ScopeOperation:
+		return stateStore.SaveOperationRuntime(store.OperationRuntime{ConnectionID: route.CredentialID, ModelRef: route.ExternalModel, OperationRef: state.OperationRef, Status: healthStatus(state), BlockedUntil: formatTime(state.CooldownUntil), LastError: state.LastError, Cause: string(state.LastCause), Evidence: string(state.LastEvidence), Confidence: state.Confidence, Generation: state.Generation, Failures: state.Failures, Successes: state.Successes, LastAttempt: formatTime(state.LastAttempt), LastSuccess: formatTime(state.LastSuccess), ObservedAt: state.LastAttempt})
 	case kernel.ScopeConnection:
 		return stateStore.SaveConnectionRuntime(store.ConnectionRuntime{ConnectionID: route.CredentialID, Status: healthStatus(state), Generation: route.HealthGeneration.For(state.LastScope), ConsecutiveFailures: state.Failures, CooldownUntil: formatTime(state.CooldownUntil), LastError: state.LastError, ErrorCode: string(state.LastCause)})
 	case kernel.ScopeProvider:
@@ -615,6 +617,20 @@ func persistHealthState(stateStore *store.Store, route kernel.Route, state runti
 }
 
 func (d *Daemon) restoreHealthForRoutes(routes map[string]kernel.Route) error {
+	operations, err := d.store.OperationRuntimes()
+	if err != nil {
+		return err
+	}
+	for _, item := range operations {
+		for _, route := range routes {
+			binding, exists := route.OperationBindings[normalize.Operation(item.OperationRef.ID)]
+			if !exists || binding.ContractVersion != item.OperationRef.ContractVersion || route.CredentialID != item.ConnectionID || route.ExternalModel != item.ModelRef || item.Generation != route.HealthGeneration.For(kernel.ScopeOperation) {
+				continue
+			}
+			route.SessionOperationRef = item.OperationRef
+			d.policy.Health.Restore(route, runtimehealth.RouteHealth{OperationRef: item.OperationRef, Failures: item.Failures, Successes: item.Successes, Invalid: item.Status == "invalid", Generation: item.Generation, CooldownUntil: parseTime(item.BlockedUntil), LastError: item.LastError, LastCause: kernel.OutcomeCause(item.Cause), LastScope: kernel.ScopeOperation, LastEvidence: kernel.EvidenceSource(item.Evidence), Confidence: item.Confidence, LastAttempt: parseTime(item.LastAttempt), LastSuccess: parseTime(item.LastSuccess)})
+		}
+	}
 	connections, err := d.store.ConnectionRuntimes()
 	if err != nil {
 		return err
@@ -1227,6 +1243,10 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			if explainErr != nil {
 				return fail(request, "explain request compatibility: "+explainErr.Error())
 			}
+			for index := range resolved.Candidates {
+				resolved.Candidates[index].SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(normalized.Request.Operation), ContractVersion: normalized.Request.OperationContractVersion}
+			}
+			explanations = d.policy.ExplainRoutes(resolved.Candidates, time.Now(), requestClass, sessionID)
 			byRoute := make(map[string][]kernel.RouteCompatibilityExplanation, len(compatibility))
 			for _, item := range compatibility {
 				byRoute[item.RouteID] = append(byRoute[item.RouteID], item)

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/quota"
 )
@@ -370,9 +371,15 @@ func validateSpoolRecord(record SpoolRecord) error {
 		if record.Health == nil {
 			return fmt.Errorf("health spool record %q has no payload", record.Key)
 		}
+		if record.Health.State.LastScope == kernel.ScopeOperation && (record.Health.State.OperationRef.Kind != "operation" || record.Health.State.OperationRef.Validate() != nil) {
+			return fmt.Errorf("operation health spool requires an exact operation ref")
+		}
 	case spoolQuotaKind:
 		if record.Quota == nil {
 			return fmt.Errorf("quota spool record %q has no payload", record.Key)
+		}
+		if err := record.Quota.ValidateOperation(); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("runtime persistence spool record %q has unknown kind %q", record.Key, record.Kind)
@@ -391,22 +398,24 @@ func cloneSpoolRecords(source map[string]SpoolRecord) map[string]SpoolRecord {
 func HealthSpoolKey(observation HealthObservation) string {
 	identity := healthObservationIdentity(observation)
 	key, _ := json.Marshal(struct {
-		Scope      string `json:"scope"`
-		Provider   string `json:"provider"`
-		Connection string `json:"connection"`
-		Model      string `json:"model"`
-		Route      string `json:"route"`
-	}{identity.scope, identity.provider, identity.connection, identity.model, identity.route})
+		Scope      string         `json:"scope"`
+		Provider   string         `json:"provider"`
+		Connection string         `json:"connection"`
+		Model      string         `json:"model"`
+		Route      string         `json:"route"`
+		Operation  extensions.Ref `json:"operation,omitzero"`
+	}{identity.scope, identity.provider, identity.connection, identity.model, identity.route, identity.operation})
 	return spoolHealthKind + ":" + string(key)
 }
 
 func QuotaSpoolKey(snapshot quota.Snapshot) string {
 	key, _ := json.Marshal(struct {
-		Provider   string `json:"provider"`
-		Connection string `json:"connection"`
-		Model      string `json:"model"`
-		Window     string `json:"window"`
-	}{snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName})
+		Provider   string         `json:"provider"`
+		Connection string         `json:"connection"`
+		Model      string         `json:"model"`
+		Window     string         `json:"window"`
+		Operation  extensions.Ref `json:"operation,omitzero"`
+	}{snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.WindowName, snapshot.OperationRef})
 	return spoolQuotaKind + ":" + string(key)
 }
 
@@ -424,7 +433,7 @@ func (r SpoolRecord) HealthObservation() (HealthObservation, bool) {
 	}
 	payload := r.Health
 	return HealthObservation{
-		Route: kernel.Route{ID: payload.RouteID, NodeID: payload.NodeID, CredentialID: payload.CredentialID, ExternalModel: payload.ExternalModel, HealthGeneration: payload.Generation},
+		Route: kernel.Route{ID: payload.RouteID, NodeID: payload.NodeID, CredentialID: payload.CredentialID, ExternalModel: payload.ExternalModel, HealthGeneration: payload.Generation, SessionOperationRef: payload.State.OperationRef},
 		State: func() RouteHealth { state := payload.State; state.Generation = r.Generation; return state }(),
 	}, true
 }

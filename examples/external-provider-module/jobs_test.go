@@ -32,6 +32,11 @@ func jobManifest() provider.ProviderDefinition {
 		}
 		if action == "create" {
 			binding.Idempotency = provider.IdempotencyPolicy{Header: "Idempotency-Key", MinRetentionSeconds: 60}
+			binding.ErrorClassifier = provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}
+			binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
+				RateLimitScope: provider.ScopeOperation,
+				LimitHeaders:   []provider.HTTPHeaderLimitSignal{{Name: "create-rpm", LimitHeader: "X-Create-Limit", RemainingHeader: "X-Create-Remaining", ResetHeader: "X-Create-Reset"}},
+			}}
 		}
 		definition.Operations[provider.Operation(ref.ID)] = binding
 	}
@@ -47,7 +52,9 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	var mu sync.Mutex
 	jobs := map[string]*upstreamJob{}
 	keys := map[string]string{}
+	createCallsByAccount := map[string]int{}
 	creates, createCalls, cancelCalls, statusCalls, wrongAccount := 0, 0, 0, 0, 0
+	rejectCreates := false
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -63,6 +70,16 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 				return
 			}
 			createCalls++
+			createCallsByAccount[account]++
+			if rejectCreates {
+				w.Header().Set("X-Create-Limit", "10")
+				w.Header().Set("X-Create-Remaining", "0")
+				w.Header().Set("X-Create-Reset", time.Now().Add(60*time.Second).UTC().Format(time.RFC3339))
+				w.Header().Set("Retry-After", "60")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "rate_limit_exceeded", "message": "create request rate exceeded"}})
+				return
+			}
 			key := r.Header.Get("Idempotency-Key")
 			if key == "" || key == "client-create-key" {
 				t.Error("missing issuer-derived idempotency key")
@@ -295,8 +312,6 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if status < 400 {
 		t.Fatalf("lost unsafe cancellation response falsely succeeded: %d %s", status, body)
 	}
-	// Respect the actual passive health deadline; do not disable/reset the gate
-	// or repeatedly probe the upstream to make the fixture pass.
 	health, err := daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "health.list"})
 	if err != nil || !health.OK {
 		t.Fatalf("health evidence: %#v %v", health, err)
@@ -308,26 +323,106 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if installedCLI != "" {
 		healthJSON = cli("health")
 	}
-	var states map[string]struct{ CooldownUntil time.Time }
+	type operationHealth struct {
+		OperationRef  provider.Ref `json:"operationRef"`
+		CooldownUntil time.Time
+		LastCause     string
+	}
+	type healthState struct {
+		operationHealth
+		Operations []operationHealth `json:"operations"`
+	}
+	var states map[string]healthState
 	if err := json.Unmarshal(healthJSON, &states); err != nil {
 		t.Fatal(err)
 	}
-	var deadline time.Time
+	var cancelCooling bool
+	var cancelFound bool
 	for _, state := range states {
-		if state.CooldownUntil.After(deadline) {
-			deadline = state.CooldownUntil
+		for _, operation := range state.Operations {
+			if operation.OperationRef == jobOperation("cancel") {
+				cancelFound = true
+				cancelCooling = operation.CooldownUntil.After(time.Now())
+			}
 		}
 	}
-	wait := time.Until(deadline) + time.Millisecond
-	if wait <= 0 || wait > 10*time.Second {
-		t.Fatalf("expected bounded passive cooldown, got deadline=%s", deadline)
+	if !cancelFound || !cancelCooling {
+		t.Fatalf("cancel operation health did not retain its cooldown: %#v", states)
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	<-timer.C
+	if status, _, body := call("cancel", "", "", json.RawMessage(`{}`), []provider.ArtifactRef{handle}); status < 400 {
+		t.Fatalf("cooling cancel operation was dispatched again: %d %s", status, body)
+	}
+	mu.Lock()
+	if cancelCalls != 1 {
+		mu.Unlock()
+		t.Fatalf("cooling cancel reached upstream %d times", cancelCalls)
+	}
+	mu.Unlock()
+	if err := service.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service = daemon.NewWithProviderModules(config, JobModule{})
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	health, err = daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "health.list"})
+	if err != nil || !health.OK {
+		t.Fatalf("restored health evidence: %#v %v", health, err)
+	}
+	healthJSON, err = json.Marshal(health.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installedCLI != "" {
+		healthJSON = cli("health")
+	}
+	states = nil
+	if err := json.Unmarshal(healthJSON, &states); err != nil {
+		t.Fatal(err)
+	}
+	cancelCooling = false
+	cancelFound = false
+	for _, state := range states {
+		for _, operation := range state.Operations {
+			if operation.OperationRef == jobOperation("cancel") {
+				cancelFound = true
+				cancelCooling = operation.CooldownUntil.After(time.Now())
+			}
+		}
+	}
+	if !cancelFound || !cancelCooling {
+		t.Fatalf("cancel operation cooldown did not survive restart: %#v", states)
+	}
 	status, cancelled, body := call("status", "", "", json.RawMessage(`{}`), []provider.ArtifactRef{handle})
 	if status >= 300 || cancelled.Result.Status != "cancelled" {
 		t.Fatalf("could not reconcile cancellation: %d %s", status, body)
+	}
+	health, err = daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "health.list"})
+	if err != nil || !health.OK {
+		t.Fatalf("health after status reconciliation: %#v %v", health, err)
+	}
+	healthJSON, err = json.Marshal(health.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states = nil
+	if err := json.Unmarshal(healthJSON, &states); err != nil {
+		t.Fatal(err)
+	}
+	cancelCooling = false
+	cancelFound = false
+	for _, state := range states {
+		for _, operation := range state.Operations {
+			if operation.OperationRef == jobOperation("cancel") {
+				cancelFound = true
+				if !operation.CooldownUntil.After(time.Now()) {
+					t.Fatalf("successful status erased cancel cooldown: %#v", operation)
+				}
+			}
+		}
+	}
+	if !cancelFound {
+		t.Fatalf("cancel operation health disappeared after status reconciliation: %#v", states)
 	}
 	status, second, body := call("create", accountA, "completion-case", json.RawMessage(`{"prompt":"finish a fixture"}`), nil)
 	if status >= 300 || len(second.Artifacts) != 1 || second.Result.ID == created.Result.ID {
@@ -340,8 +435,112 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 		}
 	}
 	mu.Lock()
+	rejectCreates = true
+	mu.Unlock()
+	status, _, body = call("create", accountA, "quota-case", json.RawMessage(`{"prompt":"exhaust create quota"}`), nil)
+	if status < 400 {
+		t.Fatalf("quota rejection unexpectedly succeeded: %d %s", status, body)
+	}
+	mu.Lock()
+	if creates != 2 || createCalls != 5 {
+		mu.Unlock()
+		t.Fatalf("quota rejection changed job effects: created=%d create calls=%d", creates, createCalls)
+	}
+	mu.Unlock()
+	readQuota := func() map[string]provider.QuotaSnapshot {
+		t.Helper()
+		response, err := daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "quota.list"})
+		if err != nil || !response.OK {
+			t.Fatalf("quota evidence: %#v %v", response, err)
+		}
+		encoded, err := json.Marshal(response.Result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if installedCLI != "" {
+			encoded = cli("quota")
+		}
+		var snapshots map[string]provider.QuotaSnapshot
+		if err := json.Unmarshal(encoded, &snapshots); err != nil {
+			t.Fatalf("quota JSON=%s: %v", encoded, err)
+		}
+		return snapshots
+	}
+	assertCreateQuota := func(snapshots map[string]provider.QuotaSnapshot) {
+		t.Helper()
+		foundAccountQuota := false
+		for _, snapshot := range snapshots {
+			if snapshot.WindowName != "create-rpm" {
+				continue
+			}
+			if snapshot.ConnectionID == accountA && snapshot.OperationRef == jobOperation("create") && snapshot.Remaining != nil && *snapshot.Remaining == 0 {
+				foundAccountQuota = true
+			}
+			if snapshot.OperationRef == (provider.Ref{}) {
+				t.Fatalf("rate limit created an operation-independent quota row: %#v", snapshot)
+			}
+		}
+		if !foundAccountQuota {
+			t.Fatalf("account A operation scoped create quota evidence missing: %#v", snapshots)
+		}
+	}
+	assertCreateQuota(readQuota())
+	health, err = daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "health.list"})
+	if err != nil || !health.OK {
+		t.Fatalf("health after create rate limit: %#v %v", health, err)
+	}
+	healthJSON, err = json.Marshal(health.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installedCLI != "" {
+		healthJSON = cli("health")
+	}
+	states = nil
+	if err := json.Unmarshal(healthJSON, &states); err != nil {
+		t.Fatal(err)
+	}
+	createRateLimited := false
+	for _, state := range states {
+		for _, operation := range state.Operations {
+			if operation.OperationRef == jobOperation("create") && operation.LastCause == "rate_limited" {
+				createRateLimited = true
+			}
+		}
+	}
+	if !createRateLimited {
+		t.Fatalf("create operation did not record rate_limited health evidence: %#v", states)
+	}
+	if err := service.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service = daemon.NewWithProviderModules(config, JobModule{})
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertCreateQuota(readQuota())
+	mu.Lock()
+	createCallsBeforeBlockedRetry := createCalls
+	accountACreateCallsBeforeBlockedRetry := createCallsByAccount["Bearer account-a"]
+	accountBCreateCallsBeforeBlockedRetry := createCallsByAccount["Bearer account-b"]
+	mu.Unlock()
+	status, _, body = call("create", accountA, "quota-case-after-restart", json.RawMessage(`{"prompt":"still exhausted"}`), nil)
+	if status < 400 {
+		t.Fatalf("persisted create quota did not reject request: %d %s", status, body)
+	}
+	mu.Lock()
+	if createCalls != createCallsBeforeBlockedRetry+1 || createCallsByAccount["Bearer account-a"] != accountACreateCallsBeforeBlockedRetry || createCallsByAccount["Bearer account-b"] != accountBCreateCallsBeforeBlockedRetry+1 {
+		mu.Unlock()
+		t.Fatalf("fallback did not preserve account A quota while rejecting account B once: calls=%d->%d accountA=%d->%d accountB=%d->%d", createCallsBeforeBlockedRetry, createCalls, accountACreateCallsBeforeBlockedRetry, createCallsByAccount["Bearer account-a"], accountBCreateCallsBeforeBlockedRetry, createCallsByAccount["Bearer account-b"])
+	}
+	mu.Unlock()
+	status, completed, body := call("status", "", "", json.RawMessage(`{}`), second.Artifacts)
+	if status >= 300 || completed.Result.Status != "completed" || completed.Result.ID != second.Result.ID {
+		t.Fatalf("operation quota blocked status reconciliation: %d %s", status, body)
+	}
+	mu.Lock()
 	defer mu.Unlock()
-	if creates != 2 || createCalls != 4 || cancelCalls != 1 || statusCalls != 4 || wrongAccount != 0 {
+	if creates != 2 || createCalls != 6 || createCallsByAccount["Bearer account-a"] != 5 || createCallsByAccount["Bearer account-b"] != 1 || cancelCalls != 1 || statusCalls != 5 || wrongAccount != 0 {
 		t.Fatalf("job effects escaped their contracts: created=%d cancellations=%d polls=%d wrongAccount=%d", creates, cancelCalls, statusCalls, wrongAccount)
 	}
 }

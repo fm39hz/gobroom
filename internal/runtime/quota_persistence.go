@@ -11,9 +11,7 @@ type QuotaSnapshotSink interface {
 	SaveQuotaSnapshot(quota.Snapshot) error
 }
 
-type quotaSnapshotKey struct {
-	provider, connection, model, window string
-}
+type quotaSnapshotKey = quota.Identity
 
 type queuedQuotaSnapshot struct {
 	snapshot          quota.Snapshot
@@ -59,7 +57,10 @@ func (q *QuotaSnapshotQueue) Enqueue(snapshot quota.Snapshot) bool {
 	if q == nil || q.sink == nil {
 		return false
 	}
-	key := quotaSnapshotKey{provider: snapshot.ProviderNodeID, connection: snapshot.ConnectionID, model: snapshot.ModelRef, window: snapshot.WindowName}
+	if snapshot.ValidateOperation() != nil {
+		return false
+	}
+	key := snapshot.Identity()
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -97,7 +98,7 @@ func (q *QuotaSnapshotQueue) ResetConnection(connectionID string, reset func() e
 	q.connectionVersion[connectionID]++
 	q.resettingConnections[connectionID] = true
 	for key := range q.pending {
-		if key.connection == connectionID {
+		if key.Connection == connectionID {
 			delete(q.pending, key)
 		}
 	}
@@ -123,7 +124,7 @@ func (q *QuotaSnapshotQueue) ResetProvider(providerNodeID string, reset func() e
 	q.providerVersion[providerNodeID]++
 	q.resettingProviders[providerNodeID] = true
 	for key := range q.pending {
-		if key.provider == providerNodeID {
+		if key.Provider == providerNodeID {
 			delete(q.pending, key)
 		}
 	}

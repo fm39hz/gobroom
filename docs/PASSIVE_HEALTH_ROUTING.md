@@ -146,6 +146,43 @@ global
 
 The kernel never assumes every HTTP 429 has the same scope or cause.
 
+### Exact operation dimension
+
+`operation` scopes feedback to the selected route/connection and exact
+operation ref (including contract version). A transport, decode or stream
+failure defaults to this scope; it does not establish that another action is
+unavailable. HTTP evidence can select operation, route, connection or provider
+scope through the shared classifier options. Authentication rejection remains
+connection-scoped by default. Request-only failures do not enter durable health.
+
+Operation identity is attached before scheduler eligibility/ranking, not only
+after a candidate is selected. Typed breaker keys, single-flight half-open
+admission, generation fences, queue coalescing and durable spool identities all
+retain that exact ref. A successful status request cannot clear cancel/create
+evidence. An actual successful half-open trial may recover only its own expired
+broader gates; publishing success precedes releasing that trial.
+
+The normalized quota snapshot has an optional exact `operationRef`. Zero means
+operation-independent evidence, not an inferred default operation. The same
+provider/account/model/window can therefore hold separate operation budgets
+alongside a true account budget. Classification-scoped limit windows inherit
+the current operation; provider quota-source modules may emit an exact ref
+explicitly. Shared HTTP classifier configuration accepts `operation` on scope
+selectors without provider names in the kernel.
+
+SQLite stores operation health and quota independently of broader runtime
+tables. Operation versions and observation freshness are part of the write
+contract; reset/delete and restart retain the original dimensions. The ordinary
+health view contains `operations` per route, while quota records expose their
+exact ref through IPC/CLI/TUI. No polling or active-health bypass is introduced.
+
+Adaptive workload classes and session-affinity keys also include the exact
+operation. Fast status calls cannot supply cold create rankings with unrelated
+latency samples or pin them to a status route. Comparable class evidence may
+still boost a source without modifying the user's durable order. Ranking
+freezes each score once and reads only candidate-specific statistics rather
+than copying every route's telemetry on the request path.
+
 ## Limit windows
 
 Quota, rate limit, concurrency and credit state share a typed window contract:

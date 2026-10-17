@@ -5,11 +5,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 type RouteHealth struct {
+	OperationRef  extensions.Ref `json:"operationRef,omitzero"`
 	Failures      int
 	Successes     int
 	Invalid       bool
@@ -23,20 +25,25 @@ type RouteHealth struct {
 	LastAttempt   time.Time
 	LastSuccess   time.Time
 }
+
+type RouteHealthView struct {
+	RouteHealth
+	Operations []RouteHealth `json:"operations,omitempty"`
+}
 type HealthGate struct {
 	mu                sync.RWMutex
 	routes            map[string]RouteHealth
-	scoped            map[string]RouteHealth
-	trials            map[string]bool
+	scoped            map[breakerKey]RouteHealth
+	trials            map[breakerKey]bool
 	observe           func(kernel.Route, RouteHealth)
-	generations       map[string]string
-	quotaGenerations  map[string]string
+	generations       map[breakerKey]string
+	quotaGenerations  map[quotaGenerationIdentity]string
 	routeGenerations  map[string]string
 	generationEnabled bool
 }
 
 func NewHealthGate() *HealthGate {
-	return &HealthGate{routes: map[string]RouteHealth{}, scoped: map[string]RouteHealth{}, trials: map[string]bool{}, generations: map[string]string{}, quotaGenerations: map[string]string{}, routeGenerations: map[string]string{}}
+	return &HealthGate{routes: map[string]RouteHealth{}, scoped: map[breakerKey]RouteHealth{}, trials: map[breakerKey]bool{}, generations: map[breakerKey]string{}, quotaGenerations: map[quotaGenerationIdentity]string{}, routeGenerations: map[string]string{}}
 }
 func (g *HealthGate) SetObserver(observer func(kernel.Route, RouteHealth)) { g.observe = observer }
 
@@ -46,9 +53,9 @@ func (g *HealthGate) SetGenerations(routes map[string]kernel.Route) []string {
 		scope kernel.OutcomeScope
 		value string
 	}
-	next := make(map[string]string, len(routes)*4)
-	nextQuotas := make(map[string]string, len(routes)*4)
-	entries := make(map[string]entry, len(routes)*4)
+	next := make(map[breakerKey]string, len(routes)*4)
+	nextQuotas := make(map[quotaGenerationIdentity]string, len(routes)*4)
+	entries := make(map[breakerKey]entry, len(routes)*4)
 	activeRoutes := make(map[string]struct{}, len(routes))
 	nextRouteGenerations := make(map[string]string, len(routes))
 	for _, route := range routes {
@@ -60,13 +67,25 @@ func (g *HealthGate) SetGenerations(routes map[string]kernel.Route) []string {
 			next[key] = value
 			entries[key] = entry{route: route, scope: scope, value: value}
 		}
+		for operation, binding := range route.OperationBindings {
+			bound := route
+			bound.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: binding.ContractVersion}
+			key := outcomeScopeKey(bound, kernel.ScopeOperation)
+			value := route.HealthGeneration.For(kernel.ScopeOperation)
+			next[key] = value
+			entries[key] = entry{route: bound, scope: kernel.ScopeOperation, value: value}
+		}
 		for _, identity := range []struct{ connection, model string }{{"", ""}, {"", route.ExternalModel}, {route.CredentialID, ""}, {route.CredentialID, route.ExternalModel}} {
-			key := quotaGenerationKey(route.NodeID, identity.connection, identity.model)
+			key := quotaGenerationKey(route.NodeID, identity.connection, identity.model, extensions.Ref{})
 			nextQuotas[key] = route.HealthGeneration.ForQuota(identity.connection, identity.model)
+			for operation, binding := range route.OperationBindings {
+				ref := extensions.Ref{Kind: "operation", ID: string(operation), ContractVersion: binding.ContractVersion}
+				nextQuotas[quotaGenerationKey(route.NodeID, identity.connection, identity.model, ref)] = route.HealthGeneration.ForQuota(identity.connection, identity.model)
+			}
 		}
 	}
 	var observations []HealthObservation
-	resetStates := make(map[string]RouteHealth)
+	resetStates := make(map[breakerKey]RouteHealth)
 	g.mu.Lock()
 	previous := g.generations
 	previousRoutes := g.routeGenerations
@@ -100,6 +119,9 @@ func (g *HealthGate) SetGenerations(routes map[string]kernel.Route) []string {
 		state.LastAttempt = time.Time{}
 		state.LastSuccess = time.Time{}
 		state.LastScope = item.scope
+		if item.scope == kernel.ScopeOperation {
+			state.OperationRef = item.route.SessionOperationRef
+		}
 		g.scoped[key] = state
 		resetStates[key] = state
 		delete(g.trials, key)
@@ -118,6 +140,12 @@ func (g *HealthGate) SetGenerations(routes map[string]kernel.Route) []string {
 			delete(g.routes, routeID)
 		}
 	}
+	for key := range g.scoped {
+		if _, exists := next[key]; !exists {
+			delete(g.scoped, key)
+			delete(g.trials, key)
+		}
+	}
 	observer := g.observe
 	g.mu.Unlock()
 	if observer != nil {
@@ -129,12 +157,20 @@ func (g *HealthGate) SetGenerations(routes map[string]kernel.Route) []string {
 	return changedRoutes
 }
 
-func quotaGenerationKey(providerID, connectionID, modelRef string) string {
-	return providerID + "\x00" + connectionID + "\x00" + modelRef
+type quotaGenerationIdentity struct {
+	provider, connection, model string
+	operation                   extensions.Ref
+}
+
+func quotaGenerationKey(providerID, connectionID, modelRef string, operation extensions.Ref) quotaGenerationIdentity {
+	return quotaGenerationIdentity{provider: providerID, connection: connectionID, model: modelRef, operation: operation}
 }
 
 func (g *HealthGate) AttachQuotaGeneration(snapshot *quota.Snapshot) bool {
 	if snapshot == nil {
+		return false
+	}
+	if snapshot.ValidateOperation() != nil {
 		return false
 	}
 	g.mu.Lock()
@@ -142,7 +178,7 @@ func (g *HealthGate) AttachQuotaGeneration(snapshot *quota.Snapshot) bool {
 	if !g.generationEnabled {
 		return true
 	}
-	generation, exists := g.quotaGenerations[quotaGenerationKey(snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef)]
+	generation, exists := g.quotaGenerations[quotaGenerationKey(snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.OperationRef)]
 	if !exists {
 		return false
 	}
@@ -151,12 +187,15 @@ func (g *HealthGate) AttachQuotaGeneration(snapshot *quota.Snapshot) bool {
 }
 
 func (g *HealthGate) QuotaGenerationCurrent(snapshot quota.Snapshot) bool {
+	if snapshot.ValidateOperation() != nil {
+		return false
+	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	if !g.generationEnabled {
 		return true
 	}
-	generation, exists := g.quotaGenerations[quotaGenerationKey(snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef)]
+	generation, exists := g.quotaGenerations[quotaGenerationKey(snapshot.ProviderNodeID, snapshot.ConnectionID, snapshot.ModelRef, snapshot.OperationRef)]
 	return exists && snapshot.Generation != "" && snapshot.Generation == generation
 }
 
@@ -167,6 +206,12 @@ func (g *HealthGate) AcceptsOutcome(route kernel.Route, scope kernel.OutcomeScop
 }
 
 func (g *HealthGate) generationCurrentLocked(route kernel.Route, scope kernel.OutcomeScope) bool {
+	if scope == kernel.ScopeRequest {
+		return false
+	}
+	if scope == kernel.ScopeOperation && (route.SessionOperationRef.Kind != "operation" || route.SessionOperationRef.Validate() != nil) {
+		return false
+	}
 	if !g.generationEnabled {
 		return true
 	}
@@ -178,6 +223,9 @@ func (g *HealthGate) generationCurrentLocked(route kernel.Route, scope kernel.Ou
 func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
+	if route.SessionOperationRef.ID != "" && !g.generationCurrentLocked(route, kernel.ScopeOperation) {
+		return false
+	}
 	if g.generationEnabled {
 		generation, ok := g.generations[outcomeScopeKey(route, kernel.ScopeRoute)]
 		if !ok || generation != route.HealthGeneration.For(kernel.ScopeRoute) {
@@ -198,10 +246,13 @@ func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 func (g *HealthGate) Acquire(route kernel.Route, now time.Time) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if route.SessionOperationRef.ID != "" && !g.generationCurrentLocked(route, kernel.ScopeOperation) {
+		return false
+	}
 	if !g.generationCurrentLocked(route, kernel.ScopeRoute) {
 		return false
 	}
-	acquired := make([]string, 0, 2)
+	acquired := make([]breakerKey, 0, 2)
 	for _, key := range healthKeys(route) {
 		state := g.scoped[key]
 		if state.Invalid || state.CooldownUntil.After(now) {
@@ -249,6 +300,9 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 	state.LastAttempt = now
 	state.LastCause = outcome.Cause
 	state.LastScope = outcome.Scope
+	if outcome.Scope == kernel.ScopeOperation {
+		state.OperationRef = route.SessionOperationRef
+	}
 	state.Generation = route.HealthGeneration.For(outcome.Scope)
 	state.Confidence = outcome.Confidence
 	if len(outcome.Evidence) > 0 {
@@ -288,9 +342,32 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 	}
 	g.routes[route.ID] = routeState
 	observer := g.observe
+	var recovered []HealthObservation
+	if outcome.Cause == kernel.CauseSuccess {
+		for _, trial := range healthKeys(route) {
+			if trial == key || !g.trials[trial] {
+				continue
+			}
+			prior := g.scoped[trial]
+			if prior.Invalid || prior.CooldownUntil.After(now) {
+				continue
+			}
+			prior.Failures, prior.Invalid, prior.CooldownUntil, prior.LastError = 0, false, time.Time{}, ""
+			prior.Successes++
+			prior.LastAttempt, prior.LastSuccess = now, now
+			prior.LastCause, prior.LastScope = kernel.CauseSuccess, trial.scope
+			prior.LastEvidence, prior.Confidence = kernel.EvidenceSuccessBody, 1
+			g.scoped[trial] = prior
+			delete(g.trials, trial)
+			recovered = append(recovered, HealthObservation{Route: route, State: prior})
+		}
+	}
 	g.mu.Unlock()
 	if observer != nil {
 		observer(route, state)
+		for _, observation := range recovered {
+			observer(observation.Route, observation.State)
+		}
 	}
 }
 
@@ -340,6 +417,9 @@ func (g *HealthGate) resetScope(route kernel.Route, scope kernel.OutcomeScope, i
 	state.LastAttempt = time.Time{}
 	state.LastSuccess = time.Time{}
 	state.LastScope = scope
+	if scope == kernel.ScopeOperation {
+		state.OperationRef = route.SessionOperationRef
+	}
 	state.Generation = route.HealthGeneration.For(scope)
 	g.scoped[key] = state
 	if exists && route.ID != "" {
@@ -443,6 +523,9 @@ func failureDelay(failures int, cause kernel.OutcomeCause) time.Duration {
 }
 
 func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) bool {
+	if state.LastScope == kernel.ScopeOperation && (state.OperationRef != route.SessionOperationRef || state.OperationRef.Validate() != nil) {
+		return false
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.generationEnabled && (!g.generationCurrentLocked(route, state.LastScope) || state.Generation != route.HealthGeneration.For(state.LastScope)) {
@@ -460,14 +543,43 @@ func (g *HealthGate) Restore(route kernel.Route, state RouteHealth) bool {
 	}
 	return true
 }
-func (g *HealthGate) Snapshot() map[string]RouteHealth {
+func (g *HealthGate) Snapshot() map[string]RouteHealthView {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	result := make(map[string]RouteHealth, len(g.routes))
+	result := make(map[string]RouteHealthView, len(g.routes))
 	for id, state := range g.routes {
-		result[id] = state
+		result[id] = RouteHealthView{RouteHealth: state}
+	}
+	for key, state := range g.scoped {
+		if key.scope != kernel.ScopeOperation {
+			continue
+		}
+		view := result[key.route]
+		view.Operations = append(view.Operations, state)
+		result[key.route] = view
+	}
+	for id, view := range result {
+		sort.Slice(view.Operations, func(i, j int) bool {
+			return view.Operations[i].OperationRef.Key() < view.Operations[j].OperationRef.Key()
+		})
+		result[id] = view
 	}
 	return result
+}
+
+func (g *HealthGate) StateFor(route kernel.Route) RouteHealth {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	if route.SessionOperationRef.ID != "" {
+		if state, exists := g.scoped[outcomeScopeKey(route, kernel.ScopeOperation)]; exists {
+			return state
+		}
+	}
+	state := g.routes[route.ID]
+	if state.LastScope == kernel.ScopeOperation {
+		return RouteHealth{}
+	}
+	return state
 }
 
 func (g *HealthGate) ScopedState(route kernel.Route, scope kernel.OutcomeScope) (RouteHealth, bool) {
@@ -477,28 +589,41 @@ func (g *HealthGate) ScopedState(route kernel.Route, scope kernel.OutcomeScope) 
 	return state, exists
 }
 
-func scopeKey(route kernel.Route) string { return "route:" + route.ID }
+type breakerKey struct {
+	scope                       kernel.OutcomeScope
+	route, connection, provider string
+	operation                   extensions.Ref
+}
 
-func outcomeScopeKey(route kernel.Route, scope kernel.OutcomeScope) string {
+func scopeKey(route kernel.Route) breakerKey {
+	return breakerKey{scope: kernel.ScopeRoute, route: route.ID}
+}
+
+func outcomeScopeKey(route kernel.Route, scope kernel.OutcomeScope) breakerKey {
 	switch scope {
+	case kernel.ScopeOperation:
+		return breakerKey{scope: scope, route: route.ID, connection: route.CredentialID, operation: route.SessionOperationRef}
 	case kernel.ScopeConnection:
-		return "connection:" + route.CredentialID
+		return breakerKey{scope: scope, connection: route.CredentialID}
 	case kernel.ScopeProvider:
-		return "provider:" + route.NodeID
+		return breakerKey{scope: scope, provider: route.NodeID}
 	case kernel.ScopeRouteConnection:
-		return "route_connection:" + route.ID + "\x00" + route.CredentialID
+		return breakerKey{scope: scope, route: route.ID, connection: route.CredentialID}
 	default:
 		return scopeKey(route)
 	}
 }
 
-func healthKeys(route kernel.Route) []string {
-	keys := []string{scopeKey(route)}
+func healthKeys(route kernel.Route) []breakerKey {
+	keys := []breakerKey{scopeKey(route)}
+	if route.SessionOperationRef.ID != "" {
+		keys = append(keys, outcomeScopeKey(route, kernel.ScopeOperation))
+	}
 	if route.CredentialID != "" {
-		keys = append(keys, "route_connection:"+route.ID+"\x00"+route.CredentialID, "connection:"+route.CredentialID)
+		keys = append(keys, outcomeScopeKey(route, kernel.ScopeRouteConnection), outcomeScopeKey(route, kernel.ScopeConnection))
 	}
 	if route.NodeID != "" {
-		keys = append(keys, "provider:"+route.NodeID)
+		keys = append(keys, outcomeScopeKey(route, kernel.ScopeProvider))
 	}
 	return keys
 }

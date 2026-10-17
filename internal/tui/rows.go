@@ -10,6 +10,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 type providerNode struct {
@@ -95,6 +96,7 @@ type comboModel struct {
 }
 
 type routeHealth struct {
+	OperationRef  extensions.Ref `json:"operationRef"`
 	Failures      int
 	Successes     int
 	Invalid       bool
@@ -108,7 +110,13 @@ type routeHealth struct {
 	LastSuccess   time.Time
 }
 
+type routeHealthView struct {
+	routeHealth
+	Operations []routeHealth `json:"operations"`
+}
+
 type quotaSnapshot struct {
+	OperationRef   extensions.Ref `json:"operationRef"`
 	ProviderNodeID string
 	ConnectionID   string
 	ModelRef       string
@@ -370,7 +378,7 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 		}
 		return entries, nil
 	case "health.list":
-		var values map[string]routeHealth
+		var values map[string]routeHealthView
 		if err := decode(&values); err != nil {
 			return nil, err
 		}
@@ -383,6 +391,18 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 				state = "cooldown until " + value.CooldownUntil.Format(time.RFC3339)
 			}
 			detail := fmt.Sprintf("Route health\n\nState      %s\nFailures   %d\nSuccesses  %d\nCause      %s\nScope      %s\nEvidence   %s\nConfidence %.2f\nLast error\n%s\n\nInternal route ID\n%s", state, value.Failures, value.Successes, value.LastCause, value.LastScope, value.LastEvidence, value.Confidence, value.LastError, routeID)
+			if len(value.Operations) > 0 {
+				detail += "\n\nOperation health"
+				for _, operation := range value.Operations {
+					status := "healthy"
+					if operation.Invalid {
+						status = "invalid"
+					} else if operation.CooldownUntil.After(time.Now()) {
+						status = "cooldown until " + operation.CooldownUntil.Format(time.RFC3339)
+					}
+					detail += fmt.Sprintf("\n%s · %s · %s · %d failures", operation.OperationRef.Key(), status, operation.LastCause, operation.Failures)
+				}
+			}
 			entries = append(entries, entry{key: routeID, title: state, summary: fmt.Sprintf("%s · %d failures", value.LastCause, value.Failures), detail: detail, payload: value})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
@@ -425,7 +445,16 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 				remaining += " · observe only"
 			}
 			detail := fmt.Sprintf("Quota\n\nModel      %s\nWindow     %s\nUsed       %.2f\nRemaining  %s\nRouting    %s\nReset      %s\nAuthority  %s\nObserved   %s\nSource     %s\n\nProvider node ID\n%s\nConnection ID\n%s", value.ModelRef, value.WindowName, value.Used, remaining, routingEffect, reset, value.Authority, observed, value.Source, value.ProviderNodeID, value.ConnectionID)
-			entries = append(entries, entry{key: value.ProviderNodeID + value.ConnectionID + value.ModelRef + value.WindowName, title: name, summary: remaining, detail: detail, parentID: value.ProviderNodeID, payload: value})
+			if value.OperationRef.ID != "" {
+				detail += "\n\nOperation\n" + value.OperationRef.Key()
+				name += " · " + value.OperationRef.Key()
+			}
+			identity := quota.Identity{Provider: value.ProviderNodeID, Connection: value.ConnectionID, Model: value.ModelRef, Window: value.WindowName, Operation: value.OperationRef}
+			key, err := identity.MarshalText()
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, entry{key: string(key), title: name, summary: remaining, detail: detail, parentID: value.ProviderNodeID, payload: value})
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].key < entries[j].key })
 		return entries, nil

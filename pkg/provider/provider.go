@@ -18,6 +18,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
 	core "github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/quota"
 )
 
 type RuntimeModule = core.RuntimeModule
@@ -77,6 +78,7 @@ type StaticModelCatalogSource = core.StaticModelCatalogSource
 type QuotaRequest = core.QuotaRequest
 type QuotaHTTPError = core.QuotaHTTPError
 type QuotaSnapshot = core.QuotaSnapshot
+type QuotaIdentity = quota.Identity
 type QuotaRoutingEffect = core.QuotaRoutingEffect
 type HTTPJSONQuotaOptions = core.HTTPJSONQuotaOptions
 type HTTPJSONQuotaReport = core.HTTPJSONQuotaReport
@@ -88,6 +90,15 @@ type QuotaScope = core.QuotaScope
 type ScopedQuotaSource = core.ScopedQuotaSource
 type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
+type ErrorClassifierOptions = core.ErrorClassifierOptions
+type HTTPJSONErrorClassifierOptions = core.HTTPJSONErrorClassifierOptions
+type HTTPHeaderLimitSignal = core.HTTPHeaderLimitSignal
+type OutcomeScope = kernel.OutcomeScope
+
+const (
+	ScopeOperation  = kernel.ScopeOperation
+	ScopeConnection = kernel.ScopeConnection
+)
 
 func QuotaFailureCode(err error) string { return core.QuotaFailureCode(err) }
 
