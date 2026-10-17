@@ -167,6 +167,13 @@ again; an independently eligible account may still be selected. The existing
 job's status remains usable. Set `GOBROOM_TEST_CLI` to an installed CLI path to
 additionally verify status/catalog/health/quota projection through that binary.
 
+Installed acceptance for operation feedback (`9492f6d`): after
+`make install-all`, run
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test ./... -run '^TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart$' -count=1`
+inside `examples/external-provider-module`. This passed with CLI status,
+extension metadata, operation health and quota evidence through real Unix IPC.
+The main service remained `ok`; installed CLI config export → validate passed.
+
 The `TestOperation*` runtime/store/daemon groups cover exact-version and
 credential-generation fences, action-local failure and success, half-open
 single-flight, recovery of an actually acquired expired shared trial, broad

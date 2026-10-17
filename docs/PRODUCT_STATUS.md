@@ -33,8 +33,10 @@ affinity. The external job fixture proves that a cancelled action's
 cooldown survives restart without delaying status, and that exhausted create
 quota suppresses the affected account without disabling status or legitimate
 selection of another eligible account. Full tests, race tests and the existing
-conformance subset pass for this slice. Installed-client acceptance is recorded
-separately with the milestone's CLI run. This does not close the full M15 gate
+conformance subset pass for this slice (`9492f6d`). After `make install-all`,
+the installed CLI also passed status/catalog/health/quota acceptance against
+the external module's restarted daemon; the main daemon reported `ok` and its
+configuration export → validate round trip passed. This does not close the full M15 gate
 or establish every provider's limits/reset semantics.
 
 ## Product-level exit gaps
