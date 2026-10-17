@@ -1,7 +1,6 @@
 package openai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -298,7 +297,7 @@ func (Chat) DecodeResponse(ctx context.Context, response kernel.UpstreamResponse
 	return decodeOpenAIResponse(ctx, response, wireFormat, emit, hooks)
 }
 
-func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+func (a Chat) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	url := "/chat/completions"
 	var body map[string]any
 	if request.SourceFormat == normalize.FormatOpenAIChat {
@@ -386,10 +385,7 @@ func (a Chat) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
-		return kernel.UpstreamRequest{}, err
-	}
-	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+	return kernel.PrepareBytesRequest(ctx, http.MethodPost, url, headers, data, credential, kernel.CredentialAuthorization(route.CredentialPresentation), request.Transport.IdempotencyKey != "")
 }
 
 func openAIChatToolChoice(choice normalize.ToolChoice) (any, error) {

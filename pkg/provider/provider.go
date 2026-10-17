@@ -8,6 +8,7 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -31,6 +32,8 @@ type PrimitiveRegistry = core.PrimitiveRegistry
 type ProviderDefinition = core.ProviderDefinition
 type Operation = core.Operation
 type OperationBinding = core.OperationBinding
+type PreparedRequestReplay = kernel.PreparedRequestReplay
+type PreparedAuthorization = kernel.PreparedAuthorization
 type IdempotencyPolicy = kernel.IdempotencyPolicy
 type PrimitiveKind = core.PrimitiveKind
 type PrimitiveRef = core.PrimitiveRef
@@ -138,6 +141,22 @@ type SignatureProof = kernel.SignatureProof
 // of hardcoding API-key/OAuth branches.
 func ApplyCredentialPresentation(headers http.Header, credential Credential, presentation CredentialPresentation) error {
 	return kernel.ApplyCredentialPresentation(headers, credential, presentation)
+}
+
+// PrepareBytesRequest separates one-time business encoding from renewable
+// authorization, including body-bound signing through an independent reader.
+func PrepareBytesRequest(ctx context.Context, method, url string, headers http.Header, body []byte, credential Credential, authorize PreparedAuthorization, replay bool) (UpstreamRequest, error) {
+	return kernel.PrepareBytesRequest(ctx, method, url, headers, body, credential, authorize, replay)
+}
+
+func CredentialAuthorization(presentation CredentialPresentation) PreparedAuthorization {
+	return kernel.CredentialAuthorization(presentation)
+}
+
+// ApplyPreparedRequestHeaders puts kernel-owned dispatch headers in place
+// before a custom signer computes a header-bound signature.
+func ApplyPreparedRequestHeaders(ctx context.Context, headers http.Header) {
+	kernel.ApplyPreparedRequestHeaders(ctx, headers)
 }
 
 // SessionStoreKeyFor returns the exact connection/provider/operation/model/

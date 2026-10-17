@@ -15,6 +15,7 @@ import (
 	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 const MultipartRequestCodecID = "multipart-form"
@@ -165,6 +166,40 @@ func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.Norm
 			return kernel.UpstreamRequest{}, fmt.Errorf("multipart codec has no field mapping for artifact role %q", artifact.Role)
 		}
 	}
+	model := route.ExternalModel
+	if model == "" {
+		model = request.Model
+	}
+	boundary := multipart.NewWriter(io.Discard).Boundary()
+	authorize := kernel.CredentialAuthorization(route.CredentialPresentation)
+	replayable := request.Transport.IdempotencyKey != ""
+	for _, artifact := range request.Artifacts {
+		if artifact.Body != nil && !artifact.Body.Replayable {
+			replayable = false
+		}
+	}
+	if !replayable {
+		return c.openPreparedMultipart(ctx, request, model, boundary, authorize, credential)
+	}
+	frozen := normalize.CloneRequest(request)
+	var factory kernel.PreparedRequestReplay
+	factory = func(ctx context.Context, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+		upstream, err := c.openPreparedMultipart(ctx, frozen, model, boundary, authorize, credential)
+		upstream.Replay = factory
+		return upstream, err
+	}
+	return factory(ctx, credential)
+}
+
+func (c *MultipartRequestCodec) openPreparedMultipart(ctx context.Context, request kernel.NormalizedRequest, model, boundary string, authorize kernel.PreparedAuthorization, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return kernel.UpstreamRequest{}, err
+	}
+	headers := make(http.Header)
+	kernel.ApplyPreparedRequestHeaders(ctx, headers)
+	if err := authorize(ctx, headers, nil, credential); err != nil {
+		return kernel.UpstreamRequest{}, err
+	}
 	leases := make([]*artifacts.Lease, 0, len(request.Artifacts))
 	for _, artifact := range request.Artifacts {
 		lease, err := artifacts.OpenArtifactFromContext(ctx, artifact)
@@ -177,20 +212,15 @@ func (c *MultipartRequestCodec) Prepare(ctx context.Context, request kernel.Norm
 		leases = append(leases, lease)
 	}
 
-	model := route.ExternalModel
-	if model == "" {
-		model = request.Model
-	}
 	reader, writer := io.Pipe()
 	form := multipart.NewWriter(writer)
-	headers := make(http.Header)
-	headers.Set("Content-Type", form.FormDataContentType())
-	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
+	if err := form.SetBoundary(boundary); err != nil {
 		for _, lease := range leases {
 			_ = lease.Close()
 		}
 		return kernel.UpstreamRequest{}, err
 	}
+	headers.Set("Content-Type", form.FormDataContentType())
 	stopCancellation := context.AfterFunc(ctx, func() { _ = writer.CloseWithError(ctx.Err()) })
 	go func() {
 		err := writeMultipartOperation(ctx, form, request, model, c.options, c.artifactFields, leases)

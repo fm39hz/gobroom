@@ -499,7 +499,7 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 // generateContent shape. Only understood OpenAI fields are forwarded: passing
 // the raw Chat body through would send `messages` to Gemini and appear to work
 // for neither tools nor streaming.
-func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+func (Gemini) Prepare(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
 	if len(request.UnsupportedFacets) > 0 {
 		return kernel.UpstreamRequest{}, fmt.Errorf("Gemini request contains unsupported semantic facets: %s", strings.Join(request.UnsupportedFacets, ", "))
 	}
@@ -521,10 +521,7 @@ func (Gemini) Prepare(_ context.Context, request kernel.NormalizedRequest, route
 	}
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
-	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
-		return kernel.UpstreamRequest{}, err
-	}
-	return kernel.UpstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: bytes.NewReader(data)}, nil
+	return kernel.PrepareBytesRequest(ctx, http.MethodPost, endpoint, headers, data, credential, kernel.CredentialAuthorization(route.CredentialPresentation), request.Transport.IdempotencyKey != "")
 }
 
 func geminiRequest(request kernel.NormalizedRequest) (generateContentRequest, error) {

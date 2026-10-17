@@ -19,3 +19,9 @@ Run from this directory with `GOWORK=off go test ./...`. The tests compile the
 module as an independent importer, bind the manifest, verify the custom quota
 source through the registry, then start the public daemon API with the module
 and exercise the operation through local IPC and a fake HTTP provider.
+
+The COSY signing fixture additionally uses the public `PrepareBytesRequest`
+and `PreparedAuthorization` contracts. It encodes the business payload once,
+then renews body-bound authorization for replay without changing those bytes
+or the resolved endpoint. Request codecs without a prepared replay factory
+cannot receive an automatic scoped retry after ambiguous dispatch.

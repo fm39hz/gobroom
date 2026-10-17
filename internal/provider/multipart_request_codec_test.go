@@ -93,10 +93,12 @@ func TestMultipartRequestCodecStreamsConfiguredArtifactFields(t *testing.T) {
 		Receiver:  extensions.ArtifactOwner{Domain: "provider", ProviderDefinitionID: recipient.ID, ConnectionID: "asr-1"},
 		Recipient: recipient,
 	})
-	upstream, err := codec.Prepare(ctx, normalize.Request{
+	request := normalize.Request{
 		Model: "asr-small", OperationPayload: json.RawMessage(`{"language":"vi"}`), Stream: true,
 		Artifacts: []extensions.ArtifactRef{artifact},
-	}, kernel.Route{}, kernel.Credential{})
+	}
+	request.Transport.IdempotencyKey = "multipart-replay"
+	upstream, err := codec.Prepare(ctx, request, kernel.Route{CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}, kernel.Credential{Secret: "initial"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,11 @@ func TestMultipartRequestCodecStreamsConfiguredArtifactFields(t *testing.T) {
 	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
 		t.Fatalf("multipart content-type=%q err=%v", upstream.Headers.Get("Content-Type"), err)
 	}
-	reader := multipart.NewReader(upstream.Body, params["boundary"])
+	encoded, err := io.ReadAll(upstream.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := multipart.NewReader(strings.NewReader(string(encoded)), params["boundary"])
 	fields := map[string]string{}
 	var artifactBody string
 	for {
@@ -139,6 +145,45 @@ func TestMultipartRequestCodecStreamsConfiguredArtifactFields(t *testing.T) {
 	}
 	if fields["model"] != "asr-small" || fields["language"] != "vi" || fields["stream"] != "true" || artifactBody != "waveform" {
 		t.Fatalf("multipart fields=%#v artifact=%q", fields, artifactBody)
+	}
+	request.Model = "must-not-change"
+	request.OperationPayload[0] = '['
+	request.Artifacts[0].MediaType = "must-not-change"
+	replayed, err := upstream.Replay(ctx, kernel.Credential{Secret: "renewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayed.Body.(io.Closer).Close()
+	second, err := io.ReadAll(replayed.Body)
+	if err != nil || string(second) != string(encoded) || replayed.Headers.Get("Content-Type") != upstream.Headers.Get("Content-Type") || replayed.Headers.Get("Authorization") != "Bearer renewed" {
+		t.Fatalf("multipart replay changed body/framing or retained old credential: err=%v headers=%v", err, replayed.Headers)
+	}
+	if err := bodyStore.Release(owner, bodyRef); err != nil {
+		t.Fatal(err)
+	}
+	if unexpected, err := upstream.Replay(ctx, kernel.Credential{}); err == nil {
+		_ = unexpected.Body.(io.Closer).Close()
+		t.Fatal("prepared replay bypassed the released artifact lease")
+	}
+	oneShot, err := bodyStore.Put(ctx, owner, "audio/wav", strings.NewReader("waveform"), 128, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oneShotArtifact := artifact
+	oneShotArtifact.Body, oneShotArtifact.ExpiresAt = &oneShot, oneShot.ExpiresAt
+	oneShotArtifact.SHA256 = oneShot.SHA256
+	oneShotRequest := normalize.Request{Model: "asr-small", OperationPayload: json.RawMessage(`{"language":"vi"}`), Artifacts: []extensions.ArtifactRef{oneShotArtifact}}
+	oneShotRequest.Transport.IdempotencyKey = "does-not-grant-artifact-replay"
+	oneShotUpstream, err := codec.Prepare(ctx, oneShotRequest, kernel.Route{}, kernel.Credential{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oneShotUpstream.Body.(io.Closer).Close()
+	if oneShotUpstream.Replay != nil {
+		t.Fatal("an idempotency key overrode a non-replayable artifact body")
+	}
+	if _, err := io.Copy(io.Discard, oneShotUpstream.Body); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -219,6 +264,14 @@ func TestRuntimeBindingBindsManifestConfiguredMultipartCodecOptions(t *testing.T
 }
 
 func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ambiguous_replay=%t", replay), func(t *testing.T) {
+			runManifestMultipartKernelFixture(t, replay)
+		})
+	}
+}
+
+func runManifestMultipartKernelFixture(t *testing.T, replay bool) {
 	runtime, err := NewRuntimeRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -255,11 +308,15 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 	}, func(json.RawMessage) (any, error) { return struct{}{}, nil }); err != nil {
 		t.Fatal(err)
 	}
+	safety := operations.ReplayNever
+	if replay {
+		safety = operations.ReplayWithKey
+	}
 	if err := runtime.Primitives.Operations.Register(operations.Definition{
 		Ref: operationRef, DisplayName: "Transcribe audio", Description: "Transcribe one WAV artifact into a typed transcript.",
 		InputSchemaRef: inputSchemaRef, ResultSchemaRef: &resultSchemaRef, EventSchemaRefs: []extensions.Ref{eventSchemaRef},
 		ArtifactInputs: []operations.ArtifactInput{{Role: "source-audio", TypeRef: artifactType, MinCount: 1, MaxCount: 1}},
-		ResourceBounds: operations.DefaultResourceBounds(), ReplaySafety: operations.ReplayNever,
+		ResourceBounds: operations.DefaultResourceBounds(), ReplaySafety: safety,
 		InputPayload:        func(normalize.Request) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
 		CompileRequirements: func(normalize.Request) ([]normalize.FeatureRequirement, error) { return nil, nil },
 		NewResultProjector: func(extensions.ResourceBounds) (operations.ResultProjector, error) {
@@ -280,6 +337,11 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 			ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
 		}},
 	}
+	if replay {
+		operation := providerDefinition.Operations[Operation("audio.transcribe.e2e")]
+		operation.Idempotency = kernel.IdempotencyPolicy{Header: "X-Audio-Idempotency", MinRetentionSeconds: 60}
+		providerDefinition.Operations[Operation("audio.transcribe.e2e")] = operation
+	}
 	if err := runtime.Primitives.RegisterDefinition(providerDefinition); err != nil {
 		t.Fatal(err)
 	}
@@ -295,6 +357,7 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 	var receivedFileName, receivedFileType string
 	var captureMu sync.Mutex
 	var roundTrips int
+	var originalWire, originalKey string
 	transport := kernel.HTTPTransport{Client: &http.Client{Transport: multipartRoundTripper(func(request *http.Request) (*http.Response, error) {
 		captureMu.Lock()
 		roundTrips++
@@ -307,7 +370,20 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 		if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
 			return nil, fmt.Errorf("multipart request content type=%q err=%v", request.Header.Get("Content-Type"), err)
 		}
-		reader := multipart.NewReader(request.Body, params["boundary"])
+		wire, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		captureMu.Lock()
+		if replay && roundTrips == 1 {
+			originalWire, originalKey = string(wire), request.Header.Get("X-Audio-Idempotency")
+		}
+		if replay && (originalKey == "" || originalWire != string(wire) || originalKey != request.Header.Get("X-Audio-Idempotency")) {
+			captureMu.Unlock()
+			return nil, fmt.Errorf("idempotent multipart dispatch changed its key or exact wire body")
+		}
+		captureMu.Unlock()
+		reader := multipart.NewReader(strings.NewReader(string(wire)), params["boundary"])
 		for {
 			part, err := reader.NextPart()
 			if err == io.EOF {
@@ -336,6 +412,9 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 			}
 			captureMu.Unlock()
 		}
+		if replay && roundTrips == 1 {
+			return nil, io.ErrUnexpectedEOF
+		}
 		body := `{"id":"fixture-response","choices":[{"index":0,"message":{"role":"assistant","content":"decoded transcript"},"finish_reason":"stop"}]}`
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 	})}}
@@ -345,6 +424,11 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 		ID: "audio-route", DefinitionID: providerDefinition.ID, DefinitionRef: providerRef, ExternalModel: "physical-asr-7",
 		BaseURL: "https://audio.example/v1", Protocol: kernel.ProtocolOpenAIChat, Enabled: true,
 		OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.Operation(operationRef.ID): {ContractVersion: operationRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}}},
+	}
+	if replay {
+		operation := route.OperationBindings[normalize.Operation(operationRef.ID)]
+		operation.Idempotency = map[string]kernel.IdempotencyPolicy{binding.AdapterID: binding.Idempotency}
+		route.OperationBindings[normalize.Operation(operationRef.ID)] = operation
 	}
 	runtimeSnapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "speech-role", TargetRef: "speech-role"}},
@@ -378,6 +462,9 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 		SourceFormat: normalize.FormatOpenAIChat, OperationPayload: json.RawMessage(`{"language":"vi"}`),
 		Artifacts: []extensions.ArtifactRef{{TypeRef: artifactType, Role: "source-audio", Owner: owner, ReplayScope: extensions.ArtifactReplayRequest, Sensitivity: extensions.ArtifactPrivate, MediaType: bodyRef.MediaType, SizeBytes: bodyRef.SizeBytes, SHA256: bodyRef.SHA256, ExpiresAt: bodyRef.ExpiresAt, Body: &bodyRef}},
 	}
+	if replay {
+		request.Transport.IdempotencyKey = "audio-job-key"
+	}
 	compatibilityPolicy := kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(request)}
 	for _, event := range kernel.RequiredResponseEvents(request) {
 		compatibilityPolicy.RequiredFacets = append(compatibilityPolicy.RequiredFacets, kernel.ResponseEventFacet(event))
@@ -395,6 +482,13 @@ func TestManifestMultipartCodecFramesBinaryBodyThroughKernelAndTypedResult(t *te
 	}
 	captureMu.Lock()
 	defer captureMu.Unlock()
+	wantRoundTrips := 1
+	if replay {
+		wantRoundTrips = 2
+	}
+	if roundTrips != wantRoundTrips {
+		t.Fatalf("unexpected dispatch count: got=%d want=%d", roundTrips, wantRoundTrips)
+	}
 	if receivedModel != "physical-asr-7" || receivedPayload != "vi" || receivedFile != audioBody || receivedFileName != "source.wav" || receivedFileType != "audio/wav" {
 		t.Fatalf("manifest multipart wire frame: model=%q payload=%q file=%q filename=%q type=%q", receivedModel, receivedPayload, receivedFile, receivedFileName, receivedFileType)
 	}

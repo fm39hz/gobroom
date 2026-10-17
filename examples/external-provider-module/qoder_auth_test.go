@@ -16,6 +16,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -94,7 +95,7 @@ func (qoderFixtureRequestCodec) ID() string { return "example.qoder-cosy-request
 func (qoderFixtureRequestCodec) DescribeCompatibility(provider.CompatibilityContext) []provider.FacetMapping {
 	return []provider.FacetMapping{{Facet: provider.FacetWireRequest, Paths: []string{"qoderFixturePayload"}, Disposition: provider.FacetTranslated}}
 }
-func (qoderFixtureRequestCodec) Prepare(_ context.Context, request provider.NormalizedRequest, route provider.Route, credential provider.Credential) (provider.UpstreamRequest, error) {
+func (qoderFixtureRequestCodec) Prepare(ctx context.Context, request provider.NormalizedRequest, route provider.Route, credential provider.Credential) (provider.UpstreamRequest, error) {
 	if err := credential.ValidateRuntimeContext(); err != nil {
 		return provider.UpstreamRequest{}, err
 	}
@@ -112,17 +113,26 @@ func (qoderFixtureRequestCodec) Prepare(_ context.Context, request provider.Norm
 	}
 	encodedBody := qoderFixtureEncodeBody(payload)
 	absoluteURL := strings.TrimRight(route.BaseURL, "/") + qoderFixturePath
-	headers, err := qoderFixtureCOSYHeaders(encodedBody, absoluteURL, credential)
-	if err != nil {
-		return provider.UpstreamRequest{}, err
-	}
+	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("Accept", "text/event-stream")
 	headers.Set("Cache-Control", "no-cache")
 	headers.Set("Accept-Encoding", "identity")
 	headers.Set("X-Model-Key", route.ExternalModel)
 	headers.Set("X-Model-Source", "system")
-	return provider.UpstreamRequest{Method: http.MethodPost, URL: qoderFixturePath, Headers: headers, Body: bytes.NewReader(encodedBody)}, nil
+	authorize := func(_ context.Context, headers http.Header, body io.Reader, credential provider.Credential) error {
+		encoded, err := io.ReadAll(body)
+		if err != nil {
+			return err
+		}
+		signed, err := qoderFixtureCOSYHeaders(encoded, absoluteURL, credential)
+		if err != nil {
+			return err
+		}
+		maps.Copy(headers, signed)
+		return nil
+	}
+	return provider.PrepareBytesRequest(ctx, http.MethodPost, qoderFixturePath, headers, encodedBody, credential, authorize, request.Transport.IdempotencyKey != "")
 }
 
 type qoderFixtureResponseDecoder struct{}
@@ -275,6 +285,7 @@ func TestExternalRequestCodecEncodesThenSignsBodyWithoutKernelChanges(t *testing
 		t.Fatal(err)
 	}
 	request := provider.NormalizedRequest{Model: "qoder/qmodel_latest", Stream: true, Raw: map[string]any{"messages": []any{map[string]any{"role": "user", "content": "hello"}}}}
+	request.Transport.IdempotencyKey = "fixture-replay"
 	prepared, err := binding.Adapter.Prepare(context.Background(), request, provider.Route{BaseURL: server.URL, ExternalModel: "qmodel_latest"}, credential)
 	if err != nil {
 		t.Fatal(err)
@@ -289,6 +300,22 @@ func TestExternalRequestCodecEncodesThenSignsBodyWithoutKernelChanges(t *testing
 	}
 	if !received || response.Status != http.StatusOK || !strings.Contains(client.Body.String(), "wrapped result") {
 		t.Fatalf("signed request/response fixture failed: received=%v response=%#v client_status=%d client_headers=%#v client_body=%s", received, response, client.Code, client.Header(), client.Body.String())
+	}
+	request.Raw["messages"] = []any{map[string]any{"role": "user", "content": "must not be re-encoded"}}
+	credential.Secret = "renewed-device-token"
+	replayed, err := prepared.Replay(context.Background(), credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.URL != prepared.URL || replayed.Headers.Get("Cosy-Bodyhash") != prepared.Headers.Get("Cosy-Bodyhash") || replayed.Headers.Get("Authorization") == prepared.Headers.Get("Authorization") {
+		t.Fatal("external replay changed encoded action/body or failed to renew body-bound authorization")
+	}
+	response, err = binding.Adapter.Execute(context.Background(), replayed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := binding.Adapter.RenderResponse(context.Background(), response, httptest.NewRecorder(), provider.Format("openai"), provider.StreamHooks{Streaming: true}); err != nil {
+		t.Fatal(err)
 	}
 }
 

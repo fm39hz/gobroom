@@ -234,14 +234,41 @@ func (a ComposedAdapter) PrepareWithCompatibility(ctx context.Context, req Norma
 		upstream, err = a.Request.Prepare(ctx, req, route, credential)
 	}
 	if err != nil {
+		if body, ok := upstream.Body.(io.Closer); ok {
+			_ = body.Close()
+		}
 		return UpstreamRequest{}, err
 	}
 	if a.Endpoint == nil {
 		return UpstreamRequest{}, fmt.Errorf("adapter %q has no endpoint primitive", a.AdapterID)
 	}
-	upstream.URL, err = a.Endpoint.Resolve(route.BaseURL, upstream.URL, a.EndpointOptions)
+	encodedURL := upstream.URL
+	upstream.URL, err = a.Endpoint.Resolve(route.BaseURL, encodedURL, a.EndpointOptions)
 	if err != nil {
+		if body, ok := upstream.Body.(io.Closer); ok {
+			_ = body.Close()
+		}
 		return UpstreamRequest{}, fmt.Errorf("resolve endpoint %q: %w", a.Endpoint.ID(), err)
+	}
+	if replay := upstream.Replay; replay != nil {
+		resolvedURL, method := upstream.URL, upstream.Method
+		var wrapped PreparedRequestReplay
+		wrapped = func(ctx context.Context, credential Credential) (UpstreamRequest, error) {
+			next, err := replay(ctx, credential)
+			if err != nil {
+				return next, err
+			}
+			if next.URL != encodedURL || next.Method != method {
+				if body, ok := next.Body.(io.Closer); ok {
+					_ = body.Close()
+				}
+				return UpstreamRequest{}, fmt.Errorf("prepared replay changed its encoded action")
+			}
+			next.URL = resolvedURL
+			next.Replay = wrapped
+			return next, nil
+		}
+		upstream.Replay = wrapped
 	}
 	return upstream, nil
 }
@@ -398,10 +425,23 @@ func (t HTTPTransport) Execute(ctx context.Context, request UpstreamRequest) (Up
 	}
 	req, err := http.NewRequestWithContext(ctx, request.Method, request.URL, request.Body)
 	if err != nil {
+		if body, ok := request.Body.(io.Closer); ok {
+			_ = body.Close()
+		}
 		return UpstreamResponse{}, err
 	}
 	req.Header = request.Headers
-	response, err := client.Do(req)
+	// The kernel owns redispatch. Do not let net/http rewind byte readers or
+	// treat an empty body plus Idempotency-Key as proof of unlimited replay.
+	req.GetBody = nil
+	if req.Body == nil || req.Body == http.NoBody {
+		req.Body = io.NopCloser(strings.NewReader(""))
+	}
+	// A redirect may change the issuer/action and invalidate a signature.
+	// Copy client settings without mutating the injected/shared client.
+	requestClient := *client
+	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := requestClient.Do(req)
 	if err != nil {
 		return UpstreamResponse{}, err
 	}

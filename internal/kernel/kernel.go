@@ -490,19 +490,29 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				responseArtifactAccess = &access
 			}
 			refreshed := false
+			if idempotencyKey != "" {
+				attemptCtx = withPreparedIdempotency(attemptCtx, idempotency.Header, idempotencyKey)
+			}
 			idempotencyRetried := false
 			var firstDispatch time.Time
+			var replay PreparedRequestReplay
+			var preparedMethod, preparedURL, preparedMediaType string
 		retryUpstream:
 			providerRequest := candidateRequest
 			providerRequest.ArtifactFacts = nil
 			var upstream UpstreamRequest
 			var prepareErr error
-			if planned, ok := adapter.(CompatibilityPlanPreparer); ok {
+			if idempotencyRetried {
+				upstream, prepareErr = replay(attemptCtx, selectedCredential)
+			} else if planned, ok := adapter.(CompatibilityPlanPreparer); ok {
 				upstream, prepareErr = planned.PrepareWithCompatibility(attemptCtx, providerRequest, candidate, selectedCredential, compatibilityPlan)
 			} else {
 				upstream, prepareErr = adapter.Prepare(attemptCtx, providerRequest, candidate, selectedCredential)
 			}
 			if prepareErr != nil {
+				if body, ok := upstream.Body.(io.Closer); ok {
+					_ = body.Close()
+				}
 				k.Scheduler.Release(candidate)
 				if idempotencyRetried {
 					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: prepareErr}
@@ -511,12 +521,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				continue
 			}
 			if idempotencyKey != "" {
+				if !idempotencyRetried {
+					replay = upstream.Replay
+					preparedMethod, preparedURL, preparedMediaType = upstream.Method, upstream.URL, upstream.Headers.Get("Content-Type")
+				}
 				if upstream.Headers == nil {
 					upstream.Headers = make(http.Header)
 				}
 				upstream.Headers.Set(idempotency.Header, idempotencyKey)
 			}
 			dispatchErr := attemptCtx.Err()
+			if dispatchErr == nil && idempotencyRetried && (upstream.Method != preparedMethod || upstream.URL != preparedURL || upstream.Headers.Get("Content-Type") != preparedMediaType) {
+				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("prepared replay changed its action or media framing")}
+			}
 			if dispatchErr == nil && idempotencyRetried && !idempotency.permitsReplay(firstDispatch, time.Now()) {
 				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("provider idempotency retention window expired before replay dispatch")}
 			}
@@ -536,7 +553,10 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					k.Scheduler.Release(candidate)
 					return ctx.Err()
 				}
-				if idempotencyKey != "" && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) {
+				if idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) {
+					if body, ok := upstream.Body.(io.Closer); ok {
+						_ = body.Close()
+					}
 					idempotencyRetried = true
 					goto retryUpstream
 				}
@@ -563,15 +583,21 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if outcome.Effect == "" {
 					outcome.Effect = inferUpstreamEffect(response.Status, outcome.Cause)
 				}
-				if idempotencyKey != "" && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
+				if idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
+					if body, ok := upstream.Body.(io.Closer); ok {
+						_ = body.Close()
+					}
 					_ = response.Body.Close()
 					idempotencyRetried = true
 					goto retryUpstream
 				}
-				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()))
+				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()))
 				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canRefresh {
 					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
 					if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {
+						if body, ok := upstream.Body.(io.Closer); ok {
+							_ = body.Close()
+						}
 						_ = response.Body.Close()
 						selectedCredential = refreshedCredential
 						refreshed = true

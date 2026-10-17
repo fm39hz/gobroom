@@ -565,7 +565,7 @@ func (a Messages) Prepare(ctx context.Context, request kernel.NormalizedRequest,
 	return a.PrepareWithCompatibility(ctx, request, route, credential, kernel.CompatibilityPlan{})
 }
 
-func (a Messages) PrepareWithCompatibility(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential, plan kernel.CompatibilityPlan) (kernel.UpstreamRequest, error) {
+func (a Messages) PrepareWithCompatibility(ctx context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential, plan kernel.CompatibilityPlan) (kernel.UpstreamRequest, error) {
 	url := "/messages"
 	body := map[string]any{}
 	if request.SourceFormat == normalize.FormatAnthropic {
@@ -656,10 +656,7 @@ func (a Messages) PrepareWithCompatibility(_ context.Context, request kernel.Nor
 	headers := make(http.Header)
 	headers.Set("Content-Type", "application/json")
 	headers.Set("anthropic-version", "2023-06-01")
-	if err := kernel.ApplyCredentialPresentation(headers, credential, route.CredentialPresentation); err != nil {
-		return kernel.UpstreamRequest{}, err
-	}
-	return kernel.UpstreamRequest{Method: http.MethodPost, URL: url, Headers: headers, Body: bytes.NewReader(data)}, nil
+	return kernel.PrepareBytesRequest(ctx, http.MethodPost, url, headers, data, credential, kernel.CredentialAuthorization(route.CredentialPresentation), request.Transport.IdempotencyKey != "")
 }
 
 func lossInteger(value any) (int, bool) {

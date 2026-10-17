@@ -219,7 +219,16 @@ type UpstreamRequest struct {
 	URL     string
 	Headers http.Header
 	Body    io.Reader
+	Replay  PreparedRequestReplay
 }
+
+// PreparedRequestReplay opens the same business request with fresh body handles
+// and authorization. It must not rerun semantic encoding or change the action.
+type PreparedRequestReplay func(context.Context, Credential) (UpstreamRequest, error)
+
+// PreparedAuthorization may read the frozen body to sign it, but cannot mutate
+// its bytes. Each call receives an independent reader and cloned header map.
+type PreparedAuthorization func(context.Context, http.Header, io.Reader, Credential) error
 
 type UpstreamResponse struct {
 	Status      int

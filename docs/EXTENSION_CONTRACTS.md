@@ -726,6 +726,39 @@ For example, [Stripe's contract](https://docs.stripe.com/api/idempotent_requests
 explicitly permits pruning keys after its documented minimum; this motivates
 an explicit bound, not a retention assumption for an AI provider.
 
+Scoped retries also require `UpstreamRequest.Replay`, a codec-owned
+`PreparedRequestReplay` factory. The kernel does not call the semantic codec's
+`Prepare` again after an ambiguous dispatch. Missing factories suppress replay;
+a factory that changes method, resolved URL or Content-Type is rejected before
+dispatch. Endpoint composition pins the initially resolved URL while renewing
+body handles and auth. The original request body is closed before replay so a
+multipart producer cannot remain blocked on an abandoned consumer.
+
+The public `PrepareBytesRequest` helper freezes encoded bytes and static headers
+when replay is requested, then supplies independent readers to the transport
+and `PreparedAuthorization`. Authorization can renew credentials, nonces or a
+body-bound signature without changing the encoded business bytes. Requests
+without replay intent do not need a second frozen payload copy. The shared
+multipart codec freezes its typed invocation and boundary, reopens authorized
+artifact leases and uses the standard multipart writer for each attempt;
+non-replayable bodies do not acquire a factory, and expired/released bodies
+remain unavailable. No fallback buffers an arbitrary stream in RAM.
+
+Kernel-owned idempotency headers are available before authorization through
+the typed preparation context; shared helpers apply them automatically, and
+custom codecs can use `ApplyPreparedRequestHeaders` before signing. The shared
+HTTP transport disables automatic redirects and body rewind (`GetBody`), and
+keeps even empty actions non-replayable to Go's implicit idempotent retry
+heuristic. Transport retries before any bytes were sent may still recover an
+unused connection; after a possible upstream effect, the kernel alone grants
+redispatch. Custom transport modules must uphold the same boundary.
+
+Custom factories are in-process trusted extension code, just like codecs;
+preserving business payload is their contract, not a sandbox guarantee. The
+shared helpers and conformance fixtures prove byte identity for JSON, binary
+multipart and an external body-signing codec. Specialized schemes supply a
+factory/authorizer in their versioned codec rather than adding a kernel branch.
+
 After client write/flush/commit, retry and fallback are forbidden regardless
 of replay safety. Precommit failures are classified before sending a client
 error; an error frame must not accidentally commit a failed attempt while a

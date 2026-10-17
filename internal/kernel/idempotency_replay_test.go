@@ -28,25 +28,54 @@ type issuerReplayAdapter struct {
 	replayPrepareDelay time.Duration
 	executeError       error
 	prepareHook        func(context.Context, int)
+	replayCalls        int
+	noReplay           bool
+	bodies             []string
+	replayMutate       func(*UpstreamRequest)
 }
 
 func (a *issuerReplayAdapter) ID() string { return a.id }
 func (a *issuerReplayAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
 	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 }
-func (a *issuerReplayAdapter) Prepare(ctx context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
+func (a *issuerReplayAdapter) Prepare(ctx context.Context, _ NormalizedRequest, route Route, credential Credential) (UpstreamRequest, error) {
 	a.prepareCalls++
 	if a.prepareHook != nil {
 		a.prepareHook(ctx, a.prepareCalls)
 	}
-	if a.prepareCalls > 1 {
-		time.Sleep(a.replayPrepareDelay)
+	present := CredentialAuthorization(CredentialPresentation{Header: "Authorization", Prefix: "Bearer "})
+	authorize := func(ctx context.Context, headers http.Header, body io.Reader, credential Credential) error {
+		headers.Set("X-Signed-Key", headers.Get("X-Upstream-Idempotency"))
+		return present(ctx, headers, body, credential)
 	}
-	return UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
+	upstream, err := PrepareBytesRequest(ctx, http.MethodPost, route.ID, http.Header{"Content-Type": {"application/json"}}, []byte(`{"encoded":"once"}`), credential, authorize, !a.noReplay)
+	if factory := upstream.Replay; factory != nil {
+		upstream.Replay = func(ctx context.Context, credential Credential) (UpstreamRequest, error) {
+			a.replayCalls++
+			if a.prepareHook != nil {
+				a.prepareHook(ctx, a.prepareCalls+a.replayCalls)
+			}
+			time.Sleep(a.replayPrepareDelay)
+			next, err := factory(ctx, credential)
+			if a.replayMutate != nil {
+				a.replayMutate(&next)
+			}
+			return next, err
+		}
+	}
+	return upstream, err
 }
 func (a *issuerReplayAdapter) Execute(_ context.Context, request UpstreamRequest) (UpstreamResponse, error) {
 	a.calls++
 	a.keys = append(a.keys, request.Headers.Get("X-Upstream-Idempotency"))
+	if request.Headers.Get("X-Signed-Key") != request.Headers.Get("X-Upstream-Idempotency") {
+		return UpstreamResponse{}, errors.New("authorization did not observe the actual kernel-owned idempotency key")
+	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return UpstreamResponse{}, err
+	}
+	a.bodies = append(a.bodies, string(body))
 	if a.calls <= a.failures {
 		time.Sleep(a.executeDelay)
 		if a.executeError != nil {
@@ -189,6 +218,9 @@ func TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader(t *t
 	if first.calls != 2 || second.calls != 0 || len(first.keys) != 2 {
 		t.Fatalf("issuer A calls=%d keys=%v, issuer B calls=%d", first.calls, first.keys, second.calls)
 	}
+	if first.prepareCalls != 1 || first.replayCalls != 1 || first.bodies[0] != first.bodies[1] {
+		t.Fatalf("replay reran business encoding or changed payload: prepare=%d replay=%d bodies=%v", first.prepareCalls, first.replayCalls, first.bodies)
+	}
 	if first.keys[0] == "" || first.keys[0] != first.keys[1] || first.keys[0] == "client-key-123" {
 		t.Fatalf("provider key was missing, unstable, or unscoped: %v", first.keys)
 	}
@@ -229,5 +261,32 @@ func TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch(t *testing
 	}
 	if len(first.keys) != 1 || first.keys[0] != "" {
 		t.Fatalf("upstream received an idempotency key without a client proof: %v", first.keys)
+	}
+}
+
+func TestReplayWithKeyRequiresPreparedFactoryAndStableAction(t *testing.T) {
+	tests := []struct {
+		name      string
+		noFactory bool
+		mutate    func(*UpstreamRequest)
+	}{
+		{name: "missing factory", noFactory: true},
+		{name: "changed method", mutate: func(request *UpstreamRequest) { request.Method = http.MethodDelete }},
+		{name: "changed endpoint", mutate: func(request *UpstreamRequest) { request.URL = "other-action" }},
+		{name: "changed framing", mutate: func(request *UpstreamRequest) {
+			request.Headers.Set("Content-Type", "multipart/form-data; boundary=different")
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			first := &issuerReplayAdapter{id: "issuer-a-adapter", failStatus: http.StatusServiceUnavailable, failures: 1, noReplay: test.noFactory, replayMutate: test.mutate}
+			second := &issuerReplayAdapter{id: "issuer-b-adapter"}
+			k := newReplayKeyKernel(t, first, second)
+			err := k.Execute(context.Background(), replayKeyRequest("stable-body-key"), Credential{}, httptest.NewRecorder())
+			var suppressed *ReplaySuppressedError
+			if !errors.As(err, &suppressed) || first.calls != 1 || first.prepareCalls != 1 || second.calls != 0 {
+				t.Fatalf("unproven prepared replay was dispatched: err=%v first=%d prepare=%d second=%d", err, first.calls, first.prepareCalls, second.calls)
+			}
+		})
 	}
 }

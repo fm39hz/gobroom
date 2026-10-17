@@ -269,8 +269,9 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    explicit cancellation as well as credential-generation changes. Device
    acquisition itself is tracked and cancelled on daemon shutdown, not only
    the subsequent poll. Remaining: broader cancellation/shutdown races and HTTPS/non-loopback
-   callback integrations. Opaque leases and
-   prepared request signing remain separate auth-driver work. Validate full
+   callback integrations. Prepared request signing now has a public frozen-body/renewable-authorization
+   seam with an external COSY fixture; provider-specific signer implementations
+   and opaque leases remain auth-driver work. Validate full
    lifecycle fixtures, not token-only stubs.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
@@ -291,9 +292,21 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fixture now executes both JSON and bounded multipart non-chat operations
    through module-owned ingress, assigned model, Physical/Combo graph, shared
    multipart provider codec, decoder and client renderer. Remaining: real
-   provider idempotency guarantees, prepared-body equivalence across codec
-   re-execution/signing/multipart, async job effects and broader
+   provider idempotency guarantees, async job effects and broader
    commit/cancellation/replay stress cases.
+   Scoped retry now requires a prepared replay factory instead of rerunning
+   the semantic codec. The byte helper freezes encoded payload/headers and
+   renews authorization through an independent body reader. Multipart retains
+   its boundary and frozen typed input while reopening authorized replayable
+   leases; an end-to-end kernel fixture checks identical key/wire bytes after
+   ambiguous transport failure. An external module re-signs identical encoded
+   bytes through the resolved endpoint without changing kernel code. Missing
+   factories and changed actions/framing fail closed. Factory invariants remain
+   obligations of trusted module code, not an in-process security sandbox.
+   Signers receive the derived dispatch header before authorization. The shared
+   HTTP transport no longer follows redirects or implicitly rewinds requests
+   behind the kernel's attempt policy; a reused-connection fixture covers even
+   an empty-body POST carrying a standard idempotency key.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and
    versioned JSON/multipart ingress, loads its manifest, builds an assigned
