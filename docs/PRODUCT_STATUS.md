@@ -43,6 +43,15 @@ headless operations and configuration correctness; they do not establish a
 resource baseline, finish model curation UX, widen provider catalog coverage or
 close the full harness/protocol matrix. Generic setup actions/leases and full
 C4/SG2/M15 composition remain open.
+Implementation checkpoint: `a09102b`. Full tests/vet, current conformance and
+repeated focused root/external race tests passed. After `make install-all`, the
+installed CLI verified activation list/get/retry, degraded status while control
+and serving were already published but version persistence failed, and recovery
+by explicit retry or restart. The real main service reported `ok` with control
+and serving versions both 467, an empty activation list and a valid bundle-v9
+config export → validate round trip. These are deterministic fake-provider
+acceptances; renewal-preserved quota, recovery triggers and generic leases/actions
+remain architecture work rather than implied completion.
 
 Previous integrated milestone:
 

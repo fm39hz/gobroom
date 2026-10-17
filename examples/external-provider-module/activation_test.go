@@ -205,6 +205,9 @@ func TestExternalCredentialRefreshActivationRetryAndRestartRecovery(t *testing.T
 				db.Close()
 				t.Fatalf("recovered activation=%s", activationJSON)
 			}
+			if calls.Load() != 2 {
+				t.Fatalf("local activation repeated upstream requests: %d", calls.Load())
+			}
 			if _, err := db.Exec(`DROP TRIGGER IF EXISTS fail_activation_snapshot_insert`); err != nil {
 				t.Error(err)
 			}

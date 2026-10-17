@@ -239,6 +239,14 @@ persist its version, then repairs the durable job through retry or restart.
 This closes the identified refresh/code/device activation slice, not universal
 auth actions, leases, full fault composition or live-provider acceptance.
 
+Installed acceptance (`a09102b`): after `make install-all`, run
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test ./... -run '^TestExternalCredentialRefreshActivationRetryAndRestartRecovery$' -count=1`
+inside `examples/external-provider-module`. It passed activation list/get/retry,
+published-but-unpersisted degraded status, explicit retry and pending-job restart
+recovery through the installed client. The main service reported equal control/
+serving versions and `ok`; config export → validate passed. No live provider
+is called, and complete C4/SG2/M15 remains pending.
+
 Auth-owner rebinding evidence: `TestCredentialOwnerProjectionAndCAS` covers
 typed node/definition projection, privacy, forged-owner rejection and current-owner
 CAS. Store fixtures exercise raw-SQL and repository definition/version ABA,
