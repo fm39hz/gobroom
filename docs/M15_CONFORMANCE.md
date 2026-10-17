@@ -237,6 +237,14 @@ activation records, then consumes the recovered state after restart. This is
 host-contract-v3 recovery conformance, not principal-scoped quota continuity or
 full C4/SG2/M15 closure.
 
+Installed recovery acceptance (`565279b`): after `make install-all`, run
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test ./... -run '^TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate$' -count=1`
+inside `examples/external-provider-module`. It passed typed HTTP498 recovery,
+permission/quota and disabled-policy vetoes, CLI setup/get/activation/status and
+post-restart inference. The main service remained `ok` with matching control/
+serving versions; installed config export → validate passed. No live provider
+is called, and principal/quota continuity remains a separate architecture gate.
+
 Activation evidence: credential CAS and its secret-free outbox commit atomically;
 store fixtures cover rollback, restart, deadline ordering, evidence requirements
 for `active`, superseding and conditional reset/progress writes. Root daemon

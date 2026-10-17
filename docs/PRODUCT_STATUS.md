@@ -41,6 +41,15 @@ breadth or complete harness compatibility. Quota continuity still requires
 principal and credential generations plus auth/operational health separation;
 generic setup actions/leases, UX catalog work and measured resource performance
 also remain open. Full C4/SG2/M15 is not yet closed.
+Implementation checkpoint: `565279b`. Full tests/vet, conformance and repeated
+focused root/external race tests passed; final request-scope recovery veto was
+also followed by full tests/vet and kernel race checks. After `make install-all`,
+the installed CLI exercised device setup/status/activation views and post-restart
+inference in the fake-provider HTTP498 recovery fixture. The same fixture
+verified permission/quota 403 and mode-disabled 401 do not refresh. Main daemon
+status was `ok` with control/serving versions both 468; installed bundle-v9
+config export → validate passed. These checks are not live-provider or quota-
+continuity acceptance.
 
 Previous integrated milestone:
 
