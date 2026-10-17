@@ -262,7 +262,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    tested against a concurrent credential update. The loopback callback
    listener is exercised through HTTP and the TUI projects its status. Denial,
    expiry, device slow-down and shutdown during device polling have lifecycle
-   evidence. Remaining: broader cancellation/shutdown races and HTTPS/non-loopback
+   evidence. `TestAuthorizationCancellationFencesLateSuccessfulToken` additionally
+   covers late-success drivers after caller/session/daemon cancellation, code
+   expiry, coordinator admission closure and worker draining for both flows.
+   Credential commit checks live session/context/expiry and serializes against
+   explicit cancellation as well as credential-generation changes. Device
+   acquisition itself is tracked and cancelled on daemon shutdown, not only
+   the subsequent poll. Remaining: broader cancellation/shutdown races and HTTPS/non-loopback
    callback integrations. Opaque leases and
    prepared request signing remain separate auth-driver work. Validate full
    lifecycle fixtures, not token-only stubs.

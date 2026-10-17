@@ -61,6 +61,7 @@ type authorizationStatusView struct {
 
 type authorizationSessions struct {
 	mu           sync.Mutex
+	closed       bool
 	byID         map[string]authorizationSession
 	byConnection map[string]string
 	inFlight     map[string]bool
@@ -112,6 +113,11 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 	sessions := d.authorizationSessions()
 	d.pruneAuthorizationSessions(sessions, time.Now())
 	sessions.mu.Lock()
+	if sessions.closed {
+		sessions.mu.Unlock()
+		d.releaseOAuthCallbackListener(callbackKey)
+		return authorizationChallenge{}, fmt.Errorf("authorization coordinator is stopped")
+	}
 	if active := sessions.byConnection[connection.ID]; active != "" {
 		sessions.mu.Unlock()
 		d.releaseOAuthCallbackListener(callbackKey)
@@ -141,7 +147,7 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 	d.pruneAuthorizationSessions(sessions, time.Now())
 	sessions.mu.Lock()
 	session, exists := sessions.byID[sessionID]
-	if !exists || session.kind != "authorization_code" || session.status != "awaiting_user" || session.state != state {
+	if sessions.closed || !exists || session.kind != "authorization_code" || session.status != "awaiting_user" || session.state != state {
 		sessions.mu.Unlock()
 		return nil, fmt.Errorf("authorization session is missing, expired or has invalid state")
 	}
@@ -153,51 +159,52 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 		sessions.mu.Unlock()
 		return nil, fmt.Errorf("authorization session is already completing")
 	}
-	sessions.inFlight[sessionID] = true
-	sessions.mu.Unlock()
-
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	exchangeCtx, cancel := context.WithTimeout(ctx, oauthExchangeTimeout)
-	credential, err := session.flow.ExchangeAuthorizationCode(exchangeCtx, code, session.verifier)
-	cancel()
-	if err != nil {
+	exchangeCtx, cancelExpiry := context.WithDeadline(exchangeCtx, session.expiresAt)
+	stopDaemonCancel := func() bool { return false }
+	if d.runCtx != nil {
+		stopDaemonCancel = context.AfterFunc(d.runCtx, cancel)
+		if d.runCtx.Err() != nil {
+			cancel()
+		}
+	}
+	session.cancel = cancel
+	sessions.byID[sessionID] = session
+	sessions.inFlight[sessionID] = true
+	d.authWG.Add(1)
+	sessions.mu.Unlock()
+	defer func() {
+		stopDaemonCancel()
+		cancelExpiry()
+		cancel()
 		sessions.mu.Lock()
 		delete(sessions.inFlight, sessionID)
+		if current, ok := sessions.byID[sessionID]; ok {
+			current.cancel = nil
+			sessions.byID[sessionID] = current
+		}
 		sessions.mu.Unlock()
-		return nil, err
+		d.authWG.Done()
+	}()
+	credential, err := session.flow.ExchangeAuthorizationCode(exchangeCtx, code, session.verifier)
+	if exchangeCtx.Err() != nil {
+		err = exchangeCtx.Err()
 	}
-	credential.ConnectionID = session.connectionID
-	encoded, err := provider.EncodeOAuthCredential(credential)
 	if err != nil {
-		d.finishAuthorizationSession(sessionID, "failed", "could not encode the returned credential")
+		if exchangeCtx.Err() != nil {
+			status, message := classifyAuthorizationError(exchangeCtx, err)
+			d.finishAuthorizationSession(sessionID, status, message)
+		}
 		return nil, err
 	}
-	unlockCredential := d.lockCredentialRefresh(session.connectionID)
-	if err := d.store.UpdateConnectionSecretIfUnchanged(session.connectionID, session.expectedSecret, encoded); err != nil {
-		unlockCredential()
-		d.finishAuthorizationSession(sessionID, "failed", "connection credential changed or was removed; authorization was not applied")
+	if err := d.commitAuthorizationCredential(exchangeCtx, sessions, sessionID, credential); err != nil {
+		status, message := authorizationCommitFailure(exchangeCtx, err)
+		d.finishAuthorizationSession(sessionID, status, message)
 		return nil, fmt.Errorf("persist OAuth credential: %w", err)
 	}
-	unlockCredential()
-	sessions.mu.Lock()
-	session = sessions.byID[sessionID]
-	callbackKey := session.callbackKey
-	session.callbackKey = ""
-	if session.timer != nil {
-		session.timer.Stop()
-		session.timer = nil
-	}
-	session.status = "completed"
-	session.expiresAt = time.Now().Add(authorizationSessionRetention)
-	sessions.byID[sessionID] = session
-	if sessions.byConnection[session.connectionID] == sessionID {
-		delete(sessions.byConnection, session.connectionID)
-	}
-	delete(sessions.inFlight, sessionID)
-	sessions.mu.Unlock()
-	d.releaseOAuthCallbackListener(callbackKey)
 	if err := d.server.Reload(); err != nil {
 		d.finishAuthorizationSession(sessionID, "failed", "credential stored but serving snapshot reload failed")
 		return nil, fmt.Errorf("credential stored but serving snapshot reload failed: %w", err)
@@ -221,7 +228,7 @@ func (d *Daemon) finishAuthorizationSession(sessionID, status, message string) {
 	sessions := d.authorizationSessions()
 	sessions.mu.Lock()
 	session, exists := sessions.byID[sessionID]
-	if !exists || session.kind != "authorization_code" {
+	if !exists || session.kind != "authorization_code" || session.status == "expired" || session.status == "cancelled" {
 		sessions.mu.Unlock()
 		return
 	}
@@ -235,7 +242,6 @@ func (d *Daemon) finishAuthorizationSession(sessionID, status, message string) {
 	session.statusError = message
 	session.expiresAt = time.Now().Add(authorizationSessionRetention)
 	sessions.byID[sessionID] = session
-	delete(sessions.inFlight, sessionID)
 	if sessions.byConnection[session.connectionID] == sessionID {
 		delete(sessions.byConnection, session.connectionID)
 	}
@@ -252,10 +258,9 @@ func (d *Daemon) expireAuthorizationSession(sessionID string) {
 		return
 	}
 	if sessions.inFlight[sessionID] {
-		session.timer = time.AfterFunc(time.Second, func() { d.expireAuthorizationSession(sessionID) })
-		sessions.byID[sessionID] = session
-		sessions.mu.Unlock()
-		return
+		if session.cancel != nil {
+			session.cancel()
+		}
 	}
 	callbackKey := session.callbackKey
 	session.callbackKey = ""
@@ -317,16 +322,15 @@ func equalStringSlices(left, right []string) bool {
 func (d *Daemon) cancelAuthorization(sessionID string) error {
 	sessions := d.authorizationSessions()
 	sessions.mu.Lock()
-	if sessions.inFlight[sessionID] {
-		sessions.mu.Unlock()
-		return fmt.Errorf("authorization session is completing")
-	}
 	session, exists := sessions.byID[sessionID]
-	if !exists {
+	if !exists || session.kind != "authorization_code" {
 		sessions.mu.Unlock()
 		return fmt.Errorf("authorization session %q not found", sessionID)
 	}
 	delete(sessions.byID, sessionID)
+	if session.cancel != nil {
+		session.cancel()
+	}
 	if session.timer != nil {
 		session.timer.Stop()
 	}

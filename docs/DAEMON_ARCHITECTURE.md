@@ -79,6 +79,18 @@ acknowledgement before initiating Stop, and daemon Wait observes that internal
 shutdown as well as process signals. The shutdown result is retained so Wait
 also reports a cleanup failure initiated by another caller.
 
+OAuth authorization-code exchanges and device acquisition/polling are tracked
+daemon workers. Shutdown closes authorization admission, cancels active work
+and drains it before closing SQLite. The code exchange is bounded by caller
+cancellation, daemon cancellation, session expiry and its exchange timeout;
+device polling intentionally survives the initiating client disconnect. Both
+flows use one credential commit boundary that checks the live session, expiry,
+context and expected credential generation while serializing against explicit
+session cancellation. A late successful driver response cannot revive a
+cancelled session or persist a token after cancellation won that boundary.
+Drivers must still cooperate with context cancellation; in-process code is not
+forcibly terminated. Cancellation after a completed commit does not undo it.
+
 No network healthcheck or daemon-wide quota poll runs by default. Real attempts
 feed passive runtime state; provider quota enrichment is evidence-triggered and
 deduplicated. See [Passive health](PASSIVE_HEALTH_ROUTING.md).

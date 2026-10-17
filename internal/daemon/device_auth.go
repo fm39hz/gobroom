@@ -55,10 +55,23 @@ func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID stri
 		return deviceAuthorizationView{}, err
 	}
 	startCtx, cancelStart := context.WithTimeout(ctx, deviceAuthorizationStartTimeout)
+	defer cancelStart()
+	if d.runCtx != nil {
+		stopCancel := context.AfterFunc(d.runCtx, cancelStart)
+		defer stopCancel()
+		if d.runCtx.Err() != nil {
+			cancelStart()
+		}
+	}
 	expiresAt := time.Now().Add(deviceAuthorizationStartTimeout)
 	sessions := d.authorizationSessions()
 	d.pruneAuthorizationSessions(sessions, time.Now())
 	sessions.mu.Lock()
+	if sessions.closed {
+		sessions.mu.Unlock()
+		cancelStart()
+		return deviceAuthorizationView{}, fmt.Errorf("authorization coordinator is stopped")
+	}
 	if active := sessions.byConnection[connection.ID]; active != "" {
 		sessions.mu.Unlock()
 		cancelStart()
@@ -71,9 +84,14 @@ func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID stri
 	}
 	sessions.byID[sessionID] = authorizationSession{kind: "device_code", connectionID: connection.ID, expectedSecret: connection.Secret, expiresAt: expiresAt, status: "starting", cancel: cancelStart}
 	sessions.byConnection[connection.ID] = sessionID
+	d.authWG.Add(1)
 	sessions.mu.Unlock()
+	defer d.authWG.Done()
 
 	challenge, err := deviceFlow.BeginDeviceAuthorization(startCtx)
+	if startCtx.Err() != nil {
+		err = startCtx.Err()
+	}
 	cancelStart()
 	if err != nil {
 		d.removeDeviceAuthorizationReservation(sessionID)
@@ -152,22 +170,18 @@ func validateDeviceAuthorization(device provider.DeviceAuthorization) error {
 
 func (d *Daemon) pollDeviceAuthorization(ctx context.Context, sessionID string, session authorizationSession) {
 	credential, err := session.deviceFlow.WaitForDeviceAuthorization(ctx, session.device)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	}
 	if err != nil {
-		status, message := classifyDeviceAuthorizationError(ctx, err)
+		status, message := classifyAuthorizationError(ctx, err)
 		d.finishDeviceAuthorization(sessionID, status, message)
 		return
 	}
-	credential.ConnectionID = session.connectionID
-	encoded, err := provider.EncodeOAuthCredential(credential)
+	err = d.commitAuthorizationCredential(ctx, d.authorizationSessions(), sessionID, credential)
 	if err != nil {
-		d.finishDeviceAuthorization(sessionID, "failed", "could not encode the returned credential")
-		return
-	}
-	unlock := d.lockCredentialRefresh(session.connectionID)
-	err = d.store.UpdateConnectionSecretIfUnchanged(session.connectionID, session.expectedSecret, encoded)
-	unlock()
-	if err != nil {
-		d.finishDeviceAuthorization(sessionID, "failed", "connection credential changed or was removed; authorization was not applied")
+		status, message := authorizationCommitFailure(ctx, err)
+		d.finishDeviceAuthorization(sessionID, status, message)
 		return
 	}
 	if d.server != nil {
@@ -179,18 +193,18 @@ func (d *Daemon) pollDeviceAuthorization(ctx context.Context, sessionID string, 
 	d.finishDeviceAuthorization(sessionID, "completed", "")
 }
 
-func classifyDeviceAuthorizationError(ctx context.Context, err error) (string, string) {
+func classifyAuthorizationError(ctx context.Context, err error) (string, string) {
 	if errors.Is(err, context.Canceled) || (ctx != nil && errors.Is(ctx.Err(), context.Canceled)) {
 		return "cancelled", "authorization was cancelled"
 	}
 	if errors.Is(err, context.DeadlineExceeded) || (ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
-		return "expired", "device authorization expired before approval"
+		return "expired", "authorization expired before approval"
 	}
 	var retrieveError *oauth2.RetrieveError
 	if errors.As(err, &retrieveError) && retrieveError.ErrorCode != "" {
-		return "failed", "provider rejected device authorization: " + strings.ToLower(retrieveError.ErrorCode)
+		return "failed", "provider rejected authorization: " + strings.ToLower(retrieveError.ErrorCode)
 	}
-	return "failed", "device authorization failed; inspect provider availability and configuration"
+	return "failed", "authorization failed; inspect provider availability and configuration"
 }
 
 func (d *Daemon) finishDeviceAuthorization(sessionID, status, message string) {
@@ -198,7 +212,7 @@ func (d *Daemon) finishDeviceAuthorization(sessionID, status, message string) {
 	sessions.mu.Lock()
 	defer sessions.mu.Unlock()
 	session, exists := sessions.byID[sessionID]
-	if !exists || session.kind != "device_code" {
+	if !exists || session.kind != "device_code" || session.status == "expired" || session.status == "cancelled" {
 		return
 	}
 	if session.cancel != nil {
@@ -247,14 +261,9 @@ func (d *Daemon) cancelDeviceAuthorization(sessionID string) error {
 }
 
 func (d *Daemon) cancelAuthorizationSessions() {
-	d.oauthMu.Lock()
-	sessions := d.oauth
-	d.oauth = nil
-	d.oauthMu.Unlock()
-	if sessions == nil {
-		return
-	}
+	sessions := d.authorizationSessions()
 	sessions.mu.Lock()
+	sessions.closed = true
 	for _, session := range sessions.byID {
 		if session.timer != nil {
 			session.timer.Stop()

@@ -105,6 +105,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 
 	go test ./internal/daemon -run '^(TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay|TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential|TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall|TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate)$$' -count=1
 	go test ./internal/daemon -run '^(TestLoopbackCallbackAddressRejectsNonLocalAndInvalidRedirects|TestOAuthCallbackTargetMatchesExactRegisteredPathAndQuery)$$' -count=1
+	go test ./internal/daemon -run '^(TestAuthorizationCancellationFencesLateSuccessfulToken|TestDeviceAuthorizationStartCancelsAndDrainsBeforeLateSuccess)$$' -count=1
 	go test ./internal/daemon -run '^TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow$$' -count=1
 	go test ./internal/runtime/sessionstore -run '^TestCachePersistsSessionStateOffTheReadPath$$' -count=1
 

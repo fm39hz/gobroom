@@ -20,6 +20,18 @@ opaque/order cases are exercised before the broader M15 composition suite. It
 also runs the concurrent HTTP disconnect-through-kernel test and daemon
 shutdown-before-drain cancellation test.
 
+OAuth cancellation evidence also includes
+`TestAuthorizationCancellationFencesLateSuccessfulToken`: deliberately late
+successful drivers cannot write credentials after explicit session cancellation,
+coordinator shutdown or daemon context cancellation in either flow, nor after
+caller cancellation or session expiry in a code exchange. The test holds each
+driver open after cancellation and verifies the authorization worker drain has
+not returned, then checks the original credential survives its late success.
+Expiry remains visible rather than being overwritten by exchange completion.
+`TestDeviceAuthorizationStartCancelsAndDrainsBeforeLateSuccess` additionally
+holds the initial device acquisition after daemon cancellation and proves it is
+drained without spawning a poller, even when its driver returns a valid challenge.
+
 | Change simulation | Executable evidence |
 |---|---|
 | API-key provider, `/models`, operation bindings and reusable primitives | `TestGenericProviderManifestBindsProtocolsAndSemanticTasks`; daemon manifest/discovery path in `TestDaemonPersistsManifestClassifiedQuotaEvidenceAcrossRestart` |

@@ -49,6 +49,14 @@ or redirected automatically.
 The bundled user service restarts only on failure, so this clean shutdown
 leaves it stopped until `systemctl --user start gobroomd` or `make install-all`.
 
+`connections authorize-cancel --session-id ID` can cancel an in-flight code
+exchange, not only a session waiting for a callback. Code exchanges also stop
+on caller disconnect, daemon shutdown or session expiry. Device polling remains
+daemon-owned after its starting command exits; use `connections device-cancel`
+to stop it explicitly. Both flows reject a late token from a cancelled driver
+before credential commit. Cancellation cannot reverse an already committed
+credential; inspect the connection/session when commands race completion.
+
 ## Service and logs
 
 The user service writes operational messages to stdout/stderr, so a service
