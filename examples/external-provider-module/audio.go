@@ -74,8 +74,8 @@ func (exampleAudioAuth) Resolve(_ context.Context, input provider.AuthInput) (pr
 	}
 	return provider.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret, AuthContext: provider.AuthContext{"userId": "user:" + input.Secret}}, nil
 }
-func (exampleAudioAuth) Refresh(_ context.Context, credential provider.Credential) (provider.Credential, error) {
-	return credential, nil
+func (exampleAudioAuth) Refresh(_ context.Context, input provider.AuthInput, _ provider.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(input.Secret)
 }
 
 // audioQuotaSource demonstrates that the public QuotaSource contract can be

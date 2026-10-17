@@ -27,6 +27,27 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+The auth-state boundary now separates provider-owned persisted state from the
+ephemeral kernel credential. Code/device setup and refresh return a bounded,
+redacted `CredentialState`; the daemon validates through the selected `Resolve`
+before revision CAS. OAuth alone owns token serialization; refresh token/client
+ID/client secret no longer live in `kernel.Credential`. A provider-defined
+`opaque_ticket` mode has a public-module setup → HTTP 401 → refresh → restart
+fixture preserving typed ticket/subject/workspace metadata without exposing
+it in config/IPC. The kernel accepts same-secret header/context/generation
+refresh without relaxing operation replay rules. Static module host contract
+v2 makes the interface break explicit rather than adding a compatibility path.
+This improves provider extensibility and account operation, not catalog breadth,
+TUI model curation, full harness compatibility or resource-performance evidence.
+Generic action-based setup, opaque lease isolation and post-commit reconciliation
+remain open; this slice does not close full C4/SG2 or M15.
+Source review also identified an unclosed ownership case: provider-definition
+rebinding does not currently rotate child credential revisions. Exact old-driver
+commit fencing across that rebind needs its own implementation and acceptance;
+the current state-preservation fixture deliberately keeps its definition fixed.
+
+Previous integrated milestone:
+
 The M7/SG2 credential lifecycle slice replaces secret-equality guards with a
 durable, non-exported credential revision. Setup/device completion and refresh
 share a context-aware CAS; same-secret resave, A → B → A, disabled/re-enabled

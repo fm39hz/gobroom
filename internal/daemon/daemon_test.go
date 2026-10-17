@@ -54,6 +54,14 @@ type streamingDaemonAdapter struct {
 
 type pendingDaemonDeviceAuth struct{ pollStarted chan struct{} }
 
+func oauthFixtureState(state provider.OAuthTokenState) (provider.CredentialState, error) {
+	encoded, err := provider.EncodeOAuthTokenState(state)
+	if err != nil {
+		return provider.CredentialState{}, err
+	}
+	return provider.NewCredentialState(encoded)
+}
+
 func (daemonTransformFixture) Definition() kernel.TransformDefinition {
 	return kernel.TransformDefinition{Ref: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.daemon-transform", ContractVersion: 1}, ImplementationVersion: "1", Label: "Daemon test transform", Description: "Fixture for control-plane binding CRUD.", Stage: kernel.TransformBeforeRequirements, Effects: []kernel.TransformEffect{kernel.TransformInput}}
 }
@@ -110,16 +118,16 @@ func (*pendingDaemonDeviceAuth) SetupSchema() provider.SetupSchema { return prov
 func (*pendingDaemonDeviceAuth) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (*pendingDaemonDeviceAuth) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (*pendingDaemonDeviceAuth) Refresh(_ context.Context, _ provider.AuthInput, credential kernel.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(credential.Secret)
 }
 func (*pendingDaemonDeviceAuth) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
 	return provider.DeviceAuthorization{DeviceCode: "ipc-private-code", UserCode: "IPC-CODE", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute), PollInterval: time.Second}, nil
 }
-func (f *pendingDaemonDeviceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (kernel.Credential, error) {
+func (f *pendingDaemonDeviceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	close(f.pollStarted)
 	<-ctx.Done()
-	return kernel.Credential{}, ctx.Err()
+	return provider.CredentialState{}, ctx.Err()
 }
 
 func (daemonExplainAdapter) ID() string { return "daemon-explain-fixture" }
@@ -149,18 +157,18 @@ func (callbackOAuthFixture) SetupSchema() provider.SetupSchema { return provider
 func (callbackOAuthFixture) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (callbackOAuthFixture) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (callbackOAuthFixture) Refresh(_ context.Context, _ provider.AuthInput, credential kernel.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(credential.Secret)
 }
 func (f callbackOAuthFixture) AuthorizationURL(state, verifier string) (string, error) {
 	query := url.Values{"client_id": {"fixture"}, "redirect_uri": {f.redirectURL}, "state": {state}, "code_challenge": {oauth2.S256ChallengeFromVerifier(verifier)}, "code_challenge_method": {"S256"}}
 	return "https://identity.test/authorize?" + query.Encode(), nil
 }
-func (callbackOAuthFixture) ExchangeAuthorizationCode(_ context.Context, code, verifier string) (kernel.Credential, error) {
+func (callbackOAuthFixture) ExchangeAuthorizationCode(_ context.Context, code, verifier string) (provider.CredentialState, error) {
 	if code != "loopback-code" || verifier == "" {
-		return kernel.Credential{}, fmt.Errorf("unexpected authorization exchange input")
+		return provider.CredentialState{}, fmt.Errorf("unexpected authorization exchange input")
 	}
-	return kernel.Credential{Type: "oauth2", Secret: "loopback-access", RefreshToken: "loopback-refresh"}, nil
+	return oauthFixtureState(provider.OAuthTokenState{AccessToken: "loopback-access", RefreshToken: "loopback-refresh", ClientID: "loopback-client"})
 }
 
 type blockingCallbackOAuthFixture struct {
@@ -169,13 +177,13 @@ type blockingCallbackOAuthFixture struct {
 	release chan struct{}
 }
 
-func (f *blockingCallbackOAuthFixture) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (kernel.Credential, error) {
+func (f *blockingCallbackOAuthFixture) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (provider.CredentialState, error) {
 	close(f.entered)
 	select {
 	case <-f.release:
-		return kernel.Credential{Type: "oauth2", Secret: "stale-issued-access", RefreshToken: "stale-issued-refresh"}, nil
+		return oauthFixtureState(provider.OAuthTokenState{AccessToken: "stale-issued-access", RefreshToken: "stale-issued-refresh", ClientID: "fixture-client"})
 	case <-ctx.Done():
-		return kernel.Credential{}, ctx.Err()
+		return provider.CredentialState{}, ctx.Err()
 	}
 }
 
@@ -190,8 +198,8 @@ func (*serializedDeviceAuthFixture) SetupSchema() provider.SetupSchema { return 
 func (*serializedDeviceAuthFixture) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (*serializedDeviceAuthFixture) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (*serializedDeviceAuthFixture) Refresh(_ context.Context, _ provider.AuthInput, credential kernel.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(credential.Secret)
 }
 func (f *serializedDeviceAuthFixture) BeginDeviceAuthorization(ctx context.Context) (provider.DeviceAuthorization, error) {
 	f.starts.Add(1)
@@ -203,9 +211,9 @@ func (f *serializedDeviceAuthFixture) BeginDeviceAuthorization(ctx context.Conte
 		return provider.DeviceAuthorization{}, ctx.Err()
 	}
 }
-func (*serializedDeviceAuthFixture) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (kernel.Credential, error) {
+func (*serializedDeviceAuthFixture) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	<-ctx.Done()
-	return kernel.Credential{}, ctx.Err()
+	return provider.CredentialState{}, ctx.Err()
 }
 
 func TestIPCControlCRUDUsesDaemonServices(t *testing.T) {
@@ -744,21 +752,6 @@ func TestConnectionCanBeCreatedWithoutTokenOnlyForInteractiveOAuth(t *testing.T)
 	}
 }
 
-func TestRefreshedCredentialPersistenceRetainsOAuthClientSecret(t *testing.T) {
-	credential := kernel.Credential{Secret: "new-access", RefreshToken: "new-refresh", ClientID: "client", ClientSecret: "secret", ExpiresAt: time.Now().Add(time.Hour)}
-	stored, err := refreshedCredentialSecret(credential)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state map[string]any
-	if err := json.Unmarshal([]byte(stored), &state); err != nil {
-		t.Fatal(err)
-	}
-	if state["access_token"] != credential.Secret || state["refresh_token"] != credential.RefreshToken || state["client_id"] != credential.ClientID || state["client_secret"] != credential.ClientSecret {
-		t.Fatalf("persisted OAuth state=%#v", state)
-	}
-}
-
 func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) {
 	transport := oauthRoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 		body, err := io.ReadAll(r.Body)
@@ -1000,7 +993,7 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 		t.Fatal("connection credential missing after callback")
 	}
 	token, err := provider.DecodeOAuthTokenState(stored.Secret)
-	if err != nil || token.AccessToken != "loopback-access" || token.RefreshToken != "loopback-refresh" {
+	if err != nil || token.AccessToken != "loopback-access" || token.RefreshToken != "loopback-refresh" || token.ClientID != "loopback-client" {
 		t.Fatalf("loopback exchange credential=%#v err=%v", token, err)
 	}
 	d.oauthCallbackMu.Lock()

@@ -24,8 +24,8 @@ func (*generationDeviceFlow) SetupSchema() provider.SetupSchema { return provide
 func (*generationDeviceFlow) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (*generationDeviceFlow) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (*generationDeviceFlow) Refresh(_ context.Context, _ provider.AuthInput, credential kernel.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(credential.Secret)
 }
 func (*generationDeviceFlow) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
 	return provider.DeviceAuthorization{
@@ -33,13 +33,13 @@ func (*generationDeviceFlow) BeginDeviceAuthorization(context.Context) (provider
 		VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute),
 	}, nil
 }
-func (f *generationDeviceFlow) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (kernel.Credential, error) {
+func (f *generationDeviceFlow) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	close(f.entered)
 	select {
 	case <-f.release:
-		return kernel.Credential{Type: "oauth2", Secret: "delayed-device-token", RefreshToken: "delayed-refresh-token"}, nil
+		return oauthFixtureState(provider.OAuthTokenState{AccessToken: "delayed-device-token", RefreshToken: "delayed-refresh-token", ClientID: "device-client"})
 	case <-ctx.Done():
-		return kernel.Credential{}, ctx.Err()
+		return provider.CredentialState{}, ctx.Err()
 	}
 }
 

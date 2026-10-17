@@ -37,7 +37,7 @@ func (f *delayedCredentialFlow) Resolve(ctx context.Context, input provider.Auth
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
 
-func (f *delayedCredentialFlow) Refresh(ctx context.Context, current kernel.Credential) (kernel.Credential, error) {
+func (f *delayedCredentialFlow) Refresh(ctx context.Context, _ provider.AuthInput, _ kernel.Credential) (provider.CredentialState, error) {
 	if f.refreshEntered != nil {
 		if f.observedContext != nil {
 			f.observedContext <- ctx
@@ -45,10 +45,7 @@ func (f *delayedCredentialFlow) Refresh(ctx context.Context, current kernel.Cred
 		close(f.refreshEntered)
 		<-f.refreshRelease // Deliberately model a provider returning late success.
 	}
-	return kernel.Credential{
-		ConnectionID: current.ConnectionID, Type: current.Type,
-		Secret: "refreshed-secret", RefreshToken: "refreshed-token",
-	}, nil
+	return provider.NewCredentialState("refreshed-secret")
 }
 
 func credentialRefreshRoute(t *testing.T, d *Daemon, connectionID string) kernel.Route {

@@ -718,13 +718,20 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	if oauth, ok := binding.AuthModes["oauth2"].Flow.(OAuthAuth); !ok || oauth.Config.DeviceAuthURL != "https://oauth.test/device" {
 		t.Fatalf("device authorization endpoint did not bind from provider definition: %#v", binding.AuthModes["oauth2"].Flow)
 	}
-	state := []byte(`{"access_token":"access","refresh_token":"refresh","client_secret":"per-connection-secret"}`)
+	state := []byte(`{"access_token":"access","refresh_token":"refresh","client_secret":"per-connection-secret","expires_at":"2030-01-02T03:04:05Z"}`)
 	credential, err := binding.AuthModes["oauth2"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: string(state)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if credential.Secret != "access" || credential.RefreshToken != "refresh" || credential.ClientID != "public-client" || credential.ClientSecret != "per-connection-secret" {
+	if credential.Secret != "access" || !credential.ExpiresAt.Equal(time.Date(2030, time.January, 2, 3, 4, 5, 0, time.UTC)) {
 		t.Fatalf("resolved credential=%#v", credential)
+	}
+	persisted, err := DecodeOAuthTokenState(string(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.AccessToken != "access" || persisted.RefreshToken != "refresh" || persisted.ClientID != "" || persisted.ClientSecret != "per-connection-secret" {
+		t.Fatalf("persistent OAuth state=%#v", persisted)
 	}
 }
 

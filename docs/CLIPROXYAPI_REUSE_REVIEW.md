@@ -55,6 +55,14 @@ Unlike a cancellation-detached persistence policy, Gobroom rejects late success
 before its commit boundary when the request or daemon context is canceled.
 Post-commit reconciliation errors remain observable and do not roll back tokens.
 
+Provider-state lesson: `sdk/cliproxy/auth/types.go` keeps arbitrary mutable
+account metadata (tokens/cookies/provider fields), rather than assuming all
+refresh results are a bearer token. Gobroom solves that preservation problem
+with bounded, redacted, provider-owned `CredentialState` plus typed serde inside
+the auth primitive. Its daemon validates through `Resolve` before revision CAS;
+its kernel sees only an ephemeral credential/generation. No metadata bag or
+CLIProxyAPI persistence/conductor implementation is copied into the kernel.
+
 CLIProxyAPI separates API handlers, a translator pipeline, auth/conductor
 selection and provider executors. `sdk/cliproxy/auth/conductor_execution.go`
 owns attempt orchestration (`Execute`, `ExecuteCount`, `ExecuteStream`), while

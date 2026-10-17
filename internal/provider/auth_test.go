@@ -21,10 +21,49 @@ func (a deviceOAuthFixture) Resolve(_ context.Context, input AuthInput) (kernel.
 	if input.Secret == "" {
 		return kernel.Credential{}, context.Canceled
 	}
-	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret, ClientID: a.issuer, RequestHeaders: http.Header{"X-Provider-Device": []string{a.issuer}}}, nil
+	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret, AuthContext: kernel.AuthContext{"issuer": a.issuer}, RequestHeaders: http.Header{"X-Provider-Device": []string{a.issuer}}}, nil
 }
-func (a deviceOAuthFixture) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (a deviceOAuthFixture) Refresh(_ context.Context, input AuthInput, credential kernel.Credential) (CredentialState, error) {
+	return NewCredentialState(input.Secret)
+}
+
+type customStateAuth struct{}
+
+func (customStateAuth) ID() string               { return "custom-state" }
+func (customStateAuth) SetupSchema() SetupSchema { return SetupSchema{} }
+func (customStateAuth) Resolve(_ context.Context, input AuthInput) (kernel.Credential, error) {
+	var state struct {
+		Token string `json:"vendor_token"`
+	}
+	if err := json.Unmarshal([]byte(input.Secret), &state); err != nil {
+		return kernel.Credential{}, err
+	}
+	if state.Token == "" {
+		return kernel.Credential{}, context.Canceled
+	}
+	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: state.Token}, nil
+}
+func (customStateAuth) Refresh(_ context.Context, input AuthInput, _ kernel.Credential) (CredentialState, error) {
+	return NewCredentialState(input.Secret)
+}
+
+func TestCustomAuthRefreshStateRemainsOpaqueUntilResolve(t *testing.T) {
+	flow := customStateAuth{}
+	input := AuthInput{ConnectionID: "conn", Type: "custom", Secret: `{"vendor_token":"new-token"}`}
+	state, err := flow.Refresh(context.Background(), input, kernel.Credential{ConnectionID: "conn", Type: "custom", Secret: "old-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := state.Encoded(); got != input.Secret {
+		t.Fatalf("state=%q", got)
+	}
+	credential, err := flow.Resolve(context.Background(), AuthInput{ConnectionID: input.ConnectionID, Type: input.Type, Secret: state.Encoded()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.Secret != "new-token" || credential.ConnectionID != input.ConnectionID {
+		t.Fatalf("resolved credential=%#v", credential)
+	}
 }
 
 func TestStaticSecretAuthIsReusablePrimitive(t *testing.T) {
@@ -126,7 +165,7 @@ func TestProviderSpecificDeviceOAuthFlowUsesGenericAuthExtensionContract(t *test
 		t.Fatal(err)
 	}
 	credential, err := binding.AuthModes["oauth-device"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth-device", Secret: "access-token"})
-	if err != nil || credential.Secret != "access-token" || credential.ClientID != "login.example" || credential.RequestHeaders.Get("X-Provider-Device") != "login.example" {
+	if err != nil || credential.Secret != "access-token" || credential.AuthContext["issuer"] != "login.example" || credential.RequestHeaders.Get("X-Provider-Device") != "login.example" {
 		t.Fatalf("provider auth extension credential=%#v err=%v", credential, err)
 	}
 	requestHeaders := make(http.Header)

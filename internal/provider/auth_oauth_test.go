@@ -20,8 +20,11 @@ func TestOAuthAuthParsesTokenState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if credential.Secret != "access" || credential.RefreshToken != "refresh" {
+	if credential.Secret != "access" {
 		t.Fatalf("credential=%#v", credential)
+	}
+	if !credential.ExpiresAt.IsZero() {
+		t.Fatalf("runtime credential expiry=%s", credential.ExpiresAt)
 	}
 }
 
@@ -36,8 +39,8 @@ func TestOAuthTokenStateUsesTypedJSONAndRejectsMalformedObjects(t *testing.T) {
 	if err != nil || plain.AccessToken != "plain-access-token" {
 		t.Fatalf("plain token state=%#v err=%v", plain, err)
 	}
-	credential := kernel.Credential{Secret: "access", RefreshToken: "refresh", ClientID: "client", ClientSecret: "private", ExpiresAt: time.Now().UTC().Round(time.Second)}
-	encoded, err := EncodeOAuthCredential(credential)
+	state := OAuthTokenState{AccessToken: "access", RefreshToken: "refresh", ClientID: "client", ClientSecret: "private", ExpiresAt: time.Now().UTC().Round(time.Second)}
+	encoded, err := EncodeOAuthTokenState(state)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +48,7 @@ func TestOAuthTokenStateUsesTypedJSONAndRejectsMalformedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.AccessToken != credential.Secret || decoded.RefreshToken != credential.RefreshToken || decoded.ClientID != credential.ClientID || decoded.ClientSecret != credential.ClientSecret || !decoded.ExpiresAt.Equal(credential.ExpiresAt) {
+	if decoded != state {
 		t.Fatalf("OAuth state roundtrip=%#v", decoded)
 	}
 }
@@ -71,11 +74,25 @@ func TestOAuthAuthRefreshesAgainstTokenEndpoint(t *testing.T) {
 	flow := OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", ClientSecret: "secret", TokenURL: "http://" + listener.Addr().String()}}
 	for name, expiry := range map[string]time.Time{"expired": time.Now().Add(-time.Hour), "not expired": time.Now().Add(time.Hour), "no expiry": {}} {
 		t.Run(name, func(t *testing.T) {
-			credential, err := flow.Refresh(context.Background(), kernel.Credential{ConnectionID: "conn", Type: "oauth2", Secret: "old", RefreshToken: "refresh", ExpiresAt: expiry})
+			inputState := OAuthTokenState{AccessToken: "old", RefreshToken: "refresh", ClientID: "client", ClientSecret: "secret", ExpiresAt: expiry}
+			encoded, err := EncodeOAuthTokenState(inputState)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if credential.Secret != "new-access" || credential.RefreshToken != "new-refresh" || !credential.ExpiresAt.After(time.Now()) {
+			input := AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: encoded}
+			state, err := flow.Refresh(context.Background(), input, kernel.Credential{ConnectionID: "conn", Type: "oauth2", Secret: "old", ExpiresAt: expiry})
+			if err != nil {
+				t.Fatal(err)
+			}
+			credential, err := flow.Resolve(context.Background(), AuthInput{ConnectionID: input.ConnectionID, Type: input.Type, Secret: state.Encoded()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			persisted, err := DecodeOAuthTokenState(state.Encoded())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if credential.Secret != "new-access" || !credential.ExpiresAt.Equal(persisted.ExpiresAt) || persisted.AccessToken != "new-access" || persisted.RefreshToken != "new-refresh" || !persisted.ExpiresAt.After(time.Now()) {
 				t.Fatal("explicit refresh did not replace the rejected access token")
 			}
 		})
@@ -143,11 +160,20 @@ func TestDefinitionBoundOAuthFlowRefreshesWithConnectionSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refreshed, err := binding.AuthModes["oauth2"].Flow.Refresh(context.Background(), credential)
+	input := AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: state}
+	replacement, err := binding.AuthModes["oauth2"].Flow.Refresh(context.Background(), input, credential)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if refreshed.Secret != "new-access" || refreshed.RefreshToken != "new-refresh" || refreshed.ClientID != "public-client" || refreshed.ClientSecret != "connection-secret" {
+	refreshed, err := binding.AuthModes["oauth2"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: input.ConnectionID, Type: input.Type, Secret: replacement.Encoded()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := DecodeOAuthTokenState(replacement.Encoded())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Secret != "new-access" || !refreshed.ExpiresAt.Equal(persisted.ExpiresAt) || persisted.AccessToken != "new-access" || persisted.RefreshToken != "new-refresh" || persisted.ClientID != "public-client" || persisted.ClientSecret != "connection-secret" {
 		t.Fatalf("refreshed credential=%#v", refreshed)
 	}
 }

@@ -778,13 +778,6 @@ func (d *Daemon) providerNodeForConnection(connectionID string) (string, error) 
 	return "", fmt.Errorf("enabled connection %q was not found", connectionID)
 }
 
-func refreshedCredentialSecret(credential kernel.Credential) (string, error) {
-	if credential.RefreshToken == "" && credential.ClientSecret == "" && credential.ExpiresAt.IsZero() {
-		return credential.Secret, nil
-	}
-	return provider.EncodeOAuthCredential(credential)
-}
-
 func (d *Daemon) Wait(ctx context.Context) error {
 	d.mu.Lock()
 	runCtx := d.runCtx

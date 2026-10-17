@@ -50,21 +50,21 @@ func (deviceRaceAuth) Resolve(_ context.Context, input provider.AuthInput) (prov
 	}
 	return provider.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (deviceRaceAuth) Refresh(_ context.Context, credential provider.Credential) (provider.Credential, error) {
-	return credential, nil
+func (deviceRaceAuth) Refresh(_ context.Context, input provider.AuthInput, _ provider.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(input.Secret)
 }
 func (deviceRaceAuth) CanAuthorizeCode() bool   { return false }
 func (deviceRaceAuth) CanAuthorizeDevice() bool { return true }
 func (a deviceRaceAuth) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
 	return provider.DeviceAuthorization{DeviceCode: "private-test-device-code", UserCode: "TEST-CODE", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
-func (a deviceRaceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.Credential, error) {
+func (a deviceRaceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	close(a.barrier.entered)
 	select {
 	case <-a.barrier.release:
-		return provider.Credential{Type: "oauth2", Secret: "late-device-token"}, nil
+		return provider.NewCredentialState("late-device-token")
 	case <-ctx.Done():
-		return provider.Credential{}, ctx.Err()
+		return provider.CredentialState{}, ctx.Err()
 	}
 }
 

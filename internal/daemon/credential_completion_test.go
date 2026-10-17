@@ -29,12 +29,12 @@ func (*credentialCompletionFlow) SetupSchema() provider.SetupSchema {
 func (*credentialCompletionFlow) Resolve(_ context.Context, input provider.AuthInput) (kernel.Credential, error) {
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (f *credentialCompletionFlow) Refresh(_ context.Context, current kernel.Credential) (kernel.Credential, error) {
+func (f *credentialCompletionFlow) Refresh(_ context.Context, _ provider.AuthInput, current kernel.Credential) (provider.CredentialState, error) {
 	f.refreshCalls.Add(1)
 	f.refreshInput <- current
 	f.enteredOnce.Do(func() { close(f.entered) })
 	<-f.release
-	return kernel.Credential{ConnectionID: current.ConnectionID, Type: current.Type, Secret: "refreshed-secret"}, nil
+	return provider.NewCredentialState("refreshed-secret")
 }
 
 func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T) {

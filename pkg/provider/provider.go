@@ -57,6 +57,16 @@ const RuntimeModuleHostContractVersion = core.RuntimeModuleHostContractVersion
 const MultipartRequestCodecID = core.MultipartRequestCodecID
 
 type OAuthFlowOptions = core.OAuthFlowOptions
+type OAuthTokenState = core.OAuthTokenState
+
+func OAuthAuthFactory(options AuthOptions) (AuthFlow, error) { return core.OAuthAuthFactory(options) }
+func EncodeOAuthTokenState(state OAuthTokenState) (string, error) {
+	return core.EncodeOAuthTokenState(state)
+}
+func DecodeOAuthTokenState(encoded string) (OAuthTokenState, error) {
+	return core.DecodeOAuthTokenState(encoded)
+}
+
 type AuthOptions = core.AuthOptions
 type AuthModeDefinition = core.AuthModeDefinition
 type AuthModeMetadata = core.AuthModeMetadata
@@ -67,6 +77,14 @@ type AuthorizationCodeFlow = core.AuthorizationCodeFlow
 type DeviceAuthorizationFlow = core.DeviceAuthorizationFlow
 type DeviceAuthorization = core.DeviceAuthorization
 type AuthInput = core.AuthInput
+type CredentialState = core.CredentialState
+
+const MaxCredentialStateBytes = core.MaxCredentialStateBytes
+
+func NewCredentialState(encoded string) (CredentialState, error) {
+	return core.NewCredentialState(encoded)
+}
+
 type AuthFlowFactory = core.AuthFlowFactory
 type SetupField = core.SetupField
 type SetupSchema = core.SetupSchema

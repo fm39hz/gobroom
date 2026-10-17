@@ -28,6 +28,10 @@ Durable credential revision CAS and revision rotation use SQLite transactions
 and triggers, covering every credential writer rather than duplicating counters
 in setup, refresh and configuration paths.
 
+Auth state uses provider-owned typed serde and standard `fmt`/JSON redaction,
+not a kernel metadata-bag parser. Public OAuth encode/decode/factory helpers let
+modules compose the pinned `x/oauth2` flow without copying its exchange logic.
+
 ## Adopt
 
 | Area | Library/tool | Version checked | Decision | Why |

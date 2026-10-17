@@ -6,23 +6,24 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
 // Commit and cancellation share a linearization point. A driver returning a
 // token after cancellation does not grant permission to persist that token.
-func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *authorizationSessions, sessionID string, credential kernel.Credential) error {
+func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *authorizationSessions, sessionID string, state provider.CredentialState) error {
 	sessions.mu.Lock()
 	session, exists := sessions.byID[sessionID]
 	sessions.mu.Unlock()
 	if !exists {
 		return fmt.Errorf("authorization session is no longer active: %w", context.Canceled)
 	}
-	credential.ConnectionID = session.connectionID
-	encoded, err := provider.EncodeOAuthCredential(credential)
-	if err != nil {
+	flow := session.authFlow
+	if flow == nil {
+		return fmt.Errorf("authorization auth primitive is unavailable")
+	}
+	if _, err := d.resolveReplacementCredential(ctx, flow, session.expectedCredential, state); err != nil {
 		return err
 	}
 	unlock, err := d.lockCredentialRefresh(ctx, session.connectionID)
@@ -50,7 +51,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 		sessions.mu.Unlock()
 		return d.runCtx.Err()
 	}
-	if err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, encoded); err != nil {
+	if err := d.store.CompareAndSwapConnectionCredential(ctx, current.expectedCredential, state.Encoded()); err != nil {
 		sessions.mu.Unlock()
 		return err
 	}
@@ -66,6 +67,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	current.verifier = ""
 	current.device.DeviceCode = ""
 	current.deviceFlow = nil
+	current.authFlow = nil
 	sessions.byID[sessionID] = current
 	if sessions.byConnection[current.connectionID] == sessionID {
 		delete(sessions.byConnection, current.connectionID)

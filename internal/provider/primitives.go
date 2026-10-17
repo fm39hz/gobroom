@@ -689,7 +689,7 @@ type RuntimeModule interface {
 	Register(*RuntimeRegistry) error
 }
 
-const RuntimeModuleHostContractVersion uint64 = 1
+const RuntimeModuleHostContractVersion uint64 = 2
 
 type RuntimeModuleFunc struct {
 	Name                string

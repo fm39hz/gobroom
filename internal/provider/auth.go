@@ -38,7 +38,7 @@ type AuthFlow interface {
 	ID() string
 	SetupSchema() SetupSchema
 	Resolve(context.Context, AuthInput) (kernel.Credential, error)
-	Refresh(context.Context, kernel.Credential) (kernel.Credential, error)
+	Refresh(context.Context, AuthInput, kernel.Credential) (CredentialState, error)
 }
 
 // InteractiveAuthCapabilities advertises which daemon-owned authorization
@@ -66,7 +66,7 @@ func InteractiveAuthModes(flow AuthFlow) (authorizationCode, device bool) {
 // submit the callback code plus the returned session ID.
 type AuthorizationCodeFlow interface {
 	AuthorizationURL(state, verifier string) (string, error)
-	ExchangeAuthorizationCode(context.Context, string, string) (kernel.Credential, error)
+	ExchangeAuthorizationCode(context.Context, string, string) (CredentialState, error)
 }
 
 type DeviceAuthorization struct {
@@ -82,7 +82,7 @@ type DeviceAuthorization struct {
 // stay private to the daemon; only verification instructions cross IPC.
 type DeviceAuthorizationFlow interface {
 	BeginDeviceAuthorization(context.Context) (DeviceAuthorization, error)
-	WaitForDeviceAuthorization(context.Context, DeviceAuthorization) (kernel.Credential, error)
+	WaitForDeviceAuthorization(context.Context, DeviceAuthorization) (CredentialState, error)
 }
 
 type StaticSecretAuth struct{}
@@ -97,8 +97,8 @@ func (StaticSecretAuth) Resolve(_ context.Context, input AuthInput) (kernel.Cred
 	}
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: input.Secret}, nil
 }
-func (StaticSecretAuth) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (StaticSecretAuth) Refresh(_ context.Context, input AuthInput, _ kernel.Credential) (CredentialState, error) {
+	return NewCredentialState(input.Secret)
 }
 
 type NoAuth struct{}
@@ -108,8 +108,8 @@ func (NoAuth) SetupSchema() SetupSchema { return SetupSchema{} }
 func (NoAuth) Resolve(_ context.Context, input AuthInput) (kernel.Credential, error) {
 	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type}, nil
 }
-func (NoAuth) Refresh(_ context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	return credential, nil
+func (NoAuth) Refresh(context.Context, AuthInput, kernel.Credential) (CredentialState, error) {
+	return CredentialState{}, fmt.Errorf("no-auth does not support credential refresh")
 }
 
 type OAuthAuth struct{ Config appauth.OAuthConfig }
@@ -140,15 +140,7 @@ func DecodeOAuthTokenState(raw string) (OAuthTokenState, error) {
 	return OAuthTokenState{AccessToken: raw}, nil
 }
 
-func EncodeOAuthCredential(credential kernel.Credential) (string, error) {
-	return encodeOAuthTokenState(OAuthTokenState{
-		AccessToken: credential.Secret, RefreshToken: credential.RefreshToken,
-		ExpiresAt: credential.ExpiresAt, ClientID: credential.ClientID,
-		ClientSecret: credential.ClientSecret,
-	})
-}
-
-func encodeOAuthTokenState(state OAuthTokenState) (string, error) {
+func EncodeOAuthTokenState(state OAuthTokenState) (string, error) {
 	if state.AccessToken == "" {
 		return "", fmt.Errorf("OAuth token state has no access_token")
 	}
@@ -177,33 +169,33 @@ func (a OAuthAuth) Resolve(_ context.Context, input AuthInput) (kernel.Credentia
 	if err != nil {
 		return kernel.Credential{}, err
 	}
-	clientID := state.ClientID
-	if clientID == "" {
-		clientID = a.Config.ClientID
-	}
-	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: state.AccessToken, RefreshToken: state.RefreshToken, ExpiresAt: state.ExpiresAt, ClientID: clientID, ClientSecret: state.ClientSecret}, nil
+	return kernel.Credential{ConnectionID: input.ConnectionID, Type: input.Type, Secret: state.AccessToken, ExpiresAt: state.ExpiresAt}, nil
 }
 
-func (a OAuthAuth) Refresh(ctx context.Context, credential kernel.Credential) (kernel.Credential, error) {
-	if credential.RefreshToken == "" {
-		return kernel.Credential{}, fmt.Errorf("oauth refresh token is missing")
+func (a OAuthAuth) Refresh(ctx context.Context, input AuthInput, _ kernel.Credential) (CredentialState, error) {
+	state, err := DecodeOAuthTokenState(input.Secret)
+	if err != nil {
+		return CredentialState{}, err
+	}
+	if state.RefreshToken == "" {
+		return CredentialState{}, fmt.Errorf("oauth refresh token is missing")
 	}
 	config := a.Config
-	if credential.ClientID != "" {
-		config.ClientID = credential.ClientID
+	if state.ClientID != "" {
+		config.ClientID = state.ClientID
 	}
-	if credential.ClientSecret != "" {
-		config.ClientSecret = credential.ClientSecret
+	if state.ClientSecret != "" {
+		config.ClientSecret = state.ClientSecret
 	}
 	// Refresh is an explicit replacement request (for example after HTTP 401),
 	// not a validity check. A valid seed would make TokenSource reuse the
 	// rejected access token, even when its recorded expiry is still in future.
-	token := config.Config().TokenSource(ctx, &oauth2.Token{RefreshToken: credential.RefreshToken})
+	token := config.Config().TokenSource(ctx, &oauth2.Token{RefreshToken: state.RefreshToken})
 	refreshed, err := token.Token()
 	if err != nil {
-		return kernel.Credential{}, err
+		return CredentialState{}, err
 	}
-	return kernel.Credential{ConnectionID: credential.ConnectionID, Type: credential.Type, Secret: refreshed.AccessToken, RefreshToken: refreshed.RefreshToken, ExpiresAt: refreshed.Expiry, ClientID: config.ClientID, ClientSecret: config.ClientSecret}, nil
+	return oauthCredentialState(OAuthTokenState{AccessToken: refreshed.AccessToken, RefreshToken: refreshed.RefreshToken, ExpiresAt: refreshed.Expiry, ClientID: config.ClientID, ClientSecret: config.ClientSecret})
 }
 
 func (a OAuthAuth) AuthorizationURL(state, verifier string) (string, error) {
@@ -221,21 +213,21 @@ func (a OAuthAuth) CanAuthorizeDevice() bool {
 	return a.Config.ClientID != "" && a.Config.DeviceAuthURL != "" && a.Config.TokenURL != ""
 }
 
-func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (kernel.Credential, error) {
+func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (CredentialState, error) {
 	if strings.TrimSpace(code) == "" || verifier == "" {
-		return kernel.Credential{}, fmt.Errorf("OAuth authorization code and PKCE verifier are required")
+		return CredentialState{}, fmt.Errorf("OAuth authorization code and PKCE verifier are required")
 	}
 	token, err := a.Config.Exchange(ctx, code, verifier)
 	if err != nil {
-		return kernel.Credential{}, fmt.Errorf("exchange OAuth authorization code: %w", err)
+		return CredentialState{}, fmt.Errorf("exchange OAuth authorization code: %w", err)
 	}
 	if token == nil || strings.TrimSpace(token.AccessToken) == "" {
-		return kernel.Credential{}, fmt.Errorf("OAuth token endpoint returned no access token")
+		return CredentialState{}, fmt.Errorf("OAuth token endpoint returned no access token")
 	}
-	return kernel.Credential{
-		Type: "oauth2", Secret: token.AccessToken, RefreshToken: token.RefreshToken,
+	return oauthCredentialState(OAuthTokenState{
+		AccessToken: token.AccessToken, RefreshToken: token.RefreshToken,
 		ExpiresAt: token.Expiry, ClientID: a.Config.ClientID, ClientSecret: a.Config.ClientSecret,
-	}, nil
+	})
 }
 
 func (a OAuthAuth) BeginDeviceAuthorization(ctx context.Context) (DeviceAuthorization, error) {
@@ -260,9 +252,9 @@ func (a OAuthAuth) BeginDeviceAuthorization(ctx context.Context) (DeviceAuthoriz
 	}, nil
 }
 
-func (a OAuthAuth) WaitForDeviceAuthorization(ctx context.Context, device DeviceAuthorization) (kernel.Credential, error) {
+func (a OAuthAuth) WaitForDeviceAuthorization(ctx context.Context, device DeviceAuthorization) (CredentialState, error) {
 	if device.DeviceCode == "" || device.ExpiresAt.IsZero() {
-		return kernel.Credential{}, fmt.Errorf("OAuth device code and expiry are required")
+		return CredentialState{}, fmt.Errorf("OAuth device code and expiry are required")
 	}
 	response := &oauth2.DeviceAuthResponse{
 		DeviceCode: device.DeviceCode, UserCode: device.UserCode,
@@ -271,12 +263,20 @@ func (a OAuthAuth) WaitForDeviceAuthorization(ctx context.Context, device Device
 	}
 	token, err := a.Config.Config().DeviceAccessToken(ctx, response)
 	if err != nil {
-		return kernel.Credential{}, fmt.Errorf("poll OAuth device authorization: %w", err)
+		return CredentialState{}, fmt.Errorf("poll OAuth device authorization: %w", err)
 	}
 	if token == nil || strings.TrimSpace(token.AccessToken) == "" {
-		return kernel.Credential{}, fmt.Errorf("OAuth device token response has no access token")
+		return CredentialState{}, fmt.Errorf("OAuth device token response has no access token")
 	}
-	return kernel.Credential{Type: "oauth2", Secret: token.AccessToken, RefreshToken: token.RefreshToken, ExpiresAt: token.Expiry, ClientID: a.Config.ClientID}, nil
+	return oauthCredentialState(OAuthTokenState{AccessToken: token.AccessToken, RefreshToken: token.RefreshToken, ExpiresAt: token.Expiry, ClientID: a.Config.ClientID})
+}
+
+func oauthCredentialState(state OAuthTokenState) (CredentialState, error) {
+	encoded, err := EncodeOAuthTokenState(state)
+	if err != nil {
+		return CredentialState{}, err
+	}
+	return NewCredentialState(encoded)
 }
 
 type AuthRegistry struct {

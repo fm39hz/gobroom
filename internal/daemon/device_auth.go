@@ -82,7 +82,7 @@ func (d *Daemon) startDeviceAuthorization(ctx context.Context, connectionID stri
 		cancelStart()
 		return deviceAuthorizationView{}, fmt.Errorf("maximum pending authorization sessions (%d) reached", maxAuthorizationSessions)
 	}
-	sessions.byID[sessionID] = authorizationSession{kind: "device_code", connectionID: connection.ID, expectedCredential: connection, expiresAt: expiresAt, status: "starting", cancel: cancelStart}
+	sessions.byID[sessionID] = authorizationSession{kind: "device_code", connectionID: connection.ID, expectedCredential: connection, authFlow: flow, expiresAt: expiresAt, status: "starting", cancel: cancelStart}
 	sessions.byConnection[connection.ID] = sessionID
 	d.authWG.Add(1)
 	sessions.mu.Unlock()

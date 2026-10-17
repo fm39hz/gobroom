@@ -426,13 +426,11 @@ type OutcomeClassifier interface {
 }
 
 type Credential struct {
+	Generation   string `json:"-"`
 	ConnectionID string
 	Type         string
 	Secret       string
-	RefreshToken string
 	ExpiresAt    time.Time
-	ClientID     string
-	ClientSecret string
 	// RequestHeaders are credential-scoped values produced by an auth flow at
 	// resolution time. They are runtime-only and never persisted or serialized.
 	RequestHeaders http.Header `json:"-"`

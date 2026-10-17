@@ -32,6 +32,14 @@ connection update through Unix IPC; stale setup must fail, and the next operatio
 must authenticate with the newer credential. The same `GOBROOM_TEST_CLI` switch
 exercises installed CLI device-start/get, connection update and operation probe.
 
+The opaque-state fixture registers its own `opaque_ticket` mode with typed
+`ticket`/`subject`/`workspace` metadata. Device setup and a real 401-triggered
+refresh return bounded `CredentialState`; `Resolve` derives the wire ticket
+and runtime context. After daemon restart the next chat call verifies the
+refreshed metadata survived, while config/IPC omit it. With `GOBROOM_TEST_CLI`,
+successful device setup and post-restart inference also use the installed CLI.
+The module host contract is v2; no v1 auth-interface adapter is maintained.
+
 The COSY signing fixture additionally uses the public `PrepareBytesRequest`
 and `PreparedAuthorization` contracts. It encodes the business payload once,
 then renews body-bound authorization for replay without changing those bytes

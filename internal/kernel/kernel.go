@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -603,7 +604,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()))
 				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canRefresh {
 					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
-					if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {
+					if refreshErr == nil && refreshedCredential.ConnectionID == selectedCredential.ConnectionID && refreshedCredential.Type == selectedCredential.Type && refreshedCredential.ValidateRuntimeContext() == nil && !reflect.DeepEqual(refreshedCredential, selectedCredential) {
 						if body, ok := upstream.Body.(io.Closer); ok {
 							_ = body.Close()
 						}

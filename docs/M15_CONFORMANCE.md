@@ -223,6 +223,19 @@ second connection or issuing a second request outside kernel replay policy.
 
 ## Full semantic closure gate
 
+Auth-state isolation evidence: `TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate`
+uses a provider-defined `opaque_ticket` mode with typed ticket/subject/workspace
+metadata. Successful device setup and a real HTTP-401 refresh persist its exact
+state; a restarted daemon resolves the refreshed state and completes another
+chat request. IPC and configuration exports omit state. `TestCredentialStateBoundsAndRedacts`
+checks bounded construction, exact bytes and redacted formatting/JSON;
+`TestRefreshCredentialRejectsInvalidProviderStateBeforeCAS`, replacement Resolve
+failure/cancellation and malformed runtime-context fixtures leave the old revision
+untouched. `TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges` proves
+same-secret generation/header/context changes reach the permitted same-issuer
+retry. These are public extension/daemon/kernel fixtures, not universal auth
+setup actions, cross-provider credential leases or full SG2 closure.
+
 Response-terminal accounting slice: the typed origin/first-failure latch is
 covered by `TestComposedAdapterResponseFailurePreservesTransformOriginThroughDecoderWrap`,
 `TestComposedAdapterLatchesIgnoredTransformCallbackFailure`, renderer/provider

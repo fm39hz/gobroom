@@ -8,7 +8,6 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/api"
 	"github.com/fm39hz/gobroom/internal/extensions"
-	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
 )
@@ -22,15 +21,15 @@ type lateAuthorizationFixture struct {
 	release   chan struct{}
 }
 
-func (f *lateAuthorizationFixture) lateToken(ctx context.Context) (kernel.Credential, error) {
+func (f *lateAuthorizationFixture) lateToken(ctx context.Context) (provider.CredentialState, error) {
 	close(f.entered)
 	<-ctx.Done()
 	close(f.cancelled)
 	<-f.release
-	return kernel.Credential{Type: "oauth2", Secret: "must-not-be-stored"}, nil
+	return oauthFixtureState(provider.OAuthTokenState{AccessToken: "must-not-be-stored", RefreshToken: "late-refresh-token", ClientID: "late-client"})
 }
 
-func (f *lateAuthorizationFixture) ExchangeAuthorizationCode(ctx context.Context, _, _ string) (kernel.Credential, error) {
+func (f *lateAuthorizationFixture) ExchangeAuthorizationCode(ctx context.Context, _, _ string) (provider.CredentialState, error) {
 	return f.lateToken(ctx)
 }
 
@@ -38,7 +37,7 @@ func (f *lateAuthorizationFixture) BeginDeviceAuthorization(context.Context) (pr
 	return provider.DeviceAuthorization{DeviceCode: "private-device", UserCode: "USER", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 
-func (f *lateAuthorizationFixture) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (kernel.Credential, error) {
+func (f *lateAuthorizationFixture) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	return f.lateToken(ctx)
 }
 

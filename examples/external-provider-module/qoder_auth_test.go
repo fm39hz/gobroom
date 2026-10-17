@@ -68,8 +68,8 @@ func (qoderFixtureAuth) Resolve(_ context.Context, input provider.AuthInput) (pr
 		AuthContext: provider.AuthContext{"userId": state.UserID, "machineId": state.MachineID, "name": state.Name, "email": state.Email},
 	}, nil
 }
-func (qoderFixtureAuth) Refresh(_ context.Context, credential provider.Credential) (provider.Credential, error) {
-	return credential, nil
+func (qoderFixtureAuth) Refresh(_ context.Context, input provider.AuthInput, _ provider.Credential) (provider.CredentialState, error) {
+	return provider.NewCredentialState(input.Secret)
 }
 
 type qoderFixtureModule struct{}

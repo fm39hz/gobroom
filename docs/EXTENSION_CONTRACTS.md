@@ -639,6 +639,37 @@ redacted. Providers with non-token credentials store their own typed state
 behind the same secret handle; they do not add credential columns to the
 kernel or force every auth method into an access-token field.
 
+The current executable auth boundary separates these values:
+
+```text
+AuthInput                         provider-owned persisted bytes + connection/mode
+AuthFlow.Resolve(input)           -> ephemeral kernel.Credential
+AuthFlow.Refresh(input, resolved) -> provider.CredentialState
+Code/device completion            -> provider.CredentialState
+daemon                           -> validate state -> Resolve -> revision CAS
+```
+
+`CredentialState` is a private encoded value constructed through
+`NewCredentialState`; it requires 1..64 KiB and redacts formatting and JSON.
+Only an explicit `Encoded()` crosses the secret-store boundary. The provider
+owns its typed JSON/binary/text binding, validation and serialization. The
+daemon never infers OAuth from runtime fields or rewrites the provider document.
+Before CAS it resolves the replacement through the same selected auth primitive,
+validates bounded runtime headers/context, and rejects late success after
+cancellation. Invalid/zero/oversized/unresolvable state leaves the old revision
+untouched. An unchanged refresh state does not cause a credential rewrite.
+
+`kernel.Credential` has no refresh-token/client-ID/client-secret fields. It
+contains the current wire secret, bounded runtime headers/context, generic
+expiry and an opaque connection generation. A changed generation/context/header
+can authorize the single allowed auth retry even when the bearer secret stays
+the same; existing operation replay and issuer restrictions still apply.
+OAuth alone owns `OAuthTokenState`, its encode/decode helpers and the existing
+`x/oauth2` exchange; those helpers/factory are public for module composition.
+The static-module host contract is version 2 for this breaking Go interface;
+old module contracts are rejected, not adapted. This does not add durable
+interactive session resumption or a universal action-based setup driver.
+
 The daemon coordinator owns the state machine. The current authorization-code
 slice exposes `auth.authorization.start`, `auth.authorization.complete` and
 `auth.authorization.cancel` over local IPC (with headless CLI commands). Start

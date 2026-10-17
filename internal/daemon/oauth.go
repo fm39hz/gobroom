@@ -29,6 +29,7 @@ type authorizationSession struct {
 	kind               string
 	connectionID       string
 	flow               provider.AuthorizationCodeFlow
+	authFlow           provider.AuthFlow
 	state              string
 	verifier           string
 	redirectURL        string
@@ -129,7 +130,7 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 		d.releaseOAuthCallbackListener(callbackKey)
 		return authorizationChallenge{}, fmt.Errorf("maximum pending authorization sessions (%d) reached", maxAuthorizationSessions)
 	}
-	session := authorizationSession{kind: "authorization_code", connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, callbackKey: callbackKey, callbackMode: callbackMode, expectedCredential: connection, expiresAt: expiresAt, status: "awaiting_user"}
+	session := authorizationSession{kind: "authorization_code", connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, callbackKey: callbackKey, callbackMode: callbackMode, expectedCredential: connection, authFlow: flow, expiresAt: expiresAt, status: "awaiting_user"}
 	session.timer = time.AfterFunc(time.Until(expiresAt), func() { d.expireAuthorizationSession(state) })
 	sessions.byID[state] = session
 	sessions.byConnection[connection.ID] = state
