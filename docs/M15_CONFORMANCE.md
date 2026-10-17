@@ -223,6 +223,13 @@ no provider-health or success/performance observation after disconnect.
 These cases close demonstrated attribution/terminal holes; they are not the
 full SG1–SG7 matrix or evidence of live-provider/harness parity.
 
+Checkpoint `8c83070`: full tests/vet, the focused response/kernel/API race group
+(`-count=3`) and `make test-conformance` passed. After `make install-all`, the
+installed CLI external-job control/HTTP acceptance and main config export →
+validate passed; the main daemon remained `ok`. Cancellation/flush/fault-origin
+details are proved by the targeted deterministic/real-loopback fixtures above,
+not by assuming a successful status command covers them.
+
 The following cases are required in addition to the existing subset. They use
 deterministic upstream/callback fixtures; live credentials are not required.
 Each assertion checks observable behavior through the ordinary control and

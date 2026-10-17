@@ -37,7 +37,11 @@ management UX. Full tests/vet, repeated race tests and the current conformance
 subset pass. The concurrent HTTP fixture checks that actual client disconnect
 does not create provider-health or success/performance observations. Standard
 context causes distinguish caller deadlines from operation execution budgets.
-Installed acceptance is recorded after integration; full M15 remains pending.
+Implementation checkpoint: `8c83070`. After `make install-all`, the installed
+CLI status/catalog/health/quota fixture against the external module passed,
+the main service reported `ok`, and config export → validate passed. These
+installed checks complement the targeted HTTP disconnect/fault fixtures;
+they do not turn every fault case into a live-provider run. Full M15 remains pending.
 
 Previous integrated milestone:
 
