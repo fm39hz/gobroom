@@ -85,6 +85,8 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/kernel -run '^(TestIdempotencyPolicyRequiresExplicitBoundedRetention|TestReplayWithKeyExpiresBeforeAnotherDispatch|TestReplayWithKeyCancellationDuringPreparePreventsDispatch)$$' -count=1
 	go test ./internal/kernel -run '^(TestPreparedBytesReplayFreezesPayloadAndRenewsBodyBoundAuthorization|TestReplayWithKeyRequiresPreparedFactoryAndStableAction)$$' -count=1
 	go test ./internal/kernel -run '^(TestHTTPTransportDoesNotRedirectPreparedActions|TestHTTPTransportDoesNotImplicitlyReplayAfterAmbiguousEmptyBodyDispatch)$$' -count=1
+	go test ./internal/artifacts -run '^TestInlineResponseDisclosurePreservesConnectionReplayScope$$' -count=1
+	go test ./internal/ingress -run '^TestJSONOperationIngressBindsInlineArtifactsAndRejectsBodyLeases$$' -count=1
 	go test ./internal/controlplane -run '^TestLoaderBuildsTypedPhysicalAndComboGraph$$' -count=1
 	go test ./internal/kernel -run '^(TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader|TestReplayWithKeyNeverFallsBackAcrossIssuerAfterAmbiguousRetry|TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch)$$' -count=1
 	go test ./internal/operations ./internal/kernel -run '^(TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode|TestComposedSemanticPipelineBoundsEachDecodedResponseEvent|TestResponseCommitWriterEnforcesOperationOutputBound)$$' -count=1

@@ -25,3 +25,12 @@ and `PreparedAuthorization` contracts. It encodes the business payload once,
 then renews body-bound authorization for replay without changing those bytes
 or the resolved endpoint. Request codecs without a prepared replay factory
 cannot receive an automatic scoped retry after ambiguous dispatch.
+
+`JobModule` demonstrates async create/status/cancel as independent operations,
+with schema-validated results and a client-held, connection-scoped inline handle.
+The lifecycle test loses create/cancel responses, proves no duplicate job or
+unsafe cancel replay, restarts the daemon, and rejects handles on another
+account's role or after expiry/issuer changes. It follows the reported passive
+cooldown before reconciling cancellation; no background job worker is needed.
+To verify the installed control client too, run the lifecycle test with
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom`.

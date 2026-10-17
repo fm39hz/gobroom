@@ -108,12 +108,19 @@ func (c JSONOperationIngress) DecodeBody(request *http.Request, body []byte) (no
 	result.Request.Operation = normalize.Operation(c.Operation)
 	result.Request.OperationContractVersion = c.OperationContractVersion
 	var envelope struct {
-		Payload json.RawMessage `json:"operationPayload"`
+		Payload   json.RawMessage          `json:"operationPayload"`
+		Artifacts []extensions.ArtifactRef `json:"artifacts"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return normalize.Request{}, fmt.Errorf("decode operation payload envelope: %w", err)
 	}
 	result.Request.OperationPayload = append(json.RawMessage(nil), envelope.Payload...)
+	for _, artifact := range envelope.Artifacts {
+		if artifact.Body != nil {
+			return normalize.Request{}, fmt.Errorf("JSON operation ingress accepts inline artifacts, not daemon body leases")
+		}
+		result.Request.Artifacts = append(result.Request.Artifacts, artifact.Clone())
+	}
 	return result.Request, nil
 }
 

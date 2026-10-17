@@ -160,6 +160,12 @@ func (a ArtifactRef) ValidateShape(maxBytes int64) error {
 	if !validArtifactReplayScope(a.ReplayScope) || sensitivityRank(a.Sensitivity) < 0 {
 		return fmt.Errorf("artifact has invalid replay scope or sensitivity")
 	}
+	if a.ReplayScope == ArtifactReplayPortable && a.Sensitivity == ArtifactSecret {
+		return fmt.Errorf("secret artifacts cannot be portable")
+	}
+	if a.Owner.Domain == "provider" && a.ReplayScope == ArtifactReplayConnection && (a.Owner.ConnectionID == "" || a.Owner.IssuerRef == nil || a.Owner.IssuerRef.Kind != "provider-definition" || a.Owner.IssuerRef.ID != a.Owner.ProviderDefinitionID) {
+		return fmt.Errorf("provider connection-scoped artifact requires an exact issuer contract and connection owner")
+	}
 	if a.MediaType == "" || a.SizeBytes < 0 {
 		return fmt.Errorf("artifact requires mediaType and non-negative sizeBytes")
 	}

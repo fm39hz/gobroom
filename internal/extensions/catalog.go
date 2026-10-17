@@ -830,6 +830,19 @@ func (s *Snapshot) ValidateSchema(ref Ref, value json.RawMessage) error {
 // ownership, replay, sensitivity, media and size policies before the value or
 // body lease may cross a module boundary.
 func (s *Snapshot) ValidateArtifact(artifact ArtifactRef, receiver ArtifactOwner, recipient Ref, now time.Time) error {
+	return s.validateArtifact(artifact, receiver, recipient, now, false)
+}
+
+// ValidateArtifactDisclosure permits a declared provider output to be delivered
+// to a harness without granting that harness the issuer's replay authority.
+func (s *Snapshot) ValidateArtifactDisclosure(artifact ArtifactRef, receiver ArtifactOwner, recipient Ref, now time.Time) error {
+	if artifact.Owner.Domain != "provider" || receiver.Domain != "harness" || recipient.Kind != "operation" {
+		return fmt.Errorf("artifact disclosure requires provider output, harness receiver and operation recipient")
+	}
+	return s.validateArtifact(artifact, receiver, recipient, now, true)
+}
+
+func (s *Snapshot) validateArtifact(artifact ArtifactRef, receiver ArtifactOwner, recipient Ref, now time.Time, disclosure bool) error {
 	if s == nil {
 		return fmt.Errorf("artifact catalog is nil")
 	}
@@ -880,6 +893,9 @@ func (s *Snapshot) ValidateArtifact(artifact ArtifactRef, receiver ArtifactOwner
 		if !containsRef(policy.RecipientContracts, recipient) {
 			return fmt.Errorf("artifact owned by %q cannot be transferred to this recipient", artifact.Owner.Domain)
 		}
+		if disclosure {
+			return nil
+		}
 		switch artifact.ReplayScope {
 		case ArtifactReplayRequest:
 			// The exact recipient is authorized for this invocation only.
@@ -890,6 +906,9 @@ func (s *Snapshot) ValidateArtifact(artifact ArtifactRef, receiver ArtifactOwner
 		case ArtifactReplayConnection:
 			if artifact.Owner.ConnectionID == "" || artifact.Owner.ConnectionID != receiver.ConnectionID {
 				return fmt.Errorf("connection-scoped artifact cannot cross connection owners")
+			}
+			if artifact.Owner.IssuerRef != nil && (receiver.IssuerRef == nil || *artifact.Owner.IssuerRef != *receiver.IssuerRef) {
+				return fmt.Errorf("connection-scoped artifact cannot cross issuer contracts")
 			}
 		case ArtifactReplayProvider:
 			if artifact.Owner.ProviderDefinitionID == "" || artifact.Owner.ProviderDefinitionID != receiver.ProviderDefinitionID {

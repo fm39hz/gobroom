@@ -491,7 +491,7 @@ func (s *Snapshot) ValidateArtifactOutputs(operationRef extensions.Ref, artifact
 		if counts[artifact.Role] > output.MaxCount {
 			return fmt.Errorf("artifact output role %q exceeds maximum count %d", artifact.Role, output.MaxCount)
 		}
-		if err := s.catalog.ValidateArtifact(artifact, receiver, recipient, time.Now()); err != nil {
+		if err := s.catalog.ValidateArtifactDisclosure(artifact, receiver, recipient, time.Now()); err != nil {
 			return fmt.Errorf("artifact %q for %s: %w", artifact.TypeRef.Key(), recipient.Key(), err)
 		}
 	}

@@ -10,7 +10,9 @@ package provider
 import (
 	"context"
 	"net/http"
+	"time"
 
+	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -109,6 +111,9 @@ type Transport = kernel.Transport
 type RequestCodec = kernel.RequestCodec
 type ResponseDecoder = kernel.ResponseDecoder
 type ResponseRenderer = kernel.ResponseRenderer
+type ResponseRenderContext = kernel.ResponseRenderContext
+type ResponseRenderSession = kernel.ResponseRenderSession
+type CompatibilityPolicy = kernel.CompatibilityPolicy
 type ProviderAdapter = kernel.ProviderAdapter
 type Credential = kernel.Credential
 type AuthContext = kernel.AuthContext
@@ -135,6 +140,15 @@ type SessionStoreKey = kernel.SessionStoreKey
 type SessionState = kernel.SessionState
 type SignatureProof = kernel.SignatureProof
 
+func ComposeCompatibilityPlan(stages [][]FacetMapping, policy CompatibilityPolicy) CompatibilityPlan {
+	return kernel.ComposeCompatibilityPlan(stages, policy)
+}
+
+func RequiredRequestFacets(request NormalizedRequest) []string {
+	return kernel.RequiredRequestFacets(request)
+}
+func ResponseEventFacet(event ResponseEventKind) string { return kernel.ResponseEventFacet(event) }
+
 // ApplyCredentialPresentation applies the selected auth mode's safe static
 // headers, dynamic credential headers and token presentation to an upstream
 // request header map. External request-codec modules should use this instead
@@ -157,6 +171,12 @@ func CredentialAuthorization(presentation CredentialPresentation) PreparedAuthor
 // before a custom signer computes a header-bound signature.
 func ApplyPreparedRequestHeaders(ctx context.Context, headers http.Header) {
 	kernel.ApplyPreparedRequestHeaders(ctx, headers)
+}
+
+// PublishInlineResponseArtifact mints a declared, bounded provider output using
+// the selected route's owner. Client delivery does not widen its replay scope.
+func PublishInlineResponseArtifact(ctx context.Context, typeRef Ref, role, mediaType string, replayScope ArtifactReplayScope, sensitivity ArtifactSensitivity, value []byte, ttl time.Duration) (ArtifactRef, error) {
+	return artifacts.PublishInlineResponseArtifactFromContext(ctx, typeRef, role, mediaType, replayScope, sensitivity, value, ttl)
 }
 
 // SessionStoreKeyFor returns the exact connection/provider/operation/model/
@@ -240,17 +260,20 @@ const (
 	ReplayWithKey        = operations.ReplayWithKey
 	ReplayNever          = operations.ReplayNever
 
-	SchemaKind              = extensions.SchemaKind
-	ArtifactKind            = extensions.ArtifactKind
-	ArtifactInterpreterKind = extensions.ArtifactInterpreterKind
-	ArtifactReplayRequest   = extensions.ArtifactReplayRequest
-	ArtifactReplaySession   = extensions.ArtifactReplaySession
-	ArtifactReplayPortable  = extensions.ArtifactReplayPortable
-	ArtifactPublic          = extensions.ArtifactPublic
-	ArtifactPrivate         = extensions.ArtifactPrivate
-	ArtifactSecret          = extensions.ArtifactSecret
+	SchemaKind               = extensions.SchemaKind
+	ArtifactKind             = extensions.ArtifactKind
+	ArtifactInterpreterKind  = extensions.ArtifactInterpreterKind
+	ArtifactReplayRequest    = extensions.ArtifactReplayRequest
+	ArtifactReplaySession    = extensions.ArtifactReplaySession
+	ArtifactReplayConnection = extensions.ArtifactReplayConnection
+	ArtifactReplayPortable   = extensions.ArtifactReplayPortable
+	ArtifactPublic           = extensions.ArtifactPublic
+	ArtifactPrivate          = extensions.ArtifactPrivate
+	ArtifactSecret           = extensions.ArtifactSecret
 
 	FacetWireRequest      = kernel.FacetWireRequest
+	FacetWireResponse     = kernel.FacetWireResponse
+	EventArtifact         = kernel.EventArtifact
 	FacetReasoningIntent  = kernel.FacetReasoningIntent
 	FacetReasoningBudget  = kernel.FacetReasoningBudget
 	FacetTranslated       = kernel.FacetTranslated

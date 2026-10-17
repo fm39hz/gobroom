@@ -292,7 +292,7 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fixture now executes both JSON and bounded multipart non-chat operations
    through module-owned ingress, assigned model, Physical/Combo graph, shared
    multipart provider codec, decoder and client renderer. Remaining: real
-   provider idempotency guarantees, async job effects and broader
+   provider idempotency guarantees, operation-aware health/quota evidence and broader
    commit/cancellation/replay stress cases.
    Scoped retry now requires a prepared replay factory instead of rerunning
    the semantic codec. The byte helper freezes encoded payload/headers and
@@ -307,6 +307,18 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    HTTP transport no longer follows redirects or implicitly rewinds requests
    behind the kernel's attempt policy; a reused-connection fixture covers even
    an empty-body POST carrying a standard idempotency key.
+   The separate `JobModule` now registers create/status/cancel operations, their
+   typed schemas, codecs, client ingress and renderer. A connection-scoped inline
+   output handle is disclosed without widening its consumption scope; it retains
+   the exact issuer/connection and TTL after response cleanup and daemon restart.
+   Its real daemon/HTTP fixture proves keyed create survives a lost response
+   without a second job, wrong role/expiry/issuer fail before upstream dispatch,
+   cancellation with a lost response is not repeated, and explicit status reads
+   reconcile cancelled or completed jobs. No daemon poller/job database is added.
+   The fixture exposed an open policy dimension: network feedback currently
+   cools down every operation on that route. It respects the observed deadline
+   through control IPC; the next C5 slice must model operation-aware health and
+   quota scope generically rather than granting job-status a bypass.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and
    versioned JSON/multipart ingress, loads its manifest, builds an assigned

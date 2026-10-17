@@ -770,6 +770,35 @@ operations linked by a scoped job artifact. Any long-running orchestration
 worker is optional and uses those same operations. It introduces no second
 model category or provider-specific loop in the kernel.
 
+Artifact delivery and artifact consumption are different actions. A declared
+provider output may be disclosed to its operation's harness renderer without
+turning a connection-scoped handle into a request-scoped/portable value.
+`ValidateArtifactDisclosure` preserves schema, byte, sensitivity, expiry and
+exact recipient checks; the consumption path still enforces replay scope.
+Provider connection handles require a non-empty connection and exact issuer
+contract matching their provider definition. Consuming one at a different
+connection or issuer contract is rejected before provider dispatch.
+
+`PublishInlineResponseArtifact` mints bounded, schema-validated values using
+the selected route's owner and an explicit positive TTL. Inline handles survive
+response spool cleanup and can cross daemon restarts when the caller retains
+them; ordinary response body leases still end with their response. The generic
+JSON operation ingress binds inline artifacts directly and rejects external
+daemon-body lease references. Operation ports and the route's artifact policy
+remain the authority for admission. These are routing/ownership contracts, not
+cryptographic capability tokens or a substitute for caller/upstream account
+authorization; authenticated opaque references remain separate auth-driver work.
+
+The external job fixture creates a job, loses its response and replays the same
+prepared keyed request without creating another job. It restarts the daemon,
+then reads/cancels the job through its retained scoped handle. An ambiguous
+unsafe cancellation is not retried: the caller reads status to reconcile it.
+The current passive health gate may cool down the whole route after such a
+failure, including status actions; the fixture waits for the actual deadline
+reported by `health.list`, without resetting the gate or probing repeatedly.
+Operation-specific health/quota evidence remains an explicit follow-up, not a
+provider/job exception in the kernel.
+
 ## Closure criterion
 
 The design decisions above are fixed for the current product scope. Future

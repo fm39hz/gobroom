@@ -67,6 +67,49 @@ func WithResponseScope(ctx context.Context, scope *ResponseScope) context.Contex
 	return context.WithValue(WithStore(ctx, scope.store), responseScopeKey{}, scope)
 }
 
+// PublishInlineResponseArtifactFromContext publishes a bounded provider handle
+// with its original replay scope. Unlike a body spool, it survives response
+// cleanup as a client-held value until its explicit expiry.
+func PublishInlineResponseArtifactFromContext(ctx context.Context, typeRef extensions.Ref, role, mediaType string, replayScope extensions.ArtifactReplayScope, sensitivity extensions.ArtifactSensitivity, value []byte, ttl time.Duration) (extensions.ArtifactRef, error) {
+	if ctx == nil || ttl <= 0 {
+		return extensions.ArtifactRef{}, fmt.Errorf("inline response artifact requires a context and positive TTL")
+	}
+	if err := ctx.Err(); err != nil {
+		return extensions.ArtifactRef{}, err
+	}
+	scope, ok := ctx.Value(responseScopeKey{}).(*ResponseScope)
+	if !ok || scope == nil {
+		return extensions.ArtifactRef{}, fmt.Errorf("response artifact scope is unavailable")
+	}
+	port, exists := scope.outputs[role]
+	if !exists || port.TypeRef != typeRef {
+		return extensions.ArtifactRef{}, fmt.Errorf("inline response artifact role/type is not declared by the operation")
+	}
+	artifact := extensions.ArtifactRef{
+		TypeRef: typeRef, Role: role, Owner: cloneOwner(scope.owner), ReplayScope: replayScope,
+		Sensitivity: sensitivity, MediaType: mediaType, SizeBytes: int64(len(value)),
+		Value: value, ExpiresAt: time.Now().Add(ttl),
+	}
+	if err := scope.catalog.ValidateArtifactDisclosure(artifact, scope.receiver, scope.recipient, time.Now()); err != nil {
+		return extensions.ArtifactRef{}, err
+	}
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	if scope.closed {
+		return extensions.ArtifactRef{}, fmt.Errorf("response artifact scope is closed")
+	}
+	if scope.counts[role] >= port.MaxCount || artifact.SizeBytes > scope.maxBytes-scope.used-scope.pending {
+		return extensions.ArtifactRef{}, fmt.Errorf("inline response artifact exceeds output count or byte budget")
+	}
+	if err := ctx.Err(); err != nil {
+		return extensions.ArtifactRef{}, err
+	}
+	scope.counts[role]++
+	scope.used += artifact.SizeBytes
+	artifact.Value = append([]byte(nil), artifact.Value...)
+	return artifact, nil
+}
+
 // PutResponseArtifactFromContext streams provider output into the daemon's
 // bounded spool and validates the declared type's transfer policy before the
 // reference becomes visible to a response decoder.
