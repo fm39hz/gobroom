@@ -567,6 +567,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	d.ipc = NewIPCServer(d.config.IPCPath, d.handleIPC)
+	d.ipc.operationProbe = d.serveOperationProbe
 	d.ipc.afterReply = func(request IPCRequest, response IPCResponse) {
 		if request.Method == "shutdown" && response.OK {
 			go d.Stop(context.Background())
@@ -1454,14 +1455,14 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		return success(request, result)
 	case "connections.test_operation":
-		var input struct {
-			ConnectionID string          `json:"connectionID"`
-			OperationID  string          `json:"operationID"`
-			ModelID      string          `json:"modelID"`
-			Payload      json.RawMessage `json:"payload"`
-		}
+		var input OperationProbeRequest
 		if err := decodeParams(request.Params, &input); err != nil {
 			return fail(request, err.Error())
+		}
+		for _, artifact := range input.Artifacts {
+			if artifact.Body != nil {
+				return fail(request, "operation-probe JSON cannot reference daemon body leases")
+			}
 		}
 		if d.providerRegistry == nil {
 			return fail(request, "provider runtime registry is unavailable")
@@ -1470,7 +1471,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings, Operations: operationSnapshot}).TestOperation(ctx, input.ConnectionID, input.OperationID, input.ModelID, input.Payload)
+		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings, Operations: operationSnapshot, Artifacts: d.artifactStore}).TestOperation(ctx, input)
 		if err != nil {
 			return fail(request, err.Error())
 		}

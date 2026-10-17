@@ -34,11 +34,12 @@ type IPCResponse struct {
 type IPCHandler func(context.Context, IPCRequest) IPCResponse
 
 type IPCServer struct {
-	path       string
-	handler    IPCHandler
-	afterReply func(IPCRequest, IPCResponse)
-	mu         sync.Mutex
-	run        *ipcRun
+	path           string
+	handler        IPCHandler
+	afterReply     func(IPCRequest, IPCResponse)
+	operationProbe http.HandlerFunc
+	mu             sync.Mutex
+	run            *ipcRun
 }
 
 func NewIPCServer(path string, handler IPCHandler) *IPCServer {
@@ -89,6 +90,9 @@ func (s *IPCServer) startLocked(ctx context.Context, socket *ipcSocket, ownsSock
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+ipcEndpointPath, s.serveRequest)
+	if s.operationProbe != nil {
+		mux.HandleFunc("POST "+operationProbePath, s.operationProbe)
+	}
 	s.run = newIPCRun(ctx, socket, ownsSocket, mux)
 	return nil
 }
@@ -184,6 +188,10 @@ func CallIPC(ctx context.Context, path string, request IPCRequest) (IPCResponse,
 		return IPCResponse{}, err
 	}
 	httpRequest.Header.Set("Content-Type", "application/json")
+	return callIPCRequest(ctx, path, httpRequest, request.Method)
+}
+
+func callIPCRequest(ctx context.Context, path string, httpRequest *http.Request, method string) (IPCResponse, error) {
 	var dialer net.Dialer
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -219,10 +227,10 @@ func CallIPC(ctx context.Context, path string, request IPCRequest) (IPCResponse,
 		return IPCResponse{}, decodeErr
 	}
 	if !response.OK {
-		return response, fmt.Errorf("IPC %s: %s", request.Method, response.Error)
+		return response, fmt.Errorf("IPC %s: %s", method, response.Error)
 	}
 	if httpResponse.StatusCode != http.StatusOK {
-		return response, fmt.Errorf("IPC %s: HTTP status %d", request.Method, httpResponse.StatusCode)
+		return response, fmt.Errorf("IPC %s: HTTP status %d", method, httpResponse.StatusCode)
 	}
 	return response, nil
 }

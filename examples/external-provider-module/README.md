@@ -20,6 +20,12 @@ module as an independent importer, bind the manifest, verify the custom quota
 source through the registry, then start the public daemon API with the module
 and exercise the operation through local IPC and a fake HTTP provider.
 
+The artifact-probe fixture starts a Unix-only daemon and streams a local WAV
+through `CallOperationProbe`. It checks upstream bytes/MIME, interpreter rejection,
+spool cleanup and unchanged catalog/health/quota/usage. Set
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom` to exercise the installed
+`connections test-operation --artifacts-file` command against that daemon too.
+
 The COSY signing fixture additionally uses the public `PrepareBytesRequest`
 and `PreparedAuthorization` contracts. It encodes the business payload once,
 then renews body-bound authorization for replay without changing those bytes

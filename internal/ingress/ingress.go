@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -170,13 +171,27 @@ func (c MultipartOperationIngress) Decode(request *http.Request) (normalize.Requ
 	if request == nil || request.Body == nil {
 		return normalize.Request{}, fmt.Errorf("multipart request body is required")
 	}
-	store, ok := artifacts.FromContext(request.Context())
+	_, ok := artifacts.FromContext(request.Context())
 	if !ok {
 		return normalize.Request{}, ErrArtifactIngressUnavailable
 	}
 	multipartReader, err := request.MultipartReader()
 	if err != nil {
 		return normalize.Request{}, fmt.Errorf("read multipart operation body: %w", err)
+	}
+	return c.DecodeParts(request, multipartReader, nil)
+}
+
+// DecodeParts shares the bounded file/spool decoder with control requests that
+// have already read and validated their required first metadata part.
+func (c MultipartOperationIngress) DecodeParts(request *http.Request, multipartReader *multipart.Reader, metadata []byte) (normalize.Request, error) {
+	if request == nil || multipartReader == nil {
+		return normalize.Request{}, fmt.Errorf("multipart request and reader are required")
+	}
+	var err error
+	store, ok := artifacts.FromContext(request.Context())
+	if !ok {
+		return normalize.Request{}, ErrArtifactIngressUnavailable
 	}
 	requestField := c.requestField()
 	bindings := make(map[string]MultipartArtifactBinding, len(c.Bindings))
@@ -196,8 +211,11 @@ func (c MultipartOperationIngress) Decode(request *http.Request) (normalize.Requ
 		bindings[binding.Field] = binding
 	}
 
-	var requestJSON []byte
+	requestJSON := append([]byte(nil), metadata...)
 	seenFields := make(map[string]bool, len(bindings)+1)
+	if len(metadata) > 0 {
+		seenFields[requestField] = true
+	}
 	result := normalize.Request{}
 	created := make([]extensions.ArtifactRef, 0, len(bindings))
 	complete := false

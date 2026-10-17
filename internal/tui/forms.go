@@ -11,6 +11,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -480,11 +481,21 @@ func newOperationTestForm(connectionID string, definition *provider.DefinitionMe
 		{key: "operation", label: "Provider operation ID", placeholder: "exact ID from available operations"},
 		{key: "modelID", label: "Exact upstream model ID", placeholder: "vendor/model-name"},
 		{key: "payload", label: "Operation payload JSON (one line)", placeholder: `{"input":"..."}`},
+		{key: "artifactFiles", label: "Artifact files JSON (role, local path, mediaType)", placeholder: `[]`},
 	}, nil)
 	form.extra["connectionID"] = connectionID
 	form.operationChoices = choices
 	form.inputs[2].CharLimit = 64 << 10
+	form.inputs[3].SetValue("[]")
+	form.inputs[3].CharLimit = 64 << 10
 	return form
+}
+
+func decodeProbeFileSpecs(raw string) ([]daemon.ProbeFileSpec, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []daemon.ProbeFileSpec{}, nil
+	}
+	return daemon.DecodeProbeFileSpecs(strings.NewReader(raw))
 }
 
 func (f *formState) Update(msg tea.Msg) (*formState, tea.Cmd, bool, map[string]any, error) {
@@ -800,6 +811,11 @@ func (f *formState) Params() (map[string]any, error) {
 		params["operationID"] = operationID
 		params["payload"] = payload
 		params["connectionID"] = f.extra["connectionID"]
+		files, err := decodeProbeFileSpecs(fmt.Sprint(params["artifactFiles"]))
+		if err != nil {
+			return nil, err
+		}
+		params["artifactFiles"] = files
 	}
 	if f.method == "connections.create" {
 		credentialType, _ := params["credentialType"].(string)

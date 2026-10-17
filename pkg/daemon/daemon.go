@@ -14,6 +14,8 @@ type Daemon = core.Daemon
 type IPCRequest = core.IPCRequest
 type IPCResponse = core.IPCResponse
 type ListenerAddresses = core.ListenerAddresses
+type OperationProbeRequest = core.OperationProbeRequest
+type ProbeFileSpec = core.ProbeFileSpec
 
 var ErrIPCInUse = core.ErrIPCInUse
 
@@ -27,4 +29,8 @@ func DefaultConfig() (Config, error) { return core.DefaultConfig() }
 
 func CallIPC(ctx context.Context, path string, request IPCRequest) (IPCResponse, error) {
 	return core.CallIPC(ctx, path, request)
+}
+
+func CallOperationProbe(ctx context.Context, path string, request OperationProbeRequest, files []ProbeFileSpec) (IPCResponse, error) {
+	return core.CallOperationProbe(ctx, path, request, files)
 }

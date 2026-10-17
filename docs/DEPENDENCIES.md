@@ -10,6 +10,17 @@ The goal is to reduce handwritten infrastructure code without turning
 GoBroom into a dependency-heavy framework. The standard library remains the
 default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 
+Before adding infrastructure, check the standard library, existing dependencies
+and reusable project primitives first. Inspect relevant upstream source and tests
+for provider/protocol behavior instead of guessing from names or wire examples.
+Record the source, reuse boundary and license when borrowing implementation;
+keep Gobroom-specific policy separate from reusable mechanics. Check current
+upstream versions when selecting or upgrading a dependency, then pin and test it.
+
+The operation-probe upload uses `mime/multipart`, `io.Pipe` and the existing
+Unix HTTP transport, multipart ingress and artifact store. CLI/TUI share one
+strict JSON manifest decoder; no second upload/storage framework is introduced.
+
 ## Adopt
 
 | Area | Library/tool | Version checked | Decision | Why |

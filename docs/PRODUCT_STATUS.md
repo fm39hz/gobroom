@@ -13,7 +13,7 @@ milestone status, [use cases](USE_CASES.md) own product acceptance, and
 | Turn sources into Physical models | Typed identity/revision/fidelity, source evidence, capability/limit projections, conservative grouping and model policies. | Whole-catalog review/split UX, stronger identity evidence and convenient capability comparison across sources. |
 | Build role Combos and expose selected names | Ordered typed members, registry-backed strategy/options, source-prefix filtering, exposure and `/v1/models` have onboarding and editor acceptance fixtures. | Complete interactive/headless acceptance for every management action, including Physical exposure through the UI. |
 | Consume the provider endpoint | Chat has fake verticals and a limited live acceptance history. Responses/Anthropic/Gemini, tools, JSON/SSE and committed-stream fallback have many deterministic IR fixtures. | The complete cross-protocol, reasoning/signature/history/continuity/modality matrix and live harness coverage. A supported vertical is not universal wire compatibility. |
-| Run headless and operate through CLI/TUI | Daemon owns state, listeners and workers; Unix IPC lifecycle/ownership, stream-independent control, reload, logs, usage and installed-client smoke tests exist. | Some advanced probes still lack artifact upload from CLI/TUI. Lazygit-like keyboard contracts and automated workflows do not alone establish polished UX for every screen. |
+| Run headless and operate through CLI/TUI | Daemon owns state, listeners and workers; Unix IPC lifecycle/ownership, stream-independent control, reload, logs, usage and installed-client smoke tests exist. | CLI/TUI operation probes now stream declared file artifacts through Unix IPC with bounded storage, interpreter validation and cleanup fixtures. Lazygit-like keyboard contracts and automated workflows do not alone establish polished UX for every screen. |
 | Route from real health/quota/performance evidence | Passive feedback, reset-aware gates, usage, EWMA, bounded asynchronous persistence/spool and restart fixtures. Exact operation health/quota, workload ranking and affinity have deterministic integration evidence. | More provider-specific evidence shapes and whole-path latency/RSS/load measurements. Go/concurrency tests are not proof of the “nearly invisible” resource target. |
 | Configure, move and extend the product | Secret-free bundle export/validate/diff/apply, exact refs, single-writer portability, independently configurable control/data planes, and a separate static module executing JSON/multipart/signing/job fixtures. | Full C1–C6/SG1–SG7 closure; alternate databases, hosted multi-writer sync and direct remote log backends are not shipped features. |
 
@@ -26,6 +26,16 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+The M2 operation-probe slice now carries local file artifacts from CLI/TUI
+over Unix IPC without requiring a public listener. A separate provider-module
+fixture verifies exact bytes/MIME, interpreter rejection before dispatch,
+empty spool after success/failure and no catalog/health/quota/usage writes.
+Transport fixtures cover metadata-first streaming, local-path isolation,
+JSON-only RPC and cancellation. This closes the missing upload mechanism,
+not a file-picker UX, broad live-provider acceptance or the full M2/M15 gate.
+
+Previous integrated milestone:
 
 The response-terminal slice has deterministic verification: ordinary chat, cross-protocol
 streaming and extension operations now share explicit fault origin and a staged

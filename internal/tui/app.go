@@ -434,6 +434,15 @@ func (m *app) invoke(method string, params map[string]any) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
+		if method == "connections.test_operation" {
+			request, files := operationProbeInput(params)
+			response, err := daemon.CallOperationProbe(ctx, m.ipcPath, request, files)
+			if err != nil {
+				return actionMsg{method: method, err: err}
+			}
+			result, err := json.Marshal(response.Result)
+			return actionMsg{method: method, result: result, err: err}
+		}
 		response, err := daemon.CallIPC(ctx, m.ipcPath, daemon.IPCRequest{ID: "gobroom", Method: method, Params: params})
 		if err != nil {
 			return actionMsg{method: method, err: err}
@@ -441,6 +450,16 @@ func (m *app) invoke(method string, params map[string]any) tea.Cmd {
 		result, err := json.Marshal(response.Result)
 		return actionMsg{method: method, result: result, err: err}
 	}
+}
+
+func operationProbeInput(params map[string]any) (daemon.OperationProbeRequest, []daemon.ProbeFileSpec) {
+	request := daemon.OperationProbeRequest{}
+	request.ConnectionID, _ = params["connectionID"].(string)
+	request.OperationID, _ = params["operationID"].(string)
+	request.ModelID, _ = params["modelID"].(string)
+	request.Payload, _ = params["payload"].(json.RawMessage)
+	files, _ := params["artifactFiles"].([]daemon.ProbeFileSpec)
+	return request, files
 }
 
 func (m *app) rebuildStrategyPicker() {

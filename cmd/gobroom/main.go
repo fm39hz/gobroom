@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -162,32 +163,41 @@ func resourceCommands() []*cobra.Command {
 	testInference.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
 	testInference.Flags().StringVar(&probeModelID, "model-id", "", "exact upstream model ID (probe may incur provider cost)")
 	connections.AddCommand(testInference)
-	var probeOperationID, probeOperationModelID, probePayloadFile string
+	var probeOperationID, probeOperationModelID, probePayloadFile, probeArtifactsFile string
 	testOperation := &cobra.Command{Use: "test-operation", Short: "send a schema-validated payload through one provider operation (may incur cost or create resources)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if probeOperationID == "" || probeOperationModelID == "" || probePayloadFile == "" {
 			return fmt.Errorf("--operation, --model-id and --payload-file are required")
 		}
-		var payload json.RawMessage
-		if probePayloadFile == "-" {
-			if err := json.NewDecoder(cmd.InOrStdin()).Decode(&payload); err != nil {
-				return fmt.Errorf("read operation payload from stdin: %w", err)
-			}
-		} else {
-			raw, err := os.ReadFile(probePayloadFile)
-			if err != nil {
-				return fmt.Errorf("read operation payload: %w", err)
-			}
-			payload = append(json.RawMessage(nil), raw...)
+		if err := validateOperationStdin(probePayloadFile, probeArtifactsFile); err != nil {
+			return err
+		}
+		payload, err := readOperationPayload(cmd.InOrStdin(), probePayloadFile)
+		if err != nil {
+			return err
 		}
 		if !json.Valid(payload) {
 			return fmt.Errorf("operation payload must be valid JSON")
 		}
-		return invoke("connections.test_operation", map[string]any{"connectionID": connID, "operationID": probeOperationID, "modelID": probeOperationModelID, "payload": payload})
+		files, err := readProbeFiles(cmd.InOrStdin(), probeArtifactsFile)
+		if err != nil {
+			return err
+		}
+		response, err := daemon.CallOperationProbe(cmd.Context(), ipcPath, daemon.OperationProbeRequest{
+			ConnectionID: connID,
+			OperationID:  probeOperationID,
+			ModelID:      probeOperationModelID,
+			Payload:      payload,
+		}, files)
+		if err != nil {
+			return err
+		}
+		return printResult(response.Result)
 	}}
 	testOperation.Flags().StringVar(&connID, "connection-id", "", "enabled connection ID")
 	testOperation.Flags().StringVar(&probeOperationID, "operation", "", "exact provider operation binding ID")
 	testOperation.Flags().StringVar(&probeOperationModelID, "model-id", "", "exact upstream model ID")
 	testOperation.Flags().StringVar(&probePayloadFile, "payload-file", "", "operation input JSON file or - for stdin; request may incur provider cost")
+	testOperation.Flags().StringVar(&probeArtifactsFile, "artifacts-file", "", "JSON array of local artifact files or - for stdin")
 	connections.AddCommand(testOperation)
 	authorizeStart := &cobra.Command{Use: "authorize-start", Short: "begin daemon-owned OAuth authorization", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("auth.authorization.start", map[string]any{"connectionID": connID})
@@ -486,16 +496,73 @@ func bindProviderFlags(cmd *cobra.Command, id, name, prefix, baseURL, protocol, 
 	cmd.Flags().StringVar(authMode, "auth-mode", "", "authentication mode")
 }
 
+func readOperationPayload(stdin io.Reader, path string) (json.RawMessage, error) {
+	reader := stdin
+	var file *os.File
+	if path == "-" {
+	} else {
+		var err error
+		file, err = os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("read operation payload: %w", err)
+		}
+		defer file.Close()
+		reader = file
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, 128*1024+1))
+	if err != nil {
+		return nil, fmt.Errorf("read operation payload: %w", err)
+	}
+	if len(raw) > 128*1024 {
+		return nil, fmt.Errorf("operation payload exceeds 128 KiB")
+	}
+	return json.RawMessage(raw), nil
+}
+
+func validateOperationStdin(payloadPath, artifactsPath string) error {
+	if payloadPath == "-" && artifactsPath == "-" {
+		return fmt.Errorf("--payload-file and --artifacts-file cannot both use stdin")
+	}
+	return nil
+}
+
+func readProbeFiles(stdin io.Reader, path string) ([]daemon.ProbeFileSpec, error) {
+	if path == "" {
+		return nil, nil
+	}
+	reader := stdin
+	var file *os.File
+	if path == "-" {
+	} else {
+		var err error
+		file, err = os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("read artifacts manifest: %w", err)
+		}
+		defer file.Close()
+		reader = file
+	}
+	files, err := daemon.DecodeProbeFileSpecs(reader)
+	if err != nil {
+		return nil, fmt.Errorf("decode artifacts manifest: %w", err)
+	}
+	return files, nil
+}
+
 func invoke(method string, params map[string]any) error {
 	response, err := daemon.CallIPC(context.Background(), ipcPath, daemon.IPCRequest{ID: "cli", Method: method, Params: params})
 	if err != nil {
 		return err
 	}
+	return printResult(response.Result)
+}
+
+func printResult(result any) error {
 	if outputJSON {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
-		return encoder.Encode(response.Result)
+		return encoder.Encode(result)
 	}
-	_, err = fmt.Fprintln(os.Stdout, response.Result)
+	_, err := fmt.Fprintln(os.Stdout, result)
 	return err
 }

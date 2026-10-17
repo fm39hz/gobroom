@@ -57,6 +57,33 @@ to stop it explicitly. Both flows reject a late token from a cancelled driver
 before credential commit. Cancellation cannot reverse an already committed
 credential; inspect the connection/session when commands race completion.
 
+## Operation probes with local files
+
+`gobroom connections test-operation` accepts `--payload-file payload.json`
+and optional `--artifacts-file files.json`. The latter is a strict JSON array:
+
+```json
+[{"role":"audio","path":"/local/sample.wav","mediaType":"audio/wav"}]
+```
+
+Use the exact roles from the registered operation's artifact ports. In the
+Connections TUI, `P` exposes the same manifest as the `artifactFiles` field.
+Paths belong to the frontend machine: the daemon receives streamed bytes,
+not local paths or base64. MIME can be inferred from the filename; specify it
+explicitly when inference would be ambiguous. Either input may use stdin (`-`),
+but not both at once.
+
+The upload endpoint exists only on Unix IPC; neither public HTTP nor an HTTP
+control listener is needed. Metadata and CLI payloads are capped at 128 KiB,
+with at most 32 files and a 32 MiB total multipart body. Artifact type,
+operation and store limits may impose tighter bounds. Exact provider/task
+refs are checked before upload and again before execution; artifact
+interpreters and recipient authorization run before upstream dispatch.
+Probe leases are released on success or failure. Results contain bounded
+response metadata, not provider response bodies. Probes do not update model
+catalog, passive health, quota or usage; they can still incur provider cost
+or create upstream resources. Cancellation cannot undo an upstream mutation.
+
 ## Service and logs
 
 The user service writes operational messages to stdout/stderr, so a service

@@ -516,7 +516,7 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 		Operations: operationSnapshot,
 	}
 	payload := json.RawMessage(`{"audio_url":"https://assets.example/audio.wav","language":"vi"}`)
-	result, err := service.TestOperation(context.Background(), connection.ID, string(provider.OperationAudio), "asr-v4", payload)
+	result, err := service.TestOperation(context.Background(), OperationProbeInput{ConnectionID: connection.ID, OperationID: string(provider.OperationAudio), ModelID: "asr-v4", Payload: payload})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 	if err != nil || strings.Contains(string(encoded), "transcribed output") || strings.Contains(string(encoded), "audio_url") {
 		t.Fatalf("operation probe result retained input/output content: %s err=%v", encoded, err)
 	}
-	if _, err := service.TestOperation(context.Background(), connection.ID, string(provider.OperationAudio), "asr-v4", json.RawMessage(`{"language":"vi"}`)); err == nil || !strings.Contains(err.Error(), "audio_url") {
+	if _, err := service.TestOperation(context.Background(), OperationProbeInput{ConnectionID: connection.ID, OperationID: string(provider.OperationAudio), ModelID: "asr-v4", Payload: json.RawMessage(`{"language":"vi"}`)}); err == nil || !strings.Contains(err.Error(), "audio_url") {
 		t.Fatalf("schema-invalid payload was not rejected before dispatch: %v", err)
 	}
 	if upstreamCalls != 1 {
@@ -537,7 +537,7 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 	chatBinding.Operation = provider.OperationChat
 	chatBinding.TaskRef = *provider.OperationRef(normalize.OperationChatGenerate, 1)
 	service.Bindings[provider.RuntimeBindingKey(chatBinding.DefinitionRef, provider.OperationChat)] = chatBinding
-	if _, err := service.TestOperation(context.Background(), connection.ID, string(provider.OperationChat), "asr-v4", json.RawMessage(`{"model":"asr-v4"}`)); err == nil || !strings.Contains(err.Error(), "bounded test-inference") {
+	if _, err := service.TestOperation(context.Background(), OperationProbeInput{ConnectionID: connection.ID, OperationID: string(provider.OperationChat), ModelID: "asr-v4", Payload: json.RawMessage(`{"model":"asr-v4"}`)}); err == nil || !strings.Contains(err.Error(), "bounded test-inference") {
 		t.Fatalf("generic operation probe bypassed the one-token chat contract: %v", err)
 	}
 	if upstreamCalls != 1 {

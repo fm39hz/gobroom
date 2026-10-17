@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/artifacts"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
@@ -24,6 +26,7 @@ type Service struct {
 	Client     *http.Client
 	Bindings   map[string]provider.RuntimeBinding
 	Operations *operations.Snapshot
+	Artifacts  *artifacts.Store
 }
 type Result struct {
 	NodeID        string                        `json:"nodeId"`
@@ -137,7 +140,8 @@ const operationProbeResponseLimit = 64 << 10
 // exact provider operation binding. It is a connection smoke test, not a
 // serving request: it does not route, record usage, or mutate health/catalog
 // state. The request may be billable or create a provider-side resource.
-func (s Service) TestOperation(ctx context.Context, connectionID, operationID, modelID string, payload json.RawMessage) (OperationTestResult, error) {
+func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (OperationTestResult, error) {
+	connectionID, operationID, modelID, payload := input.ConnectionID, input.OperationID, input.ModelID, input.Payload
 	if strings.TrimSpace(operationID) == "" || strings.TrimSpace(modelID) == "" {
 		return OperationTestResult{}, fmt.Errorf("exact provider operation and upstream model ID are required")
 	}
@@ -175,6 +179,12 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 	if !ok || binding.Adapter == nil || binding.TaskRef.Kind != "operation" || binding.TaskRef.ContractVersion == 0 {
 		return OperationTestResult{}, fmt.Errorf("provider definition %q has no executable binding for operation %q", node.DefinitionID, operationID)
 	}
+	if input.ExpectedOperation != (extensions.Ref{}) && input.ExpectedOperation != binding.TaskRef {
+		return OperationTestResult{}, fmt.Errorf("operation binding changed during probe upload")
+	}
+	if input.ExpectedProvider != (extensions.Ref{}) && input.ExpectedProvider != definitionRef {
+		return OperationTestResult{}, fmt.Errorf("provider definition changed during probe upload")
+	}
 	authMode, authModeExists := binding.AuthModes[selected.CredentialType]
 	if !authModeExists || authMode.Flow == nil {
 		return OperationTestResult{}, fmt.Errorf("provider definition %q does not bind credential type %q", node.DefinitionID, selected.CredentialType)
@@ -187,24 +197,26 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 		OperationContractVersion: binding.TaskRef.ContractVersion,
 		OperationPayload:         append(json.RawMessage(nil), payload...),
 		SourceFormat:             binding.ProviderFormat,
+		Artifacts:                cloneProbeArtifacts(input.Artifacts),
 	}
-	prepared, err := s.Operations.Prepare(request)
+	var openBody operations.ArtifactBodyOpener
+	if s.Artifacts != nil {
+		openBody = func(ctx context.Context, artifact extensions.ArtifactRef, recipient extensions.Ref) (io.ReadCloser, error) {
+			return s.Artifacts.OpenArtifact(ctx, s.Operations.ExtensionCatalog(), artifact, extensions.ArtifactOwner{Domain: "harness"}, recipient)
+		}
+	}
+	prepared, err := s.Operations.PrepareWithArtifactBodies(ctx, request, openBody)
 	if err != nil {
 		return OperationTestResult{}, fmt.Errorf("validate payload for operation %q: %w", operationID, err)
 	}
 	request.OperationPayload = prepared.InputPayload
+	request.ArtifactFacts = prepared.ArtifactFacts
+	request.Requirements = prepared.Requirements
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(prepared.ResourceBounds.DeadlineMillis)*time.Millisecond)
 	defer cancel()
-	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
-	if err != nil {
-		return OperationTestResult{}, fmt.Errorf("resolve operation-probe credential: %w", err)
-	}
-	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
-		return OperationTestResult{}, err
-	}
 	task := normalize.Operation(binding.TaskRef.ID)
 	route := kernel.Route{
-		ID: connectionID + ":operation-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
+		ID: connectionID + ":operation-probe", NodeID: node.ID, DefinitionID: node.DefinitionID, DefinitionRef: definitionRef,
 		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
 		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
 		CredentialPresentation: authMode.Presentation,
@@ -212,9 +224,34 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 			task: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
 		},
 	}
+	receiver := extensions.ArtifactOwner{Domain: "provider", IssuerRef: &definitionRef, ProviderDefinitionID: node.DefinitionID, ConnectionID: connectionID, ModelIdentity: modelID, ClientContract: string(request.SourceFormat)}
+	if err := s.Operations.ValidateArtifactsForConsumer(binding.TaskRef, request.Artifacts, receiver, definitionRef); err != nil {
+		return OperationTestResult{}, err
+	}
+	for _, artifact := range request.Artifacts {
+		if artifact.Body != nil && s.Artifacts == nil {
+			return OperationTestResult{}, fmt.Errorf("probe artifact store is unavailable")
+		}
+	}
+	if s.Artifacts != nil {
+		ctx = artifacts.WithAccess(ctx, artifacts.Access{Store: s.Artifacts, Catalog: s.Operations.ExtensionCatalog(), Receiver: receiver, Recipient: definitionRef})
+	}
+	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("resolve operation-probe credential: %w", err)
+	}
+	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
+		return OperationTestResult{}, err
+	}
 	upstream, err := binding.Adapter.Prepare(ctx, request, route, resolvedCredential)
 	if err != nil {
 		return OperationTestResult{}, fmt.Errorf("prepare operation probe %q: %w", operationID, err)
+	}
+	if body, ok := upstream.Body.(io.Closer); ok {
+		defer body.Close()
+	}
+	if err := ctx.Err(); err != nil {
+		return OperationTestResult{}, err
 	}
 	response, err := binding.Adapter.Execute(ctx, upstream)
 	if err != nil {
@@ -255,6 +292,54 @@ func (s Service) TestOperation(ctx context.Context, connectionID, operationID, m
 		return result, fmt.Errorf("operation probe returned HTTP %d (%s)", response.Status, class)
 	}
 	return result, nil
+}
+
+type OperationProbeInput struct {
+	ConnectionID      string                   `json:"connectionID"`
+	OperationID       string                   `json:"operationID"`
+	ModelID           string                   `json:"modelID"`
+	Payload           json.RawMessage          `json:"payload"`
+	Artifacts         []extensions.ArtifactRef `json:"artifacts,omitempty"`
+	ExpectedOperation extensions.Ref           `json:"expectedOperation,omitzero"`
+	ExpectedProvider  extensions.Ref           `json:"expectedProvider,omitzero"`
+}
+
+func cloneProbeArtifacts(input []extensions.ArtifactRef) []extensions.ArtifactRef {
+	result := make([]extensions.ArtifactRef, len(input))
+	for i, artifact := range input {
+		result[i] = artifact.Clone()
+	}
+	return result
+}
+
+// OperationProbeContract resolves the exact current binding before accepting
+// binary files. TestOperation checks these refs again after upload.
+func (s Service) OperationProbeContract(input OperationProbeInput) (extensions.Ref, extensions.Ref, []extensions.ArtifactInput, error) {
+	if s.Operations == nil {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("operation catalog is unavailable")
+	}
+	node, err := s.Store.ProviderNodeByConnection(input.ConnectionID)
+	if err != nil {
+		return extensions.Ref{}, extensions.Ref{}, nil, err
+	}
+	if _, ok := s.Store.ConnectionCredentialByID(input.ConnectionID); !ok {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("enabled probe connection is unavailable")
+	}
+	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionRef(), provider.Operation(input.OperationID))]
+	if !ok || binding.Adapter == nil || binding.TaskRef.ID == string(normalize.OperationChatGenerate) {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("an exact non-chat operation binding is required")
+	}
+	if input.ExpectedOperation != (extensions.Ref{}) && input.ExpectedOperation != binding.TaskRef {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("probe operation contract does not match selected binding")
+	}
+	if input.ExpectedProvider != (extensions.Ref{}) && input.ExpectedProvider != node.DefinitionRef() {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("probe provider contract does not match selected binding")
+	}
+	ports, ok := s.Operations.ArtifactInputs(binding.TaskRef)
+	if !ok {
+		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("probe operation contract is unavailable")
+	}
+	return node.DefinitionRef(), binding.TaskRef, ports, nil
 }
 
 // TestInference probes one exact upstream model through the selected enabled
