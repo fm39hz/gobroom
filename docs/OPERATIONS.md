@@ -16,12 +16,25 @@ clients over the Unix IPC socket.
 The daemon flags are authoritative when a deployment needs different paths.
 The request hot path reads immutable snapshots and does not query SQLite.
 
-Startup reserves every enabled HTTP listener before initializing state or
-publishing IPC. An occupied data/control port makes startup fail; any earlier
+Startup reserves every enabled HTTP listener and acquires Unix IPC ownership
+before initializing state. An occupied data/control port makes startup fail; any earlier
 reservation is released. A later initialization or IPC error also releases the
 reserved ports. After `Start` succeeds, the enabled listeners are already bound.
 Embedders can request `127.0.0.1:0` and read the allocated ports from
 `Daemon.Addresses()`. Addresses are cleared when the daemon stops.
+
+IPC ownership uses a private `<socket>.lock` file and an OS advisory lock held
+until daemon cleanup finishes. A second process using that IPC path fails
+before opening its database. An existing active socket is preserved, including
+listeners from another application. Crash residue is reclaimed only after a
+socket probe reports no listener; regular files, directories and symlinks are
+never replaced. Socket cleanup checks inode identity before unlinking.
+The lock file intentionally remains after shutdown: its presence is not a held
+lock, and deleting it while another process runs can break exclusivity.
+
+Socket existence alone is not readiness: initialization reserves it before
+starting the accept loop. `make install-all` waits for a successful CLI `status`
+request before reporting the restarted daemon ready.
 
 ## Service and logs
 

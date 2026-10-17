@@ -2,13 +2,17 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/provider"
 )
 
 func listenerTestConfig(t *testing.T) Config {
@@ -99,6 +103,98 @@ func TestDaemonIPCFailureRollsBackHTTPAndAllowsRetry(t *testing.T) {
 	if _, err := CallIPC(context.Background(), service.Addresses().IPC, IPCRequest{ID: "status", Method: "status"}); err != nil {
 		t.Fatalf("retried daemon did not serve IPC: %v", err)
 	}
+}
+
+func TestDaemonIPCConflictDoesNotInitializeAnotherDatabase(t *testing.T) {
+	config := listenerTestConfig(t)
+	owner := New(config)
+	if err := owner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Stop(context.Background())
+	contenderConfig := config
+	contenderConfig.DBPath = filepath.Join(filepath.Dir(config.DBPath), "contender.db")
+	contender := New(contenderConfig)
+	if err := contender.Start(context.Background()); !errors.Is(err, ErrIPCInUse) {
+		t.Fatalf("second daemon did not reject an owned IPC path: %v", err)
+	}
+	if _, err := os.Stat(contenderConfig.DBPath); !os.IsNotExist(err) {
+		t.Fatalf("IPC conflict initialized a second database: %v", err)
+	}
+	if _, err := CallIPC(context.Background(), config.IPCPath, IPCRequest{ID: "owner", Method: "status"}); err != nil {
+		t.Fatalf("contender disturbed the original daemon: %v", err)
+	}
+}
+
+func TestDaemonInitializationFailureReleasesReservedSockets(t *testing.T) {
+	config := listenerTestConfig(t)
+	config.HTTPAddr = unusedListenerAddress(t)
+	initializationError := errors.New("fixture module initialization failed")
+	module := provider.RuntimeModuleFunc{
+		Name: "fixture.fail-startup", Version: "test", HostContractVersion: provider.RuntimeModuleHostContractVersion,
+		Init: func(*provider.RuntimeRegistry) error { return initializationError },
+	}
+	failed := NewWithProviderModules(config, module)
+	if err := failed.Start(context.Background()); !errors.Is(err, initializationError) {
+		t.Fatalf("expected module initialization failure: %v", err)
+	}
+	if _, err := os.Lstat(config.IPCPath); !os.IsNotExist(err) {
+		t.Fatalf("initialization failure retained the reserved socket: %v", err)
+	}
+	replacement := New(config)
+	if err := replacement.Start(context.Background()); err != nil {
+		t.Fatalf("startup rollback leaked IPC ownership or HTTP port: %v", err)
+	}
+	defer replacement.Stop(context.Background())
+	if _, err := CallIPC(context.Background(), config.IPCPath, IPCRequest{ID: "replacement", Method: "status"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDaemonRetainsIPCOwnershipUntilCleanupCompletes(t *testing.T) {
+	config := listenerTestConfig(t)
+	config.HTTPEnabled, config.HTTPControl = false, false
+	owner := New(config)
+	if err := owner.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cleanupEntered := make(chan struct{})
+	allowCleanup := make(chan struct{})
+	var release sync.Once
+	defer func() {
+		release.Do(func() { close(allowCleanup) })
+		_ = owner.Stop(context.Background())
+	}()
+	cleanup := owner.stop
+	owner.stop = func() {
+		close(cleanupEntered)
+		<-allowCleanup
+		cleanup()
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- owner.Stop(context.Background()) }()
+	select {
+	case <-cleanupEntered:
+	case <-time.After(time.Second):
+		t.Fatal("daemon did not enter cleanup")
+	}
+	successor := NewIPCServer(config.IPCPath, ipcFixtureHandler)
+	if err := successor.Start(context.Background()); !errors.Is(err, ErrIPCInUse) {
+		t.Fatalf("IPC ownership was released before workers/store cleanup: %v", err)
+	}
+	release.Do(func() { close(allowCleanup) })
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("daemon cleanup did not finish")
+	}
+	if err := successor.Start(context.Background()); err != nil {
+		t.Fatalf("cleanup did not release IPC ownership: %v", err)
+	}
+	defer successor.Close()
 }
 
 func TestDaemonPublishesBoundListenersAndReleasesThemOnStop(t *testing.T) {

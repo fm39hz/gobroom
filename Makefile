@@ -116,6 +116,7 @@ test-conformance-transform-boundaries:
 	go test ./internal/api -run '^TestClientDisconnectCancelsDataPlaneExecution$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonStopCancelsActiveHTTPRequestBeforeDraining$$' -count=1
 	go test ./internal/daemon -run '^(TestDaemonHTTPBindFailureDoesNotPublishOrInitialize|TestDaemonControlBindFailureRollsBackDataPort|TestDaemonIPCFailureRollsBackHTTPAndAllowsRetry|TestDaemonPublishesBoundListenersAndReleasesThemOnStop)$$' -count=1
+	go test ./internal/daemon -run '^(TestIPCSocketOwnershipSurvivesContentionAndOwnerCrash|TestIPCServerPreservesNonSocketPaths|TestIPCServerPreservesActiveUnmanagedSocket|TestIPCServerClosePreservesReplacementPath|TestIPCServerCancellationReleasesOwnership|TestDaemonIPCConflictDoesNotInitializeAnotherDatabase|TestDaemonInitializationFailureReleasesReservedSockets|TestDaemonRetainsIPCOwnershipUntilCleanupCompletes)$$' -count=1
 	go test ./internal/daemon -run '^TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream$$' -count=1
 
 test-external-provider-module: ## compile a separate Go module against the public provider/daemon APIs
@@ -155,8 +156,8 @@ install-all: install ## install binaries and user systemd unit
 	systemctl --user daemon-reload
 	systemctl --user enable gobroomd 2>/dev/null || true
 	systemctl --user restart gobroomd
-	@for attempt in $$(seq 1 150); do \
-		if test -S /run/user/$$(id -u)/gobroom.sock; then exit 0; fi; \
+	@for attempt in $$(seq 1 15); do \
+		if timeout 1s ./$(BIN) status >/dev/null 2>&1; then exit 0; fi; \
 		sleep 0.1; \
 	done; \
 	systemctl --user status gobroomd --no-pager -l; \

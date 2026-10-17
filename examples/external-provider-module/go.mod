@@ -2,12 +2,15 @@ module example.com/gobroom-external-provider
 
 go 1.27
 
-require github.com/fm39hz/gobroom v0.0.0
+require (
+	github.com/fm39hz/gobroom v0.0.0
+	github.com/google/uuid v1.6.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-chi/chi/v5 v5.3.2 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/gofrs/flock v0.13.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

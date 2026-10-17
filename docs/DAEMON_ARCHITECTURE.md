@@ -56,6 +56,15 @@ the reservations. `Start`/`Stop` are serialized, and a second `Start` on a runni
 instance is rejected. The immutable `Addresses()` projection reports actual
 bound addresses, including OS-selected ports, and is cleared after shutdown.
 
+Unix IPC is reserved before state initialization as well. `gofrs/flock` holds
+an exclusive OS lock on the socket's persistent lock file through worker/store
+cleanup. The server preserves active listeners and non-socket filesystem
+objects, recovers refused stale sockets under that lock, and checks ownership
+before pathname removal. Binding is separate from serving: the accept loop
+starts after runtime initialization, and readiness is verified by a status
+response. A standalone `IPCServer` releases ownership on Close or context
+cancellation; an embedded daemon retains its reservation through final cleanup.
+
 No network healthcheck or daemon-wide quota poll runs by default. Real attempts
 feed passive runtime state; provider quota enrichment is evidence-triggered and
 deduplicated. See [Passive health](PASSIVE_HEALTH_ROUTING.md).

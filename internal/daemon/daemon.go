@@ -57,6 +57,7 @@ type Daemon struct {
 	artifactStore       *artifacts.Store
 	server              *api.Server
 	ipc                 *IPCServer
+	ipcLease            *ipcSocket
 	http                *http.Server
 	httpControl         *http.Server
 	listeners           httpListeners
@@ -176,6 +177,15 @@ func (d *Daemon) Start(ctx context.Context) error {
 	defer func() {
 		if !started {
 			listeners.close()
+		}
+	}()
+	ipcReservation, err := acquireIPCSocket(ctx, d.config.IPCPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if !started {
+			_ = ipcReservation.close()
 		}
 	}()
 	s, err := store.Open(d.config.DBPath)
@@ -560,11 +570,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.stop = nil
 		return err
 	}
-	if err := d.ipc.Start(ctx); err != nil {
+	if err := d.ipc.startReserved(ctx, ipcReservation); err != nil {
 		d.stop()
 		d.stop = nil
 		return err
 	}
+	d.ipcLease = ipcReservation
 
 	addresses := ListenerAddresses{IPC: d.config.IPCPath}
 	d.listeners = listeners
@@ -822,21 +833,26 @@ func (d *Daemon) Stop(ctx context.Context) error {
 		}
 	}
 	d.listeners.close()
+	var ipcErr error
 	if d.ipc != nil {
-		_ = d.ipc.Close()
+		ipcErr = d.ipc.Close()
 	}
 	d.stop()
+	if d.ipcLease != nil {
+		ipcErr = errors.Join(ipcErr, d.ipcLease.close())
+	}
 	d.stop = nil
 	d.runCancel = nil
 	d.http = nil
 	d.httpControl = nil
 	d.ipc = nil
+	d.ipcLease = nil
 	d.listeners = httpListeners{}
 	d.addresses.Store(nil)
 	d.oauthMu.Lock()
 	d.oauth = nil
 	d.oauthMu.Unlock()
-	return nil
+	return ipcErr
 }
 
 func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse {

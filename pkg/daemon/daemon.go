@@ -15,6 +15,8 @@ type IPCRequest = core.IPCRequest
 type IPCResponse = core.IPCResponse
 type ListenerAddresses = core.ListenerAddresses
 
+var ErrIPCInUse = core.ErrIPCInUse
+
 func New(config Config) *Daemon { return core.New(config) }
 
 func NewWithProviderModules(config Config, modules ...provider.RuntimeModule) *Daemon {

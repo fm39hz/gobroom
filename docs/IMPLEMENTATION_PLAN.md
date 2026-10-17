@@ -294,9 +294,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fixtures additionally prove synchronous HTTP port reservation, rollback on
    data/control/IPC startup failure, immediate use of allocated port-zero
    addresses, duplicate-Start rejection and listener release after Stop.
-   Remaining: Unix IPC ownership across processes still needs active/stale
-   socket handling; `IPCServer.Start` currently removes the pathname before
-   binding. Complete the full SG1–SG7 compatibility, auth, artifact, transform, replay,
+   Unix IPC now uses `gofrs/flock` for process ownership before database
+   initialization, preserves active/non-socket paths, recovers crash residue
+   and retains the lock through worker/store cleanup. Real subprocess fixtures
+   verify contention and forced-crash recovery; status responses, rather than
+   socket existence, gate installation readiness. Remaining: IPC request
+   cancellation/draining still needs coverage beyond listener ownership.
+   Complete the full SG1–SG7 compatibility, auth, artifact, transform, replay,
    reload and bundle cases through that module, then run installed CLI/control
    acceptance.
 

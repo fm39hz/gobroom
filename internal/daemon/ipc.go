@@ -6,8 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
+	"sync"
 )
 
 type IPCRequest struct {
@@ -26,9 +25,12 @@ type IPCResponse struct {
 type IPCHandler func(context.Context, IPCRequest) IPCResponse
 
 type IPCServer struct {
-	path     string
-	listener net.Listener
-	handler  IPCHandler
+	path       string
+	handler    IPCHandler
+	mu         sync.Mutex
+	socket     *ipcSocket
+	ownsSocket bool
+	closed     chan struct{}
 }
 
 func NewIPCServer(path string, handler IPCHandler) *IPCServer {
@@ -36,30 +38,53 @@ func NewIPCServer(path string, handler IPCHandler) *IPCServer {
 }
 
 func (s *IPCServer) Start(ctx context.Context) error {
-	if s.path == "" {
-		return fmt.Errorf("IPC path is required")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket != nil {
+		return fmt.Errorf("IPC server is already started")
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
-	_ = os.Remove(s.path)
-	listener, err := net.Listen("unix", s.path)
+	socket, err := acquireIPCSocket(ctx, s.path)
 	if err != nil {
 		return err
 	}
-	s.listener = listener
-	if err := os.Chmod(s.path, 0o600); err != nil {
-		listener.Close()
+	if err := s.startLocked(ctx, socket, true); err != nil {
+		_ = socket.close()
 		return err
 	}
-	go func() { <-ctx.Done(); _ = listener.Close() }()
-	go s.acceptLoop(ctx)
 	return nil
 }
 
-func (s *IPCServer) acceptLoop(ctx context.Context) {
+func (s *IPCServer) startReserved(ctx context.Context, socket *ipcSocket) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket != nil {
+		return fmt.Errorf("IPC server is already started")
+	}
+	return s.startLocked(ctx, socket, false)
+}
+
+func (s *IPCServer) startLocked(ctx context.Context, socket *ipcSocket, ownsSocket bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.socket = socket
+	s.ownsSocket = ownsSocket
+	closed := make(chan struct{})
+	s.closed = closed
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.closeSocket(socket)
+		case <-closed:
+		}
+	}()
+	go s.acceptLoop(ctx, socket.listener)
+	return nil
+}
+
+func (s *IPCServer) acceptLoop(ctx context.Context, listener net.Listener) {
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			return
 		}
@@ -81,11 +106,25 @@ func (s *IPCServer) serveConn(ctx context.Context, conn net.Conn) {
 }
 
 func (s *IPCServer) Close() error {
-	if s.listener == nil {
+	return s.closeSocket(nil)
+}
+
+func (s *IPCServer) closeSocket(expected *ipcSocket) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.socket == nil || expected != nil && s.socket != expected {
 		return nil
 	}
-	err := s.listener.Close()
-	_ = os.Remove(s.path)
+	var err error
+	if s.ownsSocket {
+		err = s.socket.close()
+	} else {
+		// A daemon reservation remains owned until its workers/store have drained.
+		err = s.socket.stopAccepting()
+	}
+	s.socket = nil
+	close(s.closed)
+	s.closed = nil
 	return err
 }
 
