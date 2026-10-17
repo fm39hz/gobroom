@@ -34,6 +34,13 @@ empty spool after success/failure and no catalog/health/quota/usage writes.
 Transport fixtures cover metadata-first streaming, local-path isolation,
 JSON-only RPC and cancellation. This closes the missing upload mechanism,
 not a file-picker UX, broad live-provider acceptance or the full M2/M15 gate.
+Implementation checkpoint: `af75d2e`. Full tests/vet, current conformance and
+repeated focused race tests passed, including the separate-module upload
+fixture. After `make install-all`, the installed CLI uploaded the WAV through
+the Unix-only fixture daemon and received HTTP-200 metadata; rejected inputs
+left no spool or operational state. The main daemon reported `ok` at snapshot
+463 and installed config export → validate passed (bundle v9). These are
+local fake-provider checks, not live-provider artifact acceptance.
 
 Previous integrated milestone:
 
