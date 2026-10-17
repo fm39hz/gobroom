@@ -239,6 +239,14 @@ identified owner-rebind slice, not universal auth-driver/lease lifecycle proof.
 used before model-discovery and connection-probe auth resolution; their existing
 vertical fixtures continue exercising the valid-owner paths.
 
+Installed acceptance (`e402a0f`): after `make install-all`, run
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test ./... -run '^TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges$' -count=1`
+inside `examples/external-provider-module`. Both v1 → v2 and v1 → v2 → v1
+passed provider updates, rejected old completion, retained-credential probe,
+fresh device setup and replacement-credential probe through the installed CLI.
+The main service remained `ok`; installed config export → validate passed.
+No live provider is called, and post-commit activation remains a separate gate.
+
 Auth-state isolation evidence: `TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate`
 uses a provider-defined `opaque_ticket` mode with typed ticket/subject/workspace
 metadata. Successful device setup and a real HTTP-401 refresh persist its exact

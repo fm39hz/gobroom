@@ -41,6 +41,14 @@ It does not add provider catalog breadth, finish TUI curation, establish full
 harness compatibility, or provide the still-missing resource/load baseline.
 Full C4/SG2/M15 remains open for generic setup actions, leases, reconciliation
 and the remaining composition matrix.
+Implementation checkpoint: `e402a0f`. Full tests/vet, the conformance composition
+suite and repeated focused root/external race tests passed. After
+`make install-all`, the installed CLI passed device-start → definition update
+(including ABA) → failed old completion → retained-credential probe → fresh
+current-owner setup → new-credential probe. The main daemon reported `ok` at
+snapshot 466 and installed config export → validate passed (bundle v9).
+These are fake-provider checks; activation after durable commit is the next
+identified architecture slice, not a completed part of this milestone.
 
 Previous integrated milestone:
 
