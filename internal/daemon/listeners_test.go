@@ -1,0 +1,154 @@
+package daemon
+
+import (
+	"context"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func listenerTestConfig(t *testing.T) Config {
+	t.Helper()
+	directory := t.TempDir()
+	return Config{
+		DBPath: filepath.Join(directory, "state.db"), IPCPath: filepath.Join(directory, "daemon.sock"),
+		ArtifactStoreDir: filepath.Join(directory, "artifacts"),
+		HTTPEnabled:      true, HTTPAddr: "127.0.0.1:0", HTTPControl: true, HTTPControlAddr: "127.0.0.1:0",
+	}
+}
+
+func unusedListenerAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return address
+}
+
+func TestDaemonHTTPBindFailureDoesNotPublishOrInitialize(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	config := listenerTestConfig(t)
+	config.HTTPAddr = occupied.Addr().String()
+	service := New(config)
+	if err := service.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "bind HTTP data plane") {
+		t.Fatalf("occupied data port was not reported by Start: %v", err)
+	}
+	for _, path := range []string{config.DBPath, config.IPCPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("failed port reservation changed %q: %v", path, err)
+		}
+	}
+	if service.Addresses() != (ListenerAddresses{}) {
+		t.Fatalf("failed startup published listener addresses: %#v", service.Addresses())
+	}
+}
+
+func TestDaemonControlBindFailureRollsBackDataPort(t *testing.T) {
+	config := listenerTestConfig(t)
+	address := unusedListenerAddress(t)
+	// Data owns this port first; control must fail and release the data reservation.
+	config.HTTPAddr, config.HTTPControlAddr = address, address
+	service := New(config)
+	if err := service.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "bind HTTP control plane") {
+		t.Fatalf("control/data port conflict was not reported by Start: %v", err)
+	}
+	rebound, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("failed control bind leaked the data-plane port: %v", err)
+	}
+	defer rebound.Close()
+	if _, err := os.Stat(config.IPCPath); !os.IsNotExist(err) {
+		t.Fatalf("failed HTTP startup published IPC: %v", err)
+	}
+}
+
+func TestDaemonIPCFailureRollsBackHTTPAndAllowsRetry(t *testing.T) {
+	config := listenerTestConfig(t)
+	config.HTTPAddr = unusedListenerAddress(t)
+	config.IPCPath = ""
+	service := New(config)
+	if err := service.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "IPC path is required") {
+		t.Fatalf("expected IPC startup failure: %v", err)
+	}
+	if service.stop != nil || service.Addresses() != (ListenerAddresses{}) {
+		t.Fatal("failed IPC startup left the daemon marked as running")
+	}
+	rebound, err := net.Listen("tcp", config.HTTPAddr)
+	if err != nil {
+		t.Fatalf("failed IPC startup leaked HTTP: %v", err)
+	}
+	_ = rebound.Close()
+	service.config.IPCPath = filepath.Join(filepath.Dir(config.DBPath), "retry.sock")
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatalf("daemon could not start after startup rollback: %v", err)
+	}
+	defer service.Stop(context.Background())
+	if _, err := CallIPC(context.Background(), service.Addresses().IPC, IPCRequest{ID: "status", Method: "status"}); err != nil {
+		t.Fatalf("retried daemon did not serve IPC: %v", err)
+	}
+}
+
+func TestDaemonPublishesBoundListenersAndReleasesThemOnStop(t *testing.T) {
+	config := listenerTestConfig(t)
+	service := New(config)
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Stop(context.Background())
+	addresses := service.Addresses()
+	if addresses.IPC != config.IPCPath || addresses.HTTP == "" || addresses.HTTPControl == "" || strings.HasSuffix(addresses.HTTP, ":0") || strings.HasSuffix(addresses.HTTPControl, ":0") {
+		t.Fatalf("Start did not publish bound addresses: %#v", addresses)
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	for _, check := range []struct {
+		address string
+		path    string
+		status  int
+	}{
+		{addresses.HTTP, "/v1/models", http.StatusOK},
+		{addresses.HTTP, "/api/status", http.StatusNotFound},
+		{addresses.HTTPControl, "/api/status", http.StatusOK},
+		{addresses.HTTPControl, "/v1/models", http.StatusNotFound},
+	} {
+		response, err := client.Get("http://" + check.address + check.path)
+		if err != nil {
+			t.Fatalf("listener was not reachable immediately after Start: %v", err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != check.status {
+			t.Fatalf("%s%s returned %d, want %d", check.address, check.path, response.StatusCode, check.status)
+		}
+	}
+	if err := service.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "already started") {
+		t.Fatalf("duplicate Start replaced a running instance: %v", err)
+	}
+	if _, err := CallIPC(context.Background(), addresses.IPC, IPCRequest{ID: "status", Method: "status"}); err != nil {
+		t.Fatalf("duplicate Start disturbed the existing daemon: %v", err)
+	}
+	if err := service.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if service.Addresses() != (ListenerAddresses{}) {
+		t.Fatalf("stopped daemon retained ready addresses: %#v", service.Addresses())
+	}
+	for _, address := range []string{addresses.HTTP, addresses.HTTPControl} {
+		listener, err := net.Listen("tcp", address)
+		if err != nil {
+			t.Fatalf("Stop did not release %s: %v", address, err)
+		}
+		_ = listener.Close()
+	}
+}

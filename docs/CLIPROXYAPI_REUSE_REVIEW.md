@@ -59,6 +59,15 @@ after downstream commit. Gobroom already has its own replay-safety contract;
 CLIProxyAPI should inform additional provider fixtures, not replace that
 contract or its independent scheduler.
 
+The 2026-10-17 lifecycle follow-up against the same source snapshot examined
+`internal/api/server.go:Start`: it acquires a TCP listener and returns bind
+failures before entering `Serve`. Gobroom had started `ListenAndServe` in a
+background goroutine, allowing `Start` to report success while a requested
+port was unavailable. Gobroom now reserves both enabled HTTP listeners before
+publishing IPC and uses standard-library `net.ListenConfig`/`http.Server.Serve`
+with startup rollback. The lesson is listener ownership and readiness; no
+CLIProxyAPI server or protocol-multiplexer code is imported or copied.
+
 ### Protocol translation
 
 `sdk/translator.Registry` maps pairs of wire `Format` values to request and

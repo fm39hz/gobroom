@@ -62,7 +62,8 @@ func main() {
 	if err := d.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("gobroomd ready: ipc=%s http=%v addr=%s", *ipcPath, *httpEnabled, *addr)
+	addresses := d.Addresses()
+	log.Printf("gobroomd ready: ipc=%s http=%v addr=%s control_addr=%s", addresses.IPC, *httpEnabled, addresses.HTTP, addresses.HTTPControl)
 	if err := d.Wait(ctx); err != nil {
 		log.Fatal(err)
 	}

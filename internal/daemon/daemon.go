@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/api"
@@ -58,6 +59,8 @@ type Daemon struct {
 	ipc                 *IPCServer
 	http                *http.Server
 	httpControl         *http.Server
+	listeners           httpListeners
+	addresses           atomic.Pointer[ListenerAddresses]
 	kernel              *kernel.Kernel
 	providerBindings    map[string]provider.RuntimeBinding
 	providerRegistry    *provider.RuntimeRegistry
@@ -157,6 +160,24 @@ func NewWithProviderModules(config Config, modules ...provider.RuntimeModule) *D
 }
 
 func (d *Daemon) Start(ctx context.Context) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.stop != nil {
+		return fmt.Errorf("daemon is already started")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	listeners, err := reserveHTTPListeners(ctx, d.config)
+	if err != nil {
+		return err
+	}
+	started := false
+	defer func() {
+		if !started {
+			listeners.close()
+		}
+	}()
 	s, err := store.Open(d.config.DBPath)
 	if err != nil {
 		return err
@@ -255,7 +276,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	d.runCtx = ctx
 	d.runCancel = cancel
-	started := false
 	var bodyStore *artifacts.Store
 	defer func() {
 		if !started {
@@ -535,31 +555,30 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	d.ipc = NewIPCServer(d.config.IPCPath, d.handleIPC)
+	if err := ctx.Err(); err != nil {
+		d.stop()
+		d.stop = nil
+		return err
+	}
 	if err := d.ipc.Start(ctx); err != nil {
 		d.stop()
+		d.stop = nil
 		return err
 	}
 
-	if d.config.HTTPEnabled {
-		d.http = newDaemonHTTPServer(d.config.HTTPAddr, d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}), ctx)
-		go func() {
-			if err := d.http.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP: %v\n", err)
-			}
-		}()
+	addresses := ListenerAddresses{IPC: d.config.IPCPath}
+	d.listeners = listeners
+	if listeners.data != nil {
+		addresses.HTTP = listeners.data.Addr().String()
+		d.http = newDaemonHTTPServer(addresses.HTTP, d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}), ctx)
+		d.serveHTTP(d.http, listeners.data, "data plane")
 	}
-	if d.config.HTTPControl {
-		controlAddr := d.config.HTTPControlAddr
-		if controlAddr == "" {
-			controlAddr = "127.0.0.1:2713"
-		}
-		d.httpControl = newDaemonHTTPServer(controlAddr, d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true}), ctx)
-		go func() {
-			if err := d.httpControl.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "[gobroomd] HTTP control: %v\n", err)
-			}
-		}()
+	if listeners.control != nil {
+		addresses.HTTPControl = listeners.control.Addr().String()
+		d.httpControl = newDaemonHTTPServer(addresses.HTTPControl, d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true}), ctx)
+		d.serveHTTP(d.httpControl, listeners.control, "control plane")
 	}
+	d.addresses.Store(&addresses)
 	started = true
 	return nil
 }
@@ -772,6 +791,14 @@ func newDaemonHTTPServer(address string, handler http.Handler, base context.Cont
 	}
 }
 
+func (d *Daemon) serveHTTP(server *http.Server, listener net.Listener, plane string) {
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			d.appendLog("error", fmt.Sprintf("HTTP %s stopped: %v", plane, err))
+		}
+	}()
+}
+
 func (d *Daemon) Stop(ctx context.Context) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -794,12 +821,18 @@ func (d *Daemon) Stop(ctx context.Context) error {
 			_ = d.httpControl.Close()
 		}
 	}
+	d.listeners.close()
 	if d.ipc != nil {
 		_ = d.ipc.Close()
 	}
 	d.stop()
 	d.stop = nil
 	d.runCancel = nil
+	d.http = nil
+	d.httpControl = nil
+	d.ipc = nil
+	d.listeners = httpListeners{}
+	d.addresses.Store(nil)
 	d.oauthMu.Lock()
 	d.oauth = nil
 	d.oauthMu.Unlock()
@@ -1856,7 +1889,7 @@ func DefaultConfig() (Config, error) {
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), RuntimeSpoolPath: filepath.Join(configDir, "gobroom", "runtime-spool.json"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:2712", HTTPControl: false, HTTPControlAddr: "127.0.0.1:2713", ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts")}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), RuntimeSpoolPath: filepath.Join(configDir, "gobroom", "runtime-spool.json"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: defaultHTTPAddr, HTTPControl: false, HTTPControlAddr: defaultHTTPControlAddr, ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts")}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }

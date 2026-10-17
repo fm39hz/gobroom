@@ -49,6 +49,13 @@ reload must leave the last valid snapshot active. Provider discovery failures
 should affect the relevant provider operation, not make an otherwise valid
 daemon unusable.
 
+Listener acquisition is part of startup. The daemon reserves all enabled TCP
+listeners before opening SQLite or publishing IPC, then hands those listeners
+to Go's HTTP server after runtime initialization. Any startup error releases
+the reservations. `Start`/`Stop` are serialized, and a second `Start` on a running
+instance is rejected. The immutable `Addresses()` projection reports actual
+bound addresses, including OS-selected ports, and is cleared after shutdown.
+
 No network healthcheck or daemon-wide quota poll runs by default. Real attempts
 feed passive runtime state; provider quota enrichment is evidence-triggered and
 deduplicated. See [Passive health](PASSIVE_HEALTH_ROUTING.md).

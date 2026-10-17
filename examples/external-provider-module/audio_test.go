@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"mime/multipart"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -301,39 +300,22 @@ func TestPublicDaemonHostsExternalProviderModuleAndManifest(t *testing.T) {
 		_, _ = io.WriteString(writer, `{"text":"fixture transcript"}`)
 	}))
 	defer upstream.Close()
-	dataPlaneListener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataPlaneAddr := dataPlaneListener.Addr().String()
-	if err := dataPlaneListener.Close(); err != nil {
-		t.Fatal(err)
-	}
-
 	manifestDir := t.TempDir()
 	writeManifest(t, manifestDir)
 	runtimeDir := t.TempDir()
 	configuration := daemon.Config{
 		DBPath: filepath.Join(runtimeDir, "fixture.db"), IPCPath: filepath.Join(runtimeDir, "fixture.sock"),
 		ProviderManifestDir: manifestDir, ArtifactStoreDir: filepath.Join(runtimeDir, "artifacts"),
-		HTTPEnabled: true, HTTPAddr: dataPlaneAddr,
+		HTTPEnabled: true, HTTPAddr: "127.0.0.1:0",
 	}
 	service := daemon.NewWithProviderModules(configuration, AudioModule{})
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	defer service.Stop(context.Background())
-	httpReadyDeadline := time.Now().Add(5 * time.Second)
-	for {
-		connection, dialErr := net.DialTimeout("tcp", dataPlaneAddr, 50*time.Millisecond)
-		if dialErr == nil {
-			_ = connection.Close()
-			break
-		}
-		if time.Now().After(httpReadyDeadline) {
-			t.Fatalf("daemon HTTP listener did not become ready: %v", dialErr)
-		}
-		time.Sleep(10 * time.Millisecond)
+	dataPlaneAddr := service.Addresses().HTTP
+	if dataPlaneAddr == "" || strings.HasSuffix(dataPlaneAddr, ":0") {
+		t.Fatalf("daemon did not publish the bound HTTP address: %#v", service.Addresses())
 	}
 	response, err := http.Post("http://"+dataPlaneAddr+"/v1/audio/inspect", "multipart/form-data", strings.NewReader("not-multipart"))
 	if err != nil {

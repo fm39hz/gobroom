@@ -13,6 +13,7 @@ type Config = core.Config
 type Daemon = core.Daemon
 type IPCRequest = core.IPCRequest
 type IPCResponse = core.IPCResponse
+type ListenerAddresses = core.ListenerAddresses
 
 func New(config Config) *Daemon { return core.New(config) }
 

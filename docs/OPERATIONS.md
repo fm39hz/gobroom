@@ -16,6 +16,13 @@ clients over the Unix IPC socket.
 The daemon flags are authoritative when a deployment needs different paths.
 The request hot path reads immutable snapshots and does not query SQLite.
 
+Startup reserves every enabled HTTP listener before initializing state or
+publishing IPC. An occupied data/control port makes startup fail; any earlier
+reservation is released. A later initialization or IPC error also releases the
+reserved ports. After `Start` succeeds, the enabled listeners are already bound.
+Embedders can request `127.0.0.1:0` and read the allocated ports from
+`Daemon.Addresses()`. Addresses are cleared when the daemon stops.
+
 ## Service and logs
 
 The user service writes operational messages to stdout/stderr, so a service
