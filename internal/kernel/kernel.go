@@ -140,7 +140,7 @@ func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential 
 	operationRef := extensions.Ref{Kind: "operation", ID: string(req.Operation), ContractVersion: req.OperationContractVersion}
 	if definition, exists := k.Operations.Resolve(operationRef); exists && definition.ResourceBounds.DeadlineMillis > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(definition.ResourceBounds.DeadlineMillis)*time.Millisecond)
+		ctx, cancel = context.WithTimeoutCause(ctx, time.Duration(definition.ResourceBounds.DeadlineMillis)*time.Millisecond, ErrOperationDeadline)
 		defer cancel()
 	}
 	externalRequirements := append([]normalize.FeatureRequirement(nil), req.Requirements...)
@@ -554,6 +554,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			response, err := adapter.Execute(attemptCtx, upstream)
 			if err != nil {
 				if ctx.Err() != nil {
+					if errors.Is(context.Cause(ctx), ErrOperationDeadline) {
+						if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+							observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorCooldown, Cause: CauseTimeout, Effect: EffectUnknown, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 1, Evidence: []EvidenceSource{EvidenceInferred}, Message: ctx.Err().Error()})
+						}
+					}
 					k.Scheduler.Release(candidate)
 					return ctx.Err()
 				}
@@ -638,10 +643,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				continue
 			}
-			defer response.Body.Close()
+			if response.Body != nil {
+				response.Body = &responseBodyLease{ReadCloser: response.Body}
+				defer response.Body.Close()
+			}
 			var firstByteAt time.Time
 			emitEvent := responseEventSink(writer)
-			streamWriter := &responseCommitWriter{ResponseWriter: writer, maxBytes: resourceBounds.MaxOutputBytes}
+			streamWriter := &responseCommitWriter{ResponseWriter: writer, maxBytes: resourceBounds.MaxOutputBytes, ctx: ctx}
 			artifactOutputCounts := make(map[string]int, len(artifactOutputs))
 			var sequence uint64
 			resultFinalized := false
@@ -749,39 +757,36 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					attemptReleased = true
 				}
 			}
-			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
+			var stagedCompletion *UsageEvent
+			var providerUsage UsageEvent
+			providerUsageKnown := false
+			recordProviderUsage := func(event UsageEvent) {
+				if knownProviderUsage(event) {
+					providerUsage, providerUsageKnown = event, true
+				}
+			}
+			var terminalFailure error
+			reportFailure := func(err error) {
+				if err == nil || terminalFailure != nil {
+					return
+				}
+				terminalFailure = err
 				if emitEvent != nil {
-					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: streamErr.Error()})
+					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: err.Error()})
 				}
-				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseStreamFailure, Effect: EffectAccepted, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: streamErr.Error()})
-				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-					feedback.MarkFailure(candidate, ErrorRetryable, streamErr)
+				if providerResponseFailure(ctx, err) {
+					cause := CauseStreamFailure
+					if errors.Is(context.Cause(ctx), ErrOperationDeadline) {
+						cause = CauseTimeout
+					}
+					if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+						observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: cause, Effect: EffectAccepted, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: err.Error()})
+					} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
+						feedback.MarkFailure(candidate, ErrorRetryable, err)
+					}
 				}
-				releaseAttempt()
-			}, ValidateEvent: validateEvent, OnEvent: func(event ResponseEvent) {
-				if event.ResponseID != "" {
-					sessionState.ResponseID = event.ResponseID
-				}
-				if emitEvent != nil {
-					emitEvent(event)
-				}
-			}, OnSessionState: func(state SessionState) {
-				if state.ResponseID != "" {
-					sessionState.ResponseID = state.ResponseID
-				}
-				if len(state.ProviderData) > 0 {
-					sessionState.ProviderData = append([]byte(nil), state.ProviderData...)
-				}
-				if !state.ExpiresAt.IsZero() {
-					sessionState.ExpiresAt = state.ExpiresAt
-				}
-			}, OnFirstByte: func(at time.Time) {
-				firstByteAt = at
-				if emitEvent != nil {
-					emitEvent(ResponseEvent{At: at, Kind: EventResponseStarted})
-				}
-			}, OnComplete: func(event UsageEvent) {
+			}
+			finishSuccess := func(event UsageEvent) {
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
 					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorTerminal, Cause: CauseSuccess, Effect: EffectAccepted, Scope: ScopeOperation, Retry: RetryNow, Confidence: 1, Evidence: []EvidenceSource{EvidenceSuccessBody}})
 				}
@@ -803,6 +808,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						event = enriched
 					}
 				}
+				event.Status = "ok"
 				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
 					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 						feedback.MarkSuccess(candidate)
@@ -848,27 +854,84 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					emitEvent(ResponseEvent{At: event.At, Kind: EventResponseComplete, Usage: &event})
 				}
 				k.EmitUsage(event)
+			}
+			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
+				reportFailure(streamErr)
+			}, ValidateEvent: validateEvent, OnEvent: func(event ResponseEvent) {
+				if event.ResponseID != "" {
+					sessionState.ResponseID = event.ResponseID
+				}
+				if emitEvent != nil && event.Kind != EventResponseComplete && event.Kind != EventResponseError {
+					emitEvent(event)
+				}
+			}, OnSessionState: func(state SessionState) {
+				if state.ResponseID != "" {
+					sessionState.ResponseID = state.ResponseID
+				}
+				if len(state.ProviderData) > 0 {
+					sessionState.ProviderData = append([]byte(nil), state.ProviderData...)
+				}
+				if !state.ExpiresAt.IsZero() {
+					sessionState.ExpiresAt = state.ExpiresAt
+				}
+			}, OnFirstByte: func(at time.Time) {
+				firstByteAt = at
+				if emitEvent != nil {
+					emitEvent(ResponseEvent{At: at, Kind: EventResponseStarted})
+				}
+			}, OnProviderUsage: recordProviderUsage, OnComplete: func(event UsageEvent) {
+				recordProviderUsage(event)
+				if stagedCompletion == nil {
+					copy := event
+					stagedCompletion = &copy
+				}
 			}})
+			if terminalFailure != nil {
+				renderErr = terminalFailure
+			}
+			if renderErr == nil && streamWriter.failure != nil {
+				renderErr = streamWriter.failure
+			}
+			if renderErr == nil && resultProjector != nil && !resultFinalized {
+				renderErr = WrapResponseFailure(ResponseFailureProvider, fmt.Errorf("operation %q did not finalize its declared result", operationRef.Key()))
+			}
 			if renderErr == nil && len(artifactOutputs) > 0 {
 				if err := k.Operations.ValidateArtifactOutputCounts(operationRef, artifactOutputCounts); err != nil {
-					renderErr = err
+					renderErr = WrapResponseFailure(ResponseFailureProvider, err)
 				}
 			}
 			if responseScope != nil {
 				if closeErr := responseScope.Close(); renderErr == nil && closeErr != nil {
-					renderErr = closeErr
+					renderErr = WrapResponseFailure(ResponseFailureRenderer, closeErr)
 				}
+			}
+			if renderErr == nil && ctx.Err() != nil {
+				renderErr = ctx.Err()
 			}
 			if renderErr == nil {
+				if stagedCompletion != nil {
+					finishSuccess(*stagedCompletion)
+				}
+				releaseAttempt()
 				return nil
 			}
-			if !attemptReleased {
-				releaseAttempt()
-				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
-					observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorRetryable, Cause: CauseProtocol, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 0.9, Evidence: []EvidenceSource{EvidenceInferred}, Message: renderErr.Error()})
-				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-					feedback.MarkFailure(candidate, ErrorRetryable, renderErr)
+			reportFailure(renderErr)
+			releaseAttempt()
+			failedUsage := providerUsage
+			if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
+				if enriched, err := source.EnrichUsage(ctx, candidate, response.Headers, failedUsage); err == nil {
+					failedUsage = enriched
 				}
+			}
+			if providerUsageKnown || knownProviderUsage(failedUsage) {
+				event := failedUsage
+				event.Status = "error"
+				if ctx.Err() != nil && !errors.Is(context.Cause(ctx), ErrOperationDeadline) {
+					event.Status = "cancelled"
+				}
+				event.At, event.LogicalModel, event.ProviderNodeID, event.ConnectionID, event.ExternalModel = time.Now(), req.Model, candidate.NodeID, candidate.CredentialID, candidate.ExternalModel
+				event.Latency, event.RequestClass, event.SessionID = time.Since(started), requestClass(req), req.Session.ID
+				k.EmitUsage(event)
 			}
 			if err := ctx.Err(); err != nil {
 				return err

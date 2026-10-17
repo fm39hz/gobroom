@@ -200,6 +200,29 @@ second connection or issuing a second request outside kernel replay policy.
 
 ## Full semantic closure gate
 
+Response-terminal accounting slice: the typed origin/first-failure latch is
+covered by `TestComposedAdapterResponseFailurePreservesTransformOriginThroughDecoderWrap`,
+`TestComposedAdapterLatchesIgnoredTransformCallbackFailure`, renderer/provider
+fault tests and caller-cancellation tests. Kernel fixtures exercise cancellation
+before/after client bytes, ignored cancellation with a false completion callback,
+typed local versus provider failure, exactly-one feedback and admission release.
+Standard `testing/synctest` distinguishes a neutral caller deadline from an
+operation-budget timeout during dispatch or accepted provider response work.
+
+`TestProviderUsageSurvivesTransformFaultWithoutSuccessObservation`,
+`TestProviderUsageSurvivesCancellationAfterAdapterCompletion` and
+`TestProviderCompletionIsStagedUntilTerminalReturn` retain actual provider
+token/cost counters without publishing success or starting another route.
+Happy completion still emits once; unreported usage is not fabricated. The
+response-artifact fixture now has a false-completion/missing-required-artifact
+case proving late validation cannot leak success. Client write/flush errors
+latch through the standard ResponseController wrapper chain, and writes after
+cancellation stop. The real eight-request HTTP disconnect fixture now asserts
+no provider-health or success/performance observation after disconnect.
+
+These cases close demonstrated attribution/terminal holes; they are not the
+full SG1–SG7 matrix or evidence of live-provider/harness parity.
+
 The following cases are required in addition to the existing subset. They use
 deterministic upstream/callback fixtures; live credentials are not required.
 Each assertion checks observable behavior through the ordinary control and

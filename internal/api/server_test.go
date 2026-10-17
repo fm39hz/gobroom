@@ -138,7 +138,11 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := kernel.New(snapshot, nil, 4)
+	gate := &disconnectRecordingGate{
+		outcomes: make(chan kernel.ClassifiedOutcome, concurrentRequests),
+		usage:    make(chan kernel.UsageEvent, concurrentRequests),
+	}
+	engine, err := kernel.New(snapshot, gate, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +246,50 @@ func TestClientDisconnectCancelsDataPlaneExecution(t *testing.T) {
 	case <-completed:
 		t.Fatal("cancelled stream emitted successful usage completion")
 	default:
+	}
+	select {
+	case outcome := <-gate.outcomes:
+		t.Fatalf("client disconnect emitted provider health outcome: %#v", outcome)
+	default:
+	}
+	select {
+	case usage := <-gate.usage:
+		t.Fatalf("client disconnect emitted successful usage: %#v", usage)
+	default:
+	}
+}
+
+type disconnectRecordingGate struct {
+	outcomes chan kernel.ClassifiedOutcome
+	usage    chan kernel.UsageEvent
+}
+
+func (*disconnectRecordingGate) Usable(kernel.Route, time.Time) bool { return true }
+func (g *disconnectRecordingGate) ObserveOutcome(_ kernel.Route, outcome kernel.ClassifiedOutcome) {
+	g.outcomes <- outcome
+}
+func (g *disconnectRecordingGate) ObserveUsage(_ kernel.Route, usage kernel.UsageEvent) {
+	g.usage <- usage
+}
+
+type flushErrorResponseRecorder struct {
+	*httptest.ResponseRecorder
+	err error
+}
+
+func (w flushErrorResponseRecorder) FlushError() error { return w.err }
+
+func TestTrackingWriterPreservesFlushError(t *testing.T) {
+	want := errors.New("client flush failed")
+	fake := flushErrorResponseRecorder{ResponseRecorder: httptest.NewRecorder(), err: want}
+	accessLogWriter := &accessLogResponseWriter{ResponseWriter: fake}
+	writer := &trackingWriter{ResponseWriter: accessLogWriter}
+	err := http.NewResponseController(writer).Flush()
+	if !errors.Is(err, want) {
+		t.Fatalf("Flush error=%v, want underlying error %v", err, want)
+	}
+	if accessLogWriter.status != http.StatusOK {
+		t.Fatalf("access log status=%d after flush, want %d", accessLogWriter.status, http.StatusOK)
 	}
 }
 

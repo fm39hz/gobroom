@@ -487,6 +487,7 @@ type StreamHooks struct {
 	OnEvent           func(ResponseEvent)
 	ValidateEvent     func(context.Context, ResponseEvent) error
 	OnComplete        func(UsageEvent)
+	OnProviderUsage   func(UsageEvent)
 	OnError           func(error)
 	OnSessionState    func(SessionState)
 	TransformResponse func(context.Context, ResponseEvent) (ResponseEvent, error)

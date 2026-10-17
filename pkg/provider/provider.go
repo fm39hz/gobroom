@@ -139,6 +139,21 @@ type FacetMapping = kernel.FacetMapping
 type FacetDisposition = kernel.FacetDisposition
 type ResponseEvent = kernel.ResponseEvent
 type ResponseEventKind = kernel.ResponseEventKind
+type ResponseFailureOrigin = kernel.ResponseFailureOrigin
+type ResponseFailure = kernel.ResponseFailure
+
+const (
+	ResponseFailureUnknown   = kernel.ResponseFailureUnknown
+	ResponseFailureProvider  = kernel.ResponseFailureProvider
+	ResponseFailureTransform = kernel.ResponseFailureTransform
+	ResponseFailureRenderer  = kernel.ResponseFailureRenderer
+	ResponseFailureClient    = kernel.ResponseFailureClient
+)
+
+func WrapResponseFailure(origin ResponseFailureOrigin, err error) error {
+	return kernel.WrapResponseFailure(origin, err)
+}
+
 type StreamHooks = kernel.StreamHooks
 type ErrorClass = kernel.ErrorClass
 type ClassifiedOutcome = kernel.ClassifiedOutcome

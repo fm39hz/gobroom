@@ -234,6 +234,33 @@ Provider-signed response events carry the exact provider-definition issuer ref;
 the kernel rejects missing or mismatched issuers before rendering, and response
 transforms cannot rewrite that provenance. A renderer may preserve a signature
 only when the response decoder declares the signature event family.
+
+Response termination keeps fault origin explicit: provider, transform,
+renderer, client, or unknown. `ResponseFailure` unwraps its inner error, so
+standard `errors.As`/`errors.Is` checks still reach typed causes; wrapping an
+already attributed failure preserves its inner origin. Only an evidenced
+provider-origin failure can penalize operation health. Caller cancellation
+and ordinary deadlines are neutral. An operation deadline uses
+`ErrOperationDeadline` and counts as timeout only while the failure is still
+attributed to provider work; a later local transform or render failure does
+not become a provider timeout. Ambiguous validation after a transform remains
+unknown rather than being guessed as provider fault. Renderer failures are
+neutral unless their wrapped cause establishes provider or client origin.
+
+The response pipeline latches the first callback failure and returns it even
+if a decoder ignores the callback error. It checks cancellation at response
+boundaries, budgets original provider events separately from transformed
+client events, and prevents response-writer writes after cancellation. Raw
+provider usage is reported through `OnProviderUsage` before transformation
+and also from decoder completion when available. The kernel stages successful
+completion until rendering returns, required artifact counts validate, scope
+cleanup succeeds, and cancellation checks pass. It then publishes one terminal
+success result; on failure it retains reported nonzero provider token/cost
+counters in one `error` or `cancelled` usage event, without a success health or
+performance observation. Unreported usage is not inferred. A 2xx accepted
+upstream effect still forbids fallback after a response fault, regardless of
+whether client bytes were committed.
+
 Opaque tool signatures echoed by clients are untrusted until the selected
 provider's session store contains the matching signature-digest, issuer,
 conversation-context and target-call proof. Context is the normalized

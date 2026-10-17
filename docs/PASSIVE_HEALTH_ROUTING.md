@@ -345,14 +345,22 @@ headers accepted -> first byte -> stream/protocol completes -> success
 | Event | Runtime effect |
 |---|---|
 | Complete valid response | success and performance sample |
-| Stream fails after commitment | partial success plus reliability penalty |
+| Evidenced provider-origin stream failure | operation-scoped reliability penalty; no success performance sample |
+| Transform, renderer, client-write, or unknown-origin failure | neutral unless the wrapped evidence identifies a provider fault |
 | Client cancels after first byte | neutral cancellation |
-| Timeout before headers | timeout/network failure |
+| Operation deadline during provider work | operation-scoped timeout; local transform/render deadline remains neutral |
 | Empty or malformed upstream response | upstream protocol failure |
 | Invalid client payload | request failure; route neutral |
 
 Success reward is emitted only at the completion boundary defined by the
-adapter/stream contract.
+adapter/stream contract. Provider usage observed before client transformation
+is retained if rendering later fails or the caller cancels, with terminal
+`error` or `cancelled` status when nonzero usage was reported. This accounting
+does not create a success health/performance observation or authorize fallback
+after an accepted upstream effect. Unknown usage is not fabricated. A decoder
+that ignores a callback error cannot erase the first latched response failure;
+ambiguous post-transform validation remains unknown-origin and does not receive
+a guessed provider penalty.
 
 ## Derived status
 

@@ -26,6 +26,15 @@ notice and have an independent Gobroom fixture.
 
 ## Implementation map
 
+Response-terminal lesson: `sdk/api/handlers/handlers_interceptors.go`
+(`completeError`) and `handlers_stream.go` (`streamDeliveryCompletion`)
+separate cancelled request lifecycles from stream delivery failure. Gobroom
+uses that problem statement to keep caller cancellation/local projection
+faults out of provider health, retain known provider usage, and publish one
+validated terminal result. It uses standard Go context causes, `errors.As`/
+`errors.Is`, and `http.ResponseController` plus its own IR contracts; no
+interceptor or stream-delivery implementation is copied or imported.
+
 Scope-isolation lesson for the operation feedback slice: the auth scheduler's
 targeted model updates (`sdk/cliproxy/auth/scheduler.go` and the targeted-update/
 cooldown-rebuild fixtures) keep one suppressed model from starving another.

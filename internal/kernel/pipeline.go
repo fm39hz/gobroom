@@ -279,9 +279,24 @@ func (a ComposedAdapter) ClassifyError(status int, body []byte) ErrorClass {
 	return a.Response.ClassifyError(status, body)
 }
 func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamResponse, writer http.ResponseWriter, source normalize.Format, hooks StreamHooks) error {
+	if response.Body != nil {
+		lease := &responseBodyLease{ReadCloser: response.Body}
+		response.Body = lease
+		defer lease.Close()
+	}
+	fail := func(origin ResponseFailureOrigin, err error) error {
+		err = WrapResponseFailure(origin, err)
+		if hooks.OnError != nil {
+			hooks.OnError(err)
+		}
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(ResponseFailureRenderer, err)
+	}
 	renderer := a.Renderers[source]
 	if renderer == nil {
-		return fmt.Errorf("adapter %q has no renderer for client format %q", a.AdapterID, source)
+		return fail(ResponseFailureRenderer, fmt.Errorf("adapter %q has no renderer for client format %q", a.AdapterID, source))
 	}
 	rendererCtx := ctx
 	if hooks.ArtifactAccess != nil {
@@ -293,7 +308,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		Streaming: hooks.Streaming, ProviderStreaming: providerStreaming, SemanticTransformActive: hooks.TransformResponse != nil, Model: hooks.Model,
 	}, writer)
 	if err != nil {
-		return err
+		return fail(ResponseFailureRenderer, err)
 	}
 	decodeHooks := hooks
 	decodeHooks.OnEvent = nil
@@ -315,12 +330,30 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	decodeHooks.OnComplete = func(event UsageEvent) {
 		decoderCompleted = true
 		completionUsage = event
+		if hooks.OnProviderUsage != nil {
+			hooks.OnProviderUsage(event)
+		}
 	}
+	decodeHooks.OnProviderUsage = hooks.OnProviderUsage
 	providerComplete := false
 	firstEvent := false
 	responseOutputStarted := responseWriterOutputStarted(writer)
-	var totalEventBytes int64
-	emit := func(event ResponseEvent) error {
+	providerBudget := responseEventBudget{maxEvent: hooks.MaxEventBytes, maxOutput: hooks.MaxOutputBytes}
+	clientBudget := responseEventBudget{maxEvent: hooks.MaxEventBytes, maxOutput: hooks.MaxOutputBytes}
+	var emitFailure error
+	emitOne := func(event ResponseEvent) error {
+		if event.Usage != nil && (event.Kind == EventUsage || event.Kind == EventResponseComplete) && hooks.OnProviderUsage != nil {
+			hooks.OnProviderUsage(*event.Usage)
+		}
+		if emitFailure != nil {
+			return emitFailure
+		}
+		if err := ctx.Err(); err != nil {
+			return WrapResponseFailure(ResponseFailureProvider, err)
+		}
+		if err := providerBudget.consume(event); err != nil {
+			return WrapResponseFailure(ResponseFailureProvider, err)
+		}
 		if event.Kind == EventThinkingSignature && event.SignatureIssuer.ID == "" {
 			event.SignatureIssuer = hooks.ProviderIssuer
 		}
@@ -344,60 +377,75 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 			}
 			transformed, transformErr := hooks.TransformResponse(transformCtx, event)
 			if transformErr != nil {
-				return transformErr
+				return WrapResponseFailure(ResponseFailureTransform, transformErr)
 			}
 			event = transformed
+			if err := clientBudget.consume(event); err != nil {
+				return WrapResponseFailure(ResponseFailureTransform, err)
+			}
 		}
-		if hooks.MaxEventBytes > 0 {
-			eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.SignatureIssuer.ID)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
-			artifactBytes := int64(0)
-			for _, artifact := range event.Artifacts {
-				eventBytes += int64(len(artifact.TypeRef.ID)+len(artifact.Role)+len(artifact.MediaType)+len(artifact.Sensitivity)+len(artifact.Value)) + 64
-				if artifact.Body != nil {
-					artifactBytes += artifact.SizeBytes
-				}
-			}
-			if eventBytes > hooks.MaxEventBytes {
-				return fmt.Errorf("response event %q exceeds %d-byte operation buffer limit", event.Kind, hooks.MaxEventBytes)
-			}
-			totalEventBytes += eventBytes + artifactBytes
-			if hooks.MaxOutputBytes > 0 && totalEventBytes > hooks.MaxOutputBytes {
-				return fmt.Errorf("decoded response exceeds %d-byte operation output limit", hooks.MaxOutputBytes)
-			}
+		if err := ctx.Err(); err != nil {
+			return WrapResponseFailure(ResponseFailureTransform, err)
 		}
 		if hooks.ValidateEvent != nil {
 			if err := hooks.ValidateEvent(ctx, event); err != nil {
-				return fmt.Errorf("validate operation response event %q: %w", event.Kind, err)
+				origin := ResponseFailureProvider
+				if hooks.TransformResponse != nil {
+					origin = ResponseFailureUnknown
+				}
+				return WrapResponseFailure(origin, fmt.Errorf("validate operation response event %q: %w", event.Kind, err))
 			}
 		}
 		if hooks.OnEvent != nil {
 			hooks.OnEvent(event)
 		}
 		if err := session.Emit(rendererCtx, event); err != nil {
-			return err
+			return WrapResponseFailure(ResponseFailureRenderer, err)
+		}
+		if err := ctx.Err(); err != nil {
+			return WrapResponseFailure(ResponseFailureRenderer, err)
 		}
 		responseOutputStarted = responseWriterOutputStarted(writer)
 		return nil
 	}
+	emit := func(event ResponseEvent) error {
+		err := emitOne(event)
+		if err != nil && emitFailure == nil {
+			emitFailure = err
+		}
+		return err
+	}
 	decodeErr := a.Response.Decode(ctx, response, emit, decodeHooks)
+	if emitFailure != nil {
+		decodeErr = emitFailure
+	}
+	if decodeErr == nil && ctx.Err() != nil {
+		decodeErr = ctx.Err()
+	}
 	if decodeErr == nil && !providerComplete {
 		decodeErr = io.ErrUnexpectedEOF
 	}
 	if decodeErr != nil {
-		_ = emit(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: decodeErr.Error()})
+		decodeErr = WrapResponseFailure(ResponseFailureProvider, decodeErr)
+		errorEvent := ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: decodeErr.Error()}
+		if hooks.OnEvent != nil {
+			hooks.OnEvent(errorEvent)
+		}
+		if ctx.Err() == nil && responseWriterOutputStarted(writer) {
+			// Project an error only onto an already committed client response.
+			// Do not re-run the failed transform/validator to render diagnostics.
+			_ = session.Emit(rendererCtx, errorEvent)
+		}
 	}
 	finishErr := session.Finish(rendererCtx, decodeErr)
 	if decodeErr != nil {
-		if hooks.OnError != nil {
-			hooks.OnError(decodeErr)
-		}
-		return decodeErr
+		return fail(ResponseFailureProvider, decodeErr)
 	}
 	if finishErr != nil {
-		if hooks.OnError != nil {
-			hooks.OnError(finishErr)
-		}
-		return finishErr
+		return fail(ResponseFailureRenderer, finishErr)
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(ResponseFailureRenderer, err)
 	}
 	if !decoderCompleted {
 		completionUsage.Status = "ok"

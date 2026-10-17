@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -144,6 +145,18 @@ func (a responseArtifactAdapter) RenderResponse(ctx context.Context, response Up
 }
 
 func TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease(t *testing.T) {
+	t.Run("valid artifact", func(t *testing.T) { runResponseArtifactCompletionFixture(t, false) })
+	t.Run("completion missing required artifact", func(t *testing.T) { runResponseArtifactCompletionFixture(t, true) })
+}
+
+type missingArtifactCompletionAdapter struct{ responseArtifactAdapter }
+
+func (missingArtifactCompletionAdapter) RenderResponse(_ context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
+	hooks.OnComplete(UsageEvent{Status: "ok", InputTokens: 11})
+	return nil
+}
+
+func runResponseArtifactCompletionFixture(t *testing.T, omitArtifact bool) {
 	catalog := extensions.NewCatalog()
 	operationRef := extensions.Ref{Kind: "operation", ID: "image.generate", ContractVersion: 1}
 	artifactRef := extensions.Ref{Kind: extensions.ArtifactKind, ID: "image.output", ContractVersion: 1}
@@ -203,7 +216,8 @@ func TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, err := New(snapshot, nil, 2)
+	gate := &responseFailureGate{}
+	k, err := New(snapshot, gate, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,10 +237,32 @@ func TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease(t
 		Renderers: map[normalize.Format]ResponseRenderer{normalize.FormatOpenAIChat: responseArtifactRenderer{got: &got, artifact: &renderedArtifact}},
 	}
 	k.Adapters["artifact"] = responseArtifactAdapter{composed: composed}
+	if omitArtifact {
+		k.Adapters["artifact"] = missingArtifactCompletionAdapter{responseArtifactAdapter{composed: composed}}
+	}
 	request := NormalizedRequest{Model: "image", Operation: normalize.Operation(operationRef.ID), OperationContractVersion: 1, SourceFormat: normalize.FormatOpenAIChat}
 	writer := httptest.NewRecorder()
-	if err := k.Execute(context.Background(), request, Credential{}, writer); err != nil {
-		t.Fatal(err)
+	executeErr := k.Execute(context.Background(), request, Credential{}, writer)
+	if omitArtifact {
+		var suppressed *ReplaySuppressedError
+		if !errors.As(executeErr, &suppressed) || suppressed.Effect != EffectAccepted {
+			t.Fatalf("late artifact validation did not fail with accepted effect: %v", executeErr)
+		}
+		if len(gate.usage) != 0 || len(gate.outcomes) != 1 || gate.outcomes[0].Cause == CauseSuccess {
+			t.Fatalf("completion escaped late validation: usage=%v outcomes=%v", gate.usage, gate.outcomes)
+		}
+		select {
+		case event := <-k.Events:
+			if event.Status != "error" || event.InputTokens != 11 {
+				t.Fatalf("lost provider accounting on late validation: %#v", event)
+			}
+		default:
+			t.Fatal("provider-reported usage was lost on late validation")
+		}
+		return
+	}
+	if executeErr != nil {
+		t.Fatal(executeErr)
 	}
 	if string(got) != "pixels" || writer.Body.String() != "rendered" {
 		t.Fatalf("renderer got artifact=%q client body=%q", got, writer.Body.String())

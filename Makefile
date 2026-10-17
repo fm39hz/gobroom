@@ -89,6 +89,8 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/ingress -run '^TestJSONOperationIngressBindsInlineArtifactsAndRejectsBodyLeases$$' -count=1
 	go test ./internal/runtime ./internal/store ./internal/daemon -run '^(TestOperation|TestConnectionAuthFailure)' -count=1
 	go test ./internal/kernel ./internal/tui -run '^(TestWorkloadClassIncludesExactOperationWithoutAStringDSL|TestHealthEntryShowsIndependentOperationEvidence|TestQuotaEntryIdentityIncludesExactOperation)$$' -count=1
+	go test ./internal/kernel -run '^(TestKernel(CanceledRender|OperationDeadline|CallerDeadline|ProviderRenderTimeout|TypedLocalRender|TypedProviderRender|RenderFailureDiscards|UntypedRender)|TestComposedAdapter(ResponseFailure|LatchesIgnored|TagsRenderer|TagsUnexpectedEOF|CanceledContext)|TestProvider(UsageSurvives|CompletionIsStaged|UsageHappy)|TestUnknownProviderUsage|TestResponseCommitWriter)' -count=1
+	go test ./internal/api -run '^(TestClientDisconnectCancelsDataPlaneExecution|TestTrackingWriterPreservesFlushError)$$' -count=1
 	go test ./internal/controlplane -run '^TestLoaderBuildsTypedPhysicalAndComboGraph$$' -count=1
 	go test ./internal/kernel -run '^(TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader|TestReplayWithKeyNeverFallsBackAcrossIssuerAfterAmbiguousRetry|TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch)$$' -count=1
 	go test ./internal/operations ./internal/kernel -run '^(TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode|TestComposedSemanticPipelineBoundsEachDecodedResponseEvent|TestResponseCommitWriterEnforcesOperationOutputBound)$$' -count=1

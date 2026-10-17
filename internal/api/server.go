@@ -626,11 +626,15 @@ func (w *trackingWriter) Write(data []byte) (int, error) {
 }
 
 func (w *trackingWriter) Flush() {
-	w.committed = true
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	_ = w.FlushError()
 }
+
+func (w *trackingWriter) FlushError() error {
+	w.committed = true
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *trackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -726,12 +730,14 @@ func (w *accessLogResponseWriter) Write(data []byte) (int, error) {
 }
 
 func (w *accessLogResponseWriter) Flush() {
+	_ = w.FlushError()
+}
+
+func (w *accessLogResponseWriter) FlushError() error {
 	if w.status == 0 {
 		w.WriteHeader(http.StatusOK)
 	}
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
 func (w *accessLogResponseWriter) Unwrap() http.ResponseWriter {

@@ -27,6 +27,20 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+The response-terminal slice has deterministic verification: ordinary chat, cross-protocol
+streaming and extension operations now share explicit fault origin and a staged
+completion boundary. Client/transform/render faults must not poison provider
+health or manufacture a successful usage record; provider token/cost evidence
+must remain available when client delivery fails. This improves consume-API
+correctness and operational accounting, not provider catalog breadth or model
+management UX. Full tests/vet, repeated race tests and the current conformance
+subset pass. The concurrent HTTP fixture checks that actual client disconnect
+does not create provider-health or success/performance observations. Standard
+context causes distinguish caller deadlines from operation execution budgets.
+Installed acceptance is recorded after integration; full M15 remains pending.
+
+Previous integrated milestone:
+
 The operation-aware feedback slice has deterministic end-to-end verification. It adds an
 exact operation dimension to health, quota, persistence, workload ranking and
 affinity. The external job fixture proves that a cancelled action's

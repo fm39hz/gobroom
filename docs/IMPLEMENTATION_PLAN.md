@@ -253,10 +253,19 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    similarly checked. Request safe-fail-open requires exact descriptor
    permission and records bounded reason codes; protected identity, artifacts
    and cancellation remain fail-closed. Response safe-fail-open is permitted
-   only before renderer output starts. Remaining: schema-driven TUI binding UX,
-   complete opaque artifact/effect coverage, transform-specific resource
-   budgets, and full fallback/cancellation accounting proofs; provider usage is
-   proven immutable under client-side usage projection.
+   only before renderer output starts. Response faults now carry typed origin
+   evidence: local transforms/rendering and client delivery do not penalize a
+   provider. Callback failures latch even when a decoder ignores them; original
+   and transformed event budgets are separate. Caller cancellation is neutral,
+   while an explicitly marked operation deadline in provider work records an
+   operation timeout. Completion is staged through rendering and final result/
+   artifact validation and cleanup before publishing success. Known provider
+   usage survives local failure/cancellation with error/cancelled status; it
+   does not become success/performance feedback or a replay grant. The actual
+   concurrent HTTP disconnect fixture additionally checks neutral health.
+   Remaining: complete opaque artifact/effect coverage, broader transform
+   resource/commit/cancellation permutations and provider-specific wire cases;
+   schema-driven TUI binding forms already have catalog-backed fixtures.
 4. **C4 — daemon auth coordinator (in progress):** authorization-code IPC owns
    state/S256 PKCE, bounded expiry/exchange, callback validation, cancellation
    and replay rejection. RFC 8628 uses `x/oauth2` DeviceAuth/DeviceAccessToken;
