@@ -236,6 +236,14 @@ same-secret generation/header/context changes reach the permitted same-issuer
 retry. These are public extension/daemon/kernel fixtures, not universal auth
 setup actions, cross-provider credential leases or full SG2 closure.
 
+Installed acceptance (`30a066e`): after `make install-all`, run
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test ./... -run '^TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate$' -count=1`
+inside `examples/external-provider-module`. Device-start/get and post-restart
+inference passed through the installed CLI, alongside the fixture's real HTTP
+401-refresh/restart path and private config/IPC assertions. Main daemon status
+remained `ok`; installed config export → validate passed. The provider is fake
+and definition-fixed; this does not cover auth-owner rebinding or every driver.
+
 Response-terminal accounting slice: the typed origin/first-failure latch is
 covered by `TestComposedAdapterResponseFailurePreservesTransformOriginThroughDecoderWrap`,
 `TestComposedAdapterLatchesIgnoredTransformCallbackFailure`, renderer/provider

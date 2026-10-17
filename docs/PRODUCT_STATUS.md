@@ -45,6 +45,13 @@ Source review also identified an unclosed ownership case: provider-definition
 rebinding does not currently rotate child credential revisions. Exact old-driver
 commit fencing across that rebind needs its own implementation and acceptance;
 the current state-preservation fixture deliberately keeps its definition fixed.
+Implementation checkpoint: `30a066e`. Full tests/vet, conformance composition
+and repeated focused root/external race tests passed. After `make install-all`,
+the installed CLI completed custom device setup and post-restart inference;
+the fixture's real HTTP path also performed one 401-triggered refresh and
+verified state privacy. The main daemon reported `ok` at snapshot 465 and
+installed config export → validate passed (bundle v9). No live provider was
+called, and the remaining ownership/reconciliation/lease gates stay open.
 
 Previous integrated milestone:
 
