@@ -39,6 +39,12 @@ fixed bounded local retry policy is application behavior, not a new provider
 retry framework. No queue service, scheduler dependency or periodic provider
 health check is introduced.
 
+Structured auth recovery reuses the existing HTTP/JSON error-evidence decoder,
+JSON Pointer matching and frozen JSON Schema binding. Evidence is decoded once
+per classifier call; status membership uses standard `slices.Contains`. No
+provider-specific regex parser, status switch in the recovery kernel or new
+dependency is needed for configured token-expiry envelopes.
+
 ## Adopt
 
 | Area | Library/tool | Version checked | Decision | Why |

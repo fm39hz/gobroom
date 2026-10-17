@@ -223,6 +223,20 @@ second connection or issuing a second request outside kernel replay policy.
 
 ## Full semantic closure gate
 
+Recovery-trigger evidence: `TestCredentialRecoveryRequiresAuthClassificationAndRoutePolicy`
+composes normalized cause/action with explicit mode policy; unknown hints and
+invalid route policies fail closed, and an unannotated HTTP status cannot supply
+a recovery hint. Accepted effects and unsafe replay are vetoed, while a bounded
+same-issuer prepared key permits ambiguous-effect recovery. HTTP/JSON fixtures
+cover default 401, 403 permission, structured custom-status matching, quota
+precedence, success veto, strict option schema and immutable options. Binding
+fixtures carry policy through manifests, safe metadata and control-plane routes.
+The separate public-module opaque-state fixture normalizes HTTP498 and persists
+its replacement, rejects 403 permission/quota and mode-disabled 401 without new
+activation records, then consumes the recovered state after restart. This is
+host-contract-v3 recovery conformance, not principal-scoped quota continuity or
+full C4/SG2/M15 closure.
+
 Activation evidence: credential CAS and its secret-free outbox commit atomically;
 store fixtures cover rollback, restart, deadline ordering, evidence requirements
 for `active`, superseding and conditional reset/progress writes. Root daemon

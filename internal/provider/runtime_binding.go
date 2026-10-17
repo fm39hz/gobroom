@@ -72,17 +72,19 @@ type DefinitionMetadata struct {
 }
 
 type AuthModeMetadata struct {
-	CredentialType      string      `json:"credentialType"`
-	ID                  string      `json:"id"`
-	SetupSchema         SetupSchema `json:"setupSchema"`
-	AuthorizationCode   bool        `json:"authorizationCode,omitempty"`
-	DeviceAuthorization bool        `json:"deviceAuthorization,omitempty"`
+	CredentialType      string                    `json:"credentialType"`
+	ID                  string                    `json:"id"`
+	Recovery            kernel.CredentialRecovery `json:"recovery,omitempty"`
+	SetupSchema         SetupSchema               `json:"setupSchema"`
+	AuthorizationCode   bool                      `json:"authorizationCode,omitempty"`
+	DeviceAuthorization bool                      `json:"deviceAuthorization,omitempty"`
 }
 
 type BoundAuthMode struct {
 	FlowID       string
 	Flow         AuthFlow
 	Presentation kernel.CredentialPresentation
+	Recovery     kernel.CredentialRecovery
 }
 
 type OperationMetadata struct {
@@ -123,7 +125,7 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 			if err != nil {
 				return nil, fmt.Errorf("provider %q auth mode %q metadata: %w", definition.ID, mode.CredentialType, err)
 			}
-			metadata := AuthModeMetadata{CredentialType: mode.CredentialType, ID: flow.ID(), SetupSchema: flow.SetupSchema()}
+			metadata := AuthModeMetadata{CredentialType: mode.CredentialType, ID: flow.ID(), Recovery: mode.Recovery.Effective(), SetupSchema: flow.SetupSchema()}
 			metadata.AuthorizationCode, metadata.DeviceAuthorization = InteractiveAuthModes(flow)
 			if metadata.AuthorizationCode || metadata.DeviceAuthorization {
 				for i := range metadata.SetupSchema.Fields {
@@ -242,7 +244,7 @@ func (b *RuntimeBindingBuilder) Build(definitionRef extensions.Ref, operation Op
 			return RuntimeBinding{}, fmt.Errorf("bind auth flow %q: %w", mode.Auth.ID, err)
 		}
 		flowID := AuthBindingKey(definitionRef, mode.CredentialType, mode.Auth)
-		authModes[mode.CredentialType] = BoundAuthMode{FlowID: flowID, Flow: flow, Presentation: mode.Presentation}
+		authModes[mode.CredentialType] = BoundAuthMode{FlowID: flowID, Flow: flow, Presentation: mode.Presentation, Recovery: mode.Recovery.Effective()}
 	}
 	var err error
 	var modelSource ModelSource

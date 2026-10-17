@@ -67,6 +67,7 @@ type Route struct {
 	BaseURL                string
 	CredentialID           string
 	CredentialType         string
+	CredentialRecovery     CredentialRecovery
 	CredentialPresentation CredentialPresentation
 	HealthGeneration       RouteHealthGeneration `json:"-"`
 }
@@ -308,6 +309,27 @@ const (
 	RetryUnknown RetryAction = "retry_unknown"
 )
 
+// CredentialRecovery is an authorization-recovery request, not a business
+// request retry. Both normalized evidence and the selected auth mode must
+// opt in; operation replay/issuer safety still decides whether it may run.
+type CredentialRecovery string
+
+const (
+	CredentialRecoveryNone    CredentialRecovery = "none"
+	CredentialRecoveryRefresh CredentialRecovery = "refresh"
+)
+
+func (r CredentialRecovery) Valid() bool {
+	return r == "" || r == CredentialRecoveryNone || r == CredentialRecoveryRefresh
+}
+
+func (r CredentialRecovery) Effective() CredentialRecovery {
+	if r == "" {
+		return CredentialRecoveryNone
+	}
+	return r
+}
+
 // LimitWindow is an observation from a real provider response. Pointers are
 // intentional: zero and unknown are different states.
 type LimitWindow struct {
@@ -326,6 +348,7 @@ type ClassifiedOutcome struct {
 	Effect     UpstreamEffect
 	Scope      OutcomeScope
 	Retry      RetryAction
+	Recovery   CredentialRecovery
 	RetryAt    time.Time
 	Confidence float64
 	Evidence   []EvidenceSource

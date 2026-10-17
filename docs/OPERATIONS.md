@@ -77,6 +77,24 @@ state under a different current owner.
 
 ## Credential activation and reload receipts
 
+Automatic recovery is opt-in on each provider auth mode: `"recovery":"refresh"`.
+Omitting it or selecting `"none"` disables error-triggered refresh regardless of
+credential-type name. The error classifier must also provide normalized auth
+recovery evidence. Default HTTP/JSON 401 supplies that hint; default 403
+permission/quota does not. A provider's custom token-expiry status can be
+configured without a kernel change, for example in its operation binding:
+
+```json
+{"errorClassifierOptions":{"httpJson":{"authRecoverySignals":[{"httpStatuses":[498],"codes":["credential_expired"]}]}}}
+```
+
+Declared signals replace default 401 matching. Replay policy still controls
+whether the business request can be resent; recovery never permits switching
+issuer after an ambiguous keyed attempt. Module builds use host contract v3;
+old recovery behavior is not automatically adapted. This feature does not yet
+preserve quota across credential renewal; principal/credential scope separation
+remains planned work.
+
 Saving an OAuth/device/refresh credential and applying its runtime configuration
 are separate stages. A successful authorization can report `completed` with
 `activation.status=pending`: its credential is committed, not rolled back.

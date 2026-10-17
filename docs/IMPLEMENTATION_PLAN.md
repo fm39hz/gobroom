@@ -327,11 +327,18 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    the existing connection recovery reset semantics; it does not establish
    renewal-preserved quota. CLIProxyAPI's refresh path preserves unexpired
    credential-quota evidence, which motivates a typed principal/renewal scope
-   rather than a provider-name rule. Also replace the kernel's hardcoded
-   401/403 refresh trigger with a declared/normalized auth-recovery contract:
-   permission/quota errors must not be mistaken for expired credentials, and
-   a provider-specific token failure need not use those two HTTP statuses.
-   Prove these separately before treating auth/limit parity as implementation-only.
+   rather than a provider-name rule. The recovery trigger slice is now implemented:
+   normalized auth recovery plus explicit mode opt-in replaces kernel 401/403
+   checks, and replay/issuer safety remains independent. Generic structured
+   classifier options plus a public-module HTTP498 fixture prove recovery without
+   provider kernel branches; 403 permission/quota and recovery-disabled 401 do not
+   refresh. Host contract v3 rejects old recovery semantics. Quota continuity
+   still needs a durable principal generation independent of token revision,
+   renewal/replacement transition kinds, and separate auth failure versus
+   operational cooldown state. Acceptance must preserve exhausted quota with
+   unknown reset, active rate-limit cooldown, and queued evidence through renewal,
+   while replacement invalidates the former principal. Do not treat this as
+   implementation-only parity until that separate gate is proved.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

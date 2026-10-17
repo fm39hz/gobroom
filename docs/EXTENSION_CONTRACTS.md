@@ -666,7 +666,8 @@ can authorize the single allowed auth retry even when the bearer secret stays
 the same; existing operation replay and issuer restrictions still apply.
 OAuth alone owns `OAuthTokenState`, its encode/decode helpers and the existing
 `x/oauth2` exchange; those helpers/factory are public for module composition.
-The static-module host contract is version 2 for this breaking Go interface;
+The static-module host contract is version 3 for opaque-state and explicit
+credential-recovery semantics;
 old module contracts are rejected, not adapted. This does not add durable
 interactive session resumption or a universal action-based setup driver.
 
@@ -777,6 +778,32 @@ the actual reported serving snapshot rather than an unapplied control candidate.
 `lastReload`; the ambiguous `snapshotVersion` alias is removed. CLI activation
 list/get/retry and retained auth views expose safe progress, not secret bytes or
 the private revision. TUI completion is ready only with activation evidence.
+
+Automatic credential recovery requires two independent declarations: the
+normalized outcome has `cause=auth` and `recovery=refresh`, and the selected
+auth mode declares `recovery: refresh`. Omitted/`none` mode policy disables
+automatic recovery. The kernel does not infer recovery from HTTP status or
+credential-type names; it still requires operation replay/issuer/retention
+safety, disallows accepted effects, and permits at most one credential retry.
+Request-scoped auth errors do not trigger connection recovery even if a hint
+is present; recovering them would turn a caller-local failure into a retry.
+Unknown hints fail closed and unknown mode policies fail snapshot admission.
+
+The HTTP/JSON classifier's default 401 auth rejection supplies a refresh hint;
+default 403 permission and qualifying quota evidence do not. Optional
+`errorClassifierOptions.httpJson.authRecoverySignals` replaces the default
+401 matching with bounded structured evidence: HTTP statuses, codes, types,
+provider statuses and JSON Pointer field matchers. Selector groups are AND;
+values inside one group are OR. Quota classification takes precedence over
+conflicting auth evidence. Successful responses never request recovery, and
+ambiguous 5xx effects are not manufactured into confirmed rejection. Arbitrary
+provider statuses can normalize to the same contract without a kernel branch.
+One public classifier call decodes evidence once; existing typed JSON/schema
+and standard slice helpers are reused.
+
+This does not yet distinguish credential renewal from principal replacement
+for quota/operational cooldown generations. That requires stable principal
+scope and separate credential-auth failure state, not deleting quota on renewal.
 
 Credential ownership is the typed provider-node identity plus exact provider
 definition ref, alongside the selected credential mode. Reads project state,

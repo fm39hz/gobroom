@@ -601,8 +601,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					idempotencyRetried = true
 					goto retryUpstream
 				}
-				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()))
-				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canRefresh {
+				canRefresh := outcome.Effect != EffectAccepted && (canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now())))
+				if outcome.Cause == CauseAuth && outcome.Scope != ScopeRequest && outcome.Recovery == CredentialRecoveryRefresh && candidate.CredentialRecovery == CredentialRecoveryRefresh && !refreshed && k.RefreshCredential != nil && canRefresh {
 					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
 					if refreshErr == nil && refreshedCredential.ConnectionID == selectedCredential.ConnectionID && refreshedCredential.Type == selectedCredential.Type && refreshedCredential.ValidateRuntimeContext() == nil && !reflect.DeepEqual(refreshedCredential, selectedCredential) {
 						if body, ok := upstream.Body.(io.Closer); ok {
@@ -1082,9 +1082,11 @@ func classifyOutcome(adapter ProviderAdapter, status int, headers http.Header, b
 	}
 	outcome := ClassifiedOutcome{Class: class, Scope: ScopeRoute, Confidence: 0.5, Evidence: []EvidenceSource{EvidenceErrorBody}, StatusCode: status, Message: strings.TrimSpace(string(body))}
 	switch {
-	case status == 401 || status == 403:
+	case status == 401:
 		outcome.Cause, outcome.Retry = CauseAuth, RetryNever
 		outcome.Scope = ScopeConnection
+	case status == 403:
+		outcome.Cause, outcome.Retry = CausePermission, RetryNever
 	case status == 429:
 		outcome.Cause, outcome.Retry = CauseRateLimited, RetryAfter
 	case status >= 500:

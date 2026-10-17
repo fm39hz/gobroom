@@ -121,7 +121,21 @@ func opaqueStateManifest(t *testing.T) provider.ProviderDefinition {
 	definition.DefaultCredentialType = "opaque_ticket"
 	definition.AuthModes = []provider.AuthModeDefinition{{CredentialType: "opaque_ticket",
 		Auth:         provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: opaqueStateAuthID, ContractVersion: 1},
+		Recovery:     provider.CredentialRecoveryRefresh,
 		Presentation: provider.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}}
+	return definition
+}
+
+func opaqueStateRecovery498Manifest(t *testing.T) provider.ProviderDefinition {
+	t.Helper()
+	definition := opaqueStateManifest(t)
+	for operation, binding := range definition.Operations {
+		binding.ErrorClassifier = provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}
+		binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
+			AuthRecoverySignals: []provider.HTTPJSONAuthRecoverySignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}},
+		}}
+		definition.Operations[operation] = binding
+	}
 	return definition
 }
 
@@ -131,28 +145,55 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 	if err := os.Mkdir(manifestDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	encodedManifest, err := provider.EncodeManifest(opaqueStateManifest(t))
+	encodedManifest, err := provider.EncodeManifest(opaqueStateRecovery498Manifest(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(manifestDir, "opaque-state.json"), encodedManifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	disabledDefinition := opaqueStateManifest(t)
+	disabledDefinition.ID = "opaque-state-disabled"
+	disabledDefinition.DisplayName = "Opaque credential state refresh-disabled fixture"
+	disabledDefinition.AuthModes[0].Recovery = provider.CredentialRecoveryNone
+	disabledManifest, err := provider.EncodeManifest(disabledDefinition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(manifestDir, "opaque-state-disabled.json"), disabledManifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	var upstreamCalls atomic.Int32
+	var responseMode atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callNumber := upstreamCalls.Add(1)
+		upstreamCalls.Add(1)
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Errorf("built-in chat binding used unexpected path %q", r.URL.Path)
 		}
-		if callNumber == 1 {
-			if got := r.Header.Get("Authorization"); got != "Bearer device-runtime-ticket" {
-				t.Errorf("device state resolved to wrong runtime token: %q", got)
-			}
-			w.WriteHeader(http.StatusUnauthorized)
+		mode := responseMode.Load()
+		if mode == 498 && responseMode.CompareAndSwap(498, 0) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(498)
+			_, _ = w.Write([]byte(`{"error":{"code":"credential_expired"}}`))
 			return
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer refreshed-runtime-ticket" {
-			t.Errorf("refreshed state resolved to wrong runtime token: %q", got)
+		if mode != 0 {
+			w.Header().Set("Content-Type", "application/json")
+			switch mode {
+			case 401:
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"code":"credential_expired"}}`))
+			case 403:
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":{"code":"permission_denied"}}`))
+			case 4031:
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"error":{"code":"quota_exceeded"}}`))
+			}
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer refreshed-runtime-ticket" && got != "Bearer device-runtime-ticket" {
+			t.Errorf("request resolved to wrong runtime token: %q", got)
 		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["model"] != "gpt-test" {
@@ -187,6 +228,15 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 	}
 	seed := `{"ticket":"seed-runtime-ticket","subject":"seed-subject","workspace":"workspace-7","metadata":{"issued_by":"seed"}}`
 	if err := json.Unmarshal(rpc("connections.create", map[string]any{"providerNodeID": node.ID, "name": "Opaque account", "credentialType": "opaque_ticket", "secret": seed}), &connection); err != nil {
+		t.Fatal(err)
+	}
+	var disabledNode, disabledConnection struct {
+		ID string `json:"ID"`
+	}
+	if err := json.Unmarshal(rpc("providers.create", map[string]any{"name": "Opaque disabled", "prefix": "opaque-disabled", "baseUrl": upstream.URL + "/v1", "protocol": "openai_chat", "definitionID": disabledDefinition.ID}), &disabledNode); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(rpc("connections.create", map[string]any{"providerNodeID": disabledNode.ID, "name": "Opaque disabled account", "credentialType": "opaque_ticket", "secret": seed}), &disabledConnection); err != nil {
 		t.Fatal(err)
 	}
 	connectionList := rpc("connections.list", nil)
@@ -246,7 +296,7 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 			t.Fatalf("connection IPC leaked opaque state field %q", secret)
 		}
 	}
-	// Build a public model graph and drive a real OpenAI-compatible HTTP 401 refresh.
+	// Build a public model graph and drive a typed HTTP 498 credential refresh.
 	if err := json.Unmarshal(rpc("custom_models.upsert", map[string]any{"id": "route_opaque", "providerNodeID": node.ID, "kind": "custom", "externalID": "gpt-test", "displayName": "GPT test", "connectionIds": []string{connection.ID}}), new(map[string]any)); err != nil {
 		t.Fatal(err)
 	}
@@ -268,9 +318,84 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 			t.Fatalf("chat response status=%d", response.StatusCode)
 		}
 	}
+	sendChat := func(model string) {
+		t.Helper()
+		request, err := json.Marshal(struct {
+			Model    string              `json:"model"`
+			Messages []map[string]string `json:"messages"`
+		}{Model: model, Messages: []map[string]string{{"role": "user", "content": "hello"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, callErr := http.Post("http://"+service.Addresses().HTTP+"/v1/chat/completions", "application/json", strings.NewReader(string(request)))
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		_ = response.Body.Close()
+	}
+	activationList := func() []json.RawMessage {
+		t.Helper()
+		var entries []json.RawMessage
+		if err := json.Unmarshal(rpc("credential_activation.list", map[string]any{"limit": 20}), &entries); err != nil {
+			t.Fatal(err)
+		}
+		return entries
+	}
+	_ = rpc("custom_models.upsert", map[string]any{"id": "route_opaque_disabled", "providerNodeID": disabledNode.ID, "kind": "custom", "externalID": "gpt-test", "displayName": "GPT disabled", "connectionIds": []string{disabledConnection.ID}})
+	_ = rpc("physical_models.upsert", map[string]any{"name": "opaque-disabled-physical", "identity": map[string]any{"canonicalName": "gpt-test"}, "sources": []map[string]any{{"routeId": "route_opaque_disabled", "fidelity": "exact"}}, "enabled": true})
+	_ = rpc("combo_models.upsert", map[string]any{"name": "opaque-disabled-role", "members": []map[string]any{{"kind": "physical", "id": "opaque-disabled-physical"}}, "discoverable": true, "enabled": true})
+	baselineActivations := len(activationList())
+	for _, mode := range []int32{403, 4031} {
+		label := fmt.Sprintf("denial-%d", mode)
+		var denialNode, denialConnection struct {
+			ID string `json:"ID"`
+		}
+		if err := json.Unmarshal(rpc("providers.create", map[string]any{"name": label, "prefix": label, "baseUrl": upstream.URL + "/v1", "protocol": "openai_chat", "definitionID": opaqueStateProviderID}), &denialNode); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(rpc("connections.create", map[string]any{"providerNodeID": denialNode.ID, "name": label, "credentialType": "opaque_ticket", "secret": seed}), &denialConnection); err != nil {
+			t.Fatal(err)
+		}
+		_ = rpc("custom_models.upsert", map[string]any{"id": label + "-route", "providerNodeID": denialNode.ID, "kind": "custom", "externalID": "gpt-test", "displayName": label, "connectionIds": []string{denialConnection.ID}})
+		_ = rpc("physical_models.upsert", map[string]any{"name": label + "-physical", "identity": map[string]any{"canonicalName": "gpt-test"}, "sources": []map[string]any{{"routeId": label + "-route", "fidelity": "exact"}}, "enabled": true})
+		_ = rpc("combo_models.upsert", map[string]any{"name": label + "-role", "members": []map[string]any{{"kind": "physical", "id": label + "-physical"}}, "discoverable": true, "enabled": true})
+		before := upstreamCalls.Load()
+		responseMode.Store(mode)
+		sendChat(label + "-role")
+		responseMode.Store(0)
+		if got := upstreamCalls.Load() - before; got != 1 {
+			t.Fatalf("403 mode %d caused %d upstream calls, want one and no refresh", mode, got)
+		}
+		if got := len(activationList()); got != baselineActivations {
+			t.Fatalf("403 mode %d created %d credential activation records", mode, got)
+		}
+	}
+	beforeDisabled := upstreamCalls.Load()
+	responseMode.Store(http.StatusUnauthorized)
+	sendChat("opaque-disabled-role")
+	responseMode.Store(0)
+	if got := upstreamCalls.Load() - beforeDisabled; got != 1 {
+		t.Fatalf("auth mode with recovery none caused %d upstream calls, want one", got)
+	}
+	if got := len(activationList()); got != baselineActivations {
+		t.Fatalf("recovery-disabled 401 created %d credential activation records", got)
+	}
+	if cli != "" {
+		listed := runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "activation-list", "--limit", "20")
+		var listedActivations []daemon.CredentialActivationView
+		if err := json.Unmarshal(listed, &listedActivations); err != nil || len(listedActivations) != baselineActivations {
+			t.Fatalf("denials created CLI activation records: %s", listed)
+		}
+		status := runDeviceRaceCLI(t, cli, config.IPCPath, "status")
+		if len(status) == 0 {
+			t.Fatal("CLI status returned no status view after auth denial requests")
+		}
+	}
+	beforeRefresh := upstreamCalls.Load()
+	responseMode.Store(498)
 	callChat()
-	if upstreamCalls.Load() != 2 {
-		t.Fatalf("401 did not cause exactly one credential refresh/retry: upstream calls=%d", upstreamCalls.Load())
+	if got := upstreamCalls.Load() - beforeRefresh; got != 2 {
+		t.Fatalf("typed 498 caused %d upstream calls, want one refresh retry", got)
 	}
 	configExport := rpc("config.export", nil)
 	for _, secret := range []string{"device-runtime-ticket", "refreshed-runtime-ticket", "workspace-7", "device-fixture", "persisted-by-refresh"} {
@@ -292,13 +417,15 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 		t.Fatal(err)
 	}
 	defer service.Stop(context.Background())
+	beforeRestartProbe := upstreamCalls.Load()
 	callChat()
-	if upstreamCalls.Load() != 3 {
+	if upstreamCalls.Load() != beforeRestartProbe+1 {
 		t.Fatalf("restart probe did not use persisted refreshed state: upstream calls=%d", upstreamCalls.Load())
 	}
 	if cli != "" {
+		beforeCLIProbe := upstreamCalls.Load()
 		runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "test-inference", "--connection-id", connection.ID, "--model-id", "gpt-test")
-		if upstreamCalls.Load() != 4 {
+		if upstreamCalls.Load() != beforeCLIProbe+1 {
 			t.Fatalf("installed inference probe did not consume refreshed state: upstream calls=%d", upstreamCalls.Load())
 		}
 	}

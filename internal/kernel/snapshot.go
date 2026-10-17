@@ -62,6 +62,9 @@ func ValidateSnapshot(s Snapshot) error {
 		}
 	}
 	for id, route := range s.Routes {
+		if !route.CredentialRecovery.Valid() {
+			return fmt.Errorf("route %q has unsupported credential recovery", id)
+		}
 		if route.Enabled && len(route.OperationBindings) == 0 {
 			return fmt.Errorf("route %q has no operation adapter bindings", id)
 		}

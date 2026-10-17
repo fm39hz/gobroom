@@ -84,6 +84,15 @@ Gobroom: credential renewal, account replacement and principal-scoped quota
 evidence must not be conflated. Activation correctness alone does not prove
 quota continuity across token renewal.
 
+Recovery-trigger follow-up: `conductor_refresh.go:tryRefreshAfterUnauthorized`
+rejects request-scoped failures before trying auth recovery. Gobroom preserves
+that distinction with a normalized recovery action plus a declared per-mode
+policy and generic replay/effect guards, rather than testing provider names or
+HTTP status in the recovery branch. Structured HTTP/JSON options can normalize
+custom expiry envelopes into that action; permission/quota evidence is not a
+credential recovery request. Its matcher reuses existing typed JSON evidence,
+schema validation and standard Go helpers; no conductor implementation is copied.
+
 CLIProxyAPI separates API handlers, a translator pipeline, auth/conductor
 selection and provider executors. `sdk/cliproxy/auth/conductor_execution.go`
 owns attempt orchestration (`Execute`, `ExecuteCount`, `ExecuteStream`), while

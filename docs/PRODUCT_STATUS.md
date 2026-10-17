@@ -27,6 +27,23 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Credential recovery is now driven by normalized auth evidence and an explicit
+per-mode policy rather than a kernel HTTP-status shortcut. Mode/binding/metadata/
+route projections preserve that policy; the generic HTTP/JSON classifier accepts
+bounded structured recovery signals, with quota precedence and no recovery on
+successful responses. Kernel fixtures retain replay/issuer constraints and
+reject unknown actions/policies. A separate-module fixture performs HTTP498
+credential-expired recovery, rejects 403 permission/quota and recovery-disabled
+401 without another upstream attempt or credential activation, then consumes
+persisted state after restart. Host contract v3 makes the semantic change explicit.
+This improves provider extension depth and safe API consumption, not catalog
+breadth or complete harness compatibility. Quota continuity still requires
+principal and credential generations plus auth/operational health separation;
+generic setup actions/leases, UX catalog work and measured resource performance
+also remain open. Full C4/SG2/M15 is not yet closed.
+
+Previous integrated milestone:
+
 Credential commit and activation now have distinct observable outcomes. A
 transactional, secret-free per-connection outbox resumes after restart; its
 daemon worker applies owner/revision-fenced reset/reload with bounded retries

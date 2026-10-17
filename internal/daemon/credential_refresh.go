@@ -34,6 +34,12 @@ func (d *Daemon) resolveCredential(ctx context.Context, route kernel.Route) (ker
 func (d *Daemon) refreshCredential(ctx context.Context, route kernel.Route, current kernel.Credential) (kernel.Credential, error) {
 	ctx, cancel := d.credentialOperationContext(ctx)
 	defer cancel()
+	if err := d.credentialContextError(ctx); err != nil {
+		return kernel.Credential{}, err
+	}
+	if route.CredentialRecovery != kernel.CredentialRecoveryRefresh {
+		return kernel.Credential{}, fmt.Errorf("credential recovery is not enabled for this auth mode")
+	}
 	unlock, err := d.lockCredentialRefresh(ctx, route.CredentialID)
 	if err != nil {
 		return kernel.Credential{}, err

@@ -33,12 +33,17 @@ must authenticate with the newer credential. The same `GOBROOM_TEST_CLI` switch
 exercises installed CLI device-start/get, connection update and operation probe.
 
 The opaque-state fixture registers its own `opaque_ticket` mode with typed
-`ticket`/`subject`/`workspace` metadata. Device setup and a real 401-triggered
+`ticket`/`subject`/`workspace` metadata. Device setup and a typed custom-status
 refresh return bounded `CredentialState`; `Resolve` derives the wire ticket
 and runtime context. After daemon restart the next chat call verifies the
 refreshed metadata survived, while config/IPC omit it. With `GOBROOM_TEST_CLI`,
 successful device setup and post-restart inference also use the installed CLI.
-The module host contract is v2; no v1 auth-interface adapter is maintained.
+The module host contract is v3; old auth/recovery contracts are rejected.
+The auth mode explicitly opts into `recovery: refresh`. The fixture normalizes
+HTTP498/`credential_expired` through typed classifier options, while separate
+403 permission/quota roles and a recovery-disabled 401 do not refresh. The
+shared ordinary manifest still uses default HTTP401 semantics for activation
+tests; no protocol status recovery fallback remains in the kernel.
 
 The auth-owner fixture holds device setup across provider-definition v1 → v2
 and v1 → v2 → v1 updates. The old token cannot commit; an operation still uses

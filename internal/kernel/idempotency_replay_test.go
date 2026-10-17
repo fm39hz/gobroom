@@ -103,6 +103,10 @@ func TestReplayWithKeyExpiresBeforeAnotherDispatch(t *testing.T) {
 					first.replayPrepareDelay = time.Minute
 				case "refresh":
 					first.failStatus = http.StatusUnauthorized
+					k.Adapters[first.id] = &recoveryOutcomeAdapter{issuerReplayAdapter: first, outcome: ClassifiedOutcome{
+						Cause: CauseAuth, Recovery: CredentialRecoveryRefresh, Effect: EffectRejected,
+						Scope: ScopeConnection, Retry: RetryNever, Confidence: 1,
+					}}
 					k.RefreshCredential = func(_ context.Context, _ Route, _ Credential) (Credential, error) {
 						time.Sleep(time.Minute)
 						return Credential{Secret: "refreshed"}, nil
@@ -148,6 +152,14 @@ func (*issuerReplayAdapter) RenderResponse(_ context.Context, response UpstreamR
 }
 
 func newReplayKeyKernel(t *testing.T, first, second *issuerReplayAdapter) *Kernel {
+	return newReplayKeyKernelWithRecovery(t, first, second, CredentialRecoveryRefresh)
+}
+
+func newReplayKeyKernelWithRecovery(t *testing.T, first, second *issuerReplayAdapter, recovery CredentialRecovery) *Kernel {
+	return newReplayKernelWithRecoverySafety(t, first, second, recovery, operations.ReplayWithKey)
+}
+
+func newReplayKernelWithRecoverySafety(t *testing.T, first, second *issuerReplayAdapter, recovery CredentialRecovery, safety operations.ReplaySafety) *Kernel {
 	t.Helper()
 	catalog := extensions.NewCatalog()
 	operationsRegistry, err := operations.NewRegistry(catalog)
@@ -155,7 +167,7 @@ func newReplayKeyKernel(t *testing.T, first, second *issuerReplayAdapter) *Kerne
 		t.Fatal(err)
 	}
 	operationRef := extensions.Ref{Kind: "operation", ID: "job.submit", ContractVersion: 1}
-	if err := operationsRegistry.RegisterRawPayload(operationRef, "Submit job", "Idempotent job fixture.", json.RawMessage(`{"type":"object"}`), operations.ReplayWithKey); err != nil {
+	if err := operationsRegistry.RegisterRawPayload(operationRef, "Submit job", "Idempotent job fixture.", json.RawMessage(`{"type":"object"}`), safety); err != nil {
 		t.Fatal(err)
 	}
 	contractCatalog, err := catalog.Freeze()
@@ -182,7 +194,7 @@ func newReplayKeyKernel(t *testing.T, first, second *issuerReplayAdapter) *Kerne
 			{Kind: MemberRoute, ID: "route-a", Fidelity: FidelityExact}, {Kind: MemberRoute, ID: "route-b", Fidelity: FidelityExact},
 		}}},
 		Routes: []Route{
-			{ID: "route-a", DefinitionID: "issuer-a", DefinitionRef: definitionA, ExternalModel: "job-v1", CredentialID: "conn-a", Enabled: true, Protocol: ProtocolOpenAIChat, OperationBindings: bindings(first.id, "X-Upstream-Idempotency")},
+			{ID: "route-a", DefinitionID: "issuer-a", DefinitionRef: definitionA, ExternalModel: "job-v1", CredentialID: "conn-a", Enabled: true, Protocol: ProtocolOpenAIChat, CredentialRecovery: recovery, OperationBindings: bindings(first.id, "X-Upstream-Idempotency")},
 			{ID: "route-b", DefinitionID: "issuer-b", DefinitionRef: definitionB, ExternalModel: "job-v1", CredentialID: "conn-b", Enabled: true, Protocol: ProtocolOpenAIChat, OperationBindings: bindings(second.id, "")},
 		},
 	}, 1)

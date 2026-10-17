@@ -114,6 +114,15 @@ type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
 type ErrorClassifierOptions = core.ErrorClassifierOptions
 type HTTPJSONErrorClassifierOptions = core.HTTPJSONErrorClassifierOptions
+type HTTPJSONAuthRecoverySignal = core.HTTPJSONAuthRecoverySignal
+type HTTPJSONFieldMatch = core.HTTPJSONFieldMatch
+type CredentialRecovery = kernel.CredentialRecovery
+
+const (
+	CredentialRecoveryNone    = kernel.CredentialRecoveryNone
+	CredentialRecoveryRefresh = kernel.CredentialRecoveryRefresh
+)
+
 type HTTPHeaderLimitSignal = core.HTTPHeaderLimitSignal
 type OutcomeScope = kernel.OutcomeScope
 

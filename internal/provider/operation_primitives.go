@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -246,6 +247,19 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 	options.QuotaStatuses = cloneStrings(options.QuotaStatuses)
 	options.QuotaHTTPStatuses = append([]int(nil), options.QuotaHTTPStatuses...)
 	options.QuotaMessageTokens = cloneStrings(options.QuotaMessageTokens)
+	options.AuthRecoverySignals = append([]HTTPJSONAuthRecoverySignal(nil), options.AuthRecoverySignals...)
+	for index := range options.AuthRecoverySignals {
+		signal := &options.AuthRecoverySignals[index]
+		signal.HTTPStatuses = append([]int(nil), signal.HTTPStatuses...)
+		signal.Codes = cloneStrings(signal.Codes)
+		signal.Types = cloneStrings(signal.Types)
+		signal.Statuses = cloneStrings(signal.Statuses)
+		signal.Fields = append([]HTTPJSONFieldMatch(nil), signal.Fields...)
+		for fieldIndex := range signal.Fields {
+			signal.Fields[fieldIndex].Equals = cloneStrings(signal.Fields[fieldIndex].Equals)
+			signal.Fields[fieldIndex].Contains = cloneStrings(signal.Fields[fieldIndex].Contains)
+		}
+	}
 	options.LimitHeaders = append([]HTTPHeaderLimitSignal(nil), options.LimitHeaders...)
 	for index := range options.LimitHeaders {
 		options.LimitHeaders[index].ExhaustedStatusValues = cloneStrings(options.LimitHeaders[index].ExhaustedStatusValues)
@@ -266,10 +280,16 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 	return options
 }
 func (c HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorClass {
-	quotaEvidence := decodeHTTPErrorEvidence(body, c.Options).QuotaExhausted
+	evidence := decodeHTTPErrorEvidence(body, c.Options)
+	return c.classifyWithEvidence(status, body, evidence)
+}
+
+func (c HTTPJSONErrorClassifier) classifyWithEvidence(status int, body []byte, evidence httpErrorEvidence) kernel.ErrorClass {
 	switch {
-	case quotaEvidence && isQuotaHTTPStatus(status, c.Options):
+	case evidence.QuotaExhausted && isQuotaHTTPStatus(status, c.Options):
 		return kernel.ErrorCooldown
+	case c.authRecoveryConfigured() && c.matchAuthRecoverySignal(status, body, evidence):
+		return kernel.ErrorAuth
 	case status == 401 || status == 403:
 		return kernel.ErrorAuth
 	case status == 408 || status == 409 || status == 429 || status >= 500:
@@ -279,6 +299,45 @@ func (c HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorC
 	default:
 		return kernel.ErrorRetryable
 	}
+}
+
+func (c HTTPJSONErrorClassifier) authRecoveryConfigured() bool {
+	return c.Options != nil && len(c.Options.AuthRecoverySignals) > 0
+}
+
+func (c HTTPJSONErrorClassifier) matchAuthRecoverySignal(status int, body []byte, evidence httpErrorEvidence) bool {
+	if status < 400 {
+		return false
+	}
+	if c.Options == nil {
+		return false
+	}
+	for _, signal := range c.Options.AuthRecoverySignals {
+		if len(signal.HTTPStatuses) > 0 && !slices.Contains(signal.HTTPStatuses, status) {
+			continue
+		}
+		if len(signal.Codes) > 0 && !matchesAny(evidence.Code, signal.Codes) {
+			continue
+		}
+		if len(signal.Types) > 0 && !matchesAny(evidence.Type, signal.Types) {
+			continue
+		}
+		if len(signal.Statuses) > 0 && !matchesAny(evidence.Status, signal.Statuses) {
+			continue
+		}
+		fieldsMatch := true
+		for _, field := range signal.Fields {
+			value := pointerText(body, field.Path)
+			if !matchesAny(value, field.Equals) && !matchesAnyContains(value, field.Contains) {
+				fieldsMatch = false
+				break
+			}
+		}
+		if fieldsMatch {
+			return true
+		}
+	}
+	return false
 }
 
 func isQuotaHTTPStatus(status int, options *HTTPJSONErrorClassifierOptions) bool {
@@ -397,17 +456,23 @@ func parseHeaderReset(value string, now time.Time) time.Time {
 // without touching the kernel.
 func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header, body []byte) kernel.ClassifiedOutcome {
 	message := strings.TrimSpace(string(body))
+	errorEvidence := decodeHTTPErrorEvidence(body, c.Options)
 	scope := kernel.ScopeRoute
 	if c.Options != nil && c.Options.DefaultScope != "" {
 		scope = c.Options.DefaultScope
 	}
-	outcome := kernel.ClassifiedOutcome{Class: c.Classify(status, body), Scope: scope, Confidence: 0.7, Evidence: []kernel.EvidenceSource{kernel.EvidenceErrorBody}, StatusCode: status, Message: message}
-	errorEvidence := decodeHTTPErrorEvidence(body, c.Options)
+	outcome := kernel.ClassifiedOutcome{Class: c.classifyWithEvidence(status, body, errorEvidence), Scope: scope, Confidence: 0.7, Evidence: []kernel.EvidenceSource{kernel.EvidenceErrorBody}, StatusCode: status, Message: message, Recovery: kernel.CredentialRecoveryNone}
+	authRecoveryMatched := c.authRecoveryConfigured() && c.matchAuthRecoverySignal(status, body, errorEvidence)
 	switch {
 	case errorEvidence.QuotaExhausted && isQuotaHTTPStatus(status, c.Options):
 		outcome.Cause, outcome.Retry = kernel.CauseQuotaExhausted, kernel.RetryAfter
+	case authRecoveryMatched:
+		outcome.Cause, outcome.Retry, outcome.Recovery = kernel.CauseAuth, kernel.RetryNever, kernel.CredentialRecoveryRefresh
 	case status == 401:
 		outcome.Cause, outcome.Retry = kernel.CauseAuth, kernel.RetryNever
+		if !c.authRecoveryConfigured() {
+			outcome.Recovery = kernel.CredentialRecoveryRefresh
+		}
 	case status == 403:
 		outcome.Cause, outcome.Retry = kernel.CausePermission, kernel.RetryNever
 	case status == 404:
@@ -458,6 +523,12 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 	}
 	if scope, matched := matchHTTPJSONScopeSignal(c.Options, errorEvidence, outcome.Cause, body); matched {
 		outcome.Scope = scope
+	}
+	if authRecoveryMatched && outcome.Cause == kernel.CauseAuth {
+		outcome.Scope = kernel.ScopeConnection
+		if c.Options != nil && c.Options.AuthScope != "" {
+			outcome.Scope = c.Options.AuthScope
+		}
 	}
 	now := time.Now()
 	headerRetryAt := parseRetryAfter(headers.Get("Retry-After"), now)

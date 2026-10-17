@@ -92,6 +92,7 @@ func TestRefreshCredentialConcurrentCallersSharePersistedCredential(t *testing.T
 	route := kernel.Route{
 		AuthFlowID: "credential-fixture:api_key", CredentialID: connection.ID,
 		NodeID: node.ID, DefinitionRef: node.DefinitionRef(), CredentialType: "api_key",
+		CredentialRecovery: kernel.CredentialRecoveryRefresh,
 	}
 	results := make(chan kernel.Credential, callers)
 	errorsByCall := make(chan error, callers)

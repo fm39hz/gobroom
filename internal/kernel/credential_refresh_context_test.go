@@ -12,6 +12,10 @@ type refreshContextAdapter struct {
 	replayed []Credential
 }
 
+func (*refreshContextAdapter) ClassifyOutcome(status int, _ http.Header, _ []byte) ClassifiedOutcome {
+	return ClassifiedOutcome{StatusCode: status, Cause: CauseAuth, Recovery: CredentialRecoveryRefresh, Effect: EffectRejected, Scope: ScopeConnection, Retry: RetryNever}
+}
+
 func (a *refreshContextAdapter) Prepare(ctx context.Context, request NormalizedRequest, route Route, credential Credential) (UpstreamRequest, error) {
 	upstream, err := a.issuerReplayAdapter.Prepare(ctx, request, route, credential)
 	if err != nil || upstream.Replay == nil {

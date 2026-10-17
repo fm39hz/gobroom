@@ -56,7 +56,7 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 	if err := registry.Primitives.RegisterDefinition(provider.ProviderDefinition{ContractVersion: 1, ID: "manifest-selected-provider", Version: "1", DisplayName: "Manifest selected",
 		DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeDefinition{
 			{CredentialType: "api_key", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "static-secret", ContractVersion: 1}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}},
-			{CredentialType: "oauth2", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}},
+			{CredentialType: "oauth2", Auth: provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}, AuthOptions: provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}, Recovery: kernel.CredentialRecoveryRefresh},
 		},
 		Session: provider.PrimitiveRef{Kind: provider.PrimitiveSessionStore, ID: "session", ContractVersion: 1},
 		Operations: map[provider.Operation]provider.OperationBinding{
@@ -121,7 +121,7 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 		t.Fatalf("route did not use provider runtime binding: %#v", route)
 	}
 	oauthRoute := snapshot.Routes["route:a@account-b"]
-	if oauthRoute.CredentialType != "oauth2" || oauthRoute.AuthFlowID != provider.AuthBindingKey(providerDefinitionRef, "oauth2", provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) || oauthRoute.CredentialPresentation.Header != "Authorization" || oauthRoute.CredentialPresentation.Prefix != "Bearer " {
+	if oauthRoute.CredentialType != "oauth2" || oauthRoute.AuthFlowID != provider.AuthBindingKey(providerDefinitionRef, "oauth2", provider.PrimitiveRef{Kind: provider.PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) || oauthRoute.CredentialPresentation.Header != "Authorization" || oauthRoute.CredentialPresentation.Prefix != "Bearer " || oauthRoute.CredentialRecovery != kernel.CredentialRecoveryRefresh {
 		t.Fatalf("connection credential type did not select its declared auth mode: %#v", oauthRoute)
 	}
 	mediaRoute := snapshot.Routes["route:audio@media-account"]
