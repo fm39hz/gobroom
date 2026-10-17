@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -16,27 +18,94 @@ import (
 )
 
 type issuerReplayAdapter struct {
-	id         string
-	failStatus int
-	failures   int
-	calls      int
-	keys       []string
+	id                 string
+	failStatus         int
+	failures           int
+	calls              int
+	keys               []string
+	prepareCalls       int
+	executeDelay       time.Duration
+	replayPrepareDelay time.Duration
+	executeError       error
+	prepareHook        func(context.Context, int)
 }
 
 func (a *issuerReplayAdapter) ID() string { return a.id }
 func (a *issuerReplayAdapter) PlanCompatibility(input CompatibilityContext) CompatibilityPlan {
 	return fixtureCompatibilityPlan(input, normalize.FormatOpenAIChat, FidelityNative)
 }
-func (*issuerReplayAdapter) Prepare(_ context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
+func (a *issuerReplayAdapter) Prepare(ctx context.Context, _ NormalizedRequest, route Route, _ Credential) (UpstreamRequest, error) {
+	a.prepareCalls++
+	if a.prepareHook != nil {
+		a.prepareHook(ctx, a.prepareCalls)
+	}
+	if a.prepareCalls > 1 {
+		time.Sleep(a.replayPrepareDelay)
+	}
 	return UpstreamRequest{Method: http.MethodPost, URL: route.ID}, nil
 }
 func (a *issuerReplayAdapter) Execute(_ context.Context, request UpstreamRequest) (UpstreamResponse, error) {
 	a.calls++
 	a.keys = append(a.keys, request.Headers.Get("X-Upstream-Idempotency"))
 	if a.calls <= a.failures {
+		time.Sleep(a.executeDelay)
+		if a.executeError != nil {
+			return UpstreamResponse{}, a.executeError
+		}
 		return UpstreamResponse{Status: a.failStatus, Headers: make(http.Header), Body: io.NopCloser(strings.NewReader("ambiguous"))}, nil
 	}
 	return UpstreamResponse{Status: http.StatusOK, Headers: make(http.Header), Body: io.NopCloser(strings.NewReader("ok"))}, nil
+}
+
+func TestReplayWithKeyExpiresBeforeAnotherDispatch(t *testing.T) {
+	for _, phase := range []string{"response", "transport", "prepare", "refresh"} {
+		t.Run(phase, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				first := &issuerReplayAdapter{id: "issuer-a-adapter", failStatus: http.StatusServiceUnavailable, failures: 1}
+				second := &issuerReplayAdapter{id: "issuer-b-adapter"}
+				k := newReplayKeyKernel(t, first, second)
+				switch phase {
+				case "response":
+					first.executeDelay = time.Minute
+				case "transport":
+					first.executeDelay = time.Minute
+					first.executeError = io.ErrUnexpectedEOF
+				case "prepare":
+					first.replayPrepareDelay = time.Minute
+				case "refresh":
+					first.failStatus = http.StatusUnauthorized
+					k.RefreshCredential = func(_ context.Context, _ Route, _ Credential) (Credential, error) {
+						time.Sleep(time.Minute)
+						return Credential{Secret: "refreshed"}, nil
+					}
+				}
+				err := k.Execute(context.Background(), replayKeyRequest("expiry-key"), Credential{Secret: "initial"}, httptest.NewRecorder())
+				var suppressed *ReplaySuppressedError
+				if !errors.As(err, &suppressed) || first.calls != 1 || second.calls != 0 {
+					t.Fatalf("expired replay duplicated upstream work: err=%v first=%d second=%d", err, first.calls, second.calls)
+				}
+			})
+		})
+	}
+}
+
+func TestReplayWithKeyCancellationDuringPreparePreventsDispatch(t *testing.T) {
+	for _, cancelAt := range []int{1, 2} {
+		ctx, cancel := context.WithCancel(context.Background())
+		first := &issuerReplayAdapter{id: "issuer-a-adapter", failStatus: http.StatusServiceUnavailable, failures: 1}
+		second := &issuerReplayAdapter{id: "issuer-b-adapter"}
+		first.prepareHook = func(_ context.Context, call int) {
+			if call == cancelAt {
+				cancel()
+			}
+		}
+		k := newReplayKeyKernel(t, first, second)
+		err := k.Execute(ctx, replayKeyRequest("cancel-key"), Credential{}, httptest.NewRecorder())
+		cancel()
+		if !errors.Is(err, context.Canceled) || first.calls != cancelAt-1 || second.calls != 0 {
+			t.Fatalf("cancel at prepare %d dispatched work: err=%v first=%d second=%d", cancelAt, err, first.calls, second.calls)
+		}
+	}
 }
 func (*issuerReplayAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
 func (*issuerReplayAdapter) RenderResponse(_ context.Context, response UpstreamResponse, writer http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
@@ -72,7 +141,7 @@ func newReplayKeyKernel(t *testing.T, first, second *issuerReplayAdapter) *Kerne
 	bindings := func(adapterID, idempotencyHeader string) map[normalize.Operation]RouteOperationBinding {
 		result := RouteOperationBinding{ContractVersion: 1, AdapterIDs: []string{adapterID}}
 		if idempotencyHeader != "" {
-			result.IdempotencyHeaders = map[string]string{adapterID: idempotencyHeader}
+			result.Idempotency = map[string]IdempotencyPolicy{adapterID: {Header: idempotencyHeader, MinRetentionSeconds: 60}}
 		}
 		return map[normalize.Operation]RouteOperationBinding{operation: result}
 	}

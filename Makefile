@@ -81,7 +81,8 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/kernel -run '^(TestRequestTransformSafeFailOpenRollsBackAndReportsWithoutErrorText|TestTransformCannotFailOpenProtectedIdentityOrUndeclaredDescriptorMode|TestResponseTransformSafeFailOpenOnlyBeforeOutput|TestResponseSafeFailOpenStopsAfterFirstRenderedEvent|TestKernelRecordsRequestTransformSafeFailOpenInUsagePlan)$$' -count=1
 	go test ./internal/provider -run '^TestRuntimeCatalogPinsTransformFailureModes$$' -count=1
 	go test ./internal/normalize -run '^TestIdempotencyKeyIsRequestScopedAndValidated$$' -count=1
-	go test ./internal/provider -run '^TestProviderOperationBindsOnlyValidIdempotencyHeaderNames$$' -count=1
+	go test ./internal/provider -run '^(TestProviderOperationBindsOnlyValidIdempotencyPolicies|TestProviderDefinitionRejectsRemovedHeaderOnlyFieldInEveryJSONBoundary)$$' -count=1
+	go test ./internal/kernel -run '^(TestIdempotencyPolicyRequiresExplicitBoundedRetention|TestReplayWithKeyExpiresBeforeAnotherDispatch|TestReplayWithKeyCancellationDuringPreparePreventsDispatch)$$' -count=1
 	go test ./internal/controlplane -run '^TestLoaderBuildsTypedPhysicalAndComboGraph$$' -count=1
 	go test ./internal/kernel -run '^(TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader|TestReplayWithKeyNeverFallsBackAcrossIssuerAfterAmbiguousRetry|TestReplayWithKeyWithoutClientProofDoesNotRetryAmbiguousDispatch)$$' -count=1
 	go test ./internal/operations ./internal/kernel -run '^(TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode|TestComposedSemanticPipelineBoundsEachDecodedResponseEvent|TestResponseCommitWriterEnforcesOperationOutputBound)$$' -count=1

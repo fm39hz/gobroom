@@ -696,8 +696,11 @@ establishes rejection (for example, a recognized 429); network errors, timeout,
 render failure is still an accepted upstream effect, even if no client bytes
 were committed, and does not authorize a duplicate call. `scoped_idempotency_key`
 is usable only when ingress supplies a validated `Idempotency-Key` and the
-selected provider-operation binding declares the upstream header that honors
-it, and registration rejects that header unless the exact operation contract
+selected provider-operation binding declares an `idempotency` object with
+`header` and a positive `minRetentionSeconds` backed by the provider's minimum
+guaranteed retention. Missing/zero/overflowing retention and credential or
+transport-control headers are rejected. The header-only field is removed;
+there is no compatibility path. Registration rejects that policy unless the exact operation contract
 declares `scoped_idempotency_key`. Gobroom hashes the client key with the exact provider definition,
 node/endpoint, credential, protocol, upstream model and operation, then retries
 at most once on that same route for an ambiguous transport or explicitly
@@ -708,6 +711,20 @@ idempotent. Replay permission is operation/binding specific and is never
 inherited automatically by image/job/tool execution.
 An ambiguous outcome reports replay suppression instead of launching a
 potentially duplicate upstream job.
+
+The replay window starts immediately before the first upstream dispatch, not
+at ingress or credential acquisition, and never resets on a retry. It is
+checked when choosing retry and again after request preparation/credential
+refresh before redispatch. At the retention boundary an ambiguous effect is
+reported without issuing another request or crossing providers. Cancellation
+is also checked after preparation, even if a codec returns success after
+ignoring its cancelled context. This is an invocation-local retry guarantee,
+not a durable cache of client keys across separate calls or daemon restarts.
+Reusing a client key after upstream retention expires is not protected by it.
+Do not activate this binding based merely on observing an accepted header.
+For example, [Stripe's contract](https://docs.stripe.com/api/idempotent_requests)
+explicitly permits pruning keys after its documented minimum; this motivates
+an explicit bound, not a retention assumption for an AI provider.
 
 After client write/flush/commit, retry and fallback are forbidden regardless
 of replay safety. Precommit failures are classified before sending a client

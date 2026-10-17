@@ -88,11 +88,11 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 					}
 					operationBinding.ContractVersion = routeBinding.TaskRef.ContractVersion
 					operationBinding.AdapterIDs = append(operationBinding.AdapterIDs, routeBinding.AdapterID)
-					if routeBinding.IdempotencyHeader != "" {
-						if operationBinding.IdempotencyHeaders == nil {
-							operationBinding.IdempotencyHeaders = make(map[string]string)
+					if routeBinding.Idempotency != (kernel.IdempotencyPolicy{}) {
+						if operationBinding.Idempotency == nil {
+							operationBinding.Idempotency = make(map[string]kernel.IdempotencyPolicy)
 						}
-						operationBinding.IdempotencyHeaders[routeBinding.AdapterID] = routeBinding.IdempotencyHeader
+						operationBinding.Idempotency[routeBinding.AdapterID] = routeBinding.Idempotency
 					}
 					if operationBinding.ErrorClassifierRef.ID == "" {
 						operationBinding.ErrorClassifierRef = routeBinding.ErrorClassifierRef

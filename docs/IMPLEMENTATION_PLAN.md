@@ -281,11 +281,18 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    provider-operation header binding; the kernel derives a deterministic key
    scoped to provider definition, node/endpoint, credential, protocol, upstream
    model and operation, then permits one same-route replay for ambiguous effects
-   only. It never grants cross-issuer fallback. A separate Go-module audio
+   only. Provider bindings now require a typed header plus guaranteed minimum
+   retention; the window is pinned to the first dispatch and checked again
+   after preparation/refresh. Virtual-time fixtures prove expiry after a slow
+   response, transport error, retry preparation or credential refresh causes
+   no redispatch or cross-issuer fallback. Cancellation after preparation also
+   prevents dispatch when the codec ignored its context. It never grants
+   cross-issuer fallback. A separate Go-module audio
    fixture now executes both JSON and bounded multipart non-chat operations
    through module-owned ingress, assigned model, Physical/Combo graph, shared
    multipart provider codec, decoder and client renderer. Remaining: real
-   provider idempotency semantics/expiry, async job effects and broader
+   provider idempotency guarantees, prepared-body equivalence across codec
+   re-execution/signing/multipart, async job effects and broader
    commit/cancellation/replay stress cases.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and

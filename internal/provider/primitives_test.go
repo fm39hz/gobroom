@@ -136,7 +136,7 @@ func TestRuntimeCatalogPinsTransformFailureModes(t *testing.T) {
 	}
 }
 
-func TestProviderOperationBindsOnlyValidIdempotencyHeaderNames(t *testing.T) {
+func TestProviderOperationBindsOnlyValidIdempotencyPolicies(t *testing.T) {
 	runtime, err := NewRuntimeRegistry()
 	if err != nil {
 		t.Fatal(err)
@@ -153,22 +153,22 @@ func TestProviderOperationBindsOnlyValidIdempotencyHeaderNames(t *testing.T) {
 	definition.Operations = cloneOperationBindings(definition.Operations)
 	binding := definition.Operations[OperationChat]
 	binding.TaskRef = &replayTask
-	binding.IdempotencyHeader = "Idempotency-Key"
+	binding.Idempotency = kernel.IdempotencyPolicy{Header: "Idempotency-Key", MinRetentionSeconds: 60}
 	definition.Operations[OperationChat] = binding
 	encoded, err := EncodeProviderDefinitionJSON(definition)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded, err := DecodeProviderDefinitionJSON(encoded)
-	if err != nil || decoded.Operations[OperationChat].IdempotencyHeader != "Idempotency-Key" {
-		t.Fatalf("provider definition lost idempotency header through JSON: %q err=%v", decoded.Operations[OperationChat].IdempotencyHeader, err)
+	if err != nil || decoded.Operations[OperationChat].Idempotency != binding.Idempotency {
+		t.Fatalf("provider definition lost idempotency policy through JSON: %#v err=%v", decoded.Operations[OperationChat].Idempotency, err)
 	}
 	if err := runtime.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatalf("valid idempotency header rejected: %v", err)
 	}
 	runtimeBinding, err := NewRuntimeBindingBuilder(runtime).Build(ProviderDefinitionRef(definition.ID, definition.ContractVersion), OperationChat)
-	if err != nil || runtimeBinding.IdempotencyHeader != "Idempotency-Key" {
-		t.Fatalf("runtime idempotency header=%q err=%v", runtimeBinding.IdempotencyHeader, err)
+	if err != nil || runtimeBinding.Idempotency != binding.Idempotency {
+		t.Fatalf("runtime idempotency policy=%#v err=%v", runtimeBinding.Idempotency, err)
 	}
 	nonReplayable := definition
 	nonReplayable.ID = "idempotency-header-without-replay-contract"
@@ -184,11 +184,35 @@ func TestProviderOperationBindsOnlyValidIdempotencyHeaderNames(t *testing.T) {
 		invalid.ID = fmt.Sprintf("invalid-idempotency-header-fixture-%d", index)
 		invalid.Operations = cloneOperationBindings(definition.Operations)
 		binding = invalid.Operations[OperationChat]
-		binding.IdempotencyHeader = header
+		binding.Idempotency.Header = header
 		invalid.Operations[OperationChat] = binding
 		if err := runtime.Primitives.RegisterDefinition(invalid); err == nil {
 			t.Fatalf("invalid idempotency header was accepted: %q", header)
 		}
+	}
+	for _, retention := range []int64{0, -1, 1<<63 - 1} {
+		invalid := definition
+		invalid.ID = fmt.Sprintf("invalid-idempotency-retention-%d", retention)
+		invalid.Operations = cloneOperationBindings(definition.Operations)
+		binding = invalid.Operations[OperationChat]
+		binding.Idempotency.MinRetentionSeconds = retention
+		invalid.Operations[OperationChat] = binding
+		if err := runtime.Primitives.RegisterDefinition(invalid); err == nil {
+			t.Fatalf("invalid idempotency retention accepted: %d", retention)
+		}
+	}
+}
+
+func TestProviderDefinitionRejectsRemovedHeaderOnlyFieldInEveryJSONBoundary(t *testing.T) {
+	const removed = `{"operations":{"chat":{"idempotencyHeader":"X-Key"}}}`
+	if _, err := DecodeProviderDefinitionJSON([]byte(removed)); err == nil {
+		t.Fatal("standalone manifest accepted removed header-only policy")
+	}
+	var nested struct {
+		ProviderDefinitions []ProviderDefinition `json:"providerDefinitions"`
+	}
+	if err := json.Unmarshal([]byte(`{"providerDefinitions":[{"operations":{"chat":{"idempotencyHeader":"X-Key"}}}]}`), &nested); err == nil {
+		t.Fatal("nested config bundle silently ignored removed header-only policy")
 	}
 }
 

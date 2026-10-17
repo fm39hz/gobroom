@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/net/http/httpguts"
+
 	"github.com/fm39hz/gobroom/internal/adapter/anthropic"
 	"github.com/fm39hz/gobroom/internal/adapter/gemini"
 	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
@@ -253,21 +255,7 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 }
 
 func validHTTPHeaderName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for index := 0; index < len(name); index++ {
-		character := name[index]
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' {
-			continue
-		}
-		switch character {
-		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
-		default:
-			return false
-		}
-	}
-	return true
+	return httpguts.ValidHeaderFieldName(name)
 }
 
 func validOutcomeCause(cause kernel.OutcomeCause) bool {
@@ -307,7 +295,7 @@ func validJSONPointer(path string) bool {
 type OperationBinding struct {
 	Protocol               kernel.Protocol           `json:"protocol,omitempty"`
 	TaskRef                *extensions.Ref           `json:"task,omitempty"`
-	IdempotencyHeader      string                    `json:"idempotencyHeader,omitempty"`
+	Idempotency            kernel.IdempotencyPolicy  `json:"idempotency,omitzero"`
 	ProviderFormat         normalize.Format          `json:"providerFormat,omitempty"`
 	Endpoint               PrimitiveRef              `json:"endpoint"`
 	EndpointOptions        kernel.EndpointOptions    `json:"endpointOptions,omitempty"`
@@ -630,6 +618,18 @@ func DecodeProviderDefinitionJSON(data []byte) (ProviderDefinition, error) {
 		return ProviderDefinition{}, fmt.Errorf("decode provider definition: %w", err)
 	}
 	return definition, nil
+}
+
+// Keep the same strict contract when a definition arrives nested in a config
+// bundle, rather than only when loading a standalone manifest file.
+func (d *ProviderDefinition) UnmarshalJSON(data []byte) error {
+	type definitionWire ProviderDefinition
+	var decoded definitionWire
+	if err := decodeStrictJSON(data, &decoded); err != nil {
+		return err
+	}
+	*d = ProviderDefinition(decoded)
+	return nil
 }
 
 func decodeStrictJSON(data []byte, target any) error {
@@ -1877,10 +1877,10 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 		} else if binding.Endpoint.ID == "" || binding.Transport.ID == "" {
 			return fmt.Errorf("provider %q has incomplete %q operation binding", def.ID, operation)
 		}
-		if binding.IdempotencyHeader != "" && !validIdempotencyHeaderName(binding.IdempotencyHeader) {
-			return fmt.Errorf("provider %q %q operation has an invalid idempotency header name", def.ID, operation)
-		}
-		if binding.IdempotencyHeader != "" {
+		if binding.Idempotency != (kernel.IdempotencyPolicy{}) {
+			if err := binding.Idempotency.Validate(); err != nil {
+				return fmt.Errorf("provider %q %q operation idempotency policy: %w", def.ID, operation, err)
+			}
 			if binding.TaskRef == nil || r.Operations == nil {
 				return fmt.Errorf("provider %q %q idempotency header requires an exact replayable task ref", def.ID, operation)
 			}
@@ -1980,28 +1980,6 @@ func (r *PrimitiveRegistry) RegisterDefinition(def ProviderDefinition) error {
 	}
 	r.definitions[providerRef] = def
 	return nil
-}
-
-func validIdempotencyHeaderName(name string) bool {
-	if name == "" {
-		return false
-	}
-	switch strings.ToLower(name) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie", "host", "content-length", "content-type", "transfer-encoding":
-		return false
-	}
-	for _, char := range []byte(name) {
-		if (char >= '0' && char <= '9') || (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') {
-			continue
-		}
-		switch char {
-		case '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~':
-			continue
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // RegisterDefinitionIfAbsent merges a persisted portable definition with an

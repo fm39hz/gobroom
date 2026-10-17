@@ -432,9 +432,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if adapter == nil {
 				continue
 			}
-			idempotencyHeader := operationBinding.IdempotencyHeaders[adapter.ID()]
+			idempotency := operationBinding.Idempotency[adapter.ID()]
 			idempotencyKey := ""
-			if replaySafety == operations.ReplayWithKey && candidateRequest.Transport.IdempotencyKey != "" && idempotencyHeader != "" {
+			if replaySafety == operations.ReplayWithKey && candidateRequest.Transport.IdempotencyKey != "" && idempotency.Validate() == nil {
 				idempotencyKey = deriveIssuerIdempotencyKey(candidateRequest.Transport.IdempotencyKey, candidate, operationRef)
 			}
 			var resultProjector operations.ResultProjector
@@ -491,6 +491,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			refreshed := false
 			idempotencyRetried := false
+			var firstDispatch time.Time
 		retryUpstream:
 			providerRequest := candidateRequest
 			providerRequest.ArtifactFacts = nil
@@ -513,7 +514,21 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if upstream.Headers == nil {
 					upstream.Headers = make(http.Header)
 				}
-				upstream.Headers.Set(idempotencyHeader, idempotencyKey)
+				upstream.Headers.Set(idempotency.Header, idempotencyKey)
+			}
+			dispatchErr := attemptCtx.Err()
+			if dispatchErr == nil && idempotencyRetried && !idempotency.permitsReplay(firstDispatch, time.Now()) {
+				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("provider idempotency retention window expired before replay dispatch")}
+			}
+			if dispatchErr != nil {
+				if body, ok := upstream.Body.(io.Closer); ok {
+					_ = body.Close()
+				}
+				k.Scheduler.Release(candidate)
+				return dispatchErr
+			}
+			if idempotencyKey != "" && firstDispatch.IsZero() {
+				firstDispatch = time.Now()
 			}
 			response, err := adapter.Execute(attemptCtx, upstream)
 			if err != nil {
@@ -521,7 +536,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					k.Scheduler.Release(candidate)
 					return ctx.Err()
 				}
-				if idempotencyKey != "" && !idempotencyRetried {
+				if idempotencyKey != "" && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) {
 					idempotencyRetried = true
 					goto retryUpstream
 				}
@@ -548,12 +563,12 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if outcome.Effect == "" {
 					outcome.Effect = inferUpstreamEffect(response.Status, outcome.Cause)
 				}
-				if idempotencyKey != "" && !idempotencyRetried && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
+				if idempotencyKey != "" && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
 					_ = response.Body.Close()
 					idempotencyRetried = true
 					goto retryUpstream
 				}
-				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && !idempotencyRetried)
+				canRefresh := canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()))
 				if (response.Status == http.StatusUnauthorized || response.Status == http.StatusForbidden) && !refreshed && k.RefreshCredential != nil && canRefresh {
 					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
 					if refreshErr == nil && refreshedCredential.Secret != "" && refreshedCredential.Secret != selectedCredential.Secret {

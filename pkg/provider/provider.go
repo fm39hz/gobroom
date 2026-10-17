@@ -31,6 +31,7 @@ type PrimitiveRegistry = core.PrimitiveRegistry
 type ProviderDefinition = core.ProviderDefinition
 type Operation = core.Operation
 type OperationBinding = core.OperationBinding
+type IdempotencyPolicy = kernel.IdempotencyPolicy
 type PrimitiveKind = core.PrimitiveKind
 type PrimitiveRef = core.PrimitiveRef
 type CapabilitySet = core.CapabilitySet

@@ -104,7 +104,7 @@ func (g RouteHealthGeneration) ForQuota(connectionID, modelRef string) string {
 type RouteOperationBinding struct {
 	ContractVersion    uint64
 	AdapterIDs         []string
-	IdempotencyHeaders map[string]string
+	Idempotency        map[string]IdempotencyPolicy
 	ErrorClassifierRef extensions.Ref
 	UsageSourceRef     extensions.Ref
 	UsageOptions       UsageSourceOptions

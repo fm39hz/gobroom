@@ -75,13 +75,13 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 				}},
 			},
 			provider.Operation("audio.transcribe.v1"): {
-				Protocol:          kernel.Protocol("vendor.audio.v1"),
-				TaskRef:           provider.OperationRef("audio.transcribe.v1", 1),
-				IdempotencyHeader: "X-Idempotency-Key",
-				Endpoint:          provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
-				Transport:         provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
-				RequestCodec:      provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "gemini-json", ContractVersion: 1},
-				ResponseDecoder:   provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "gemini-json", ContractVersion: 1},
+				Protocol:        kernel.Protocol("vendor.audio.v1"),
+				TaskRef:         provider.OperationRef("audio.transcribe.v1", 1),
+				Idempotency:     kernel.IdempotencyPolicy{Header: "X-Idempotency-Key", MinRetentionSeconds: 60},
+				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
+				Transport:       provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
+				RequestCodec:    provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: "gemini-json", ContractVersion: 1},
+				ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: "gemini-json", ContractVersion: 1},
 			},
 			provider.OperationQuota: {
 				Endpoint:        provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1},
@@ -127,7 +127,7 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 	mediaRoute := snapshot.Routes["route:audio@media-account"]
 	mediaBinding := mediaRoute.OperationBindings["audio.transcribe.v1"]
 	mediaAdapterRef := provider.RuntimeBindingKey(providerDefinitionRef, provider.Operation("audio.transcribe.v1"))
-	if mediaRoute.Protocol != "vendor.audio.v1" || len(mediaBinding.AdapterIDs) != 1 || mediaBinding.AdapterIDs[0] != mediaAdapterRef || mediaBinding.IdempotencyHeaders[mediaAdapterRef] != "X-Idempotency-Key" {
+	if mediaRoute.Protocol != "vendor.audio.v1" || len(mediaBinding.AdapterIDs) != 1 || mediaBinding.AdapterIDs[0] != mediaAdapterRef || mediaBinding.Idempotency[mediaAdapterRef] != (kernel.IdempotencyPolicy{Header: "X-Idempotency-Key", MinRetentionSeconds: 60}) {
 		t.Fatalf("namespaced operation binding did not reach the route snapshot: %#v", mediaRoute)
 	}
 	combo := snapshot.Nodes["junior"]

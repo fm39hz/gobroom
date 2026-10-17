@@ -4,6 +4,7 @@ Snapshot checked: 2026-09-19.
 The JSON Schema row below was added after a targeted upstream release check on
 2026-10-06. The IPC ownership row was checked on 2026-10-17; the existing rows
 retain their original check date.
+The HTTP syntax row was checked through the Go module proxy on 2026-10-17.
 
 The goal is to reduce handwritten infrastructure code without turning
 GoBroom into a dependency-heavy framework. The standard library remains the
@@ -18,6 +19,7 @@ default for HTTP, JSON, context, concurrency, crypto, testing and logging.
 | HTTP routing | `github.com/go-chi/chi/v5` | `v5.3.2` | adopt when API surface grows | small middleware/router layer on top of `net/http`; avoids a custom route framework |
 | OAuth | `golang.org/x/oauth2` | `v0.37.0` | adopt | standard OAuth2/token transport, PKCE and device/auth helpers |
 | IPC process ownership | `github.com/gofrs/flock` | `v0.13.1` (checked 2026-10-17) | adopted | OS-backed non-blocking exclusive file locks with descriptor cleanup; avoids maintaining platform lock syscalls or PID-file heuristics |
+| HTTP syntax validation | `golang.org/x/net` | `v0.61.0` (checked 2026-10-17) | adopted | `httpguts.ValidHeaderFieldName` replaces duplicated handwritten token parsers at provider/snapshot admission; replay timing tests use standard `testing/synctest` rather than a clock framework |
 | Extension option schemas | `github.com/santhosh-tekuri/jsonschema/v6` | `v6.0.3` (checked 2026-10-06) | adopted | compile JSON Schema 2020-12 at catalog freeze and validate typed module options at bind time; custom refs resolve only from the local catalog |
 | CLI | `github.com/spf13/cobra` | `v1.10.2` | adopt for `gobroom` | command tree, flags, help and completion without custom CLI plumbing |
 | TUI runtime | `charm.land/bubbletea/v2` | `v2.0.9` | adopted | Elm-style state/update/view model; bundled into the `gobroom` control client |
@@ -40,6 +42,10 @@ The validator pin is verified from the maintainer's
 The IPC ownership pin was checked against `go list -m ...@latest` and the
 [v0.13.1 release](https://github.com/gofrs/flock/releases/tag/v0.13.1). Its runtime
 dependency on `x/sys` is already present in Gobroom's module graph.
+The `x/net` pin was resolved by `go list -m -json golang.org/x/net@latest`
+(upstream timestamp 2026-10-09). Its minimum dependency graph also selects
+`x/sync v0.24.0`, `x/sys v0.49.0` and `x/text v0.43.0`; both the root module and
+the independent external-provider fixture are tidied against that graph.
 
 ## Keep optional
 
