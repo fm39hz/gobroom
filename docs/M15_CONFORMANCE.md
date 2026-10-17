@@ -494,3 +494,13 @@ fixtures include `TestCredentialRenewalPreservesPrincipalAndOperationalState`,
 `TestAuthHealthPersistenceCannotOverwriteOperationalCooldown`. These close the
 configured-principal renewal slice only; generic setup actions/leases and the
 full SG composition gate remain open.
+
+`TestSQLiteWriteTransactionsReserveBeforeReading` verifies the driver-native WAL
+write reservation prevents another writer from invalidating validation reads,
+while concurrent reads remain available. It failed with deferred transactions;
+the pinned driver's `_txlock=immediate` option fixes the reproduced model-edit/
+activation collision without a custom transaction retry layer. After installation
+of `08d662c`, the optional CLI renewal/restart fixture passed with health/quota/
+activation/status views and explicit connection replacement. Main daemon versions
+were control=serving=469; bundle-v9 export/validate passed. This is not a throughput
+benchmark or closure of the remaining SG composition cases.

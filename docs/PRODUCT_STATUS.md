@@ -39,7 +39,24 @@ failure during activation, discovery/auth isolation and queued evidence identity
 This improves safe consumption and headless recovery, not provider catalog
 breadth, universal harness compatibility or measured performance. Generic setup
 actions/leases, provider-attested/shared identity, catalog UX and full C4/SG2/M15
-closure remain open. Installed-client acceptance is recorded after verification.
+closure remain open.
+
+Implementation checkpoint: `08d662c`. Full tests/vet and conformance passed;
+focused store/runtime/daemon race checks passed twice, and external opaque setup
+and renewal fixtures passed five times under race detection. Conformance exposed
+a real `SQLITE_BUSY_SNAPSHOT` during model editing alongside activation: the
+existing driver's `_txlock=immediate` option now reserves write transactions
+before validation reads. Its regression failed on the old DSN and passes on the
+new one, including concurrent WAL reader access. The final activation receipt
+fallback was followed by full tests/vet and a repeated focused race check.
+
+After `make install-all`, the installed CLI verified health/quota/activation/status
+views and connection replacement in the local fake-provider renewal/restart
+fixture. Auth recovered after renewal; quota/rate-limited roles stayed blocked
+through restart; explicit replacement made all three roles callable. The main
+daemon reported `ok`, with control/serving versions both 469, an empty activation
+list and a valid bundle-v9 export → validate round trip. These are deterministic
+fixture acceptances, not new live-provider or latency/RSS/load measurements.
 
 Previous integrated milestone:
 
