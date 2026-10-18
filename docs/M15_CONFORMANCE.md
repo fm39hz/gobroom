@@ -572,3 +572,12 @@ the previous OAuth-only listener implementation is removed.
 These cases do not establish daemon-assigned ephemeral callback URL negotiation,
 fully migrated code/device orchestration, generic TUI forms, credential leases
 or complete SG2 composition.
+
+Installed checkpoint `6ce9490`: `make install-all` and the separate-module callback
+fixture with `GOBROOM_TEST_CLI` passed. The installed client observed loopback and
+manual modes, submitted a private callback input file, canceled setup and read
+denial/completion status; automatic HTTP callback, activation, restart and provider
+inference also passed. The main daemon reported control=serving=472, an empty
+activation queue and valid bundle-v9 export/validate. Full tests/vet/conformance
+and repeated root/external callback race cases passed. These do not close the
+remaining C4/SG2 gates or prove resource-performance targets.

@@ -41,6 +41,20 @@ convergence; daemon-assigned callback URLs, TUI action forms, leases and full
 C4/SG2/M15 remain open. Catalog curation UX and latency/RSS/load evidence remain
 separate unfinished product gates.
 
+Implementation checkpoint: `6ce9490`. Full tests/vet and conformance passed.
+Repeated focused provider/daemon race tests passed three times, including
+canonical bind sharing, admitted-callback cancellation, deterministic publication
+wait and failed-start retention cleanup. The external callback vertical passed
+five race runs; its final independent unknown-query rejection assertion was also
+followed by three passing race runs.
+
+After `make install-all`, `GOBROOM_TEST_CLI` exercised setup start/get/cancel and
+manual URL submit from a mode-0600 file, alongside automatic callback delivery,
+typed denial and HTTP inference after restart. The real main daemon reported
+`ok`, control=serving=472, no retained activation jobs and valid bundle-v9 export
+→ validate. This is an isolated fake-provider acceptance, not new live-provider
+coverage or a latency/RSS/load measurement.
+
 Previous integrated milestone:
 
 Provider modules now have an action-based setup path independent of OAuth code/
