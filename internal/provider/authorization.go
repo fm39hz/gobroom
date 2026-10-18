@@ -57,15 +57,41 @@ type AuthorizationAction struct {
 
 type AuthorizationEventKind string
 
+type AuthorizationCallbackMode string
+
 const (
-	AuthorizationSubmit AuthorizationEventKind = "submit"
-	AuthorizationPoll   AuthorizationEventKind = "poll"
+	AuthorizationCallbackLoopback AuthorizationCallbackMode = "loopback"
+	AuthorizationCallbackManual   AuthorizationCallbackMode = "manual"
+)
+
+// AuthorizationCallbackResource is private event data for the callback
+// receiver. Its fields are exposed to the driver, while its representations
+// are redacted to avoid leaking resolved URLs or static query values.
+type AuthorizationCallbackResource struct {
+	ActionID string
+	URL      string
+	Mode     AuthorizationCallbackMode
+}
+
+func (AuthorizationCallbackResource) String() string { return "[redacted]" }
+func (AuthorizationCallbackResource) GoString() string {
+	return "provider.AuthorizationCallbackResource{[redacted]}"
+}
+func (AuthorizationCallbackResource) MarshalJSON() ([]byte, error) {
+	return []byte(`"[redacted]"`), nil
+}
+
+const (
+	AuthorizationSubmit         AuthorizationEventKind = "submit"
+	AuthorizationPoll           AuthorizationEventKind = "poll"
+	AuthorizationCallbacksReady AuthorizationEventKind = "callbacks_ready"
 )
 
 type AuthorizationEvent struct {
-	Kind     AuthorizationEventKind `json:"kind"`
-	ActionID string                 `json:"actionId"`
-	Value    json.RawMessage        `json:"value,omitempty"`
+	Kind      AuthorizationEventKind          `json:"kind"`
+	ActionID  string                          `json:"actionId"`
+	Value     json.RawMessage                 `json:"value,omitempty"`
+	Callbacks []AuthorizationCallbackResource `json:"-"`
 }
 
 type AuthorizationTransition struct {

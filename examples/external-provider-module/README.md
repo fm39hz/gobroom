@@ -103,3 +103,12 @@ scoped to its operation/account across restart; other eligible accounts may
 still be selected and status remains usable. No background job worker is needed.
 To verify the installed control client too, run the lifecycle test with
 `GOBROOM_TEST_CLI=/absolute/path/to/gobroom`.
+
+`TestExternalModuleDaemonAssignedCallbackResources` requests a callback on port
+zero and receives the daemon-owned actual URI in a private typed ready event.
+The fake issuer probes a fully correlated request during registration: the socket
+is held but callback dispatch is not active. A blocked registration leaves another
+account and control status responsive. Independent sockets, activation, restart,
+exposed Physical/Combo inference and cancellation are verified without any
+probe/close/rebind port discovery. `GOBROOM_TEST_CLI` exercises final consent views
+and pending-grant cancellation through the installed control client.

@@ -581,3 +581,30 @@ inference also passed. The main daemon reported control=serving=472, an empty
 activation queue and valid bundle-v9 export/validate. Full tests/vet/conformance
 and repeated root/external callback race cases passed. These do not close the
 remaining C4/SG2 gates or prove resource-performance targets.
+
+### Daemon-assigned callback resources
+
+`TestExternalModuleDaemonAssignedCallbackResources` registers an independent
+driver that requests a port-zero callback. During its private ready event the
+driver registers the allocated URI with a fake issuer; that issuer probes a
+fully correlated callback before activation and receives rejection. One blocked
+registration does not block another account or control status. Two held sockets
+yield distinct nonzero URIs; completing one does not close the other. Activation,
+restart, exposed Physical/Combo HTTP inference and cancel cleanup are included.
+The optional installed CLI path reads the final consent actions and cancels a
+pending dynamically allocated grant. No test port discovery or rebind is used.
+
+`TestAuthorizationCallbackReservationAllocatesAndActivatesExactGrant`,
+`TestAuthorizationCallbackReservationReuseAndOwnerIsolation`,
+`TestAuthorizationCallbackReservationRollbackCancellationAndRelease`,
+`TestAuthorizationCallbackActivationRejectsChangedReservation` and
+`TestAuthorizationCallbackActivationPrunesUnusedReservations` cover pending socket
+ownership, atomic failure and exact activation scope. The preparation cases
+`TestGenericAuthorizationPreparationPublishesOnlyResolvedActions`,
+`TestGenericAuthorizationPreparationFailuresReleaseReservations` and
+`TestGenericAuthorizationPreparationCancellationFencesLateCredential` cover
+non-public intermediate state, driver/scope/round-limit failure and late canceled
+completion. `TestGenericAuthorizationSetupRejectsPublicCallbacksReadyEvent`
+prevents spoofing the internal event. Resource formatting/JSON redaction has
+provider-contract coverage. These close dynamic-URI ordering, not the remaining
+code/device coordinator migration, TUI action forms, leases or full SG2.

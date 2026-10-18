@@ -370,9 +370,22 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    cleanup, cancel versus an admitted callback and a channel-based wait for a
    published step. A separate module uses non-OAuth `ticket`/`proof` fields,
    automatic and manual callbacks, denial, restart and real HTTP inference.
-   Remaining: daemon-assigned ephemeral callback URL negotiation, migrating the
-   code/device coordinators and clients to actions, TUI forms, opaque leases and
+   Remaining: migrating the code/device coordinators and clients to actions,
+   TUI forms, opaque leases and
    full SG2 composition/live-provider evidence. This is not full auth closure.
+
+   Daemon-assigned callback URLs now use a private two-phase preparation contract.
+   A port-zero intent reserves an actual socket, then delivers typed
+   `callbacks_ready` resources to the same admitted driver before consent actions
+   are published. Activation preserves the exact granted target/action/correlation/
+   response policy and transfers ownership without rebind. Preparation cannot
+   extend expiry, is bounded to eight rounds, and releases reservations on failure,
+   cancellation, terminal output or shutdown. The external module's issuer probes
+   a matching callback during registration and receives rejection before activation;
+   a blocked registration does not stall another account or status. Both assigned
+   accounts activate and HTTP inference works through exposed Physical/Combo after
+   restart. This closes the dynamic-URL ordering slice, not code/device convergence,
+   TUI editing, credential leases or full C4/SG2.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

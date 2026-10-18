@@ -86,6 +86,8 @@ type AuthorizationEventKind = core.AuthorizationEventKind
 type AuthorizationEvent = core.AuthorizationEvent
 type AuthorizationTransition = core.AuthorizationTransition
 type AuthorizationCallback = core.AuthorizationCallback
+type AuthorizationCallbackResource = core.AuthorizationCallbackResource
+type AuthorizationCallbackMode = core.AuthorizationCallbackMode
 type AuthorizationCallbackInput = core.AuthorizationCallbackInput
 type AuthorizationFailure = core.AuthorizationFailure
 
@@ -99,11 +101,14 @@ const MaxCredentialStateBytes = core.MaxCredentialStateBytes
 const MaxAuthorizationStateBytes = core.MaxAuthorizationStateBytes
 
 const (
-	AuthorizationOpenURL     = core.AuthorizationOpenURL
-	AuthorizationDisplayCode = core.AuthorizationDisplayCode
-	AuthorizationInput       = core.AuthorizationInput
-	AuthorizationSubmit      = core.AuthorizationSubmit
-	AuthorizationPoll        = core.AuthorizationPoll
+	AuthorizationOpenURL          = core.AuthorizationOpenURL
+	AuthorizationDisplayCode      = core.AuthorizationDisplayCode
+	AuthorizationInput            = core.AuthorizationInput
+	AuthorizationSubmit           = core.AuthorizationSubmit
+	AuthorizationPoll             = core.AuthorizationPoll
+	AuthorizationCallbacksReady   = core.AuthorizationCallbacksReady
+	AuthorizationCallbackLoopback = core.AuthorizationCallbackLoopback
+	AuthorizationCallbackManual   = core.AuthorizationCallbackManual
 )
 
 func NewCredentialState(encoded string) (CredentialState, error) {

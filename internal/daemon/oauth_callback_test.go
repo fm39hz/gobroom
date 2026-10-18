@@ -27,7 +27,7 @@ func TestLoopbackCallbackAddressRejectsNonLocalAndInvalidRedirects(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, _, ok := loopbackCallbackAddress(parsed)
+			_, _, ok := loopbackCallbackAddress(parsed, false)
 			if ok != test.wantReady {
 				t.Fatalf("loopback listener eligibility=%v, want %v", ok, test.wantReady)
 			}

@@ -715,7 +715,7 @@ type for every setup method.
 ### Loopback callback grants
 
 A continuing transition may declare up to eight private `AuthorizationCallback`
-grants, each bound to an offered input-action ID. A grant declares a fixed HTTP
+grants, each bound to an offered input-action ID. A grant declares an HTTP
 loopback URL/path/static query, a named opaque correlation value and permitted
 response query names. The grant object is redacted in formatting/JSON; public
 callback modes do not dump its target or correlation data. Drivers may publish
@@ -730,9 +730,33 @@ atomically replaces one owner's grants. A required bind failure rolls back
 tentative reservations without dismantling the previous grants. An optional
 failure exposes `manual` in `callbackModes` and grants no HTTP callback. Public
 views contain only action IDs and `loopback`/`manual` modes, not correlation data.
-Non-loopback/DNS/TLS/wildcard/port-zero targets are rejected by this initial grant
-contract; daemon-assigned ephemeral callback URLs remain a separate resource-
-negotiation gate.
+Non-loopback/DNS/TLS/wildcard targets remain forbidden. An explicit port zero is
+a resource request, never an active grant or a published callback URL.
+
+For a port-zero transition, the daemon reserves actual sockets and sends a
+private typed `callbacks_ready` event containing `AuthorizationCallbackResource`
+values (action ID, resolved URL and mode). The driver can then register the
+allocated redirect URI with its issuer and construct consent actions. These
+calls share the admitted step's context/deadline and worker ownership; no
+coordinator/registry lock spans the driver call. Intermediate states/actions are
+not published as UI revisions. At most eight negotiation rounds are permitted,
+and a round cannot extend the session deadline.
+
+Reservation is not activation: matching HTTP callbacks are rejected until the
+driver returns a final transition and the input schema/revision gate is active.
+Activation must preserve the reserved action, exact resolved target, correlation,
+response fields and required/optional policy. The socket is transferred into the
+active grant without close/rebind; unused reservations are pruned. Existing fixed
+grants and private resources use the same listener registry. Optional fixed-port
+failure may produce manual mode; a dynamic allocation failure cannot produce a
+manual port-zero URI and fails closed. Error, cancellation, terminal completion
+and shutdown release both pending reservations and active grants.
+
+`callbacks_ready` is an internal driver event, not an IPC/user action. Its
+resource data is redacted in formatting/JSON and excluded from public status or
+portable configuration. A driver may deliberately expose the completed consent
+URL as a public action. Typed resource values and standard URL/form binding are
+used instead of string placeholders or frontend port selection.
 
 HTTP delivery requires GET, a loopback peer, the exact host/escaped path/static
 query/correlation and only declared response fields. Malformed, duplicate,

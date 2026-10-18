@@ -43,6 +43,17 @@ func (AuthorizationCallback) MarshalJSON() ([]byte, error) {
 	return []byte(`"[redacted]"`), nil
 }
 
+// NeedsAllocation reports whether the callback asks the daemon to allocate a
+// loopback listener port.
+func (c AuthorizationCallback) NeedsAllocation() bool {
+	u, err := url.Parse(c.URL)
+	if err != nil || u == nil || u.Port() == "" {
+		return false
+	}
+	port, err := strconv.Atoi(u.Port())
+	return err == nil && port == 0
+}
+
 // Validate checks static callback properties only. In particular, it never
 // resolves hostnames or connects to the callback endpoint.
 func (c AuthorizationCallback) Validate() error {
@@ -78,7 +89,7 @@ func (c AuthorizationCallback) Validate() error {
 		}
 	}
 	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
+	if err != nil || port < 0 || port > 65535 {
 		return fmt.Errorf("authorization callback URL port is invalid")
 	}
 	if _, _, err := net.SplitHostPort(u.Host); err != nil {

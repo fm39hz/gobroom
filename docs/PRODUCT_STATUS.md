@@ -27,6 +27,21 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Auth drivers can now request an OS-assigned callback URI without frontend port
+selection or a probe/rebind race. Private reservations are allocated before a
+typed ready event lets the driver register its redirect and return consent
+actions; only the final transition reaches the public revision. Exact grant
+activation, expiry/round bounds and cancellation/failure cleanup have focused
+fixtures. A separate module proves listener ownership before issuer registration,
+no early callback dispatch, independent accounts, responsive control while one
+issuer is blocked, activation and HTTP inference through explicitly exposed
+Physical/Combo models after restart. This extends onboarding and headless
+extensibility; it does not add live provider coverage, generic TUI forms or broader
+harness compatibility. Code/device action-engine convergence, credential leases,
+full C4/SG2/M15, catalog curation UX and measured latency/RSS/load remain open.
+
+Previous integrated milestone:
+
 Loopback callback ownership now uses one shared registry for action-based setup
 and the existing code flow. Private grants bind exact targets/correlation/query
 shapes to schema-backed input actions; no callback protocol is special in the

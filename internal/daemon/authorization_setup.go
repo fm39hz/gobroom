@@ -181,19 +181,10 @@ func (d *Daemon) applySetupTransition(ctx context.Context, id string, transition
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := transition.Validate(time.Now()); err != nil {
-		return fmt.Errorf("provider returned an invalid authorization transition")
-	}
-	for _, action := range transition.Actions {
-		if action.InputSchemaRef == nil {
-			continue
-		}
-		if d.setupSchemas == nil {
-			return fmt.Errorf("authorization schema catalog is unavailable")
-		}
-		if _, ok := d.setupSchemas.Schema(*action.InputSchemaRef); !ok {
-			return fmt.Errorf("authorization action schema is not registered")
-		}
+	var err error
+	transition, err = d.prepareSetupCallbackResources(ctx, id, transition)
+	if err != nil {
+		return err
 	}
 	sessions := d.authorizationSessions()
 	sessions.mu.Lock()

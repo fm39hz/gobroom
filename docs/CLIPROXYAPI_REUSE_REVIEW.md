@@ -53,8 +53,13 @@ real socket and correlation to one pending setup, not an OAuth-specific server
 to import. Gobroom's action grant registry uses its existing Go HTTP/URL/context
 primitives, exact target/query matching and session/action revisions. The code
 flow registers with the same listener runtime; no reference listener, forwarder,
-store or broad-address binding is copied. Fixed registered URLs are covered;
-daemon-assigned ephemeral URL negotiation remains unimplemented.
+store or broad-address binding is copied. Fixed and daemon-assigned URLs use
+the same registry. Devin's `sdk/auth/devin.go` obtains `actualPort` from
+`OAuthServer.Start` before constructing redirect/consent URLs; Trae/Windsurf
+likewise await the actual bound port before authorization. Gobroom models that
+ordering as private callback reservations and a typed `callbacks_ready` event,
+keeping listener readiness separate from callback activation. No reference
+callback server is imported and setup ownership stays in the daemon.
 
 Auth lifecycle follow-up: `sdk/cliproxy/auth/conductor_refresh.go` rereads an
 account after acquiring its per-auth lock, reuses a newer access token and fences

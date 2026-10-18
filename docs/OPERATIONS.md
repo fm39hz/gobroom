@@ -213,8 +213,11 @@ Do not put callback URLs/codes in argv or logs. The browser page acknowledges a
 received response, not routing readiness: inspect setup status and activation.
 Callbacks use the same input schema/revision checks as manual actions. Terminal
 sessions release their grants and the last socket; restarting retains committed
-credentials, not a pending callback session. Dynamic port allocation and generic
-TUI callback forms are not claimed.
+credentials, not a pending callback session. A driver may request port zero:
+the daemon owns the OS-assigned port before the driver registers its redirect
+URI or returns consent actions. The CLI only sees the resolved final actions;
+there is no frontend port probe or port-selection command. Generic TUI callback
+forms and fully migrated built-in code/device orchestration remain unfinished.
 
 ## Data-plane exposure
 

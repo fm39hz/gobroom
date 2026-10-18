@@ -47,7 +47,7 @@ func TestAuthorizationCallbackValidationBoundsAndURLs(t *testing.T) {
 		"HTTPS requires external TLS": func(c *AuthorizationCallback) { c.URL = "https://127.0.0.1:1234/callback" },
 		"nonloopback":                 func(c *AuthorizationCallback) { c.URL = "http://example.invalid:1234/callback" },
 		"missing port":                func(c *AuthorizationCallback) { c.URL = "http://localhost/callback" },
-		"zero port":                   func(c *AuthorizationCallback) { c.URL = "http://localhost:0/callback" },
+		"out of range port":           func(c *AuthorizationCallback) { c.URL = "http://localhost:65536/callback" },
 		"missing path":                func(c *AuthorizationCallback) { c.URL = "http://localhost:1234" },
 		"userinfo":                    func(c *AuthorizationCallback) { c.URL = "http://user@localhost:1234/callback" },
 		"fragment":                    func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback#secret" },

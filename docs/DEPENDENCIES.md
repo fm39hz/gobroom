@@ -125,6 +125,13 @@ already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 
+Dynamic callback allocation uses the standard `net.ListenConfig`/listener
+address, URL/form binding and existing session context/deadline ownership.
+Pending reservations are separate from active grants in the existing registry;
+the private typed ready event introduces no resource service, template engine,
+workflow framework or dependency. The ordering was checked against Devin's
+actual-port handoff and the reference Trae/Windsurf dynamic listeners.
+
 Callback grants reuse `net.Listen`, `net/http`, `net/url`, constant-time byte
 comparison and the existing action/schema/CAS lifecycle. One listener registry
 replaces the OAuth-only runtime; no callback web framework, provider redirect

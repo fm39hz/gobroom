@@ -19,7 +19,7 @@ func (d *Daemon) acquireOAuthCallbackListener(redirectURI, state string) (string
 	if err != nil {
 		return "", "", fmt.Errorf("invalid OAuth redirect URI")
 	}
-	if _, _, ok := loopbackCallbackAddress(target); !ok {
+	if _, _, ok := loopbackCallbackAddress(target, false); !ok {
 		return "", "manual", nil
 	}
 	correlation, err := provider.NewAuthorizationState(state)
@@ -52,12 +52,12 @@ func (d *Daemon) acquireOAuthCallbackListener(redirectURI, state string) (string
 	return "", "manual", nil
 }
 
-func loopbackCallbackAddress(target *url.URL) (key, bindAddress string, ok bool) {
+func loopbackCallbackAddress(target *url.URL, allowDynamic bool) (key, bindAddress string, ok bool) {
 	if target == nil || target.Scheme != "http" || target.User != nil || target.Host == "" || target.Port() == "" || target.Fragment != "" || target.Path == "" {
 		return "", "", false
 	}
 	port, err := strconv.Atoi(target.Port())
-	if err != nil || port < 1 || port > 65535 {
+	if err != nil || port < 0 || (port == 0 && !allowDynamic) || port > 65535 {
 		return "", "", false
 	}
 	host := strings.TrimSuffix(strings.ToLower(target.Hostname()), ".")

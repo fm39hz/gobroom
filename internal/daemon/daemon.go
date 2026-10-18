@@ -51,52 +51,53 @@ type Config struct {
 }
 
 type Daemon struct {
-	config              Config
-	providerModules     []provider.RuntimeModule
-	store               *store.Store
-	persistenceSpool    *runtimehealth.DurablePersistenceSpool
-	artifactStore       *artifacts.Store
-	server              *api.Server
-	ipc                 *IPCServer
-	ipcLease            *ipcSocket
-	http                *http.Server
-	httpControl         *http.Server
-	listeners           httpListeners
-	addresses           atomic.Pointer[ListenerAddresses]
-	kernel              *kernel.Kernel
-	providerBindings    map[string]provider.RuntimeBinding
-	providerRegistry    *provider.RuntimeRegistry
-	providerCatalog     []provider.DefinitionMetadata
-	strategyCatalog     *kernel.StrategyCatalog
-	strategyDefinitions []kernel.StrategyDefinition
-	extensionCatalog    extensions.CatalogView
-	setupSchemas        *extensions.Snapshot
-	authFlows           map[string]provider.AuthFlow
-	providerAuthModes   map[extensions.Ref]string
-	providerAuthFlowIDs map[extensions.Ref]map[string]string
-	sessionCache        *sessionruntime.Cache
-	policy              *runtimehealth.PolicyGate
-	quotaPersistence    *runtimehealth.QuotaSnapshotQueue
-	transformBindingsMu sync.Mutex
-	usageCancel         context.CancelFunc
-	mu                  sync.Mutex
-	oauthMu             sync.Mutex
-	oauth               *authorizationSessions
-	callbackMu          sync.Mutex
-	callbackListeners   map[string]*authorizationCallbackListener
-	callbackBindings    map[authorizationCallbackKey]authorizationCallbackBinding
-	callbacksClosed     bool
-	runCtx              context.Context
-	runCancel           context.CancelFunc
-	authWG              sync.WaitGroup
-	credentialRefreshMu sync.Mutex
-	credentialRefreshes map[string]*credentialRefreshLock
-	activationWake      chan struct{}
-	activationDone      chan struct{}
-	logMu               sync.RWMutex
-	logs                []LogRecord
-	stop                func()
-	stopErr             error
+	config               Config
+	providerModules      []provider.RuntimeModule
+	store                *store.Store
+	persistenceSpool     *runtimehealth.DurablePersistenceSpool
+	artifactStore        *artifacts.Store
+	server               *api.Server
+	ipc                  *IPCServer
+	ipcLease             *ipcSocket
+	http                 *http.Server
+	httpControl          *http.Server
+	listeners            httpListeners
+	addresses            atomic.Pointer[ListenerAddresses]
+	kernel               *kernel.Kernel
+	providerBindings     map[string]provider.RuntimeBinding
+	providerRegistry     *provider.RuntimeRegistry
+	providerCatalog      []provider.DefinitionMetadata
+	strategyCatalog      *kernel.StrategyCatalog
+	strategyDefinitions  []kernel.StrategyDefinition
+	extensionCatalog     extensions.CatalogView
+	setupSchemas         *extensions.Snapshot
+	authFlows            map[string]provider.AuthFlow
+	providerAuthModes    map[extensions.Ref]string
+	providerAuthFlowIDs  map[extensions.Ref]map[string]string
+	sessionCache         *sessionruntime.Cache
+	policy               *runtimehealth.PolicyGate
+	quotaPersistence     *runtimehealth.QuotaSnapshotQueue
+	transformBindingsMu  sync.Mutex
+	usageCancel          context.CancelFunc
+	mu                   sync.Mutex
+	oauthMu              sync.Mutex
+	oauth                *authorizationSessions
+	callbackMu           sync.Mutex
+	callbackListeners    map[string]*authorizationCallbackListener
+	callbackBindings     map[authorizationCallbackKey]authorizationCallbackBinding
+	callbackReservations map[authorizationCallbackKey]authorizationCallbackReservation
+	callbacksClosed      bool
+	runCtx               context.Context
+	runCancel            context.CancelFunc
+	authWG               sync.WaitGroup
+	credentialRefreshMu  sync.Mutex
+	credentialRefreshes  map[string]*credentialRefreshLock
+	activationWake       chan struct{}
+	activationDone       chan struct{}
+	logMu                sync.RWMutex
+	logs                 []LogRecord
+	stop                 func()
+	stopErr              error
 }
 
 type LogRecord struct {
