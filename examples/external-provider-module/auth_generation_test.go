@@ -36,7 +36,8 @@ func (m deviceRaceModule) ModuleDescriptor() provider.ModuleRef {
 
 func (m deviceRaceModule) Register(runtime *provider.RuntimeRegistry) error {
 	return runtime.RegisterAuthFactory(deviceRaceAuthID, func(provider.AuthOptions) (provider.AuthFlow, error) {
-		return deviceRaceAuth{barrier: m.barrier}, nil
+		auth := deviceRaceAuth{barrier: m.barrier}
+		return provider.NewDeviceAuthorizationDriver(auth, auth.beginDeviceAuthorization, auth.waitForDeviceAuthorization)
 	})
 }
 
@@ -55,12 +56,10 @@ func (deviceRaceAuth) Resolve(_ context.Context, input provider.AuthInput) (prov
 func (deviceRaceAuth) Refresh(_ context.Context, input provider.AuthInput, _ provider.Credential) (provider.CredentialState, error) {
 	return provider.NewCredentialState(input.Secret)
 }
-func (deviceRaceAuth) CanAuthorizeCode() bool   { return false }
-func (deviceRaceAuth) CanAuthorizeDevice() bool { return true }
-func (a deviceRaceAuth) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
+func (a deviceRaceAuth) beginDeviceAuthorization(context.Context, provider.AuthInput) (provider.DeviceAuthorization, error) {
 	return provider.DeviceAuthorization{DeviceCode: "private-test-device-code", UserCode: "TEST-CODE", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
-func (a deviceRaceAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
+func (a deviceRaceAuth) waitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	a.barrier.enteredOnce.Do(func() { close(a.barrier.entered) })
 	select {
 	case <-a.barrier.release:
@@ -140,19 +139,29 @@ func TestExternalDeviceAuthorizationCannotOverwriteNewerConnectionCredential(t *
 	if err := json.Unmarshal(rpc("connections.create", map[string]any{"providerNodeID": node.ID, "name": "Race account", "credentialType": "oauth2", "secret": "original"}), &connection); err != nil {
 		t.Fatal(err)
 	}
-	var started struct {
-		SessionID string `json:"sessionId"`
-	}
+	var started daemon.AuthorizationSetupView
 	cli := os.Getenv("GOBROOM_TEST_CLI")
 	if cli != "" {
-		if err := json.Unmarshal(runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-start", "--connection-id", connection.ID), &started); err != nil {
-			t.Fatalf("installed CLI device-start response: %v", err)
+		if err := json.Unmarshal(runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "start", "--connection-id", connection.ID), &started); err != nil {
+			t.Fatalf("installed CLI setup start response: %v", err)
 		}
-	} else if err := json.Unmarshal(rpc("auth.device.start", map[string]any{"connectionID": connection.ID}), &started); err != nil {
+	} else if err := json.Unmarshal(rpc("auth.setup.start", map[string]any{"connectionID": connection.ID}), &started); err != nil {
 		t.Fatal(err)
 	}
-	if started.SessionID == "" {
-		t.Fatal("device start response missing session ID")
+	if started.SessionID == "" || started.Status != "awaiting_user" {
+		t.Fatalf("setup start response missing session or awaiting_user status: %+v", started)
+	}
+	var hasDisplayCode, hasOpenURL bool
+	for _, action := range started.Actions {
+		switch action.Kind {
+		case provider.AuthorizationDisplayCode:
+			hasDisplayCode = action.Code == "TEST-CODE"
+		case provider.AuthorizationOpenURL:
+			hasOpenURL = action.URL == "https://identity.test/device"
+		}
+	}
+	if !hasDisplayCode || !hasOpenURL {
+		t.Fatalf("generic setup instructions missing display code/open URL actions: %+v", started.Actions)
 	}
 	select {
 	case <-barrier.entered:
@@ -178,9 +187,9 @@ func TestExternalDeviceAuthorizationCannotOverwriteNewerConnectionCredential(t *
 	for time.Now().Before(deadline) {
 		var encoded []byte
 		if cli != "" {
-			encoded = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-get", "--session-id", started.SessionID)
+			encoded = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "get", "--session-id", started.SessionID)
 		} else {
-			response, callErr := daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "auth.device.get", Params: map[string]any{"sessionID": started.SessionID}})
+			response, callErr := daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "auth.setup.get", Params: map[string]any{"sessionID": started.SessionID}})
 			if callErr != nil || !response.OK {
 				t.Fatalf("device status request failed: ok=%v error=%v", response.OK, callErr)
 			}
@@ -189,7 +198,7 @@ func TestExternalDeviceAuthorizationCannotOverwriteNewerConnectionCredential(t *
 		if err := json.Unmarshal(encoded, &final); err != nil {
 			t.Fatal(err)
 		}
-		if final.Status != "awaiting_user" && final.Status != "starting" {
+		if final.Status != "awaiting_user" {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)

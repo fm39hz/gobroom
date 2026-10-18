@@ -243,7 +243,8 @@ func oauthOptionsSchema() (json.RawMessage, error) {
       "scopes":{"type":"array","items":{"type":"string","minLength":1}},
       "redirectUrl":{"type":"string","format":"uri"}
     },
-    "required":["clientId","authUrl","tokenUrl"],
+    "required":["clientId","tokenUrl"],
+    "anyOf":[{"required":["authUrl"]},{"required":["deviceAuthUrl"]}],
     "additionalProperties":false
   },
   "options":false

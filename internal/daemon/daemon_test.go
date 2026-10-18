@@ -54,6 +54,15 @@ type streamingDaemonAdapter struct {
 
 type pendingDaemonDeviceAuth struct{ pollStarted chan struct{} }
 
+func deviceAuthorizationDriver(t *testing.T, auth provider.AuthFlow, begin func(context.Context, provider.AuthInput) (provider.DeviceAuthorization, error), await func(context.Context, provider.DeviceAuthorization) (provider.CredentialState, error)) provider.AuthFlow {
+	t.Helper()
+	driver, err := provider.NewDeviceAuthorizationDriver(auth, begin, await)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return driver
+}
+
 func oauthFixtureState(state provider.OAuthTokenState) (provider.CredentialState, error) {
 	encoded, err := provider.EncodeOAuthTokenState(state)
 	if err != nil {
@@ -712,11 +721,15 @@ func TestConnectionCanBeCreatedWithoutTokenOnlyForInteractiveOAuth(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	interactive, err := provider.OAuthAuthFactory(provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token", DeviceAuthURL: "https://identity.test/device"}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	d := &Daemon{store: s,
 		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("device-oauth", 1): {"api_key": "device-oauth:api_key", "oauth2": "device-oauth:oauth2"}, provider.ProviderDefinitionRef("token-only", 1): {"oauth2": "token-only:oauth2"}},
 		authFlows: map[string]provider.AuthFlow{
 			"device-oauth:api_key": provider.StaticSecretAuth{},
-			"device-oauth:oauth2":  provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token", DeviceAuthURL: "https://identity.test/device"}},
+			"device-oauth:oauth2":  interactive,
 			"token-only:oauth2":    provider.OAuthAuth{Config: auth.OAuthConfig{ClientID: "client", AuthURL: "https://identity.test/auth", TokenURL: "https://identity.test/token"}},
 		},
 	}
@@ -1102,33 +1115,34 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 	}
 	rootCtx, stop := context.WithCancel(context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Transport: transport}))
 	defer stop()
+	oauthFlow := provider.OAuthAuth{Config: auth.OAuthConfig{
+		ClientID: "device-client", DeviceAuthURL: "https://identity.test/device", TokenURL: "https://identity.test/token",
+	}}
 	d := &Daemon{
 		store: s, server: api.NewServer(s), runCtx: rootCtx,
 		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("device-oauth", 1): {"oauth2": "device-oauth:oauth2"}},
-		authFlows: map[string]provider.AuthFlow{"device-oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
-			ClientID: "device-client", DeviceAuthURL: "https://identity.test/device", TokenURL: "https://identity.test/token",
-		}}},
+		authFlows:           map[string]provider.AuthFlow{"device-oauth:oauth2": deviceAuthorizationDriver(t, oauthFlow, oauthFlow.BeginDeviceAuthorization, oauthFlow.WaitForDeviceAuthorization)},
 	}
-	started := d.handleIPC(rootCtx, IPCRequest{ID: "device-start", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	started := d.handleIPC(rootCtx, IPCRequest{ID: "device-start", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	if !started.OK {
 		t.Fatal(started.Error)
 	}
-	view := started.Result.(deviceAuthorizationView)
+	view := started.Result.(AuthorizationSetupView)
 	encodedView, err := json.Marshal(view)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(encodedView), "private-device-code") || view.UserCode != "ABCD-EFGH" || view.VerificationURL != "https://identity.test/activate" {
+	if strings.Contains(string(encodedView), "private-device-code") || len(view.Actions) != 2 || view.Actions[0].Code != "ABCD-EFGH" || view.Actions[1].URL != "https://identity.test/activate?user_code=ABCD-EFGH" {
 		t.Fatalf("device action leaked private code or omitted public instructions: %s", encodedView)
 	}
 	deadline := time.Now().Add(12 * time.Second)
 	for view.Status != "completed" && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
-		response := d.handleIPC(rootCtx, IPCRequest{ID: "device-get", Method: "auth.device.get", Params: map[string]any{"sessionID": view.SessionID}})
+		response := d.handleIPC(rootCtx, IPCRequest{ID: "device-get", Method: "auth.setup.get", Params: map[string]any{"sessionID": view.SessionID}})
 		if !response.OK {
 			t.Fatal(response.Error)
 		}
-		view = response.Result.(deviceAuthorizationView)
+		view = response.Result.(AuthorizationSetupView)
 	}
 	tokenRequestMu.Lock()
 	requestsAfterFirstFlow := tokenRequests
@@ -1152,12 +1166,12 @@ func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testin
 	if err != nil || tokenState.AccessToken != "device-access" || tokenState.RefreshToken != "device-refresh" {
 		t.Fatalf("stored device token state=%#v err=%v", tokenState, err)
 	}
-	second := d.handleIPC(rootCtx, IPCRequest{ID: "device-start-cancel", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	second := d.handleIPC(rootCtx, IPCRequest{ID: "device-start-cancel", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	if !second.OK {
 		t.Fatal(second.Error)
 	}
-	secondView := second.Result.(deviceAuthorizationView)
-	cancelled := d.handleIPC(rootCtx, IPCRequest{ID: "device-cancel", Method: "auth.device.cancel", Params: map[string]any{"sessionID": secondView.SessionID}})
+	secondView := second.Result.(AuthorizationSetupView)
+	cancelled := d.handleIPC(rootCtx, IPCRequest{ID: "device-cancel", Method: "auth.setup.cancel", Params: map[string]any{"sessionID": secondView.SessionID}})
 	if !cancelled.OK {
 		t.Fatal(cancelled.Error)
 	}
@@ -1246,7 +1260,7 @@ func TestDaemonStopCancelsDeviceOAuthPollBeforeClosingStore(t *testing.T) {
 		t.Fatalf("create pending OAuth connection: %s", connectionResponse.Error)
 	}
 	connection := connectionResponse.Result.(store.ConnectionRecord)
-	started := d.handleIPC(context.Background(), IPCRequest{ID: "device-start", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	started := d.handleIPC(context.Background(), IPCRequest{ID: "device-start", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	if !started.OK {
 		_ = d.Stop(context.Background())
 		t.Fatalf("start device authorization: %s", started.Error)
@@ -1284,21 +1298,27 @@ func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *test
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	flow := &serializedDeviceAuthFixture{started: make(chan struct{}, 2), release: make(chan struct{})}
+	driver := deviceAuthorizationDriver(t, flow,
+		func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+			return flow.BeginDeviceAuthorization(ctx)
+		},
+		flow.WaitForDeviceAuthorization,
+	)
 	d := &Daemon{
 		store: s, server: api.NewServer(s), runCtx: rootCtx,
 		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("device-oauth", 1): {"oauth2": "device-oauth:fixture"}},
-		authFlows:           map[string]provider.AuthFlow{"device-oauth:fixture": flow},
+		authFlows:           map[string]provider.AuthFlow{"device-oauth:fixture": driver},
 	}
 	firstDone := make(chan IPCResponse, 1)
 	go func() {
-		firstDone <- d.handleIPC(context.Background(), IPCRequest{ID: "first", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+		firstDone <- d.handleIPC(context.Background(), IPCRequest{ID: "first", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	}()
 	select {
 	case <-flow.started:
 	case <-time.After(time.Second):
 		t.Fatal("first device authorization did not enter provider start")
 	}
-	second := d.handleIPC(context.Background(), IPCRequest{ID: "second", Method: "auth.device.start", Params: map[string]any{"connectionID": connection.ID}})
+	second := d.handleIPC(context.Background(), IPCRequest{ID: "second", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	if second.OK || flow.starts.Load() != 1 {
 		t.Fatalf("concurrent device authorization was not serialized: response=%#v starts=%d", second, flow.starts.Load())
 	}
@@ -1307,8 +1327,8 @@ func TestDeviceAuthorizationReservesConnectionBeforeStartingProviderFlow(t *test
 	if !first.OK {
 		t.Fatalf("first device authorization failed: %s", first.Error)
 	}
-	view := first.Result.(deviceAuthorizationView)
-	if cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.device.cancel", Params: map[string]any{"sessionID": view.SessionID}}); !cancelled.OK {
+	view := first.Result.(AuthorizationSetupView)
+	if cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.setup.cancel", Params: map[string]any{"sessionID": view.SessionID}}); !cancelled.OK {
 		t.Fatal(cancelled.Error)
 	}
 	cancel()
@@ -1529,8 +1549,14 @@ func TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream(t *testing
 		t.Fatal(err)
 	}
 	deviceFlow := &pendingDaemonDeviceAuth{pollStarted: make(chan struct{})}
+	deviceDriver := deviceAuthorizationDriver(t, deviceFlow,
+		func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+			return deviceFlow.BeginDeviceAuthorization(ctx)
+		},
+		deviceFlow.WaitForDeviceAuthorization,
+	)
 	d.providerAuthFlowIDs[provider.ProviderDefinitionRef(deviceNode.DefinitionID, 1)] = map[string]string{"oauth2": deviceFlow.ID()}
-	d.authFlows[deviceFlow.ID()] = deviceFlow
+	d.authFlows[deviceFlow.ID()] = deviceDriver
 
 	dataPlane := httptest.NewServer(d.server.HandlerWithOptions(api.HandlerOptions{DataPlane: true}))
 	defer dataPlane.Close()
@@ -1578,7 +1604,7 @@ func TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream(t *testing
 	if reloaded := callIPC("reload", nil); !reloaded.OK {
 		t.Fatalf("reload IPC blocked by active HTTP stream: %s", reloaded.Error)
 	}
-	authorization := callIPC("auth.device.start", map[string]any{"connectionID": deviceConnection.ID})
+	authorization := callIPC("auth.setup.start", map[string]any{"connectionID": deviceConnection.ID})
 	if !authorization.OK {
 		t.Fatalf("device auth start IPC blocked by active HTTP stream: %s", authorization.Error)
 	}
@@ -1592,10 +1618,10 @@ func TestDaemonIPCReloadAndDeviceAuthRemainResponsiveDuringHTTPStream(t *testing
 	case <-time.After(time.Second):
 		t.Fatal("daemon device-auth worker did not begin polling")
 	}
-	if current := callIPC("auth.device.get", map[string]any{"sessionID": sessionID}); !current.OK {
+	if current := callIPC("auth.setup.get", map[string]any{"sessionID": sessionID}); !current.OK {
 		t.Fatalf("device auth status IPC blocked by active HTTP stream: %s", current.Error)
 	}
-	if cancelled := callIPC("auth.device.cancel", map[string]any{"sessionID": sessionID}); !cancelled.OK {
+	if cancelled := callIPC("auth.setup.cancel", map[string]any{"sessionID": sessionID}); !cancelled.OK {
 		t.Fatalf("device auth cancellation IPC blocked by active HTTP stream: %s", cancelled.Error)
 	}
 	workerDone := make(chan struct{})

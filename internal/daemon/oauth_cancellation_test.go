@@ -82,14 +82,21 @@ func (f lateDeviceStartFixture) BeginDeviceAuthorization(ctx context.Context) (p
 
 func TestDeviceAuthorizationStartCancelsAndDrainsBeforeLateSuccess(t *testing.T) {
 	flow := &lateAuthorizationFixture{entered: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
-	d, connectionID := cancellationAuthDaemon(t, lateDeviceStartFixture{flow})
+	device := lateDeviceStartFixture{flow}
+	driver := deviceAuthorizationDriver(t, device,
+		func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+			return device.BeginDeviceAuthorization(ctx)
+		},
+		device.WaitForDeviceAuthorization,
+	)
+	d, connectionID := cancellationAuthDaemon(t, driver)
 	root, stopRoot := context.WithCancel(context.Background())
 	defer stopRoot()
 	d.runCtx = root
 	defer close(flow.release)
 	result := make(chan error, 1)
 	go func() {
-		_, err := d.startDeviceAuthorization(context.Background(), connectionID)
+		_, err := d.startSetupAuthorization(context.Background(), connectionID)
 		result <- err
 	}()
 	awaitAuthorizationSignal(t, flow.entered)
@@ -113,20 +120,29 @@ func TestDeviceAuthorizationStartCancelsAndDrainsBeforeLateSuccess(t *testing.T)
 	default:
 		t.Fatal("fixture daemon was not cancelled")
 	}
-	if _, err := d.startDeviceAuthorization(context.Background(), connectionID); err == nil {
+	if _, err := d.startSetupAuthorization(context.Background(), connectionID); err == nil {
 		t.Fatal("stopped coordinator admitted another device acquisition")
 	}
 }
 
 func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
-	for _, kind := range []string{"authorization_code", "device_code"} {
+	for _, kind := range []string{"authorization_code", "device"} {
 		for _, cause := range []string{"session_cancel", "coordinator_stop", "daemon_cancel", "caller_cancel", "session_expiry"} {
-			if kind == "device_code" && (cause == "caller_cancel" || cause == "session_expiry") {
+			if kind == "device" && (cause == "caller_cancel" || cause == "session_expiry") {
 				continue // Device polling intentionally outlives its initiating RPC.
 			}
 			t.Run(kind+"/"+cause, func(t *testing.T) {
 				flow := &lateAuthorizationFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://identity.test/callback"}, entered: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
 				d, connectionID := cancellationAuthDaemon(t, flow)
+				if kind == "device" {
+					driver := deviceAuthorizationDriver(t, flow,
+						func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+							return flow.BeginDeviceAuthorization(ctx)
+						},
+						flow.WaitForDeviceAuthorization,
+					)
+					d.authFlows["oauth:oauth2"] = driver
+				}
 				root, stopRoot := context.WithCancel(context.Background())
 				defer stopRoot()
 				d.runCtx = root
@@ -148,7 +164,7 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 						result <- err
 					}()
 				} else {
-					challenge, err := d.startDeviceAuthorization(caller, connectionID)
+					challenge, err := d.startSetupAuthorization(caller, connectionID)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -161,7 +177,9 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 					if kind == "authorization_code" {
 						err = d.cancelAuthorization(sessionID)
 					} else {
-						err = d.cancelDeviceAuthorization(sessionID)
+						if !d.finishSetupAuthorization(sessionID, "cancelled", "authorization was cancelled") {
+							err = context.Canceled
+						}
 					}
 					if err != nil {
 						t.Fatal(err)

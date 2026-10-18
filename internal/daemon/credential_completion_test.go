@@ -221,7 +221,18 @@ func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 	for _, kind := range []string{"code", "device"} {
 		t.Run(kind, func(t *testing.T) {
 			flow := &ownerCompletionGateFlow{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://client.test/callback"}, entered: make(chan struct{}), release: make(chan struct{})}
-			d, connectionID := cancellationAuthDaemon(t, flow)
+			authFlow := provider.AuthFlow(flow)
+			if kind == "device" {
+				authFlow = deviceAuthorizationDriver(t, flow,
+					func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+						return flow.BeginDeviceAuthorization(ctx)
+					},
+					func(ctx context.Context, device provider.DeviceAuthorization) (provider.CredentialState, error) {
+						return flow.WaitForDeviceAuthorization(ctx, device)
+					},
+				)
+			}
+			d, connectionID := cancellationAuthDaemon(t, authFlow)
 			t.Cleanup(flow.releaseToken)
 			before, ok := d.store.ConnectionCredentialByID(connectionID)
 			if !ok {
@@ -251,7 +262,7 @@ func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 					t.Fatalf("authorization status=%+v err=%v; want failed", status, err)
 				}
 			} else {
-				challenge, err := d.startDeviceAuthorization(context.Background(), connectionID)
+				challenge, err := d.startSetupAuthorization(context.Background(), connectionID)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -263,7 +274,7 @@ func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 				drained := make(chan struct{})
 				go func() { d.authWG.Wait(); close(drained) }()
 				awaitAuthorizationSignal(t, drained)
-				status, err := d.deviceAuthorizationStatus(sessionID)
+				status, err := d.setupAuthorizationStatus(sessionID)
 				if err != nil || status.Status != "failed" {
 					t.Fatalf("device authorization status=%+v err=%v; want failed", status, err)
 				}

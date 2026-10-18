@@ -33,7 +33,16 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 		for _, failure := range []string{"routing_reset", "version_persist", "serve_before", "serve_after"} {
 			t.Run(kind+"/"+failure, func(t *testing.T) {
 				flow := &activationAuthFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://client.test/callback"}}
-				d, id := cancellationAuthDaemon(t, flow)
+				authFlow := provider.AuthFlow(flow)
+				if kind == "device" {
+					authFlow = deviceAuthorizationDriver(t, flow,
+						func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+							return flow.BeginDeviceAuthorization(ctx)
+						},
+						flow.WaitForDeviceAuthorization,
+					)
+				}
+				d, id := cancellationAuthDaemon(t, authFlow)
 				initialVersion := d.server.Control().Version()
 				switch failure {
 				case "routing_reset":
@@ -68,7 +77,7 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 						t.Fatalf("postcommit authorization=%+v err=%v", result, err)
 					}
 				} else {
-					challenge, err := d.startDeviceAuthorization(context.Background(), id)
+					challenge, err := d.startSetupAuthorization(context.Background(), id)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -86,7 +95,7 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 						}
 						return v.Activation
 					}
-					v, err := d.deviceAuthorizationStatus(sessionID)
+					v, err := d.setupAuthorizationStatus(sessionID)
 					if err != nil || v.Status != "completed" {
 						t.Fatalf("device status=%+v %v", v, err)
 					}

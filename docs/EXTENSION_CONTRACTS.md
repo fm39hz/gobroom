@@ -666,8 +666,8 @@ can authorize the single allowed auth retry even when the bearer secret stays
 the same; existing operation replay and issuer restrictions still apply.
 OAuth alone owns `OAuthTokenState`, its encode/decode helpers and the existing
 `x/oauth2` exchange; those helpers/factory are public for module composition.
-The static-module host contract is version 3 for opaque-state and explicit
-credential-recovery semantics;
+The static-module host contract is version 4 for opaque-state, explicit
+credential recovery and device-to-action lifecycle convergence;
 old module contracts are rejected, not adapted. Interactive sessions are not
 durably resumed after restart.
 
@@ -696,16 +696,17 @@ not retained in public status or logs.
 
 There are at most 64 retained authorization sessions shared with code/device
 setup, at most eight actions per transition and 64 KiB private/input documents.
-A session cannot exceed ten minutes or extend its deadline. Poll intervals are
+A generic session cannot exceed one hour or extend its provider-declared deadline.
+The separate code-flow coordinator still caps its sessions at ten minutes. Poll intervals are
 100 ms..one minute and only run for active sessions that request them; no poll
 timer exists for ordinary input-only waiting. Provider network calls are bounded,
 cancellable and never hold the coordinator mutex. Cancellation/shutdown fences
 late completion; final credential validation, owner/revision CAS and activation
 use the existing shared commit path, with principal replacement semantics.
 
-This is the generic action-driver vertical, not full C4/SG2 closure. The existing
-code/device drivers and their frontend views still need to converge on this
-action engine; no old action schema or compatibility decoder is introduced.
+This is not full C4/SG2 closure. Device setup now uses the action engine, while
+the code-flow coordinator still needs convergence; no old action schema or
+compatibility decoder is introduced.
 Generic TUI rendering/editing, full callback resource negotiation, credential leases and
 the full composition/fault matrix remain unfinished. A flow can already parse a
 cookie or service-account state through `AuthFlow.Resolve`; the new seam addresses
@@ -789,15 +790,30 @@ pending sessions, one pending session per connection, bounded callback/code
 sizes, redirect-target matching and a bounded exchange deadline, state
 matching and replay rejection.
 
-OAuth definitions may additionally declare `deviceAuthUrl`. The same auth
-primitive then supports `auth.device.start/get/cancel`: the daemon starts the
-RFC 8628 exchange, keeps `device_code` private, and runs a cancellable polling
-worker using `golang.org/x/oauth2` device authorization support. The frontend
-receives only user code, verification URLs, expiry and public status; polling
-continues if the UI disconnects. Cancellation and daemon shutdown stop the
-worker. A delayed authorization or refresh persists through a compare-and-swap
-against the connection revision observed at start, so a newer credential is not
-overwritten. On success the daemon reloads serving state.
+OAuth definitions may declare `deviceAuthUrl` without an authorization-code URL.
+The factory composes `NewDeviceAuthorizationDriver` over the existing OAuth
+implementation. It produces public code/URL actions and private `Await` intent;
+the same `auth.setup.*` coordinator owns reservation, expiry, worker lifetime,
+CAS and activation. `auth.device.*`, its separate coordinator/session fields,
+device capability metadata and the three device-specific CLI commands are removed,
+not aliased. Code capability is preserved when a definition also supports it.
+
+`Await` schedules one cancellable background driver call with the session
+deadline, rather than the short interactive-RPC timeout. It inherits daemon-owned
+context values, not the initiating frontend's lifetime. Queued and admitted work
+are both tracked before shutdown drain. Await cannot also poll or expose input/
+callback actions; those would compete for the same single-flight session. Protocol
+polling remains in the provider implementation: RFC 8628 uses the pinned
+`x/oauth2.DeviceAccessToken` pending/slow-down/expiry logic, not a second daemon loop.
+The reusable device strategy round-trips its complete bounded response/private
+metadata as opaque state and returns provider-owned `CredentialState`. Denial and
+expiry normalize to typed terminal failures. The generic CAS/activation and
+cancellation fences apply unchanged; long waits cannot grant a late credential.
+
+CLI/TUI render the same typed public setup view. TUI `D` starts generic setup;
+its one-second get calls only observe progress. Input actions display their exact
+schema ref and can be submitted through the CLI; the inline TUI editor remains
+unfinished. No public status contains the API device code or private state.
 
 The CLI and TUI expose both flows. For an HTTP loopback redirect URI, the
 daemon binds only the configured loopback address, routes the callback by the

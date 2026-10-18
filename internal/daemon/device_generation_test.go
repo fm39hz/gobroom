@@ -140,16 +140,22 @@ func TestDeviceAuthorizationDoesNotOverwriteChangedConnectionGeneration(t *testi
 				t.Fatal(err)
 			}
 			flow := &generationDeviceFlow{entered: make(chan struct{}), release: make(chan struct{})}
+			driver := deviceAuthorizationDriver(t, flow,
+				func(ctx context.Context, _ provider.AuthInput) (provider.DeviceAuthorization, error) {
+					return flow.BeginDeviceAuthorization(ctx)
+				},
+				flow.WaitForDeviceAuthorization,
+			)
 			d := &Daemon{
 				store: s, server: api.NewServer(s),
 				providerAuthFlowIDs: map[extensions.Ref]map[string]string{
 					provider.ProviderDefinitionRef("oauth", 1): {"oauth2": flow.ID()},
 				},
-				authFlows: map[string]provider.AuthFlow{flow.ID(): flow},
+				authFlows: map[string]provider.AuthFlow{flow.ID(): driver},
 			}
 			t.Cleanup(d.cancelAuthorizationSessions)
 
-			challenge, err := d.startDeviceAuthorization(context.Background(), connection.ID)
+			challenge, err := d.startSetupAuthorization(context.Background(), connection.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -160,7 +166,7 @@ func TestDeviceAuthorizationDoesNotOverwriteChangedConnectionGeneration(t *testi
 			drained := make(chan struct{})
 			go func() { d.authWG.Wait(); close(drained) }()
 			awaitAuthorizationSignal(t, drained)
-			status, err := d.deviceAuthorizationStatus(challenge.SessionID)
+			status, err := d.setupAuthorizationStatus(challenge.SessionID)
 			if err != nil || status.Status != "failed" {
 				t.Fatalf("superseded device authorization status=%+v err=%v", status, err)
 			}

@@ -15,7 +15,7 @@ import (
 	"github.com/fm39hz/gobroom/pkg/provider"
 )
 
-func TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges(t *testing.T) {
+func TestPublicDaemonRejectsAuthorizationSetupAfterDefinitionOwnerChanges(t *testing.T) {
 	for _, aba := range []bool{false, true} {
 		name := "rebind"
 		if aba {
@@ -84,18 +84,16 @@ func TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges(t *te
 			}
 
 			cli := os.Getenv("GOBROOM_TEST_CLI")
-			var started struct {
-				SessionID string `json:"sessionId"`
-			}
+			var started daemon.AuthorizationSetupView
 			if cli != "" {
-				if err := json.Unmarshal(runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-start", "--connection-id", connection.ID), &started); err != nil {
+				if err := json.Unmarshal(runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "start", "--connection-id", connection.ID), &started); err != nil {
 					t.Fatal(err)
 				}
-			} else if err := json.Unmarshal(rpc("auth.device.start", map[string]any{"connectionID": connection.ID}), &started); err != nil {
+			} else if err := json.Unmarshal(rpc("auth.setup.start", map[string]any{"connectionID": connection.ID}), &started); err != nil {
 				t.Fatal(err)
 			}
-			if started.SessionID == "" {
-				t.Fatal("device start response missing session ID")
+			if started.SessionID == "" || started.Status != "awaiting_user" {
+				t.Fatalf("setup start response missing session or awaiting_user status: %+v", started)
 			}
 			select {
 			case <-barrier.entered:
@@ -126,14 +124,14 @@ func TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges(t *te
 			for time.Now().Before(deadline) {
 				var encoded []byte
 				if cli != "" {
-					encoded = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-get", "--session-id", started.SessionID)
+					encoded = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "get", "--session-id", started.SessionID)
 				} else {
-					encoded = rpc("auth.device.get", map[string]any{"sessionID": started.SessionID})
+					encoded = rpc("auth.setup.get", map[string]any{"sessionID": started.SessionID})
 				}
 				if err := json.Unmarshal(encoded, &status); err != nil {
 					t.Fatal(err)
 				}
-				if status.Status != "awaiting_user" && status.Status != "starting" {
+				if status.Status != "awaiting_user" {
 					break
 				}
 				time.Sleep(20 * time.Millisecond)
@@ -165,14 +163,12 @@ func TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges(t *te
 			}
 
 			// A fresh setup belongs to the current owner and must still work.
-			var successor struct {
-				SessionID string `json:"sessionId"`
-			}
+			var successor daemon.AuthorizationSetupView
 			var successorStart []byte
 			if cli != "" {
-				successorStart = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-start", "--connection-id", connection.ID)
+				successorStart = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "start", "--connection-id", connection.ID)
 			} else {
-				successorStart = rpc("auth.device.start", map[string]any{"connectionID": connection.ID})
+				successorStart = rpc("auth.setup.start", map[string]any{"connectionID": connection.ID})
 			}
 			if err := json.Unmarshal(successorStart, &successor); err != nil || successor.SessionID == "" {
 				t.Fatalf("fresh device setup: %v", err)
@@ -181,14 +177,14 @@ func TestPublicDaemonRejectsDeviceAuthorizationAfterDefinitionOwnerChanges(t *te
 			for time.Now().Before(deadline) {
 				var encoded []byte
 				if cli != "" {
-					encoded = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-get", "--session-id", successor.SessionID)
+					encoded = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "get", "--session-id", successor.SessionID)
 				} else {
-					encoded = rpc("auth.device.get", map[string]any{"sessionID": successor.SessionID})
+					encoded = rpc("auth.setup.get", map[string]any{"sessionID": successor.SessionID})
 				}
 				if err := json.Unmarshal(encoded, &status); err != nil {
 					t.Fatal(err)
 				}
-				if status.Status != "awaiting_user" && status.Status != "starting" {
+				if status.Status != "awaiting_user" {
 					break
 				}
 				time.Sleep(10 * time.Millisecond)

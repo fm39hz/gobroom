@@ -67,8 +67,6 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	current.expiresAt = time.Now().Add(authorizationSessionRetention)
 	current.expectedCredential = store.Credential{}
 	current.verifier = ""
-	current.device.DeviceCode = ""
-	current.deviceFlow = nil
 	current.authFlow = nil
 	clearSetupSession(&current)
 	sessions.byID[sessionID] = current

@@ -41,7 +41,7 @@ func TestAuthorizationTransitionTerminalAndLimits(t *testing.T) {
 		"mixed terminal":              {Credential: &credential, State: state},
 		"missing continuation action": {State: state},
 		"expired":                     {State: state, ExpiresAt: now},
-		"too long expiry":             {State: state, ExpiresAt: now.Add(10*time.Minute + time.Nanosecond), PollAfter: time.Second},
+		"too long expiry":             {State: state, ExpiresAt: now.Add(MaxAuthorizationDuration + time.Nanosecond), PollAfter: time.Second},
 		"poll too short":              {State: state, ExpiresAt: now.Add(time.Minute), PollAfter: time.Millisecond},
 		"poll too long":               {State: state, ExpiresAt: now.Add(time.Minute), PollAfter: time.Minute + time.Nanosecond},
 		"too many actions":            {State: state, ExpiresAt: now.Add(time.Minute), Actions: make([]AuthorizationAction, 9)},

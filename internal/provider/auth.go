@@ -41,24 +41,18 @@ type AuthFlow interface {
 	Refresh(context.Context, AuthInput, kernel.Credential) (CredentialState, error)
 }
 
-// InteractiveAuthCapabilities advertises which daemon-owned authorization
-// paths can bootstrap a connection without a pre-existing credential.
-type InteractiveAuthCapabilities interface {
+// AuthorizationCodeCapability advertises a flow that can begin OAuth code authorization.
+type AuthorizationCodeCapability interface {
 	CanAuthorizeCode() bool
-	CanAuthorizeDevice() bool
 }
 
-// InteractiveAuthModes reports only capabilities backed by the corresponding
-// lifecycle interface, preventing a flow from advertising an unusable setup.
-func InteractiveAuthModes(flow AuthFlow) (authorizationCode, device bool) {
-	capabilities, ok := flow.(InteractiveAuthCapabilities)
-	if !ok {
-		return false, false
+func AuthorizationCodeEnabled(flow AuthFlow) bool {
+	capability, ok := flow.(AuthorizationCodeCapability)
+	if !ok || !capability.CanAuthorizeCode() {
+		return false
 	}
-	_, authorizationCodeFlow := flow.(AuthorizationCodeFlow)
-	_, deviceAuthorizationFlow := flow.(DeviceAuthorizationFlow)
-	return capabilities.CanAuthorizeCode() && authorizationCodeFlow,
-		capabilities.CanAuthorizeDevice() && deviceAuthorizationFlow
+	_, ok = flow.(AuthorizationCodeFlow)
+	return ok
 }
 
 // AuthorizationCodeFlow is an optional interactive capability. The daemon
@@ -70,19 +64,13 @@ type AuthorizationCodeFlow interface {
 }
 
 type DeviceAuthorization struct {
-	DeviceCode              string        `json:"-"`
-	UserCode                string        `json:"userCode"`
-	VerificationURL         string        `json:"verificationUrl"`
-	VerificationURLComplete string        `json:"verificationUrlComplete,omitempty"`
-	ExpiresAt               time.Time     `json:"expiresAt"`
-	PollInterval            time.Duration `json:"pollInterval"`
-}
-
-// DeviceAuthorizationFlow is an optional RFC 8628 capability. Device codes
-// stay private to the daemon; only verification instructions cross IPC.
-type DeviceAuthorizationFlow interface {
-	BeginDeviceAuthorization(context.Context) (DeviceAuthorization, error)
-	WaitForDeviceAuthorization(context.Context, DeviceAuthorization) (CredentialState, error)
+	DeviceCode              string          `json:"-"`
+	UserCode                string          `json:"userCode"`
+	VerificationURL         string          `json:"verificationUrl"`
+	VerificationURLComplete string          `json:"verificationUrlComplete,omitempty"`
+	ExpiresAt               time.Time       `json:"expiresAt"`
+	PollInterval            time.Duration   `json:"pollInterval"`
+	PrivateState            json.RawMessage `json:"-"`
 }
 
 type StaticSecretAuth struct{}
@@ -157,11 +145,33 @@ func (OAuthAuth) SetupSchema() SetupSchema {
 }
 
 func OAuthAuthFactory(options AuthOptions) (AuthFlow, error) {
-	if options.OAuth == nil || options.OAuth.ClientID == "" || options.OAuth.AuthURL == "" || options.OAuth.TokenURL == "" {
-		return nil, fmt.Errorf("oauth2 requires clientId, authUrl and tokenUrl in authOptions.oauth")
+	if options.OAuth == nil || options.OAuth.ClientID == "" || options.OAuth.TokenURL == "" || (options.OAuth.AuthURL == "" && options.OAuth.DeviceAuthURL == "") {
+		return nil, fmt.Errorf("oauth2 requires clientId, tokenUrl and authUrl or deviceAuthUrl in authOptions.oauth")
 	}
 	config := appauth.OAuthConfig{ClientID: options.OAuth.ClientID, AuthURL: options.OAuth.AuthURL, TokenURL: options.OAuth.TokenURL, DeviceAuthURL: options.OAuth.DeviceAuthURL, Scopes: append([]string(nil), options.OAuth.Scopes...), RedirectURL: options.OAuth.RedirectURL}
+	if config.DeviceAuthURL != "" {
+		base := OAuthAuth{Config: config}
+		generic, err := NewDeviceAuthorizationDriver(base, base.BeginDeviceAuthorization, base.WaitForDeviceAuthorization)
+		if err != nil {
+			return nil, err
+		}
+		return oauthDeviceAuth{OAuthAuth: base, device: generic.(AuthorizationFlow)}, nil
+	}
 	return OAuthAuth{Config: config}, nil
+}
+
+// The code capability remains available when a configured OAuth flow also
+// offers device authorization; only the device lifecycle uses the shared strategy.
+type oauthDeviceAuth struct {
+	OAuthAuth
+	device AuthorizationFlow
+}
+
+func (f oauthDeviceAuth) BeginAuthorization(ctx context.Context, input AuthInput) (AuthorizationTransition, error) {
+	return f.device.BeginAuthorization(ctx, input)
+}
+func (f oauthDeviceAuth) AdvanceAuthorization(ctx context.Context, state AuthorizationState, event AuthorizationEvent) (AuthorizationTransition, error) {
+	return f.device.AdvanceAuthorization(ctx, state, event)
 }
 
 func (a OAuthAuth) Resolve(_ context.Context, input AuthInput) (kernel.Credential, error) {
@@ -209,10 +219,6 @@ func (a OAuthAuth) CanAuthorizeCode() bool {
 	return a.Config.ClientID != "" && a.Config.AuthURL != "" && a.Config.TokenURL != "" && a.Config.RedirectURL != ""
 }
 
-func (a OAuthAuth) CanAuthorizeDevice() bool {
-	return a.Config.ClientID != "" && a.Config.DeviceAuthURL != "" && a.Config.TokenURL != ""
-}
-
 func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (CredentialState, error) {
 	if strings.TrimSpace(code) == "" || verifier == "" {
 		return CredentialState{}, fmt.Errorf("OAuth authorization code and PKCE verifier are required")
@@ -230,7 +236,7 @@ func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier
 	})
 }
 
-func (a OAuthAuth) BeginDeviceAuthorization(ctx context.Context) (DeviceAuthorization, error) {
+func (a OAuthAuth) BeginDeviceAuthorization(ctx context.Context, _ AuthInput) (DeviceAuthorization, error) {
 	if a.Config.ClientID == "" || a.Config.DeviceAuthURL == "" || a.Config.TokenURL == "" {
 		return DeviceAuthorization{}, fmt.Errorf("device authorization requires client ID, device authorization URL and token URL")
 	}

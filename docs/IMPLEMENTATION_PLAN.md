@@ -386,6 +386,22 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    accounts activate and HTTP inference works through exposed Physical/Combo after
    restart. This closes the dynamic-URL ordering slice, not code/device convergence,
    TUI editing, credential leases or full C4/SG2.
+
+   Device orchestration now converges on the generic setup engine. A reusable
+   provider strategy composes device begin/await hooks, keeps the complete bounded
+   response/private metadata opaque and emits public code/URL actions with typed
+   `Await` intent. The daemon owns queued and admitted background work, root
+   context values, expiry, single-flight advancement, CAS and activation. RFC 8628
+   polling remains in pinned `x/oauth2`, including pending/slow-down. The old device
+   coordinator, session fields, optional interface, capability metadata, IPC methods
+   and three CLI commands are removed, not adapted. TUI `D` uses the same typed
+   setup view as CLI, including activation readiness; code capability still works
+   beside device mode. Host contract v4 rejects removed lifecycle contracts.
+   Generic waits use their provider deadline under a one-hour host ceiling rather
+   than the short RPC timeout. Migrated generation/owner/activation/cancel/drain
+   fixtures and virtual-time long-wait tests retain the previous acceptance scope.
+   Remaining: authorization-code coordinator convergence, inline TUI input editor,
+   credential leases, live OAuth acceptance and full C4/SG2 composition.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

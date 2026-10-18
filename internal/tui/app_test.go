@@ -220,29 +220,52 @@ func TestSelectedConnectionTestShowsReadOnlyCatalogPreview(t *testing.T) {
 	}
 }
 
-func TestTUIDeviceAuthorizationShowsPublicInstructionsAndPollsDaemon(t *testing.T) {
+func TestTUISetupShowsGenericPublicActionsAndPollsDaemon(t *testing.T) {
 	model := newApp("/tmp/gobroom.sock")
 	model.width, model.height = 120, 40
 	model.activePanel = int(dashboardConnections)
 	model.activeTabs[dashboardConnections] = 1
 	model.resize()
 	model.setPaneItems(model.activeContextIndex(), []entry{{key: "connection-oauth", title: "oauth account", payload: connection{ID: "connection-oauth", ProviderNodeID: "provider-oauth", Name: "oauth account", CredentialType: "oauth2", Enabled: true}}})
-	updated, command := model.updateDashboardAction(tea.KeyPressMsg{Code: 'o', Text: "o"})
-	if command == nil || !strings.Contains(updated.(*app).status, "private state stays in daemon") {
-		t.Fatalf("device authorization did not start from selected connection: status=%q", updated.(*app).status)
+	updated, command := model.updateDashboardAction(tea.KeyPressMsg{Code: 'D', Text: "D"})
+	if command == nil || !strings.Contains(updated.(*app).status, "starting connection setup") {
+		t.Fatalf("generic setup did not start from selected connection: status=%q", updated.(*app).status)
 	}
 	model = updated.(*app)
-	pending := json.RawMessage(`{"sessionId":"auth-session-1","status":"awaiting_user","userCode":"ABCD-EFGH","verificationUrl":"https://identity.test/activate","expiresAt":"2026-10-07T13:00:00Z"}`)
-	updatedModel, poll := model.Update(actionMsg{method: "auth.device.start", result: pending})
+	pending := json.RawMessage(`{"sessionId":"auth-session-1","connectionId":"connection-oauth","status":"awaiting_user","revision":4,"actions":[{"kind":"display_code","label":"Enter this code","code":"ABCD-EFGH"},{"kind":"open_url","label":"Open sign-in","url":"https://identity.test/activate"},{"kind":"input","label":"Provide account details","inputSchemaRef":{"kind":"schema","id":"provider.account","contractVersion":1}}],"expiresAt":"2026-10-07T13:00:00Z","callbackModes":[{"mode":"manual"},{"mode":"loopback"}],"privateState":"private-sentinel"}`)
+	updatedModel, poll := model.Update(actionMsg{method: "auth.setup.start", result: pending})
 	model = updatedModel.(*app)
-	if model.deviceAuthSessionID != "auth-session-1" || poll == nil || !strings.Contains(model.status, "ABCD-EFGH") || !strings.Contains(model.previewExtra, "identity.test/activate") || strings.Contains(model.previewExtra, "device_code") {
-		t.Fatalf("device instructions/status are incomplete or private: status=%q preview=%q session=%q", model.status, model.previewExtra, model.deviceAuthSessionID)
+	for _, expected := range []string{"display_code", "ABCD-EFGH", "open_url", "identity.test/activate", "input", "Input schema", "Callback: manual", "Callback: loopback"} {
+		if !strings.Contains(model.previewExtra, expected) {
+			t.Fatalf("public action %q missing from preview: %q", expected, model.previewExtra)
+		}
 	}
-	completed := json.RawMessage(`{"sessionId":"auth-session-1","status":"completed","userCode":"ABCD-EFGH","verificationUrl":"https://identity.test/activate","activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
-	updatedModel, next := model.Update(actionMsg{method: "auth.device.get", result: completed})
+	if !strings.Contains(model.previewExtra, (extensions.Ref{Kind: extensions.SchemaKind, ID: "provider.account", ContractVersion: 1}).Key()) {
+		t.Fatal("typed input schema identity was lost")
+	}
+	if model.setupSessionID != "auth-session-1" || poll == nil || strings.Contains(model.previewExtra, "private-sentinel") || !strings.Contains(model.status, "revision 4") {
+		t.Fatalf("generic setup instructions/status are incomplete or private: status=%q preview=%q session=%q", model.status, model.previewExtra, model.setupSessionID)
+	}
+	completed := json.RawMessage(`{"sessionId":"auth-session-1","connectionId":"connection-oauth","status":"completed","activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
+	updatedModel, next := model.Update(actionMsg{method: "auth.setup.get", result: completed})
 	model = updatedModel.(*app)
-	if next != nil || model.deviceAuthSessionID != "" || !strings.Contains(model.status, "credential saved") {
-		t.Fatalf("completed device authorization was not rendered as terminal: status=%q session=%q", model.status, model.deviceAuthSessionID)
+	if next != nil || model.setupSessionID != "" || !strings.Contains(model.status, "credential saved") {
+		t.Fatalf("completed generic setup was not rendered as terminal: status=%q session=%q", model.status, model.setupSessionID)
+	}
+}
+
+func TestTUISetupCancellationUsesGenericSession(t *testing.T) {
+	model := newApp("/tmp/gobroom.sock")
+	model.setupSessionID = "setup-session"
+	updated, command := model.updateKey(tea.KeyPressMsg{Code: 'O', Text: "O"})
+	model = updated.(*app)
+	if command == nil || !strings.Contains(model.status, "cancelling connection setup") {
+		t.Fatalf("generic setup cancellation did not start: status=%q command=%v", model.status, command)
+	}
+	updated, _ = model.Update(actionMsg{method: "auth.setup.cancel", result: json.RawMessage(`{}`)})
+	model = updated.(*app)
+	if model.setupSessionID != "" || model.status != "connection setup cancelled" {
+		t.Fatalf("generic setup cancellation did not clear session: status=%q session=%q", model.status, model.setupSessionID)
 	}
 }
 
@@ -352,12 +375,12 @@ func TestConnectionFormUsesProviderAuthSetupSchema(t *testing.T) {
 
 func TestInteractiveOAuthConnectionFormAllowsDeferredAuthorization(t *testing.T) {
 	catalog := []provider.DefinitionMetadata{{
-		ID: "oauth-device", AuthModes: []provider.AuthModeMetadata{{CredentialType: "oauth2", ID: "oauth2", DeviceAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
+		ID: "oauth-actions", AuthModes: []provider.AuthModeMetadata{{CredentialType: "oauth2", ID: "oauth2", ActionAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
 			{Name: "access_token", Type: "string", Secret: true},
 			{Name: "refresh_token", Type: "string", Secret: true},
 		}}}},
 	}}
-	form := newConnectionFormWithMetadata(providerNode{ID: "node-oauth", DefinitionID: "oauth-device", AuthMode: "oauth2"}, catalog)
+	form := newConnectionFormWithMetadata(providerNode{ID: "node-oauth", DefinitionID: "oauth-actions", AuthMode: "oauth2"}, catalog)
 	for index, field := range form.fields {
 		if field.key == "name" {
 			form.inputs[index].SetValue("new account")
@@ -376,7 +399,7 @@ func TestConnectionFormCyclesAuthModesAndRebuildsFields(t *testing.T) {
 	catalog := []provider.DefinitionMetadata{{
 		ID: "dual-auth", DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeMetadata{
 			{CredentialType: "api_key", ID: "static-secret", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "secret", Type: "string", Required: true, Secret: true}}}},
-			{CredentialType: "oauth2", ID: "oauth2", DeviceAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "access_token", Type: "string", Secret: true}}}},
+			{CredentialType: "oauth2", ID: "oauth2", ActionAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "access_token", Type: "string", Secret: true}}}},
 		},
 	}}
 	form := newConnectionFormWithMetadata(providerNode{ID: "node-dual", DefinitionID: "dual-auth", AuthMode: "api_key"}, catalog)

@@ -1486,23 +1486,6 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, map[string]string{"status": "cancelled"})
-	case "auth.device.start":
-		result, err := d.startDeviceAuthorization(ctx, stringParam(request.Params, "connectionID"))
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, result)
-	case "auth.device.get":
-		result, err := d.deviceAuthorizationStatus(stringParam(request.Params, "sessionID"))
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, result)
-	case "auth.device.cancel":
-		if err := d.cancelDeviceAuthorization(stringParam(request.Params, "sessionID")); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, map[string]string{"status": "cancelled"})
 	case "connections.test":
 		connectionID := stringParam(request.Params, "connectionID")
 		nodeID, err := d.providerNodeForConnection(connectionID)
@@ -1930,9 +1913,9 @@ func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, c
 		return fmt.Errorf("credential type none does not accept credential secret")
 	}
 	if strings.TrimSpace(secret) == "" {
-		authorizationCode, deviceAuthorization := provider.InteractiveAuthModes(flow)
+		authorizationCode := provider.AuthorizationCodeEnabled(flow)
 		_, actionAuthorization := flow.(provider.AuthorizationFlow)
-		if authorizationCode || deviceAuthorization || actionAuthorization {
+		if authorizationCode || actionAuthorization {
 			return nil
 		}
 	}

@@ -125,6 +125,14 @@ already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 
+Device lifecycle convergence reuses the already-pinned `x/oauth2` device flow.
+Its `deviceauth.go` owns server interval, `authorization_pending`, `slow_down`,
+expiry and token retrieval; Gobroom does not implement another RFC poll loop.
+The generic coordinator uses standard context deadlines, `sync.WaitGroup` and
+existing CAS/activation, while provider hooks own opaque response/credential
+binding. No new dependency, workflow service or frontend-owned token wait is
+introduced. The public lifecycle break is module host contract v4.
+
 Dynamic callback allocation uses the standard `net.ListenConfig`/listener
 address, URL/form binding and existing session context/deadline ownership.
 Pending reservations are separate from active grants in the existing registry;

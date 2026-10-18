@@ -72,9 +72,8 @@ type AuthModeDefinition = core.AuthModeDefinition
 type AuthModeMetadata = core.AuthModeMetadata
 type BoundAuthMode = core.BoundAuthMode
 type AuthFlow = core.AuthFlow
-type InteractiveAuthCapabilities = core.InteractiveAuthCapabilities
+type AuthorizationCodeCapability = core.AuthorizationCodeCapability
 type AuthorizationCodeFlow = core.AuthorizationCodeFlow
-type DeviceAuthorizationFlow = core.DeviceAuthorizationFlow
 type DeviceAuthorization = core.DeviceAuthorization
 type AuthInput = core.AuthInput
 type CredentialState = core.CredentialState
@@ -99,6 +98,7 @@ const (
 
 const MaxCredentialStateBytes = core.MaxCredentialStateBytes
 const MaxAuthorizationStateBytes = core.MaxAuthorizationStateBytes
+const MaxAuthorizationDuration = core.MaxAuthorizationDuration
 
 const (
 	AuthorizationOpenURL          = core.AuthorizationOpenURL
@@ -109,11 +109,16 @@ const (
 	AuthorizationCallbacksReady   = core.AuthorizationCallbacksReady
 	AuthorizationCallbackLoopback = core.AuthorizationCallbackLoopback
 	AuthorizationCallbackManual   = core.AuthorizationCallbackManual
+	AuthorizationAwait            = core.AuthorizationAwait
 )
 
 func NewCredentialState(encoded string) (CredentialState, error) {
 	return core.NewCredentialState(encoded)
 }
+func NewDeviceAuthorizationDriver(auth AuthFlow, begin func(context.Context, AuthInput) (DeviceAuthorization, error), await func(context.Context, DeviceAuthorization) (CredentialState, error)) (AuthFlow, error) {
+	return core.NewDeviceAuthorizationDriver(auth, begin, await)
+}
+func AuthorizationCodeEnabled(flow AuthFlow) bool { return core.AuthorizationCodeEnabled(flow) }
 func NewAuthorizationState(encoded string) (AuthorizationState, error) {
 	return core.NewAuthorizationState(encoded)
 }

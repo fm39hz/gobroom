@@ -27,6 +27,23 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Device authorization now uses the generic setup coordinator and typed action
+view throughout daemon, CLI and TUI. A reusable provider strategy owns device
+response serde and composes the existing OAuth library's polling; the daemon
+owns one background await, queued/admitted worker drain, expiry, credential CAS
+and activation. The former device coordinator/IPC/CLI/interface/capability fields
+are removed without compatibility aliases; host contract v4 makes that break
+explicit. Virtual-time coverage proves a wait can exceed the interactive timeout
+without a frontend, while cancellation fences late success. Existing SDK slow-
+down, opaque-state privacy, generation/owner ABA, post-commit activation and
+stream-independent control fixtures now traverse this engine. TUI displays public
+code/URL/input/schema/callback-mode instructions and status; inline input editing
+remains unfinished. This reduces onboarding/control divergence, not provider
+catalog or harness gaps. Authorization-code convergence, leases, full C4/SG2/M15,
+catalog curation and measured latency/RSS/load remain open across the product.
+
+Previous integrated milestone:
+
 Auth drivers can now request an OS-assigned callback URI without frontend port
 selection or a probe/rebind race. Private reservations are allocated before a
 typed ready event lets the driver register its redirect and return consent

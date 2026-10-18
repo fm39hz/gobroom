@@ -77,7 +77,6 @@ type AuthModeMetadata struct {
 	Recovery            kernel.CredentialRecovery `json:"recovery,omitempty"`
 	SetupSchema         SetupSchema               `json:"setupSchema"`
 	AuthorizationCode   bool                      `json:"authorizationCode,omitempty"`
-	DeviceAuthorization bool                      `json:"deviceAuthorization,omitempty"`
 	ActionAuthorization bool                      `json:"actionAuthorization,omitempty"`
 }
 
@@ -127,16 +126,16 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 				return nil, fmt.Errorf("provider %q auth mode %q metadata: %w", definition.ID, mode.CredentialType, err)
 			}
 			metadata := AuthModeMetadata{CredentialType: mode.CredentialType, ID: flow.ID(), Recovery: mode.Recovery.Effective(), SetupSchema: flow.SetupSchema()}
-			metadata.AuthorizationCode, metadata.DeviceAuthorization = InteractiveAuthModes(flow)
+			metadata.SetupSchema.Fields = append([]SetupField(nil), metadata.SetupSchema.Fields...)
+			metadata.AuthorizationCode = AuthorizationCodeEnabled(flow)
 			_, metadata.ActionAuthorization = flow.(AuthorizationFlow)
-			if metadata.AuthorizationCode || metadata.DeviceAuthorization || metadata.ActionAuthorization {
+			if metadata.ActionAuthorization || metadata.AuthorizationCode {
 				for i := range metadata.SetupSchema.Fields {
-					if metadata.SetupSchema.Fields[i].Name == "access_token" || metadata.SetupSchema.Fields[i].Name == "secret" {
+					if metadata.SetupSchema.Fields[i].Secret {
 						metadata.SetupSchema.Fields[i].Required = false
 					}
 				}
 			}
-			metadata.SetupSchema.Fields = append([]SetupField(nil), metadata.SetupSchema.Fields...)
 			item.AuthModes = append(item.AuthModes, metadata)
 		}
 		operations := make([]string, 0, len(definition.Operations))

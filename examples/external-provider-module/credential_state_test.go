@@ -29,7 +29,8 @@ func (opaqueStateModule) ModuleDescriptor() provider.ModuleRef {
 }
 func (opaqueStateModule) Register(runtime *provider.RuntimeRegistry) error {
 	return runtime.RegisterAuthFactory(opaqueStateAuthID, func(provider.AuthOptions) (provider.AuthFlow, error) {
-		return opaqueStateAuth{}, nil
+		auth := opaqueStateAuth{}
+		return provider.NewDeviceAuthorizationDriver(auth, auth.beginDeviceAuthorization, auth.waitForDeviceAuthorization)
 	})
 }
 
@@ -70,12 +71,10 @@ func (opaqueStateAuth) Refresh(_ context.Context, input provider.AuthInput, _ pr
 	}
 	return provider.NewCredentialState(string(encoded))
 }
-func (opaqueStateAuth) CanAuthorizeCode() bool   { return false }
-func (opaqueStateAuth) CanAuthorizeDevice() bool { return true }
-func (opaqueStateAuth) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
+func (opaqueStateAuth) beginDeviceAuthorization(context.Context, provider.AuthInput) (provider.DeviceAuthorization, error) {
 	return provider.DeviceAuthorization{DeviceCode: "private-opaque-device-code", UserCode: "OPAQUE-CODE", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
-func (opaqueStateAuth) WaitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
+func (opaqueStateAuth) waitForDeviceAuthorization(ctx context.Context, _ provider.DeviceAuthorization) (provider.CredentialState, error) {
 	select {
 	case <-ctx.Done():
 		return provider.CredentialState{}, ctx.Err()
@@ -245,30 +244,40 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 			t.Fatalf("connection IPC leaked credential value %q", secret)
 		}
 	}
-	var started struct {
-		SessionID string `json:"sessionId"`
-	}
+	var started daemon.AuthorizationSetupView
 	cli := os.Getenv("GOBROOM_TEST_CLI")
 	var startJSON []byte
 	if cli != "" {
-		startJSON = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-start", "--connection-id", connection.ID)
+		startJSON = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "start", "--connection-id", connection.ID)
 	} else {
-		startJSON = rpc("auth.device.start", map[string]any{"connectionID": connection.ID})
+		startJSON = rpc("auth.setup.start", map[string]any{"connectionID": connection.ID})
 	}
-	if err := json.Unmarshal(startJSON, &started); err != nil || started.SessionID == "" {
-		t.Fatalf("device start=%s err=%v", startJSON, err)
+	if err := json.Unmarshal(startJSON, &started); err != nil || started.SessionID == "" || started.Status != "awaiting_user" {
+		t.Fatalf("setup start=%s err=%v", startJSON, err)
+	}
+	var hasDisplayCode, hasOpenURL bool
+	for _, action := range started.Actions {
+		switch action.Kind {
+		case provider.AuthorizationDisplayCode:
+			hasDisplayCode = action.Code == "OPAQUE-CODE"
+		case provider.AuthorizationOpenURL:
+			hasOpenURL = action.URL == "https://identity.test/device"
+		}
+	}
+	if !hasDisplayCode || !hasOpenURL {
+		t.Fatalf("generic setup instructions missing display code/open URL actions: %+v", started.Actions)
 	}
 	if strings.Contains(string(startJSON), "private-opaque-device-code") || strings.Contains(string(startJSON), "device-runtime-ticket") {
-		t.Fatal("device start leaked private auth material")
+		t.Fatal("setup start leaked private auth material")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	var status string
 	var completionJSON json.RawMessage
 	for time.Now().Before(deadline) {
 		if cli != "" {
-			completionJSON = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "device-get", "--session-id", started.SessionID)
+			completionJSON = runDeviceRaceCLI(t, cli, config.IPCPath, "connections", "setup", "get", "--session-id", started.SessionID)
 		} else {
-			completionJSON = rpc("auth.device.get", map[string]any{"sessionID": started.SessionID})
+			completionJSON = rpc("auth.setup.get", map[string]any{"sessionID": started.SessionID})
 		}
 		var result struct {
 			Status string `json:"status"`
@@ -277,7 +286,7 @@ func TestExternalOpaqueCredentialStateDeviceSetupPersistsAndStaysPrivate(t *test
 			t.Fatal(err)
 		}
 		status = result.Status
-		if status != "starting" && status != "awaiting_user" {
+		if status != "awaiting_user" {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

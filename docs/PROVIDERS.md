@@ -347,10 +347,14 @@ provider manifest, routing snapshot, ordinary connection list or exported
 config bundle.
 
 `deviceAuthUrl` is optional. When the authorization server supports RFC 8628,
-`gobroom connections device-start --connection-id <id>` starts the device
-flow; the daemon retains and polls the private device code, while CLI/TUI show
-the user code and verification URL. Polling honors the server interval,
-`authorization_pending`, `slow_down` and expiry using the shared OAuth library.
+`gobroom connections setup start --connection-id <id>` starts its generic setup
+flow. The provider strategy retains the device code as opaque state; CLI/TUI
+render public code/URL actions. The daemon owns the background await, while
+the shared OAuth library honors the server interval,
+`authorization_pending`, `slow_down` and expiry.
+Use `connections setup get/cancel` for status/cancellation. There is no separate
+device control API or compatibility command. Code capability remains available
+when a provider also configures authorization-code setup.
 
 For authorization-code flow, an HTTP redirect URI on `localhost` or a loopback
 IP causes the daemon to bind that exact local address/port only while the

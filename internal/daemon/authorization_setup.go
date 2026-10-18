@@ -43,7 +43,7 @@ func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID strin
 	if err != nil {
 		return AuthorizationSetupView{}, err
 	}
-	callCtx, cancel := d.setupCallContext(ctx, time.Now().Add(deviceAuthorizationStartTimeout))
+	callCtx, cancel := d.setupCallContext(ctx, time.Now().Add(authorizationStartTimeout))
 	defer cancel()
 	sessions := d.authorizationSessions()
 	d.pruneAuthorizationSessions(sessions, time.Now())
@@ -52,7 +52,7 @@ func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID strin
 		sessions.mu.Unlock()
 		return AuthorizationSetupView{}, fmt.Errorf("authorization coordinator is stopped, full or connection is busy")
 	}
-	sessions.byID[id] = authorizationSession{kind: "actions", connectionID: connectionID, authFlow: flow, setupFlow: driver, expectedCredential: credential, expiresAt: time.Now().Add(oauthSessionTTL), status: "starting", cancel: cancel, setupCallDone: make(chan struct{})}
+	sessions.byID[id] = authorizationSession{kind: "actions", connectionID: connectionID, authFlow: flow, setupFlow: driver, expectedCredential: credential, expiresAt: time.Now().Add(provider.MaxAuthorizationDuration), status: "starting", cancel: cancel, setupCallDone: make(chan struct{})}
 	sessions.byConnection[connectionID] = id
 	sessions.inFlight[id] = true
 	d.authWG.Add(1)
@@ -93,11 +93,18 @@ func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID strin
 // Each step has its own bounded context; no frontend lifetime controls later
 // polls, and shutdown cancellation reaches both start and advance callbacks.
 func (d *Daemon) setupCallContext(parent context.Context, expiry time.Time) (context.Context, context.CancelFunc) {
+	return d.authorizationContext(parent, expiry, authorizationStepTimeout)
+}
+
+func (d *Daemon) authorizationContext(parent context.Context, expiry time.Time, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, oauthExchangeTimeout)
-	ctx, cancelExpiry := context.WithDeadline(ctx, expiry)
+	ctx, cancel := context.WithDeadline(parent, expiry)
+	cancelTimeout := func() {}
+	if timeout > 0 {
+		ctx, cancelTimeout = context.WithTimeout(ctx, timeout)
+	}
 	stop := func() bool { return false }
 	if d.runCtx != nil {
 		stop = context.AfterFunc(d.runCtx, cancel)
@@ -105,7 +112,7 @@ func (d *Daemon) setupCallContext(parent context.Context, expiry time.Time) (con
 			cancel()
 		}
 	}
-	return ctx, func() { stop(); cancelExpiry(); cancel() }
+	return ctx, func() { stop(); cancelTimeout(); cancel() }
 }
 
 func (d *Daemon) advanceSetupAuthorization(ctx context.Context, id string, revision uint64, event provider.AuthorizationEvent) (AuthorizationSetupView, error) {
@@ -116,7 +123,18 @@ func (d *Daemon) advanceSetupAuthorization(ctx context.Context, id string, revis
 		sessions.mu.Unlock()
 		return AuthorizationSetupView{}, fmt.Errorf("authorization action is stale, busy, expired or unavailable")
 	}
-	callCtx, cancel := d.setupCallContext(ctx, session.expiresAt)
+	isAwait := event.Kind == provider.AuthorizationAwait && session.setupAwait && session.setupAwaitStarted
+	if event.Kind == provider.AuthorizationAwait && !isAwait {
+		sessions.mu.Unlock()
+		return AuthorizationSetupView{}, fmt.Errorf("authorization await is not scheduled")
+	}
+	timeout := authorizationStepTimeout
+	if isAwait {
+		timeout = 0
+		session.setupAwait = false
+		session.setupAwaitStarted = false
+	}
+	callCtx, cancel := d.authorizationContext(ctx, session.expiresAt, timeout)
 	defer cancel()
 	session.cancel = cancel
 	session.setupCallDone = make(chan struct{})
@@ -133,7 +151,7 @@ func (d *Daemon) advanceSetupAuthorization(ctx context.Context, id string, revis
 		if err := d.validateSetupInput(session, event); err != nil {
 			return AuthorizationSetupView{}, err
 		}
-	} else if event.Kind != provider.AuthorizationPoll || len(event.Value) != 0 || event.ActionID != "" {
+	} else if (event.Kind != provider.AuthorizationPoll && !isAwait) || len(event.Value) != 0 || event.ActionID != "" || len(event.Callbacks) != 0 {
 		return AuthorizationSetupView{}, fmt.Errorf("invalid authorization event")
 	}
 	current, ok := d.store.ConnectionCredentialByID(session.connectionID)
@@ -255,6 +273,8 @@ func (d *Daemon) applySetupTransition(ctx context.Context, id string, transition
 		session.setupState = transition.State
 		session.setupActions = cloneSetupActions(transition.Actions)
 		session.setupPollAfter = transition.PollAfter
+		session.setupAwait = transition.Await
+		session.setupAwaitStarted = false
 		session.expiresAt = transition.ExpiresAt
 		session.timer = time.AfterFunc(time.Until(session.expiresAt), func() { d.finishSetupAuthorization(id, "expired", "authorization expired") })
 	}
@@ -319,6 +339,19 @@ func (d *Daemon) releaseSetupCall(id string) {
 			revision := current.setupRevision
 			current.setupPollTimer = time.AfterFunc(current.setupPollAfter, func() { d.pollSetupAuthorization(id, revision) })
 		}
+		if !sessions.closed && current.status == "awaiting_user" && current.setupAwait && !current.setupAwaitStarted {
+			current.setupAwaitStarted = true
+			revision := current.setupRevision
+			root := d.runCtx
+			if root == nil {
+				root = context.Background()
+			}
+			d.authWG.Add(1)
+			go func() {
+				defer d.authWG.Done()
+				_, _ = d.advanceSetupAuthorization(root, id, revision, provider.AuthorizationEvent{Kind: provider.AuthorizationAwait})
+			}()
+		}
 		sessions.byID[id] = current
 	}
 	sessions.mu.Unlock()
@@ -346,6 +379,8 @@ func clearSetupSession(session *authorizationSession) {
 	session.setupActions = nil
 	session.setupFlow = nil
 	session.setupPollAfter = 0
+	session.setupAwait = false
+	session.setupAwaitStarted = false
 	session.expectedCredential = store.Credential{}
 	session.authFlow = nil
 	session.setupCallbackModes = nil

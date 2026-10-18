@@ -617,3 +617,27 @@ Combo inference. Main control=serving=473, activation queue empty, bundle-v9
 export/validate valid. The callback-ready event remained private and registration
 probes could not advance a not-yet-active grant. Remaining auth convergence,
 leases, TUI and performance gates are not implied by this vertical.
+
+### Device/action coordinator convergence
+
+The previous device-specific coordinator/IPC/CLI/interface/metadata are removed.
+`TestDeviceAuthorizationDriverKeepsSecretsOpaqueAndAwaitsOnDemand` and
+`TestDeviceAuthorizationDriverMapsKnownFailuresAndSanitizesErrors` cover the
+reusable strategy. `TestOAuthFactoryPreservesCodeCapabilityAlongsideDeviceActions`
+retains code capability for dual-mode OAuth, while device-only options also bind.
+`TestGenericAuthorizationAwaitOutlivesStepTimeoutWithoutFrontend` uses virtual
+time to prove the wait is driven once with the session deadline and daemon-owned
+context values. `TestGenericAuthorizationAwaitCancellationFencesLateResult` and
+`TestGenericAuthorizationRemovedDeviceRPCsAreNotAliased` enforce cancellation and
+the absence of old control paths. Queued await work is registered before Start
+returns, and actual provider work is tracked through shared worker drain.
+
+The previous device generation/owner ABA, delayed success, start reservation,
+pending/slow-down, token privacy, shutdown, activation failure and control-during-
+stream fixtures were migrated to generic setup rather than removed. Separate
+module setup/refresh/restart and installed CLI fixtures now use typed actions.
+`TestTUISetupShowsGenericPublicActionsAndPollsDaemon` and
+`TestTUISetupCancellationUsesGenericSession` exercise the common public contract.
+Module host contract v4 rejects prior lifecycle contracts; no device compatibility
+adapter is retained. Authorization-code coordinator migration, inline TUI input,
+opaque leases and full SG2 composition remain unclosed.

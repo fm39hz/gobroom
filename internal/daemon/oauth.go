@@ -17,7 +17,7 @@ import (
 
 const (
 	oauthSessionTTL          = 10 * time.Minute
-	oauthExchangeTimeout     = 30 * time.Second
+	authorizationStepTimeout = 30 * time.Second
 	maxAuthorizationSessions = 64
 	maxOAuthCallbackURLBytes = 8192
 	maxOAuthCodeBytes        = 4096
@@ -38,8 +38,6 @@ type authorizationSession struct {
 	expectedCredential store.Credential
 	activationCommit   store.CredentialCommit
 	expiresAt          time.Time
-	deviceFlow         provider.DeviceAuthorizationFlow
-	device             provider.DeviceAuthorization
 	status             string
 	statusError        string
 	cancel             context.CancelFunc
@@ -50,6 +48,8 @@ type authorizationSession struct {
 	setupRevision      uint64
 	setupPollTimer     *time.Timer
 	setupPollAfter     time.Duration
+	setupAwait         bool
+	setupAwaitStarted  bool
 	setupCallbackModes []AuthorizationCallbackView
 	setupCallDone      chan struct{}
 }
@@ -183,7 +183,7 @@ func (d *Daemon) completeAuthorization(ctx context.Context, sessionID, state, co
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	exchangeCtx, cancel := context.WithTimeout(ctx, oauthExchangeTimeout)
+	exchangeCtx, cancel := context.WithTimeout(ctx, authorizationStepTimeout)
 	exchangeCtx, cancelExpiry := context.WithDeadline(exchangeCtx, session.expiresAt)
 	stopDaemonCancel := func() bool { return false }
 	if d.runCtx != nil {
@@ -434,19 +434,6 @@ func (s *authorizationSessions) pruneLocked(now time.Time) []string {
 			}
 			if session.cancel != nil {
 				session.cancel()
-			}
-			if session.kind == "device_code" && (session.status == "awaiting_user" || session.status == "polling") {
-				session.cancel = nil
-				session.device.DeviceCode = ""
-				session.deviceFlow = nil
-				session.status = "expired"
-				session.statusError = "device authorization expired before approval"
-				session.expiresAt = now.Add(authorizationSessionRetention)
-				s.byID[id] = session
-				if s.byConnection[session.connectionID] == id {
-					delete(s.byConnection, session.connectionID)
-				}
-				continue
 			}
 			if session.kind == "authorization_code" && session.status == "awaiting_user" {
 				if session.callbackKey != "" {

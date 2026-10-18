@@ -27,10 +27,10 @@ spool cleanup and unchanged catalog/health/quota/usage. Set
 `connections test-operation --artifacts-file` command against that daemon too.
 
 The auth-generation fixture supplies its own device auth primitive using public
-`DeviceAuthorizationFlow`/`DeviceAuthorization` types. A late token races a
+`NewDeviceAuthorizationDriver`/`DeviceAuthorization` API. A late token races a
 connection update through Unix IPC; stale setup must fail, and the next operation
 must authenticate with the newer credential. The same `GOBROOM_TEST_CLI` switch
-exercises installed CLI device-start/get, connection update and operation probe.
+exercises installed CLI setup start/get, connection update and operation probe.
 
 The opaque-state fixture registers its own `opaque_ticket` mode with typed
 `ticket`/`subject`/`workspace` metadata. Device setup and a typed custom-status
@@ -38,7 +38,7 @@ refresh return bounded `CredentialState`; `Resolve` derives the wire ticket
 and runtime context. After daemon restart the next chat call verifies the
 refreshed metadata survived, while config/IPC omit it. With `GOBROOM_TEST_CLI`,
 successful device setup and post-restart inference also use the installed CLI.
-The module host contract is v3; old auth/recovery contracts are rejected.
+The module host contract is v4; old auth/device/recovery contracts are rejected.
 The auth mode explicitly opts into `recovery: refresh`. The fixture normalizes
 HTTP498/`credential_expired` through typed classifier options, while separate
 403 permission/quota roles and a recovery-disabled 401 do not refresh. The

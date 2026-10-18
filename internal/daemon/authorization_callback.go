@@ -299,7 +299,7 @@ func (d *Daemon) handleAuthorizationCallback(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Callback does not match an active grant", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), oauthExchangeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), authorizationStepTimeout)
 	defer cancel()
 	if err := selected.invoke(ctx, encoded); err != nil {
 		http.Error(w, "Authorization could not be completed. Return to GoBroom for details.", http.StatusBadRequest)

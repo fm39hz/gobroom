@@ -705,6 +705,7 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 			RequestCodec: PrimitiveRef{Kind: PrimitiveRequestCodec, ID: "openai-chat-json", ContractVersion: 1}, ResponseDecoder: PrimitiveRef{Kind: PrimitiveResponseDecoder, ID: "openai-sse", ContractVersion: 1},
 		}},
 	}
+	definition.AuthModes[0].AuthOptions.OAuth.RedirectURL = "http://127.0.0.1:12345/callback"
 	if err := registry.Primitives.RegisterDefinition(definition); err != nil {
 		t.Fatal(err)
 	}
@@ -715,8 +716,11 @@ func TestDefinitionBuildsConfiguredOAuthAuthFlow(t *testing.T) {
 	if binding.AuthModes["oauth2"].Flow == nil || binding.AuthModes["oauth2"].Flow.ID() != "oauth2" || binding.AuthModes["oauth2"].FlowID != AuthBindingKey(ProviderDefinitionRef("oauth-provider", 1), "oauth2", PrimitiveRef{Kind: PrimitiveAuth, ID: "oauth2", ContractVersion: 1}) {
 		t.Fatalf("auth binding=%#v", binding)
 	}
-	if oauth, ok := binding.AuthModes["oauth2"].Flow.(OAuthAuth); !ok || oauth.Config.DeviceAuthURL != "https://oauth.test/device" {
-		t.Fatalf("device authorization endpoint did not bind from provider definition: %#v", binding.AuthModes["oauth2"].Flow)
+	if !AuthorizationCodeEnabled(binding.AuthModes["oauth2"].Flow) {
+		t.Fatalf("configured OAuth code capability was not retained: %#v", binding.AuthModes["oauth2"].Flow)
+	}
+	if _, ok := binding.AuthModes["oauth2"].Flow.(AuthorizationFlow); !ok {
+		t.Fatalf("device authorization did not bind as a generic authorization flow: %#v", binding.AuthModes["oauth2"].Flow)
 	}
 	state := []byte(`{"access_token":"access","refresh_token":"refresh","client_secret":"per-connection-secret","expires_at":"2030-01-02T03:04:05Z"}`)
 	credential, err := binding.AuthModes["oauth2"].Flow.Resolve(context.Background(), AuthInput{ConnectionID: "conn", Type: "oauth2", Secret: string(state)})
@@ -771,8 +775,8 @@ func TestDefinitionCatalogExposesGenericSetupMetadataWithoutSecrets(t *testing.T
 	if got == nil || len(got.AuthModes) != 1 || got.AuthModes[0].ID != "oauth2" || len(got.AuthModes[0].SetupSchema.Fields) == 0 || len(got.Operations) != 1 {
 		t.Fatalf("generic provider setup metadata missing: %#v", got)
 	}
-	if !got.AuthModes[0].DeviceAuthorization || got.AuthModes[0].AuthorizationCode {
-		t.Fatalf("interactive auth capabilities=%#v", got.AuthModes[0])
+	if !got.AuthModes[0].ActionAuthorization || got.AuthModes[0].AuthorizationCode {
+		t.Fatalf("generic authorization capabilities=%#v", got.AuthModes[0])
 	}
 	for _, field := range got.AuthModes[0].SetupSchema.Fields {
 		if field.Name == "access_token" && field.Required {

@@ -90,10 +90,11 @@ configured without a kernel change, for example in its operation binding:
 
 Declared signals replace default 401 matching. Replay policy still controls
 whether the business request can be resent; recovery never permits switching
-issuer after an ambiguous keyed attempt. Module builds use host contract v3;
-old recovery behavior is not automatically adapted. This feature does not yet
-preserve quota across credential renewal; principal/credential scope separation
-remains planned work.
+issuer after an ambiguous keyed attempt. Module builds use host contract v4;
+old auth/device/recovery contracts are not automatically adapted. Credential
+renewal preserves configured-principal quota/operational cooldown, while old-token
+authentication failures use their separate credential revision. Explicit
+principal replacement discards the former account's evidence.
 
 Saving an OAuth/device/refresh credential and applying its runtime configuration
 are separate stages. A successful authorization can report `completed` with
@@ -217,7 +218,12 @@ credentials, not a pending callback session. A driver may request port zero:
 the daemon owns the OS-assigned port before the driver registers its redirect
 URI or returns consent actions. The CLI only sees the resolved final actions;
 there is no frontend port probe or port-selection command. Generic TUI callback
-forms and fully migrated built-in code/device orchestration remain unfinished.
+forms and fully migrated authorization-code orchestration remain unfinished.
+Device setup already uses `connections setup start/get/cancel` and the same
+generic public actions in TUI. Its upstream await continues without a frontend;
+the OAuth library owns pending/slow-down timing. `device-start/get/cancel` and
+`auth.device.*` no longer exist. Generic setup deadlines are provider-declared
+within a one-hour host ceiling; code-flow sessions remain capped at ten minutes.
 
 ## Data-plane exposure
 

@@ -20,7 +20,7 @@ func TestAuthCompletionWaitsForCredentialActivation(t *testing.T) {
 		sessionID func(*app) string
 	}{
 		{name: "authorization code", method: "auth.authorization.get", sessionID: func(model *app) string { return model.authCodeSessionID }},
-		{name: "device authorization", method: "auth.device.get", sessionID: func(model *app) string { return model.deviceAuthSessionID }},
+		{name: "generic setup", method: "auth.setup.get", sessionID: func(model *app) string { return model.setupSessionID }},
 	}
 	for _, flow := range flows {
 		for _, state := range []struct {

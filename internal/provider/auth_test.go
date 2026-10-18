@@ -84,6 +84,21 @@ func TestStaticSecretAuthIsReusablePrimitive(t *testing.T) {
 	}
 }
 
+func TestOAuthAuthFactoryBuildsGenericDeviceAuthorizationWithoutAuthURL(t *testing.T) {
+	flow, err := OAuthAuthFactory(AuthOptions{OAuth: &OAuthFlowOptions{
+		ClientID: "device-client", TokenURL: "https://identity.example/token", DeviceAuthURL: "https://identity.example/device",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := flow.(AuthorizationFlow); !ok {
+		t.Fatalf("device OAuth flow does not implement generic authorization: %T", flow)
+	}
+	if AuthorizationCodeEnabled(flow) {
+		t.Fatal("device-only OAuth flow advertised authorization-code support")
+	}
+}
+
 func TestAuthPrimitiveVersionsBindTheirOwnFactoriesAndSchemas(t *testing.T) {
 	registry, err := NewRuntimeRegistry()
 	if err != nil {

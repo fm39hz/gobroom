@@ -158,18 +158,7 @@ type actionMsg struct {
 	err    error
 }
 
-type authActivationResult struct {
-	Status              string `json:"status"`
-	CredentialCommitted bool   `json:"credentialCommitted"`
-	Progress            struct {
-		RoutingReset     bool   `json:"routingReset"`
-		ControlVersion   uint64 `json:"controlVersion"`
-		ControlPublished bool   `json:"controlPublished"`
-		VersionPersisted bool   `json:"versionPersisted"`
-		ServingVersion   uint64 `json:"servingVersion"`
-		ServingPublished bool   `json:"servingPublished"`
-	} `json:"progress"`
-}
+type authActivationResult = daemon.CredentialActivationView
 
 func authActivationCompletion(flow, connectionID string, activation *authActivationResult) (message string, poll bool, retryHint string) {
 	ready := flow + " completed · connection credential saved"
@@ -203,7 +192,7 @@ func authActivationCompletion(flow, connectionID string, activation *authActivat
 	return flow + " completed · activation " + activation.Status, false, ""
 }
 
-type deviceAuthorizationPollTick struct{ sessionID string }
+type setupPollTick struct{ sessionID string }
 type authorizationCodePollTick struct{ sessionID string }
 
 type keyHelp struct{ app *app }
@@ -225,7 +214,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 		case "providers":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/c"), key.WithHelp("e/t/c", "edit/test/connect")))
 		case "connections":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/P/i/m/a/A/o/O/d"), key.WithHelp("e/t/T/P/i/m/a/A/o/O/d", "edit/list test/inference/operation probe/import/custom ID/auth/delete")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/P/i/m/a/A/D/O/d"), key.WithHelp("e/t/T/P/i/m/a/A/D/O/d", "edit/test/import/auth/setup/delete")))
 		case "discovered":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 		case "physical", "combos":
@@ -246,7 +235,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 	case "providers":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("n/t"), key.WithHelp("n/t", "new/test")))
 	case "connections":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/P/i/m/a/A/o/O"), key.WithHelp("t/T/P/i/m/a/A/o/O", "list test/inference/operation probe/import/custom ID/auth")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/P/i/m/a/A/D/O"), key.WithHelp("t/T/P/i/m/a/A/D/O", "test/import/auth/setup")))
 	case "discovered":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 	case "physical", "combos":
@@ -275,7 +264,7 @@ func (keyHelp) FullHelp() [][]key.Binding {
 		{key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "assign discovered routes to Physical")), key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose selected models"))},
 		{key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "toggle model exposure")), key.NewBinding(key.WithKeys("t/i"), key.WithHelp("t/i", "test/preview · selectively import"))},
 		{key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "connection-scoped custom ID / edit model members")), key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select assigned connections in custom-model editor"))},
-		{key.NewBinding(key.WithKeys("o/O"), key.WithHelp("o/O", "start/cancel daemon OAuth device authorization"))},
+		{key.NewBinding(key.WithKeys("D/O"), key.WithHelp("D/O", "start/cancel connection setup"))},
 		{key.NewBinding(key.WithKeys("a/A"), key.WithHelp("a/A", "start/cancel OAuth authorization-code flow"))},
 	}
 }
@@ -324,20 +313,20 @@ type app struct {
 	pickerModel         any
 	pickerSourceRefs    map[string]routeReference
 
-	status              string
-	previewExtra        string
-	previewTitle        string
-	previewKey          string
-	pendingPreviewKey   string
-	lastError           string
-	loading             bool
-	confirmTitle        string
-	confirmMethod       string
-	confirmParams       map[string]any
-	confirmAction       string
-	lastG               bool
-	deviceAuthSessionID string
-	authCodeSessionID   string
+	status            string
+	previewExtra      string
+	previewTitle      string
+	previewKey        string
+	pendingPreviewKey string
+	lastError         string
+	loading           bool
+	confirmTitle      string
+	confirmMethod     string
+	confirmParams     map[string]any
+	confirmAction     string
+	lastG             bool
+	setupSessionID    string
+	authCodeSessionID string
 }
 
 func newApp(ipcPath string) *app {
@@ -683,9 +672,9 @@ func (m *app) updateModelImportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
-	case deviceAuthorizationPollTick:
-		if message.sessionID != "" && message.sessionID == m.deviceAuthSessionID {
-			return m, m.invoke("auth.device.get", map[string]any{"sessionID": message.sessionID})
+	case setupPollTick:
+		if message.sessionID != "" && message.sessionID == m.setupSessionID {
+			return m, m.invoke("auth.setup.get", map[string]any{"sessionID": message.sessionID})
 		}
 		return m, nil
 	case authorizationCodePollTick:
@@ -775,8 +764,8 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if message.method == "auth.authorization.get" {
 				m.authCodeSessionID = ""
 			}
-			if message.method == "auth.device.get" {
-				m.deviceAuthSessionID = ""
+			if message.method == "auth.setup.get" {
+				m.setupSessionID = ""
 			}
 			m.pendingPreviewKey = ""
 			m.mode = modeBrowse
@@ -906,55 +895,62 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncDetail()
 			return m, nil
 		}
-		if message.method == "auth.device.start" || message.method == "auth.device.get" {
-			var result struct {
-				SessionID       string                `json:"sessionId"`
-				ConnectionID    string                `json:"connectionId"`
-				Status          string                `json:"status"`
-				UserCode        string                `json:"userCode"`
-				VerificationURL string                `json:"verificationUrl"`
-				ExpiresAt       time.Time             `json:"expiresAt"`
-				Error           string                `json:"error,omitempty"`
-				Activation      *authActivationResult `json:"activation,omitempty"`
-			}
+		if message.method == "auth.setup.start" || message.method == "auth.setup.get" {
+			var result daemon.AuthorizationSetupView
 			if err := json.Unmarshal(message.result, &result); err != nil {
-				m.status = "decode device authorization state: " + err.Error()
+				m.status = "decode connection setup state: " + err.Error()
 				return m, nil
 			}
-			m.deviceAuthSessionID = result.SessionID
-			m.previewExtra = pretty(message.result)
-			m.previewTitle = "OAuth device authorization · daemon retains private device code"
-			m.previewKey = ""
-			if result.Status == "awaiting_user" || result.Status == "polling" {
-				m.status = fmt.Sprintf("authorize at %s · enter code %s · daemon polling", result.VerificationURL, result.UserCode)
-				m.syncDetail()
-				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return deviceAuthorizationPollTick{sessionID: result.SessionID} })
+			m.setupSessionID = result.SessionID
+			var actions strings.Builder
+			for _, action := range result.Actions {
+				fmt.Fprintf(&actions, "%s · %s\n", action.Kind, action.Label)
+				if action.Code != "" {
+					fmt.Fprintf(&actions, "  Code: %s\n", action.Code)
+				}
+				if action.URL != "" {
+					fmt.Fprintf(&actions, "  URL: %s\n", action.URL)
+				}
+				if action.InputSchemaRef != nil {
+					fmt.Fprintf(&actions, "  Input schema: %s\n", action.InputSchemaRef.Key())
+				}
 			}
-			m.status = "OAuth device authorization " + result.Status
+			for _, callback := range result.CallbackModes {
+				fmt.Fprintf(&actions, "Callback: %s\n", callback.Mode)
+			}
+			m.previewExtra = strings.TrimSpace(actions.String())
+			m.previewTitle = "Connection setup actions"
+			m.previewKey = ""
+			if result.Status == "awaiting_user" {
+				m.status = fmt.Sprintf("connection setup · %d public action(s) · revision %d", len(result.Actions), result.Revision)
+				m.syncDetail()
+				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return setupPollTick{sessionID: result.SessionID} })
+			}
+			m.status = "connection setup " + result.Status
 			if result.Status == "completed" {
 				var poll bool
 				var retryHint string
-				m.status, poll, retryHint = authActivationCompletion("OAuth device authorization", result.ConnectionID, result.Activation)
+				m.status, poll, retryHint = authActivationCompletion("Connection setup", result.ConnectionID, result.Activation)
 				if retryHint != "" {
 					m.previewExtra += "\n\n" + retryHint
 				}
 				if poll {
 					m.syncDetail()
-					return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return deviceAuthorizationPollTick{sessionID: result.SessionID} })
+					return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return setupPollTick{sessionID: result.SessionID} })
 				}
-				m.deviceAuthSessionID = ""
-			} else if result.Status == "failed" || result.Status == "expired" || result.Status == "cancelled" {
+				m.setupSessionID = ""
+			} else if result.Status == "failed" || result.Status == "expired" || result.Status == "cancelled" || result.Status == "denied" {
 				if result.Error != "" {
 					m.status += " · " + result.Error
 				}
-				m.deviceAuthSessionID = ""
+				m.setupSessionID = ""
 			}
 			m.syncDetail()
 			return m, nil
 		}
-		if message.method == "auth.device.cancel" {
-			m.deviceAuthSessionID = ""
-			m.status = "OAuth device authorization cancelled"
+		if message.method == "auth.setup.cancel" {
+			m.setupSessionID = ""
+			m.status = "connection setup cancelled"
 			m.previewExtra, m.previewTitle = "", ""
 			m.syncDetail()
 			return m, nil
@@ -1446,21 +1442,21 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-	case "o":
+	case "D":
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
 				if value, ok := selected.payload.(connection); ok {
 					m.loading = true
-					m.status = "requesting OAuth device code; private state stays in daemon…"
-					return m, m.invoke("auth.device.start", map[string]any{"connectionID": value.ID})
+					m.status = "starting connection setup…"
+					return m, m.invoke("auth.setup.start", map[string]any{"connectionID": value.ID})
 				}
 			}
 		}
 	case "O":
-		if m.deviceAuthSessionID != "" {
+		if m.setupSessionID != "" {
 			m.loading = true
-			m.status = "cancelling daemon OAuth device polling…"
-			return m, m.invoke("auth.device.cancel", map[string]any{"sessionID": m.deviceAuthSessionID})
+			m.status = "cancelling connection setup…"
+			return m, m.invoke("auth.setup.cancel", map[string]any{"sessionID": m.setupSessionID})
 		}
 	case "A":
 		if m.authCodeSessionID != "" {
@@ -1863,7 +1859,7 @@ func (m *app) mainPreview(selected entry) string {
 	case providerNode:
 		actions = append(actions, "e            edit provider", "t            test and discover", "c            add connection")
 	case connection:
-		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "a            OAuth authorization-code flow", "A            cancel authorization", "o            start OAuth device flow", "d            delete connection")
+		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "a            OAuth authorization-code flow", "A            cancel authorization", "D            start connection setup", "O            cancel connection setup", "d            delete connection")
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 		if value, ok := selected.payload.(discoveredRoute); ok && value.Kind == "custom" {
@@ -2632,7 +2628,7 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 	switch method {
 	case "connections.test", "connections.test_inference", "connections.test_operation":
 		return nil
-	case "auth.device.start", "auth.device.get", "auth.device.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.cancel":
+	case "auth.setup.start", "auth.setup.get", "auth.setup.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.cancel":
 		return nil
 	case "providers.refresh_models":
 		resources = []sectionID{sectionProviders, sectionModels, sectionDiscovered}
