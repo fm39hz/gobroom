@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,8 +19,8 @@ func TestConnectionActivationCommandsInvokeTypedRPCs(t *testing.T) {
 		method string
 		params map[string]any
 	}{
-		{name: "list default limit", args: []string{"connections", "activation-list"}, method: "credential_activation.list", params: map[string]any{"limit": float64(128)}},
-		{name: "list selected limit", args: []string{"connections", "activation-list", "--limit", "12"}, method: "credential_activation.list", params: map[string]any{"limit": float64(12)}},
+		{name: "list default limit", args: []string{"connections", "activation-list"}, method: "credential_activation.list", params: map[string]any{"limit": json.Number("128")}},
+		{name: "list selected limit", args: []string{"connections", "activation-list", "--limit", "12"}, method: "credential_activation.list", params: map[string]any{"limit": json.Number("12")}},
 		{name: "get", args: []string{"connections", "activation-get", "--connection-id", "conn-1"}, method: "credential_activation.get", params: map[string]any{"connectionID": "conn-1"}},
 		{name: "retry", args: []string{"connections", "activation-retry", "--connection-id", "conn-2"}, method: "credential_activation.retry", params: map[string]any{"connectionID": "conn-2"}},
 	}

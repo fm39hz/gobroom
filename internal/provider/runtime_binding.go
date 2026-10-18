@@ -78,6 +78,7 @@ type AuthModeMetadata struct {
 	SetupSchema         SetupSchema               `json:"setupSchema"`
 	AuthorizationCode   bool                      `json:"authorizationCode,omitempty"`
 	DeviceAuthorization bool                      `json:"deviceAuthorization,omitempty"`
+	ActionAuthorization bool                      `json:"actionAuthorization,omitempty"`
 }
 
 type BoundAuthMode struct {
@@ -127,7 +128,8 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 			}
 			metadata := AuthModeMetadata{CredentialType: mode.CredentialType, ID: flow.ID(), Recovery: mode.Recovery.Effective(), SetupSchema: flow.SetupSchema()}
 			metadata.AuthorizationCode, metadata.DeviceAuthorization = InteractiveAuthModes(flow)
-			if metadata.AuthorizationCode || metadata.DeviceAuthorization {
+			_, metadata.ActionAuthorization = flow.(AuthorizationFlow)
+			if metadata.AuthorizationCode || metadata.DeviceAuthorization || metadata.ActionAuthorization {
 				for i := range metadata.SetupSchema.Fields {
 					if metadata.SetupSchema.Fields[i].Name == "access_token" || metadata.SetupSchema.Fields[i].Name == "secret" {
 						metadata.SetupSchema.Fields[i].Required = false

@@ -268,6 +268,9 @@ func (d *Daemon) cancelAuthorizationSessions() {
 	sessions.mu.Lock()
 	sessions.closed = true
 	for _, session := range sessions.byID {
+		if session.setupPollTimer != nil {
+			session.setupPollTimer.Stop()
+		}
 		if session.timer != nil {
 			session.timer.Stop()
 		}

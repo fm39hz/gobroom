@@ -1,6 +1,6 @@
 # Product progress
 
-Snapshot: 2026-10-17. This is a use-case-level review, not a completion
+Snapshot: 2026-10-18. This is a use-case-level review, not a completion
 percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
@@ -26,6 +26,24 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+Provider modules now have an action-based setup path independent of OAuth code/
+device shape. Bounded public URL/code/input actions, exact registered schemas,
+private state and revisioned transitions feed the shared daemon session ownership,
+credential CAS and activation. CLI/IPC can advance manual proof/OTP steps; daemon
+polling continues without a frontend. The separate-module fixture starts from an
+empty credential, rejects stale/schema-invalid submissions, completes polling,
+waits for activation, restarts and invokes HTTP through a Physical/Combo model.
+Exact JSON numbers survive setup CLI/IPC; error summaries do not echo submitted
+secrets. Timer expiry, single-flight input, late-cancelled completion and shutdown
+drain have focused fixtures. This advances provider onboarding extensibility and
+headless use; it adds no shipped provider credentials or live acceptance. Existing
+code/device/callback coordination still needs to converge onto the action engine,
+and generic TUI forms, credential leases and full C4/SG2/M15 remain unfinished.
+Physical catalog curation UX, broad harness/protocol acceptance and measured
+latency/RSS/load targets also remain open across the product.
+
+Previous integrated milestone:
 
 Credential renewal now preserves configured-principal operational evidence.
 Typed renewal/replacement transitions separate private credential revisions from

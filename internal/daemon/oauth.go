@@ -44,6 +44,12 @@ type authorizationSession struct {
 	statusError        string
 	cancel             context.CancelFunc
 	timer              *time.Timer
+	setupFlow          provider.AuthorizationFlow
+	setupState         provider.AuthorizationState
+	setupActions       []provider.AuthorizationAction
+	setupRevision      uint64
+	setupPollTimer     *time.Timer
+	setupPollAfter     time.Duration
 }
 
 type authorizationChallenge struct {
@@ -406,6 +412,19 @@ func (s *authorizationSessions) pruneLocked(now time.Time) []string {
 		if !session.expiresAt.After(now) && !s.inFlight[id] {
 			if session.timer != nil {
 				session.timer.Stop()
+			}
+			if session.setupPollTimer != nil {
+				session.setupPollTimer.Stop()
+			}
+			if session.kind == "actions" && (session.status == "starting" || session.status == "awaiting_user") {
+				clearSetupSession(&session)
+				session.status, session.statusError = "expired", "authorization expired"
+				session.expiresAt = now.Add(authorizationSessionRetention)
+				s.byID[id] = session
+				if s.byConnection[session.connectionID] == id {
+					delete(s.byConnection, session.connectionID)
+				}
+				continue
 			}
 			if session.cancel != nil {
 				session.cancel()

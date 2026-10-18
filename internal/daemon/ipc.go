@@ -146,6 +146,7 @@ func writeIPCResponse(writer http.ResponseWriter, status int, response IPCRespon
 
 func decodeIPCEnvelope(reader io.Reader, target any) error {
 	decoder := json.NewDecoder(reader)
+	decoder.UseNumber()
 	if err := decoder.Decode(target); err != nil {
 		return err
 	}

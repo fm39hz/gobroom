@@ -287,8 +287,8 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    the subsequent poll. Per-connection waits use context-aware `x/sync/semaphore`;
    Resolve/Refresh propagate caller/daemon cancellation, and concurrent refresh
    callers share one persisted replacement. Public optional auth types have an
-   external-module device-race fixture. Remaining: post-commit reconciliation,
-   broader cancellation/shutdown races and HTTPS/non-loopback
+   external-module device-race fixture. Remaining: generic action/client
+   convergence, credential leases, broader lifecycle races and HTTPS/non-loopback
    callback integrations. Prepared request signing now has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations
    and opaque leases remain auth-driver work. Validate full
@@ -341,6 +341,23 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    New-credential auth failures survive delayed renewal activation. This closes
    that narrow continuity gate, not C4/SG2/M15: generic setup actions, credential
    leases, provider-reported identity and broader fault/live acceptance remain.
+
+   The action-driver vertical is now implemented through public
+   `AuthorizationFlow`/`AuthorizationTransition`, exact registered input schemas,
+   redacted provider state and shared connection/session/CAS/activation ownership.
+   Unix IPC and `connections setup start/get/submit/cancel` cover manual proof,
+   OTP-style steps and daemon-owned polling without frontend activity. Revisions
+   fence stale action replay; session expiry cannot extend, late driver success
+   cannot commit after cancellation/shutdown, and intermediate state is never a
+   public credential. A separate module starts from an empty credential, proves
+   schema/stale rejection, polls without get calls, activates, restarts and then
+   consumes the provider endpoint through Physical/Combo. Generic control JSON
+   preserves exact numbers; control consumers bind typed limits rather than
+   assuming float64. Remaining: migrate code/device/callback setup onto this same
+   action engine and remove their special coordinators/views, generic TUI action
+   forms, opaque credential leases and the complete SG2 composition/fault matrix.
+   No compatibility action decoder or duplicate provider-specific setup kernel
+   is a final-state solution. C4 remains in progress.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

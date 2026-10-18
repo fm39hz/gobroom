@@ -70,6 +70,7 @@ type Daemon struct {
 	strategyCatalog     *kernel.StrategyCatalog
 	strategyDefinitions []kernel.StrategyDefinition
 	extensionCatalog    extensions.CatalogView
+	setupSchemas        *extensions.Snapshot
 	authFlows           map[string]provider.AuthFlow
 	providerAuthModes   map[extensions.Ref]string
 	providerAuthFlowIDs map[extensions.Ref]map[string]string
@@ -263,6 +264,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return fmt.Errorf("resolve frozen extension catalog: %w", err)
 	}
+	d.setupSchemas = extensionSnapshot
 	d.strategyCatalog, err = kernel.NewStrategyCatalog(extensionSnapshot)
 	if err != nil {
 		_ = s.Close()
@@ -1153,9 +1155,15 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		return success(request, map[string]any{"requeued": requeued})
 	case "usage.list":
+		var input struct {
+			Limit *int `json:"limit"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, "limit must be an integer")
+		}
 		limit := 100
-		if raw, ok := request.Params["limit"].(float64); ok && int(raw) > 0 {
-			limit = int(raw)
+		if input.Limit != nil && *input.Limit > 0 {
+			limit = *input.Limit
 		}
 		items, err := d.store.UsageEvents(limit)
 		if err != nil {
@@ -1181,12 +1189,18 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		d.appendLog("info", fmt.Sprintf("pruned %d usage events", deleted))
 		return success(request, map[string]any{"deleted": deleted, "before": before})
 	case "logs.list":
+		var input struct {
+			Limit *int `json:"limit"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, "limit must be an integer between 1 and 256")
+		}
 		limit := 100
-		if raw, ok := request.Params["limit"].(float64); ok {
-			if raw < 1 || raw > 256 || raw != float64(int(raw)) {
+		if input.Limit != nil {
+			if *input.Limit < 1 || *input.Limit > 256 {
 				return fail(request, "limit must be an integer between 1 and 256")
 			}
-			limit = int(raw)
+			limit = *input.Limit
 		}
 		d.logMu.RLock()
 		start := len(d.logs) - limit
@@ -1403,6 +1417,38 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, challenge)
+	case "auth.setup.start":
+		view, err := d.startSetupAuthorization(ctx, stringParam(request.Params, "connectionID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, view)
+	case "auth.setup.get":
+		view, err := d.setupAuthorizationStatus(stringParam(request.Params, "sessionID"))
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, view)
+	case "auth.setup.advance":
+		var input struct {
+			SessionID string          `json:"sessionID"`
+			ActionID  string          `json:"actionID"`
+			Revision  uint64          `json:"revision"`
+			Value     json.RawMessage `json:"value"`
+		}
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, "invalid authorization action input")
+		}
+		view, err := d.advanceSetupAuthorization(ctx, input.SessionID, input.Revision, provider.AuthorizationEvent{Kind: provider.AuthorizationSubmit, ActionID: input.ActionID, Value: input.Value})
+		if err != nil {
+			return fail(request, err.Error())
+		}
+		return success(request, view)
+	case "auth.setup.cancel":
+		if !d.finishSetupAuthorization(stringParam(request.Params, "sessionID"), "cancelled", "authorization was cancelled") {
+			return fail(request, "active authorization setup session not found")
+		}
+		return d.handleIPC(ctx, IPCRequest{ID: request.ID, Method: "auth.setup.get", Params: request.Params})
 	case "auth.authorization.get":
 		result, err := d.authorizationStatus(stringParam(request.Params, "sessionID"))
 		if err != nil {
@@ -1882,7 +1928,8 @@ func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, c
 	}
 	if strings.TrimSpace(secret) == "" {
 		authorizationCode, deviceAuthorization := provider.InteractiveAuthModes(flow)
-		if authorizationCode || deviceAuthorization {
+		_, actionAuthorization := flow.(provider.AuthorizationFlow)
+		if authorizationCode || deviceAuthorization || actionAuthorization {
 			return nil
 		}
 	}

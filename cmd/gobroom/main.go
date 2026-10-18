@@ -251,6 +251,7 @@ func resourceCommands() []*cobra.Command {
 	}}
 	deviceCancel.Flags().StringVar(&authorizationSessionID, "session-id", "", "device authorization session ID")
 	connections.AddCommand(deviceCancel)
+	connections.AddCommand(setupCommand())
 	previewConnModels := &cobra.Command{Use: "preview-models", Short: "review one connection's full model catalog without importing", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("connections.preview_models", map[string]any{"connectionID": connID})
 	}}

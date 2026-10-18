@@ -504,3 +504,32 @@ of `08d662c`, the optional CLI renewal/restart fixture passed with health/quota/
 activation/status views and explicit connection replacement. Main daemon versions
 were control=serving=469; bundle-v9 export/validate passed. This is not a throughput
 benchmark or closure of the remaining SG composition cases.
+
+### Generic action setup vertical
+
+`TestExternalGenericAuthorizationSetupPersistsAndActivatesCredential` registers
+an independent auth driver and exact input schemas, creates an empty-credential
+account and consumes typed URL/code/input transitions. It rejects stale revisions
+and invalid schemas, submits proof/OTP and waits for a provider poll signal before
+making another get call. The daemon completes without a connected frontend; the
+test waits for actual activation, restarts and performs HTTP inference through
+custom → Physical → Combo. The optional installed CLI path uses `connections
+setup start/get/submit/cancel` with mode-0600 input files, never secret argv.
+
+`TestGenericAuthorizationSetupReusesActionIDAtCurrentRevision`,
+`TestGenericAuthorizationSetupRejectsInvalidSchemaWithoutEndingSession`,
+`TestGenericAuthorizationSetupRejectsUnsafeURLAndUnknownSchema`,
+`TestGenericAuthorizationSetupConcurrentInputIsSingleFlight`,
+`TestGenericAuthorizationSetupTimerExpiresWithoutFrontend`,
+`TestGenericAuthorizationSetupCancellationFencesLateCredential`,
+`TestGenericAuthorizationSetupRetainsTypedProviderDenial`,
+`TestGenericAuthorizationSetupShutdownDrainsLateBegin` and
+`TestGenericAuthorizationSetupCanceledCallNeverInvokesDriver` cover cancellation
+before dispatch as well as draining admitted calls. The pre-canceled-call
+regression failed before the explicit context guard was added.
+`TestGenericAuthorizationSetupCredentialReplacementFencesStaleCommit` exercises
+the final revision fence.
+`TestIPCEnvelopePreservesJSONNumbers` and
+`TestConnectionSetupCommandsInvokeTypedRPCs` cover exact numeric values across
+typed CLI/IPC boundaries. These do not prove migrated OAuth callback actions,
+generic TUI editing, credential leases or full SG2 composition.

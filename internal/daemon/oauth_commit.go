@@ -70,6 +70,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	current.device.DeviceCode = ""
 	current.deviceFlow = nil
 	current.authFlow = nil
+	clearSetupSession(&current)
 	sessions.byID[sessionID] = current
 	if sessions.byConnection[current.connectionID] == sessionID {
 		delete(sessions.byConnection, current.connectionID)

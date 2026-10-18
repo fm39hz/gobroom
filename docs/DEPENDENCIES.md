@@ -125,6 +125,21 @@ already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 
+Action-based authorization uses existing frozen JSON Schema validation for input
+actions, the existing CAS/activation and coordinator reservations, and standard
+context/timers for bounded calls and requested polling. Opaque state follows the
+existing typed redaction pattern. No workflow/state-machine framework, JSON
+validator, browser automation library or polling service is added.
+The standard JSON decoder's `UseNumber` preserves numeric identities/revisions
+across generic control envelopes; handlers bind typed structs instead of
+converting through floating point or manipulating JSON strings.
+Reference problems were checked in CLIProxyAPI `internal/cmd/vertex_import.go`
+(`DoVertexImport`: validate/import a service-account document),
+`internal/auth/meta/meta.go` (`MintAPIKey`: intermediate token to final key), and
+the adjacent reference's cookie-auth UI (manual input followed by an exchange).
+The contract expresses those interaction needs; it does not copy their stores,
+UI handlers or provider auth implementation.
+
 Credential renewal/replacement uses existing SQLite transactions/triggers,
 typed CAS/outbox and health persistence, with Go's `testing/synctest` for virtual
 cooldown time. No new runtime dependency is needed. The behavior was checked

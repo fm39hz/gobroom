@@ -17,6 +17,7 @@ type ListenerAddresses = core.ListenerAddresses
 type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec
 type CredentialActivationView = core.CredentialActivationView
+type AuthorizationSetupView = core.AuthorizationSetupView
 type CredentialActivationProgress = core.CredentialActivationProgress
 type CredentialTransition = core.CredentialTransition
 

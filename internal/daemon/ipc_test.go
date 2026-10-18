@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,26 @@ import (
 	"testing"
 	"time"
 )
+
+func TestIPCEnvelopePreservesJSONNumbers(t *testing.T) {
+	var request IPCRequest
+	if err := decodeIPCEnvelope(strings.NewReader(`{"method":"fixture","params":{"account":9007199254740993,"revision":18446744073709551615}}`), &request); err != nil {
+		t.Fatal(err)
+	}
+	var typed struct {
+		Account  uint64 `json:"account"`
+		Revision uint64 `json:"revision"`
+	}
+	if err := decodeParams(request.Params, &typed); err != nil {
+		t.Fatal(err)
+	}
+	if typed.Account != 9007199254740993 || typed.Revision != ^uint64(0) {
+		t.Fatalf("IPC rounded numbers: %+v", typed)
+	}
+	if _, ok := request.Params["account"].(json.Number); !ok {
+		t.Fatal("IPC eagerly converted generic input to floating point")
+	}
+}
 
 func ipcFixtureHandler(_ context.Context, request IPCRequest) IPCResponse {
 	return IPCResponse{ID: request.ID, OK: true, Result: "owned"}

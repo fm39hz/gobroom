@@ -78,11 +78,37 @@ type DeviceAuthorizationFlow = core.DeviceAuthorizationFlow
 type DeviceAuthorization = core.DeviceAuthorization
 type AuthInput = core.AuthInput
 type CredentialState = core.CredentialState
+type AuthorizationFlow = core.AuthorizationFlow
+type AuthorizationState = core.AuthorizationState
+type AuthorizationActionKind = core.AuthorizationActionKind
+type AuthorizationAction = core.AuthorizationAction
+type AuthorizationEventKind = core.AuthorizationEventKind
+type AuthorizationEvent = core.AuthorizationEvent
+type AuthorizationTransition = core.AuthorizationTransition
+type AuthorizationFailure = core.AuthorizationFailure
+
+const (
+	AuthorizationDenied      = core.AuthorizationDenied
+	AuthorizationExpired     = core.AuthorizationExpired
+	AuthorizationUnavailable = core.AuthorizationUnavailable
+)
 
 const MaxCredentialStateBytes = core.MaxCredentialStateBytes
+const MaxAuthorizationStateBytes = core.MaxAuthorizationStateBytes
+
+const (
+	AuthorizationOpenURL     = core.AuthorizationOpenURL
+	AuthorizationDisplayCode = core.AuthorizationDisplayCode
+	AuthorizationInput       = core.AuthorizationInput
+	AuthorizationSubmit      = core.AuthorizationSubmit
+	AuthorizationPoll        = core.AuthorizationPoll
+)
 
 func NewCredentialState(encoded string) (CredentialState, error) {
 	return core.NewCredentialState(encoded)
+}
+func NewAuthorizationState(encoded string) (AuthorizationState, error) {
+	return core.NewAuthorizationState(encoded)
 }
 
 type AuthFlowFactory = core.AuthFlowFactory

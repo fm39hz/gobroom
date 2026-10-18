@@ -728,22 +728,22 @@ func TestComboPickerPreservesOrderAndSupportsExplicitMemberReorder(t *testing.T)
 	if request.Method != "combo_models.upsert" {
 		t.Fatalf("save method = %q, want combo_models.upsert", request.Method)
 	}
-	gotMembers, ok := request.Params["members"].([]any)
-	if !ok || len(gotMembers) != len(want) {
-		t.Fatalf("saved members have wrong shape/length: %#v", request.Params["members"])
+	encoded, err := json.Marshal(request.Params)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for index, expected := range want {
-		member, ok := gotMembers[index].(map[string]any)
-		if !ok || member["kind"] != expected.Kind || member["id"] != expected.ID || member["weight"] != float64(expected.Weight) {
-			t.Fatalf("saved member[%d]=%#v, want %#v", index, gotMembers[index], expected)
-		}
+	var saved comboModel
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		t.Fatal(err)
 	}
-	strategy, ok := request.Params["strategy"].(map[string]any)
-	if !ok || strategy["ref"].(map[string]any)["id"] != "weighted-fallback" || strategy["ref"].(map[string]any)["contractVersion"] != float64(1) {
-		t.Fatalf("strategy primitive was not preserved in save request: %#v", request.Params["strategy"])
+	if !equalModelReferences(saved.Members, want) {
+		t.Fatalf("saved members=%#v want=%#v", saved.Members, want)
 	}
-	if config, ok := strategy["config"].(map[string]any); ok && len(config) != 0 {
-		t.Fatalf("weighted strategy unexpectedly received primitive options: %#v", config)
+	if saved.Strategy.Ref != kernel.StrategyRef("weighted-fallback", 1) {
+		t.Fatalf("strategy primitive was not preserved: %+v", saved.Strategy)
+	}
+	if len(saved.Strategy.Config) != 0 {
+		t.Fatalf("weighted strategy unexpectedly received options: %#v", saved.Strategy.Config)
 	}
 }
 
@@ -835,21 +835,22 @@ func TestTUIToggleComboExposurePreservesStrategyAndMemberPolicy(t *testing.T) {
 	if request.Method != "combo_models.upsert" || request.Params["discoverable"] != true {
 		t.Fatalf("exposure request=%#v", request)
 	}
-	strategy, ok := request.Params["strategy"].(map[string]any)
-	if !ok || strategy["ref"].(map[string]any)["id"] != value.Strategy.Ref.ID || strategy["ref"].(map[string]any)["contractVersion"] != float64(value.Strategy.Ref.ContractVersion) {
-		t.Fatalf("strategy was lost while exposing Combo: %#v", request.Params["strategy"])
+	encoded, err := json.Marshal(request.Params)
+	if err != nil {
+		t.Fatal(err)
 	}
-	config, ok := strategy["config"].(map[string]any)
-	if !ok || config["stickyLimit"] != float64(2) {
-		t.Fatalf("strategy options were lost while exposing Combo: %#v", strategy["config"])
+	var saved comboModel
+	if err := json.Unmarshal(encoded, &saved); err != nil {
+		t.Fatal(err)
 	}
-	members, ok := request.Params["members"].([]any)
-	if !ok || len(members) != 1 {
-		t.Fatalf("member edge options were lost while exposing Combo: %#v", request.Params["members"])
+	if saved.Strategy.Ref != value.Strategy.Ref {
+		t.Fatalf("strategy was lost: %+v", saved.Strategy)
 	}
-	member, ok := members[0].(map[string]any)
-	if !ok || member["weight"] != float64(3) {
-		t.Fatalf("member edge options were lost while exposing Combo: %#v", members[0])
+	if saved.Strategy.Config["stickyLimit"] != float64(2) {
+		t.Fatalf("strategy options were lost: %#v", saved.Strategy.Config)
+	}
+	if len(saved.Members) != 1 || saved.Members[0].Weight != 3 {
+		t.Fatalf("member edge options were lost: %#v", saved.Members)
 	}
 }
 

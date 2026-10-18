@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +37,59 @@ func TestHealthObservationQueueCoalescesAndFlushesOnClose(t *testing.T) {
 	defer mu.Unlock()
 	if len(saved) != 1 || saved[0].State.Failures != 2 {
 		t.Fatalf("saved observations=%#v", saved)
+	}
+}
+
+func TestHealthObservationQueueKeepsNewestAttempt(t *testing.T) {
+	for _, replaceWithNewer := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replaceWithNewer=%t", replaceWithNewer), func(t *testing.T) {
+			var mu sync.Mutex
+			var saved []HealthObservation
+			queue := NewHealthObservationQueue(1, func(observation HealthObservation) error {
+				mu.Lock()
+				defer mu.Unlock()
+				saved = append(saved, observation)
+				return nil
+			}, nil)
+			route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model"}
+			newestAttempt := time.Date(2026, time.October, 18, 10, 0, 0, 0, time.UTC)
+			newerBlocking := HealthObservation{Route: route, State: RouteHealth{
+				Failures: 1, LastScope: kernel.ScopeConnection, Lane: HealthOperational,
+				LastAttempt: newestAttempt, LastError: "upstream unavailable",
+			}}
+			olderSuccess := HealthObservation{Route: route, State: RouteHealth{
+				Successes: 1, LastScope: kernel.ScopeConnection, Lane: HealthOperational,
+				LastSuccess: newestAttempt.Add(-time.Minute),
+			}}
+			if !queue.Enqueue(newerBlocking) || !queue.Enqueue(olderSuccess) {
+				t.Fatal("same-lane observations should coalesce even when the queue is full")
+			}
+
+			latestAttempt := HealthObservation{Route: route, State: RouteHealth{
+				Failures: 2, LastScope: kernel.ScopeConnection, Lane: HealthOperational,
+				LastAttempt: newestAttempt.Add(time.Minute), LastError: "still unavailable",
+			}}
+			expected := newerBlocking
+			if replaceWithNewer {
+				if !queue.Enqueue(latestAttempt) {
+					t.Fatal("a newer same-lane observation should replace the pending observation")
+				}
+				expected = latestAttempt
+			}
+			queue.Close()
+			done := make(chan struct{})
+			go func() { queue.Run(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("close did not flush pending health observations")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(saved) != 1 || !saved[0].State.LastAttempt.Equal(expected.State.LastAttempt) || saved[0].State.Failures != expected.State.Failures {
+				t.Fatalf("saved observations=%#v", saved)
+			}
+		})
 	}
 }
 

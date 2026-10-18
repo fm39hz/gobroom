@@ -668,8 +668,49 @@ OAuth alone owns `OAuthTokenState`, its encode/decode helpers and the existing
 `x/oauth2` exchange; those helpers/factory are public for module composition.
 The static-module host contract is version 3 for opaque-state and explicit
 credential-recovery semantics;
-old module contracts are rejected, not adapted. This does not add durable
-interactive session resumption or a universal action-based setup driver.
+old module contracts are rejected, not adapted. Interactive sessions are not
+durably resumed after restart.
+
+### Action-based setup
+
+An auth primitive can also implement `AuthorizationFlow.BeginAuthorization` and
+`AdvanceAuthorization`. Its transition contains a completed opaque
+`CredentialState`, a typed terminal denial/expiry/unavailability, or opaque
+`AuthorizationState` plus bounded public actions
+and/or a poll interval. The initial public action kinds are `open_url`,
+`display_code` and `input`; input binds an exact, registered schema ref from the
+existing frozen JSON Schema catalog. This is no provider-name switch, shell
+execution, arbitrary URL fetch, filesystem access or frontend token exchange.
+An import can submit a bounded JSON document; streamed binary setup artifacts
+are not part of this initial action contract.
+
+The daemon owns connection reservation, private state, step revision, expiry,
+single-flight advancement and timers. `auth.setup.start/get/advance/cancel` is
+available over control IPC; `connections setup start/get/submit/cancel` consumes
+it. Submit requires the current revision and an offered input-action ID. Invalid
+input is rejected by its registered schema before the driver and does not consume
+the step. Schema diagnostics and driver error text are not echoed, because they
+can contain input secrets. Input comes from a bounded JSON file/stdin, never a
+secret-bearing argv option. Private state is redacted in formatting/JSON and is
+not retained in public status or logs.
+
+There are at most 64 retained authorization sessions shared with code/device
+setup, at most eight actions per transition and 64 KiB private/input documents.
+A session cannot exceed ten minutes or extend its deadline. Poll intervals are
+100 ms..one minute and only run for active sessions that request them; no poll
+timer exists for ordinary input-only waiting. Provider network calls are bounded,
+cancellable and never hold the coordinator mutex. Cancellation/shutdown fences
+late completion; final credential validation, owner/revision CAS and activation
+use the existing shared commit path, with principal replacement semantics.
+
+This is the generic action-driver vertical, not full C4/SG2 closure. The existing
+code/device drivers and their frontend views still need to converge on this
+action engine; no old action schema or compatibility decoder is introduced.
+Generic TUI rendering/editing, callback action integration, credential leases and
+the full composition/fault matrix remain unfinished. A flow can already parse a
+cookie or service-account state through `AuthFlow.Resolve`; the new seam addresses
+multi-step interaction and ownership rather than inventing a special credential
+type for every setup method.
 
 The daemon coordinator owns the state machine. The current authorization-code
 slice exposes `auth.authorization.start`, `auth.authorization.complete` and

@@ -74,6 +74,15 @@ Explicit credential replacement then makes all three blocked roles usable.
 activation/status views and performs replacement through the control client.
 This fixture uses only a local fake provider and temporary database.
 
+`TestExternalGenericAuthorizationSetupPersistsAndActivatesCredential` adds an
+independent `AuthorizationFlow` with registered proof/OTP schemas. It starts from
+an empty account, returns URL/code/input actions, rejects stale revisions and
+invalid inputs, and polls to completion without frontend get calls. After actual
+activation and restart, the resulting opaque ticket authenticates a real fake-
+upstream HTTP call through a Physical/Combo. Set `GOBROOM_TEST_CLI` to exercise
+installed `connections setup start/get/submit/cancel`; secret input uses a
+mode-0600 JSON file. This is not a live provider or migrated built-in OAuth flow.
+
 `JobModule` demonstrates async create/status/cancel as independent operations,
 with schema-validated results and a client-held, connection-scoped inline handle.
 The lifecycle test loses create/cancel responses, proves no duplicate job or

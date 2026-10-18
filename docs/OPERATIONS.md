@@ -183,6 +183,28 @@ existing quota/rate restriction has ended. Provider-wide auth failures are not
 cleared by renewing a single account. Cross-connection shared identity is not
 inferred. Explicit operator resets remain separate recovery actions.
 
+## Action-based setup
+
+For a provider mode advertising `actionAuthorization`, action-based setup is
+available through the control client:
+
+```bash
+gobroom connections setup start --connection-id CONNECTION
+gobroom connections setup get --session-id SESSION
+gobroom connections setup submit --session-id SESSION --action-id ACTION --revision REVISION --input-file /secure/path/input.json
+gobroom connections setup cancel --session-id SESSION
+```
+
+Submit only an offered input action at the returned revision. Input is one JSON
+object, at most 64 KiB, validated against the action's exact registered schema.
+Use a mode-0600 file or stdin; do not put secret values on the command line.
+The daemon owns requested polling, so keeping a CLI/TUI open is unnecessary.
+`completed` means the credential committed; inspect the separate activation
+receipt before assuming a new routing snapshot is ready. Restart retains durable
+credentials/activation, not private interactive sessions. Existing OAuth code/
+device commands have not yet been replaced by this action surface; no built-in
+provider action-flow coverage is implied by the generic fixture.
+
 ## Data-plane exposure
 
 Loopback HTTP requires no token by default. When serving beyond a trusted
