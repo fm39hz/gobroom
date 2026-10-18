@@ -608,3 +608,12 @@ completion. `TestGenericAuthorizationSetupRejectsPublicCallbacksReadyEvent`
 prevents spoofing the internal event. Resource formatting/JSON redaction has
 provider-contract coverage. These close dynamic-URI ordering, not the remaining
 code/device coordinator migration, TUI action forms, leases or full SG2.
+
+Installed checkpoint `4ccecb2`: full tests/vet/conformance, three focused root race
+runs and five independent-module race runs passed. After `make install-all`, the
+assigned-URI fixture with `GOBROOM_TEST_CLI` verified resolved consent actions,
+pending-grant cancellation, callback activation, restart and exposed Physical/
+Combo inference. Main control=serving=473, activation queue empty, bundle-v9
+export/validate valid. The callback-ready event remained private and registration
+probes could not advance a not-yet-active grant. Remaining auth convergence,
+leases, TUI and performance gates are not implied by this vertical.

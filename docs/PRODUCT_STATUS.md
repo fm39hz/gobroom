@@ -40,6 +40,20 @@ extensibility; it does not add live provider coverage, generic TUI forms or broa
 harness compatibility. Code/device action-engine convergence, credential leases,
 full C4/SG2/M15, catalog curation UX and measured latency/RSS/load remain open.
 
+Implementation checkpoint: `4ccecb2`. Full tests/vet and architecture conformance
+passed; focused root/provider race checks passed three times and the independent
+assigned-URI module passed five race runs. Exact activation scope includes action,
+target, correlation, response fields and required/optional policy; the additional
+action/policy rejection assertions passed their focused test afterward.
+
+After `make install-all`, the installed CLI observed resolved consent actions and
+canceled a pending allocated grant. The isolated fixture also proved concurrent
+account setup while one issuer is blocked, rejection before callback activation,
+credential activation, restart and HTTP 200 from both explicitly exposed Physical
+and Combo names. The main daemon reported `ok`, control=serving=473, an empty
+activation queue and a valid bundle-v9 export → validate round trip. This does not
+establish new live-provider, generic TUI or resource-performance acceptance.
+
 Previous integrated milestone:
 
 Loopback callback ownership now uses one shared registry for action-based setup
