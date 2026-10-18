@@ -205,6 +205,17 @@ credentials/activation, not private interactive sessions. Existing OAuth code/
 device commands have not yet been replaced by this action surface; no built-in
 provider action-flow coverage is implied by the generic fixture.
 
+Action setup may now report `callbackModes` per input action. `loopback` means
+the daemon owns a matching fixed-loopback listener; `manual` means an optional
+listener could not be acquired and no HTTP grant exists. Submit the provider's
+callback input through `setup submit --input-file` when manual handoff is offered.
+Do not put callback URLs/codes in argv or logs. The browser page acknowledges a
+received response, not routing readiness: inspect setup status and activation.
+Callbacks use the same input schema/revision checks as manual actions. Terminal
+sessions release their grants and the last socket; restarting retains committed
+credentials, not a pending callback session. Dynamic port allocation and generic
+TUI callback forms are not claimed.
+
 ## Data-plane exposure
 
 Loopback HTTP requires no token by default. When serving beyond a trusted

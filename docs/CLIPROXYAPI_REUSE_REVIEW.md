@@ -45,6 +45,17 @@ it does not copy the scheduler, import the auth conductor or add a job branch.
 
 ### Request path and execution
 
+Callback ownership follow-up: `internal/auth/claude/oauth_server.go` and the
+Codex equivalent probe a port before starting a listener, while Devin's
+`internal/auth/devin/devin_auth.go` retains a directly bound loopback listener.
+SDK callers separately validate returned state. The problem is ownership of a
+real socket and correlation to one pending setup, not an OAuth-specific server
+to import. Gobroom's action grant registry uses its existing Go HTTP/URL/context
+primitives, exact target/query matching and session/action revisions. The code
+flow registers with the same listener runtime; no reference listener, forwarder,
+store or broad-address binding is copied. Fixed registered URLs are covered;
+daemon-assigned ephemeral URL negotiation remains unimplemented.
+
 Auth lifecycle follow-up: `sdk/cliproxy/auth/conductor_refresh.go` rereads an
 account after acquiring its per-auth lock, reuses a newer access token and fences
 late refresh merges by registration epoch/generation. This identifies the

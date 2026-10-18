@@ -50,6 +50,8 @@ type authorizationSession struct {
 	setupRevision      uint64
 	setupPollTimer     *time.Timer
 	setupPollAfter     time.Duration
+	setupCallbackModes []AuthorizationCallbackView
+	setupCallDone      chan struct{}
 }
 
 type authorizationChallenge struct {
@@ -124,7 +126,7 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 	if redirectURL == "" {
 		return authorizationChallenge{}, fmt.Errorf("auth flow authorization URL has no redirect_uri")
 	}
-	callbackKey, callbackMode, err := d.acquireOAuthCallbackListener(redirectURL)
+	callbackKey, callbackMode, err := d.acquireOAuthCallbackListener(redirectURL, state)
 	if err != nil {
 		return authorizationChallenge{}, err
 	}
@@ -134,17 +136,17 @@ func (d *Daemon) startAuthorization(connectionID string) (authorizationChallenge
 	sessions.mu.Lock()
 	if sessions.closed {
 		sessions.mu.Unlock()
-		d.releaseOAuthCallbackListener(callbackKey)
+		d.releaseAuthorizationCallbacks(callbackKey)
 		return authorizationChallenge{}, fmt.Errorf("authorization coordinator is stopped")
 	}
 	if active := sessions.byConnection[connection.ID]; active != "" {
 		sessions.mu.Unlock()
-		d.releaseOAuthCallbackListener(callbackKey)
+		d.releaseAuthorizationCallbacks(callbackKey)
 		return authorizationChallenge{}, fmt.Errorf("connection %q already has pending authorization session %q", connection.ID, active)
 	}
 	if len(sessions.byID) >= maxAuthorizationSessions {
 		sessions.mu.Unlock()
-		d.releaseOAuthCallbackListener(callbackKey)
+		d.releaseAuthorizationCallbacks(callbackKey)
 		return authorizationChallenge{}, fmt.Errorf("maximum pending authorization sessions (%d) reached", maxAuthorizationSessions)
 	}
 	session := authorizationSession{kind: "authorization_code", connectionID: connection.ID, flow: interactive, state: state, verifier: verifier, redirectURL: redirectURL, callbackKey: callbackKey, callbackMode: callbackMode, expectedCredential: connection, authFlow: flow, expiresAt: expiresAt, status: "awaiting_user"}
@@ -267,7 +269,7 @@ func (d *Daemon) finishAuthorizationSession(sessionID, status, message string) {
 		delete(sessions.byConnection, session.connectionID)
 	}
 	sessions.mu.Unlock()
-	d.releaseOAuthCallbackListener(callbackKey)
+	d.releaseAuthorizationCallbacks(callbackKey)
 }
 
 func (d *Daemon) expireAuthorizationSession(sessionID string) {
@@ -294,7 +296,7 @@ func (d *Daemon) expireAuthorizationSession(sessionID string) {
 		delete(sessions.byConnection, session.connectionID)
 	}
 	sessions.mu.Unlock()
-	d.releaseOAuthCallbackListener(callbackKey)
+	d.releaseAuthorizationCallbacks(callbackKey)
 }
 
 func sameOAuthCallbackTarget(expected, actual string) bool {
@@ -359,7 +361,7 @@ func (d *Daemon) cancelAuthorization(sessionID string) error {
 		delete(sessions.byConnection, session.connectionID)
 	}
 	sessions.mu.Unlock()
-	d.releaseOAuthCallbackListener(session.callbackKey)
+	d.releaseAuthorizationCallbacks(session.callbackKey)
 	return nil
 }
 
@@ -393,7 +395,7 @@ func (d *Daemon) denyAuthorization(sessionID, state, callbackURL string) error {
 		delete(sessions.byConnection, session.connectionID)
 	}
 	sessions.mu.Unlock()
-	d.releaseOAuthCallbackListener(callbackKey)
+	d.releaseAuthorizationCallbacks(callbackKey)
 	return nil
 }
 
@@ -417,6 +419,10 @@ func (s *authorizationSessions) pruneLocked(now time.Time) []string {
 				session.setupPollTimer.Stop()
 			}
 			if session.kind == "actions" && (session.status == "starting" || session.status == "awaiting_user") {
+				if session.callbackKey != "" {
+					callbackKeys = append(callbackKeys, session.callbackKey)
+					session.callbackKey = ""
+				}
 				clearSetupSession(&session)
 				session.status, session.statusError = "expired", "authorization expired"
 				session.expiresAt = now.Add(authorizationSessionRetention)
@@ -470,7 +476,7 @@ func (d *Daemon) pruneAuthorizationSessions(sessions *authorizationSessions, now
 	callbackKeys := sessions.pruneLocked(now)
 	sessions.mu.Unlock()
 	for _, key := range callbackKeys {
-		d.releaseOAuthCallbackListener(key)
+		d.releaseAuthorizationCallbacks(key)
 	}
 }
 

@@ -27,6 +27,22 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Loopback callback ownership now uses one shared registry for action-based setup
+and the existing code flow. Private grants bind exact targets/correlation/query
+shapes to schema-backed input actions; no callback protocol is special in the
+dispatcher. Required listener failures roll back, optional failures expose manual
+handoff, and terminal/cancel/expiry paths release the actual socket. A separate
+module proves non-OAuth `ticket`/`proof` callback input, manual fallback, denial,
+restart and HTTP inference through Physical/Combo. Scope/ownership and admitted-
+callback cancellation have focused fixtures. This improves provider onboarding and
+headless lifecycle safety, without adding a live provider or broadening harness
+compatibility. The code/device coordinators and frontends still need action-engine
+convergence; daemon-assigned callback URLs, TUI action forms, leases and full
+C4/SG2/M15 remain open. Catalog curation UX and latency/RSS/load evidence remain
+separate unfinished product gates.
+
+Previous integrated milestone:
+
 Provider modules now have an action-based setup path independent of OAuth code/
 device shape. Bounded public URL/code/input actions, exact registered schemas,
 private state and revisioned transitions feed the shared daemon session ownership,

@@ -125,6 +125,14 @@ already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 
+Callback grants reuse `net.Listen`, `net/http`, `net/url`, constant-time byte
+comparison and the existing action/schema/CAS lifecycle. One listener registry
+replaces the OAuth-only runtime; no callback web framework, provider redirect
+forwarder or new dependency is introduced. Reference source showed both the
+probe-then-bind race and broad-address listeners, as well as a direct loopback
+listener held by the flow. Gobroom retains actual socket ownership and binds
+delivery to a typed grant rather than copying those callback servers.
+
 Action-based authorization uses existing frozen JSON Schema validation for input
 actions, the existing CAS/activation and coordinator reservations, and standard
 context/timers for bounded calls and requested polling. Opaque state follows the

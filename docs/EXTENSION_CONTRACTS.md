@@ -706,11 +706,54 @@ use the existing shared commit path, with principal replacement semantics.
 This is the generic action-driver vertical, not full C4/SG2 closure. The existing
 code/device drivers and their frontend views still need to converge on this
 action engine; no old action schema or compatibility decoder is introduced.
-Generic TUI rendering/editing, callback action integration, credential leases and
+Generic TUI rendering/editing, full callback resource negotiation, credential leases and
 the full composition/fault matrix remain unfinished. A flow can already parse a
 cookie or service-account state through `AuthFlow.Resolve`; the new seam addresses
 multi-step interaction and ownership rather than inventing a special credential
 type for every setup method.
+
+### Loopback callback grants
+
+A continuing transition may declare up to eight private `AuthorizationCallback`
+grants, each bound to an offered input-action ID. A grant declares a fixed HTTP
+loopback URL/path/static query, a named opaque correlation value and permitted
+response query names. The grant object is redacted in formatting/JSON; public
+callback modes do not dump its target or correlation data. Drivers may publish
+an authorization URL as a separate public action. Drivers generate a
+fresh, unpredictable correlation value for each new callback challenge and retain
+their own protocol validation, including manual handoff. No OAuth field name is
+special in the generic dispatcher.
+
+The shared listener registry acquires the actual loopback socket without a
+probe/close/rebind window, shares a canonical bind address across owners, and
+atomically replaces one owner's grants. A required bind failure rolls back
+tentative reservations without dismantling the previous grants. An optional
+failure exposes `manual` in `callbackModes` and grants no HTTP callback. Public
+views contain only action IDs and `loopback`/`manual` modes, not correlation data.
+Non-loopback/DNS/TLS/wildcard/port-zero targets are rejected by this initial grant
+contract; daemon-assigned ephemeral callback URLs remain a separate resource-
+negotiation gate.
+
+HTTP delivery requires GET, a loopback peer, the exact host/escaped path/static
+query/correlation and only declared response fields. Malformed, duplicate,
+unknown and ambiguous query matches fail closed before driver invocation.
+The callback is encoded as typed `AuthorizationCallbackInput{url}` and delivered
+through the pinned action revision, registered input schema and normal auth-owner/
+credential CAS checks. An already published step can still be returning to its
+caller; the callback waits on that step's completion channel with a bounded
+context, not a polling loop. Driver invocation never holds the registry lock.
+
+Completion, denial, cancellation, expiry and shutdown revoke grants and close the
+last actual socket reservation. An admitted callback still obeys cancellation
+and the daemon's worker drain, so a late successful driver cannot persist a token.
+The HTTP page acknowledges receipt; setup status and credential activation remain
+separate outcomes. The previous OAuth-only listener runtime is removed: the code
+flow uses the same registry, while its existing flow handler still owns OAuth
+interpretation until code/device orchestration migrates to the action engine.
+There is no unknown-callback forwarding or fallback to whichever session is active.
+If Start fails before producing a public session handle, its failed reservation
+does not occupy the retained-session budget. Failures after a handle was issued
+retain their public terminal status through the usual bounded retention period.
 
 The daemon coordinator owns the state machine. The current authorization-code
 slice exposes `auth.authorization.start`, `auth.authorization.complete` and

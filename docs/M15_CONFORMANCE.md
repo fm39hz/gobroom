@@ -541,3 +541,34 @@ control=serving=471 and valid bundle-v9 export/validate. Full conformance preced
 the final pre-dispatch cancellation guard; that guard was followed by full
 tests/vet and repeated generic-coordinator race checks. No live provider, migrated
 OAuth callback action or performance baseline is implied.
+
+### Shared callback grant runtime
+
+`TestExternalModuleCallbackGrantsCredentialAndSurvivesRestart` registers a
+separate auth driver with private fixed-loopback grants. Its callback uses
+non-OAuth `ticket`/`proof` fields, rejects malformed/mismatched requests,
+persists a credential through the normal schema/revision/CAS/activation path,
+restarts and performs actual HTTP inference through Physical/Combo. The same
+fixture covers port-busy manual handoff, typed denial and cancellation; the
+optional installed CLI path submits callback input through a private file.
+
+Registry evidence includes `TestAuthorizationCallbackRegistrySharesListenerAndReleasesByOwner`,
+`TestAuthorizationCallbackReplacementRollbackAndOptionalBindFailure`,
+`TestAuthorizationCallbackRegistryCloseRejectsAcquire`,
+`TestAuthorizationCallbackHandlerRequiresExactLocalGrant`,
+`TestAuthorizationCallbackHandlerFailsClosedOnAmbiguousGrants` and
+`TestAuthorizationCallbackOwnerReplacementChangesToken`.
+`TestAuthorizationCallbackCancellationFencesAdmittedCredential` exercises an
+actual admitted HTTP callback whose driver returns late after cancellation.
+`TestAuthorizationCallbackExpiryReleasesGrantAndListener` checks the expiration
+finisher's resource cleanup; the generic setup timer has separate virtual-time
+coverage. `TestAuthorizationCallbackWaitsForPublishedStepWithoutPolling` uses
+`testing/synctest` to prove the receiver waits for the admitted step rather than
+polling/bypassing it. `TestGenericAuthorizationSetupRequiredBindFailuresDoNotFillRetention`
+prevents unissued failed starts from exhausting the session budget. Existing
+OAuth success/denial/cancellation fixtures exercise the same listener runtime;
+the previous OAuth-only listener implementation is removed.
+
+These cases do not establish daemon-assigned ephemeral callback URL negotiation,
+fully migrated code/device orchestration, generic TUI forms, credential leases
+or complete SG2 composition.

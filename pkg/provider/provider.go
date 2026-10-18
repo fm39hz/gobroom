@@ -85,6 +85,8 @@ type AuthorizationAction = core.AuthorizationAction
 type AuthorizationEventKind = core.AuthorizationEventKind
 type AuthorizationEvent = core.AuthorizationEvent
 type AuthorizationTransition = core.AuthorizationTransition
+type AuthorizationCallback = core.AuthorizationCallback
+type AuthorizationCallbackInput = core.AuthorizationCallbackInput
 type AuthorizationFailure = core.AuthorizationFailure
 
 const (

@@ -980,7 +980,7 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	}
 	body, readErr := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if readErr != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Authorization complete") {
+	if readErr != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Authorization response received") {
 		t.Fatalf("loopback callback response: status=%d body=%q readErr=%v", response.StatusCode, body, readErr)
 	}
 	status := d.handleIPC(context.Background(), IPCRequest{ID: "status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": challenge.SessionID}})
@@ -996,9 +996,9 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if err != nil || token.AccessToken != "loopback-access" || token.RefreshToken != "loopback-refresh" || token.ClientID != "loopback-client" {
 		t.Fatalf("loopback exchange credential=%#v err=%v", token, err)
 	}
-	d.oauthCallbackMu.Lock()
-	remainingListeners := len(d.oauthCallbacks)
-	d.oauthCallbackMu.Unlock()
+	d.callbackMu.Lock()
+	remainingListeners := len(d.callbackListeners)
+	d.callbackMu.Unlock()
 	if remainingListeners != 0 {
 		t.Fatalf("callback listener remained after completed session: %d", remainingListeners)
 	}
@@ -1040,14 +1040,14 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if !expiredStatus.OK || !expiredOK || expiredView.Status != "expired" {
 		t.Fatalf("expired OAuth session not retained as a terminal state: %#v error=%q", expiredStatus.Result, expiredStatus.Error)
 	}
-	d.oauthCallbackMu.Lock()
-	remainingListeners = len(d.oauthCallbacks)
-	d.oauthCallbackMu.Unlock()
+	d.callbackMu.Lock()
+	remainingListeners = len(d.callbackListeners)
+	d.callbackMu.Unlock()
 	if remainingListeners != 0 {
 		t.Fatalf("OAuth listener remained after denial/expiry: %d", remainingListeners)
 	}
 	d.cancelAuthorizationSessions()
-	d.closeOAuthCallbackListeners()
+	d.closeAuthorizationCallbacks()
 }
 
 func TestDaemonOwnsDeviceAuthorizationPollingAndKeepsDeviceCodePrivate(t *testing.T) {

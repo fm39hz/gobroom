@@ -83,6 +83,16 @@ upstream HTTP call through a Physical/Combo. Set `GOBROOM_TEST_CLI` to exercise
 installed `connections setup start/get/submit/cancel`; secret input uses a
 mode-0600 JSON file. This is not a live provider or migrated built-in OAuth flow.
 
+`TestExternalModuleCallbackGrantsCredentialAndSurvivesRestart` binds an independent
+auth driver's private loopback callback to its input action. Non-OAuth query
+fields (`ticket`/`proof`) pass through the generic grant dispatcher and normal
+schema/revision/CAS/activation path. Invalid callbacks are rejected, a busy port
+exposes manual handoff, and denial/cancel close the grant. After restart, HTTP
+inference authenticates with the resulting opaque credential. `GOBROOM_TEST_CLI`
+also exercises setup views, cancel and callback URL submission from a mode-0600
+input file. The test's free-port discovery is fixture setup only; production
+registration binds and retains its actual socket without a probe/rebind window.
+
 `JobModule` demonstrates async create/status/cancel as independent operations,
 with schema-validated results and a client-held, connection-scoped inline handle.
 The lifecycle test loses create/cancel responses, proves no duplicate job or

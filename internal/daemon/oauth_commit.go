@@ -76,7 +76,7 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 		delete(sessions.byConnection, current.connectionID)
 	}
 	sessions.mu.Unlock()
-	d.releaseOAuthCallbackListener(callbackKey)
+	d.releaseAuthorizationCallbacks(callbackKey)
 	view, activationErr := d.activateCredentialLocked(d.activationContext(), commit)
 	if activationErr != nil {
 		d.appendLog("warn", "credential committed; activation progress requires reconciliation")

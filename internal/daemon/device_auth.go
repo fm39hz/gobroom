@@ -267,7 +267,14 @@ func (d *Daemon) cancelAuthorizationSessions() {
 	sessions := d.authorizationSessions()
 	sessions.mu.Lock()
 	sessions.closed = true
+	var callbackOwners []string
 	for _, session := range sessions.byID {
+		if session.callbackKey != "" {
+			callbackOwners = append(callbackOwners, session.callbackKey)
+		}
+		if session.setupCallDone != nil {
+			close(session.setupCallDone)
+		}
 		if session.setupPollTimer != nil {
 			session.setupPollTimer.Stop()
 		}
@@ -282,6 +289,9 @@ func (d *Daemon) cancelAuthorizationSessions() {
 	sessions.byConnection = map[string]string{}
 	sessions.inFlight = map[string]bool{}
 	sessions.mu.Unlock()
+	for _, owner := range callbackOwners {
+		d.releaseAuthorizationCallbacks(owner)
+	}
 }
 
 func publicDeviceAuthorization(sessionID string, session authorizationSession) deviceAuthorizationView {

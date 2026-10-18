@@ -358,6 +358,21 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    forms, opaque credential leases and the complete SG2 composition/fault matrix.
    No compatibility action decoder or duplicate provider-specific setup kernel
    is a final-state solution. C4 remains in progress.
+
+   Callback ownership now has a shared grant registry. Action drivers bind a
+   private fixed-loopback target/correlation/response shape to a schema-backed
+   input action; delivery pins the session revision and reuses the ordinary
+   advance/CAS/activation path. The previous OAuth-specific listener runtime was
+   removed, and its code-flow handler registers through the same registry. Socket
+   acquisition is real ownership, owner replacement is atomic, required failures
+   roll back, optional failures expose manual mode, and terminal/shutdown paths
+   revoke grants. Fixtures cover strict/ambiguous dispatch, shared sockets, expiry
+   cleanup, cancel versus an admitted callback and a channel-based wait for a
+   published step. A separate module uses non-OAuth `ticket`/`proof` fields,
+   automatic and manual callbacks, denial, restart and real HTTP inference.
+   Remaining: daemon-assigned ephemeral callback URL negotiation, migrating the
+   code/device coordinators and clients to actions, TUI forms, opaque leases and
+   full SG2 composition/live-provider evidence. This is not full auth closure.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

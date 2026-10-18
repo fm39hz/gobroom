@@ -82,8 +82,10 @@ type Daemon struct {
 	mu                  sync.Mutex
 	oauthMu             sync.Mutex
 	oauth               *authorizationSessions
-	oauthCallbackMu     sync.Mutex
-	oauthCallbacks      map[string]*oauthCallbackListener
+	callbackMu          sync.Mutex
+	callbackListeners   map[string]*authorizationCallbackListener
+	callbackBindings    map[authorizationCallbackKey]authorizationCallbackBinding
+	callbacksClosed     bool
 	runCtx              context.Context
 	runCancel           context.CancelFunc
 	authWG              sync.WaitGroup
@@ -485,7 +487,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.cancelAuthorizationSessions()
 		d.authWG.Wait()
 		<-d.activationDone
-		d.closeOAuthCallbackListeners()
+		d.closeAuthorizationCallbacks()
 		if d.usageCancel != nil {
 			d.usageCancel()
 		}
