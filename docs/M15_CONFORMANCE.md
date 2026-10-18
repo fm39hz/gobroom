@@ -533,3 +533,11 @@ the final revision fence.
 `TestConnectionSetupCommandsInvokeTypedRPCs` cover exact numeric values across
 typed CLI/IPC boundaries. These do not prove migrated OAuth callback actions,
 generic TUI editing, credential leases or full SG2 composition.
+
+Installed checkpoint `11a6f65`: `make install-all` and the external action setup
+fixture with `GOBROOM_TEST_CLI` passed. CLI actions, daemon-only polling, activation,
+restart, HTTP inference and cancellation were exercised; the main daemon reported
+control=serving=471 and valid bundle-v9 export/validate. Full conformance preceded
+the final pre-dispatch cancellation guard; that guard was followed by full
+tests/vet and repeated generic-coordinator race checks. No live provider, migrated
+OAuth callback action or performance baseline is implied.

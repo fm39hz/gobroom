@@ -9,7 +9,7 @@ milestone status, [use cases](USE_CASES.md) own product acceptance, and
 
 | User journey | What is demonstrated | What is not yet closed |
 |---|---|---|
-| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device lifecycle fixtures exist. | Broad live-provider auth acceptance, non-loopback/HTTPS callback integrations and the full credential lifecycle race matrix. |
+| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device lifecycle and generic action-based setup have fixtures; installed CLI actions complete headless setup and persist usable credentials. | Broad live-provider auth acceptance, code/device/callback convergence onto the action engine, generic TUI action editing, credential leases and the full lifecycle race matrix. |
 | Turn sources into Physical models | Typed identity/revision/fidelity, source evidence, capability/limit projections, conservative grouping and model policies. | Whole-catalog review/split UX, stronger identity evidence and convenient capability comparison across sources. |
 | Build role Combos and expose selected names | Ordered typed members, registry-backed strategy/options, source-prefix filtering, exposure and `/v1/models` have onboarding and editor acceptance fixtures. | Complete interactive/headless acceptance for every management action, including Physical exposure through the UI. |
 | Consume the provider endpoint | Chat has fake verticals and a limited live acceptance history. Responses/Anthropic/Gemini, tools, JSON/SSE and committed-stream fallback have many deterministic IR fixtures. | The complete cross-protocol, reasoning/signature/history/continuity/modality matrix and live harness coverage. A supported vertical is not universal wire compatibility. |
@@ -42,6 +42,21 @@ code/device/callback coordination still needs to converge onto the action engine
 and generic TUI forms, credential leases and full C4/SG2/M15 remain unfinished.
 Physical catalog curation UX, broad harness/protocol acceptance and measured
 latency/RSS/load targets also remain open across the product.
+
+Implementation checkpoint: `11a6f65`. Full tests/vet and conformance passed;
+focused provider/daemon/CLI race fixtures passed twice and the external module
+vertical passed three times under race detection. A final pre-cancelled-call
+regression failed before its context guard; after that guard, full tests/vet and
+repeated generic-coordinator race checks passed. The evidence-order queue test
+also independently verifies older reset observations cannot replace newer attempts.
+
+After `make install-all`, the installed CLI performed setup start/get/submit/
+cancel using mode-0600 JSON input, while the fake-provider fixture completed its
+poll without frontend get calls, waited for activation, restarted and returned
+HTTP 200 through a Physical/Combo model. The main daemon reported `ok`, control=
+serving=471, no retained activation jobs and valid bundle-v9 export → validate.
+These are temporary-database/fake-upstream checks; no new live account or
+production-provider acceptance is claimed.
 
 Previous integrated milestone:
 
