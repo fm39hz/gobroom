@@ -641,3 +641,12 @@ module setup/refresh/restart and installed CLI fixtures now use typed actions.
 Module host contract v4 rejects prior lifecycle contracts; no device compatibility
 adapter is retained. Authorization-code coordinator migration, inline TUI input,
 opaque leases and full SG2 composition remain unclosed.
+
+Installed checkpoint `734ace6`: full tests/vet/conformance and repeated focused
+root/external race tests passed. Installed generic setup CLI completed opaque
+device setup, generation fencing, refresh and restart inference; the exact
+`TestPublicDaemonRejectsAuthorizationSetupAfterDefinitionOwnerChanges` fixture
+passed three installed-CLI race runs, including ABA. Main control=serving=474,
+activation queue empty, bundle-v9 export/validate valid. Removed device commands
+are absent from installed help, old device RPCs are rejected and module host v3
+is rejected. No live provider or complete C4/SG2 claim follows from these cases.

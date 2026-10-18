@@ -42,6 +42,20 @@ remains unfinished. This reduces onboarding/control divergence, not provider
 catalog or harness gaps. Authorization-code convergence, leases, full C4/SG2/M15,
 catalog curation and measured latency/RSS/load remain open across the product.
 
+Implementation checkpoint: `734ace6`. Full tests/vet/conformance passed; focused
+provider/daemon/TUI/CLI race cases passed twice, including SDK slow-down, expiry,
+generation/activation and cancellation/drain. Migrated external setup/privacy/
+generation fixtures passed three race runs. Stronger old-host rejection and exact
+UI schema-ref assertions then passed focused tests.
+
+After `make install-all`, installed generic setup commands exercised opaque-state
+setup, generation fencing, refresh and inference after restart. The exact public-
+module owner-rebind and ABA fixture also passed three race runs with the installed
+CLI. Main daemon status was `ok`, control=serving=474, activation queue empty,
+bundle-v9 export/validate valid; installed help no longer lists device-specific
+commands. This is deterministic fake-provider acceptance, not new live OAuth,
+inline TUI input or performance coverage.
+
 Previous integrated milestone:
 
 Auth drivers can now request an OS-assigned callback URI without frontend port
