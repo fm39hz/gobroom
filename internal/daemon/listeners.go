@@ -14,9 +14,10 @@ const (
 // ListenerAddresses contains the addresses actually owned by a running daemon.
 // In particular, a requested TCP port of zero is replaced by the bound port.
 type ListenerAddresses struct {
-	IPC         string `json:"ipc,omitempty"`
-	HTTP        string `json:"http,omitempty"`
-	HTTPControl string `json:"httpControl,omitempty"`
+	IPC             string `json:"ipc,omitempty"`
+	HTTP            string `json:"http,omitempty"`
+	HTTPControl     string `json:"httpControl,omitempty"`
+	CallbackIngress string `json:"callbackIngress,omitempty"`
 }
 
 // Addresses returns an immutable snapshot of the running daemon's listeners.
@@ -29,8 +30,9 @@ func (d *Daemon) Addresses() ListenerAddresses {
 }
 
 type httpListeners struct {
-	data    net.Listener
-	control net.Listener
+	data     net.Listener
+	control  net.Listener
+	callback net.Listener
 }
 
 func (listeners httpListeners) close() {
@@ -40,6 +42,9 @@ func (listeners httpListeners) close() {
 	if listeners.control != nil {
 		_ = listeners.control.Close()
 	}
+	if listeners.callback != nil {
+		_ = listeners.callback.Close()
+	}
 }
 
 // Reserve both ports before initialization publishes IPC or serves requests.
@@ -47,6 +52,10 @@ func (listeners httpListeners) close() {
 func reserveHTTPListeners(ctx context.Context, config Config) (httpListeners, error) {
 	var listeners httpListeners
 	var listenConfig net.ListenConfig
+	callbackConfig, err := callbackIngressConfig(config.CallbackIngress)
+	if err != nil {
+		return httpListeners{}, err
+	}
 	if config.HTTPEnabled {
 		address := config.HTTPAddr
 		if address == "" {
@@ -69,6 +78,14 @@ func reserveHTTPListeners(ctx context.Context, config Config) (httpListeners, er
 			return httpListeners{}, fmt.Errorf("bind HTTP control plane: %w", err)
 		}
 		listeners.control = listener
+	}
+	if callbackConfig != nil {
+		listener, err := listenConfig.Listen(ctx, "tcp", callbackConfig.address)
+		if err != nil {
+			listeners.close()
+			return httpListeners{}, fmt.Errorf("bind authorization callback ingress: %w", err)
+		}
+		listeners.callback = listener
 	}
 	return listeners, nil
 }

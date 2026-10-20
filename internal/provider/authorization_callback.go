@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
+	"golang.org/x/net/http/httpguts"
 )
 
 var authorizationCallbackName = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,63}$`)
@@ -67,33 +68,40 @@ func (c AuthorizationCallback) Validate() error {
 		return fmt.Errorf("authorization callback URL has invalid length")
 	}
 	u, err := url.Parse(c.URL)
-	if err != nil || u == nil || !u.IsAbs() || u.Scheme != "http" || u.User != nil || u.Fragment != "" || u.Path == "" {
-		return fmt.Errorf("authorization callback URL must be an absolute HTTP URL with a path")
+	if err != nil || u == nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.Fragment != "" || u.Path == "" || strings.HasSuffix(u.Host, ":") || !httpguts.ValidHostHeader(u.Host) {
+		return fmt.Errorf("authorization callback URL must be an absolute HTTP/S URL with a valid host and path")
 	}
-	host := u.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		// localhost is the only permitted DNS name.
-	} else {
-		ip, parseErr := netip.ParseAddr(host)
-		if parseErr != nil || !ip.IsLoopback() || ip.Zone() != "" {
-			return fmt.Errorf("authorization callback host must be localhost or a loopback IP")
+	for _, part := range []string{u.Host, u.Path} {
+		for _, char := range part {
+			if char > 0x7f {
+				return fmt.Errorf("authorization callback host and path must be ASCII")
+			}
 		}
 	}
 	portText := u.Port()
-	if portText == "" {
-		return fmt.Errorf("authorization callback URL requires a fixed port")
-	}
-	for _, digit := range portText {
-		if digit < '0' || digit > '9' {
-			return fmt.Errorf("authorization callback URL port is invalid")
+	if u.Scheme == "http" {
+		host := u.Hostname()
+		if strings.EqualFold(host, "localhost") {
+			// localhost is the only permitted DNS name for plain HTTP.
+		} else {
+			ip, parseErr := netip.ParseAddr(host)
+			if parseErr != nil || !ip.IsLoopback() || ip.Zone() != "" {
+				return fmt.Errorf("authorization callback host must be localhost or a loopback IP")
+			}
 		}
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 0 || port > 65535 {
-		return fmt.Errorf("authorization callback URL port is invalid")
-	}
-	if _, _, err := net.SplitHostPort(u.Host); err != nil {
-		return fmt.Errorf("authorization callback URL requires a valid host and port")
+		if portText == "" {
+			return fmt.Errorf("authorization callback URL requires a fixed port")
+		}
+		if err := validateAuthorizationCallbackPort(portText, true); err != nil {
+			return err
+		}
+		if _, _, err := net.SplitHostPort(u.Host); err != nil {
+			return fmt.Errorf("authorization callback URL requires a valid host and port")
+		}
+	} else if portText != "" {
+		if err := validateAuthorizationCallbackPort(portText, false); err != nil {
+			return err
+		}
 	}
 
 	query, err := url.ParseQuery(u.RawQuery)
@@ -133,6 +141,19 @@ func (c AuthorizationCallback) Validate() error {
 			return fmt.Errorf("authorization callback response parameter conflicts with URL query")
 		}
 		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+func validateAuthorizationCallbackPort(portText string, allowZero bool) error {
+	for _, digit := range portText {
+		if digit < '0' || digit > '9' {
+			return fmt.Errorf("authorization callback URL port is invalid")
+		}
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port > 65535 || (allowZero && port < 0) || (!allowZero && port == 0) {
+		return fmt.Errorf("authorization callback URL port is invalid")
 	}
 	return nil
 }

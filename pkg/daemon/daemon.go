@@ -14,6 +14,7 @@ type Daemon = core.Daemon
 type IPCRequest = core.IPCRequest
 type IPCResponse = core.IPCResponse
 type ListenerAddresses = core.ListenerAddresses
+type AuthorizationCallbackIngressConfig = core.AuthorizationCallbackIngressConfig
 type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec
 type CredentialActivationView = core.CredentialActivationView
@@ -24,10 +25,11 @@ type AuthorizationCallbackView = core.AuthorizationCallbackView
 type AuthorizationCallbackMode = core.AuthorizationCallbackMode
 
 const (
-	AuthorizationSetupNew         = core.AuthorizationSetupNew
-	AuthorizationSetupResume      = core.AuthorizationSetupResume
-	AuthorizationCallbackLoopback = core.AuthorizationCallbackLoopback
-	AuthorizationCallbackManual   = core.AuthorizationCallbackManual
+	AuthorizationSetupNew             = core.AuthorizationSetupNew
+	AuthorizationSetupResume          = core.AuthorizationSetupResume
+	AuthorizationCallbackLoopback     = core.AuthorizationCallbackLoopback
+	AuthorizationCallbackProxiedHTTPS = core.AuthorizationCallbackProxiedHTTPS
+	AuthorizationCallbackManual       = core.AuthorizationCallbackManual
 )
 
 type CredentialActivationProgress = core.CredentialActivationProgress

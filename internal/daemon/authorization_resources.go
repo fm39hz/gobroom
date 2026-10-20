@@ -154,14 +154,13 @@ func (d *Daemon) reserveAuthorizationCallbacks(ctx context.Context, owner string
 			continue
 		}
 		target, _ := url.Parse(spec.URL)
-		_, address, ok := loopbackCallbackAddress(target, true)
-		if !ok {
-			return rollback(fmt.Errorf("callback allocation target is not local"))
+		mode, address, err := d.authorizationCallbackRoute(target, spec.Required, true)
+		if err != nil {
+			return rollback(err)
 		}
 		resolved := spec
 		resolved.ResponseParameters = append([]string(nil), spec.ResponseParameters...)
-		mode := provider.AuthorizationCallbackLoopback
-		if spec.NeedsAllocation() || (d.callbackListeners[address] == nil && created[address] == nil) {
+		if mode == provider.AuthorizationCallbackLoopback && (spec.NeedsAllocation() || (d.callbackListeners[address] == nil && created[address] == nil)) {
 			var config net.ListenConfig
 			listener, err := config.Listen(ctx, "tcp", address)
 			if err != nil {

@@ -97,9 +97,9 @@ func TestAuthorizationCodeAllocatedLoopbackBindsResolvedURIBeforeConsent(t *test
 	}
 }
 
-func TestAuthorizationCodeRemoteHTTPSBeginsConsentWithoutCallbackGrant(t *testing.T) {
+func TestAuthorizationCodeHTTPSPreparesIntentBeforeConsentAndAcceptsManualReceipt(t *testing.T) {
 	called := false
-	authorizer := newCodeTestDriver(t, "https://client.example/oauth/return", true, func(_ context.Context, request AuthorizationCodeRequest) (string, error) {
+	authorizer := newCodeTestDriver(t, "https://client.example/oauth/return", false, func(_ context.Context, request AuthorizationCodeRequest) (string, error) {
 		called = true
 		if request.RedirectURL != "https://client.example/oauth/return" {
 			t.Fatalf("redirect URI=%q", request.RedirectURL)
@@ -112,8 +112,51 @@ func TestAuthorizationCodeRemoteHTTPSBeginsConsentWithoutCallbackGrant(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !called || started.PrepareCallbacks || len(started.Callbacks) != 0 || len(started.Actions) != 2 || started.Actions[0].Kind != AuthorizationOpenURL {
-		t.Fatalf("remote HTTPS flow unexpectedly required a callback grant: called=%v transition=%#v", called, started)
+	if called || !started.PrepareCallbacks || len(started.Callbacks) != 1 || len(started.Actions) != 1 || started.Callbacks[0].URL != "https://client.example/oauth/return" {
+		t.Fatalf("HTTPS flow did not prepare callback intent before consent: called=%v transition=%#v", called, started)
+	}
+	ready, err := authorizer.AdvanceAuthorization(context.Background(), started.State, AuthorizationEvent{
+		Kind: AuthorizationCallbacksReady, Callbacks: []AuthorizationCallbackResource{{ActionID: "callback", URL: "https://client.example/oauth/return", Mode: AuthorizationCallbackManual}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || ready.PrepareCallbacks || len(ready.Callbacks) != 1 || len(ready.Actions) != 2 || ready.Actions[0].Kind != AuthorizationOpenURL {
+		t.Fatalf("manual HTTPS receipt did not carry intent through consent: called=%v transition=%#v", called, ready)
+	}
+}
+
+func TestAuthorizationCodeCallbackReadyRequiresProtocolModeMatch(t *testing.T) {
+	for _, test := range []struct {
+		name, target string
+		mode         AuthorizationCallbackMode
+		required     bool
+	}{
+		{"https cannot be loopback", "https://client.example/callback", AuthorizationCallbackLoopback, false},
+		{"http cannot be proxied", "http://127.0.0.1:43127/callback", AuthorizationCallbackProxiedHTTPS, false},
+		{"required cannot be manual", "https://client.example/callback", AuthorizationCallbackManual, true},
+		{"https manual optional", "https://client.example/callback", AuthorizationCallbackManual, false},
+		{"https proxied", "https://client.example/callback", AuthorizationCallbackProxiedHTTPS, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authorizer := newCodeTestDriver(t, test.target, test.required, func(context.Context, AuthorizationCodeRequest) (string, error) {
+				return "https://identity.example/authorize", nil
+			}, func(context.Context, AuthorizationCodeExchange) (CredentialState, error) {
+				return NewCredentialState("opaque-state")
+			})
+			started, err := authorizer.BeginAuthorization(context.Background(), AuthInput{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = authorizer.AdvanceAuthorization(context.Background(), started.State, AuthorizationEvent{Kind: AuthorizationCallbacksReady, Callbacks: []AuthorizationCallbackResource{{ActionID: "callback", URL: test.target, Mode: test.mode}}})
+			if test.name == "https manual optional" || test.name == "https proxied" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil {
+				t.Fatal("accepted callback resource with incompatible mode")
+			}
+		})
 	}
 }
 
@@ -274,7 +317,7 @@ func TestAuthorizationCodeBeginAndAdvanceHonorCancellation(t *testing.T) {
 	if _, err := authorizer.AdvanceAuthorization(deadline, started.State, AuthorizationEvent{Kind: AuthorizationSubmit, ActionID: "callback", Value: json.RawMessage(`{"code":"x","state":"y"}`)}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expired advance error=%v", err)
 	}
-	if called != 1 {
+	if called != 0 {
 		t.Fatalf("canceled paths invoked handlers unexpectedly: %d", called)
 	}
 }

@@ -7,8 +7,8 @@ import (
 )
 
 func TestDaemonConfigPreservesIPCAndSpoolPaths(t *testing.T) {
-	config := daemonConfig(daemon.Config{HTTPEnabled: true, RuntimeSpoolMaxBytes: 1024}, "/tmp/gobroom.db", "/tmp/gobroom.spool", "/run/user/1/gobroom.sock")
-	if config.DBPath != "/tmp/gobroom.db" || config.RuntimeSpoolPath != "/tmp/gobroom.spool" || config.IPCPath != "/run/user/1/gobroom.sock" || config.RuntimeSpoolMaxBytes != 1024 {
+	config := daemonConfig(daemon.Config{HTTPEnabled: true, RuntimeSpoolMaxBytes: 1024}, "/tmp/gobroom.db", "/tmp/gobroom.spool", "/run/user/1/gobroom.sock", "https://auth.example.com", "127.0.0.1:8123")
+	if config.DBPath != "/tmp/gobroom.db" || config.RuntimeSpoolPath != "/tmp/gobroom.spool" || config.IPCPath != "/run/user/1/gobroom.sock" || config.RuntimeSpoolMaxBytes != 1024 || config.CallbackIngress.PublicOrigin != "https://auth.example.com" || config.CallbackIngress.ListenAddress != "127.0.0.1:8123" {
 		t.Fatalf("daemon configuration lost command-line paths/defaults: %#v", config)
 	}
 }

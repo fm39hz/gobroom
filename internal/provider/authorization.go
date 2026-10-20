@@ -69,8 +69,9 @@ type AuthorizationEventKind string
 type AuthorizationCallbackMode string
 
 const (
-	AuthorizationCallbackLoopback AuthorizationCallbackMode = "loopback"
-	AuthorizationCallbackManual   AuthorizationCallbackMode = "manual"
+	AuthorizationCallbackLoopback     AuthorizationCallbackMode = "loopback"
+	AuthorizationCallbackManual       AuthorizationCallbackMode = "manual"
+	AuthorizationCallbackProxiedHTTPS AuthorizationCallbackMode = "proxied_https"
 )
 
 // AuthorizationCallbackResource is private event data for the callback

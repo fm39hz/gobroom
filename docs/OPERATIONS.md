@@ -14,14 +14,42 @@ clients over the Unix IPC socket.
 | user service | `gobroomd.service` |
 
 The daemon flags are authoritative when a deployment needs different paths.
-The request hot path reads immutable snapshots and does not query SQLite.
+Route selection reads immutable snapshots. Credential issuance and the final
+dispatch revision fence read current SQLite state; the latter selects binding
+metadata without selecting secret material.
 
 Startup reserves every enabled HTTP listener and acquires Unix IPC ownership
-before initializing state. An occupied data/control port makes startup fail; any earlier
+before initializing state. An occupied data/control/callback port makes startup fail; any earlier
 reservation is released. A later initialization or IPC error also releases the
 reserved ports. After `Start` succeeds, the enabled listeners are already bound.
 Embedders can request `127.0.0.1:0` and read the allocated ports from
 `Daemon.Addresses()`. Addresses are cleared when the daemon stops.
+
+## HTTPS auth callbacks behind a local TLS proxy
+
+Callback ingress is disabled by default and is separate from data/admin HTTP.
+Opt in with both flags (address shown is an example, not an allocated default):
+
+```sh
+gobroomd --callback-origin https://auth.example.com --callback-addr 127.0.0.1:2714
+```
+
+Terminate TLS at a local reverse proxy and preserve the browser's public Host
+when forwarding to that private HTTP address. Do not expose the private socket
+as a general API; it serves registered callback grants only. No callback API key
+is required, while the data-plane bearer policy remains independent. TLS keys,
+certificate renewal and public DNS remain the deployment's responsibility.
+Gobroom does not derive origins from `Forwarded`/`X-Forwarded-*`. Plain HTTP
+non-loopback origins, wildcard binds and remote proxy peers are not accepted.
+
+The provider's registered HTTPS callback must have the configured origin.
+Different origins can fall back to manual delivery only if the callback is
+optional; required callbacks fail before consent. DNS case/default-port
+equivalence does not alter the URI spelling sent to the provider's token
+exchange. Keep redirects and path rewrites out of the proxy route: escaped path,
+fixed query, nonce and permitted response fields are matched by the grant.
+`Daemon.Addresses().CallbackIngress` reports the actual private bound address;
+port zero is useful for embeddings/tests, not a stable proxy upstream.
 
 IPC ownership uses a private `<socket>.lock` file and an OS advisory lock held
 until daemon cleanup finishes. A second process using that IPC path fails
@@ -90,7 +118,7 @@ configured without a kernel change, for example in its operation binding:
 
 Declared signals replace default 401 matching. Replay policy still controls
 whether the business request can be resent; recovery never permits switching
-issuer after an ambiguous keyed attempt. Module builds use host contract v5;
+issuer after an ambiguous keyed attempt. Module builds use host contract v6;
 old auth/device/recovery contracts are not automatically adapted. Credential
 renewal preserves configured-principal quota/operational cooldown, while old-token
 authentication failures use their separate credential revision. Explicit

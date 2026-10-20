@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/url"
 	"time"
 
@@ -52,7 +51,7 @@ type authorizationCodePrivate struct {
 	RedirectURL string    `json:"redirectUrl"`
 	ExpiresAt   time.Time `json:"expiresAt"`
 	Preparing   bool      `json:"preparing"`
-	Local       bool      `json:"local"`
+	Callback    bool      `json:"callback"`
 }
 
 type authorizationCodeDriver struct {
@@ -104,18 +103,10 @@ func (f authorizationCodeDriver) BeginAuthorization(ctx context.Context, _ AuthI
 		return AuthorizationTransition{}, err
 	}
 	p := authorizationCodePrivate{Nonce: oauth2.GenerateVerifier(), Verifier: oauth2.GenerateVerifier(), RedirectURL: f.options.RedirectURL, ExpiresAt: time.Now().Add(f.options.TTL)}
-	target, _ := url.Parse(p.RedirectURL)
-	p.Local = target.Scheme == "http" && (target.Hostname() == "localhost" || (net.ParseIP(target.Hostname()) != nil && net.ParseIP(target.Hostname()).IsLoopback()))
-	if p.Local {
-		if f.callback(p).Validate() != nil {
-			return AuthorizationTransition{}, fmt.Errorf("authorization callback grant is invalid")
-		}
-		p.Preparing = true
-		return f.transition(ctx, p)
+	if f.callback(p).Validate() != nil {
+		return AuthorizationTransition{}, fmt.Errorf("authorization callback grant is invalid")
 	}
-	if target.Port() == "0" {
-		return AuthorizationTransition{}, fmt.Errorf("remote authorization target cannot request allocation")
-	}
+	p.Callback, p.Preparing = true, true
 	return f.transition(ctx, p)
 }
 
@@ -129,7 +120,7 @@ func (f authorizationCodeDriver) transition(ctx context.Context, p authorization
 		return AuthorizationTransition{}, err
 	}
 	transition := AuthorizationTransition{State: state, ExpiresAt: p.ExpiresAt, Actions: []AuthorizationAction{{ID: "callback", Kind: AuthorizationInput, Label: "Submit callback URL or code and state", InputSchemaRef: &f.options.InputSchemaRef}}}
-	if p.Local {
+	if p.Callback {
 		transition.Callbacks = []AuthorizationCallback{f.callback(p)}
 	}
 	if p.Preparing {
@@ -169,10 +160,22 @@ func (f authorizationCodeDriver) AdvanceAuthorization(ctx context.Context, state
 		resource := event.Callbacks[0]
 		requested, _ := url.Parse(p.RedirectURL)
 		resolved, err := url.Parse(resource.URL)
-		if err != nil || requested.Scheme != resolved.Scheme || requested.Hostname() != resolved.Hostname() || requested.EscapedPath() != resolved.EscapedPath() || requested.RawQuery != resolved.RawQuery || resolved.Port() == "" || resolved.Port() == "0" || (requested.Port() != "0" && requested.Host != resolved.Host) || (resource.Mode != AuthorizationCallbackLoopback && resource.Mode != AuthorizationCallbackManual) {
+		modeMatches := (resource.Mode == AuthorizationCallbackLoopback && requested.Scheme == "http") || (resource.Mode == AuthorizationCallbackProxiedHTTPS && requested.Scheme == "https") || (resource.Mode == AuthorizationCallbackManual && (requested.Scheme == "http" || requested.Scheme == "https") && !f.options.CallbackRequired)
+		requestedPort, resolvedPort := requested.Port(), ""
+		if err == nil {
+			resolvedPort = resolved.Port()
+		}
+		portMatches := requestedPort == resolvedPort
+		if requested.Scheme == "http" && requestedPort == "0" {
+			portMatches = resolvedPort != "" && resolvedPort != "0"
+		}
+		if err != nil || !resolved.IsAbs() || resolved.Host == "" || resolved.User != nil || resolved.Fragment != "" || requested.Scheme != resolved.Scheme || requested.Hostname() != resolved.Hostname() || !portMatches || requested.EscapedPath() != resolved.EscapedPath() || requested.RawQuery != resolved.RawQuery || (requestedPort != "0" && requested.Host != resolved.Host) || !modeMatches {
 			return AuthorizationTransition{}, fmt.Errorf("callback resource does not match authorization intent")
 		}
-		p.RedirectURL, p.Preparing = resource.URL, false
+		if requested.Scheme == "http" && requestedPort == "0" {
+			p.RedirectURL = resource.URL
+		}
+		p.Preparing = false
 		return f.transition(ctx, p)
 	}
 	if p.Preparing || event.Kind != AuthorizationSubmit || event.ActionID != "callback" {

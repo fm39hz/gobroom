@@ -44,18 +44,22 @@ func TestAuthorizationCallbackValidationBoundsAndURLs(t *testing.T) {
 		t.Fatalf("valid callback: %v", err)
 	}
 	for name, mutate := range map[string]func(*AuthorizationCallback){
-		"HTTPS requires external TLS": func(c *AuthorizationCallback) { c.URL = "https://127.0.0.1:1234/callback" },
-		"nonloopback":                 func(c *AuthorizationCallback) { c.URL = "http://example.invalid:1234/callback" },
-		"missing port":                func(c *AuthorizationCallback) { c.URL = "http://localhost/callback" },
-		"out of range port":           func(c *AuthorizationCallback) { c.URL = "http://localhost:65536/callback" },
-		"missing path":                func(c *AuthorizationCallback) { c.URL = "http://localhost:1234" },
-		"userinfo":                    func(c *AuthorizationCallback) { c.URL = "http://user@localhost:1234/callback" },
-		"fragment":                    func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback#secret" },
-		"duplicate query key":         func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback?fixed=one&fixed=two" },
-		"correlation in query":        func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback?state=one" },
-		"response collision":          func(c *AuthorizationCallback) { c.ResponseParameters = []string{"fixed"} },
-		"duplicate response":          func(c *AuthorizationCallback) { c.ResponseParameters = []string{"code", "code"} },
-		"oversized URL":               func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/" + strings.Repeat("x", 8192) },
+		"nonloopback":          func(c *AuthorizationCallback) { c.URL = "http://example.invalid:1234/callback" },
+		"missing port":         func(c *AuthorizationCallback) { c.URL = "http://localhost/callback" },
+		"out of range port":    func(c *AuthorizationCallback) { c.URL = "http://localhost:65536/callback" },
+		"HTTPS zero port":      func(c *AuthorizationCallback) { c.URL = "https://example.test:0/callback" },
+		"HTTPS invalid port":   func(c *AuthorizationCallback) { c.URL = "https://example.test:65536/callback" },
+		"HTTPS empty port":     func(c *AuthorizationCallback) { c.URL = "https://example.test:/callback" },
+		"missing path":         func(c *AuthorizationCallback) { c.URL = "http://localhost:1234" },
+		"non-ASCII HTTPS host": func(c *AuthorizationCallback) { c.URL = "https://éxample.test/callback" },
+		"non-ASCII HTTPS path": func(c *AuthorizationCallback) { c.URL = "https://example.test/cällback" },
+		"userinfo":             func(c *AuthorizationCallback) { c.URL = "http://user@localhost:1234/callback" },
+		"fragment":             func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback#secret" },
+		"duplicate query key":  func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback?fixed=one&fixed=two" },
+		"correlation in query": func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/callback?state=one" },
+		"response collision":   func(c *AuthorizationCallback) { c.ResponseParameters = []string{"fixed"} },
+		"duplicate response":   func(c *AuthorizationCallback) { c.ResponseParameters = []string{"code", "code"} },
+		"oversized URL":        func(c *AuthorizationCallback) { c.URL = "http://localhost:1234/" + strings.Repeat("x", 8192) },
 		"oversized correlation": func(c *AuthorizationCallback) {
 			c.CorrelationValue, _ = NewAuthorizationState(strings.Repeat("x", 257))
 		},
@@ -64,6 +68,20 @@ func TestAuthorizationCallbackValidationBoundsAndURLs(t *testing.T) {
 		mutate(&callback)
 		if err := callback.Validate(); err == nil {
 			t.Errorf("%s unexpectedly validated", name)
+		}
+	}
+}
+
+func TestAuthorizationCallbackAcceptsStaticHTTPSIntent(t *testing.T) {
+	for _, target := range []string{
+		"https://example.test/callback",
+		"https://example.test:443/callback?tenant=blue",
+		"https://[2001:db8::1]/callback",
+	} {
+		callback := validCallback()
+		callback.URL = target
+		if err := callback.Validate(); err != nil {
+			t.Errorf("HTTPS callback %q: %v", target, err)
 		}
 	}
 }

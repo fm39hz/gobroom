@@ -666,8 +666,9 @@ can authorize the single allowed auth retry even when the bearer secret stays
 the same; existing operation replay and issuer restrictions still apply.
 OAuth alone owns `OAuthTokenState`, its encode/decode helpers and the existing
 `x/oauth2` exchange; those helpers/factory are public for module composition.
-The static-module host contract is version 5 for opaque-state, explicit
-credential recovery and a single action-based interactive lifecycle;
+The static-module host contract is version 6 for opaque-state, explicit
+credential recovery, a single action-based interactive lifecycle and explicit
+HTTPS callback receiver negotiation;
 old module contracts are rejected, not adapted. Interactive sessions are not
 durably resumed after restart.
 
@@ -733,11 +734,11 @@ cookie or service-account state through `AuthFlow.Resolve`; the new seam address
 multi-step interaction and ownership rather than inventing a special credential
 type for every setup method.
 
-### Loopback callback grants
+### Callback grants and receiver policy
 
 A continuing transition may declare up to eight private `AuthorizationCallback`
 grants, each bound to an offered input-action ID. A grant declares an HTTP
-loopback URL/path/static query, a named opaque correlation value and permitted
+loopback or HTTPS URL/path/static query, a named opaque correlation value and permitted
 response query names. The grant object is redacted in formatting/JSON; public
 callback modes do not dump its target or correlation data. Drivers may publish
 an authorization URL as a separate public action. Drivers generate a
@@ -750,8 +751,9 @@ probe/close/rebind window, shares a canonical bind address across owners, and
 atomically replaces one owner's grants. A required bind failure rolls back
 tentative reservations without dismantling the previous grants. An optional
 failure exposes `manual` in `callbackModes` and grants no HTTP callback. Public
-views contain only action IDs and `loopback`/`manual` modes, not correlation data.
-Non-loopback/DNS/TLS/wildcard targets remain forbidden. An explicit port zero is
+views contain only action IDs and `loopback`/`manual`/`proxied_https` modes, not
+correlation data. Plain HTTP non-loopback and wildcard bind targets remain
+forbidden. HTTPS intent is not listener authorization. An explicit HTTP port zero is
 a resource request, never an active grant or a published callback URL.
 
 For a port-zero transition, the daemon reserves actual sockets and sends a
@@ -779,8 +781,20 @@ portable configuration. A driver may deliberately expose the completed consent
 URL as a public action. Typed resource values and standard URL/form binding are
 used instead of string placeholders or frontend port selection.
 
-HTTP delivery requires GET, a loopback peer, the exact host/escaped path/static
-query/correlation and only declared response fields. Malformed, duplicate,
+For HTTPS, an opt-in daemon `CallbackIngress` binds an explicit private loopback
+HTTP socket before IPC publication. A configured HTTPS public origin is its
+only receiver authority; an external TLS proxy must preserve public Host.
+Forwarded headers do not select the origin or rewrite a grant. Unconfigured or
+different-origin HTTPS intents produce manual resources only when optional;
+required callbacks fail before consent. The ingress is a separate bounded HTTP
+server, never the data/admin mux, and needs no API bearer token: the registered
+nonce/revision grant is the callback capability. It is disabled by default.
+
+HTTP delivery requires GET, a loopback peer, matching HTTP(S) origin/escaped path/static
+query/correlation and only declared response fields. DNS hostname case and default
+port spellings follow origin semantics; the driver receives its original registered
+URI target spelling, not an origin reconstructed from forwarded headers.
+Malformed, duplicate,
 unknown and ambiguous query matches fail closed before driver invocation.
 The callback is encoded as typed `AuthorizationCallbackInput{url}` and delivered
 through the pinned action revision, registered input schema and normal auth-owner/
@@ -791,10 +805,13 @@ context, not a polling loop. Driver invocation never holds the registry lock.
 Completion, denial, cancellation, expiry and shutdown revoke grants and close the
 last actual socket reservation. An admitted callback still obeys cancellation
 and the daemon's worker drain, so a late successful driver cannot persist a token.
+The explicitly configured ingress listener belongs to the daemon lifetime, not
+to the last grant; idle ingress has no active grant and releases its socket on
+Stop. The default-disabled configuration creates no such listener.
 The HTTP page acknowledges receipt; setup status and credential activation remain
 separate outcomes. The previous OAuth-only listener runtime is removed: the code
-flow uses the same registry, while its existing flow handler still owns OAuth
-interpretation until code/device orchestration migrates to the action engine.
+flow uses the same registry and its driver owns OAuth interpretation. Code and
+device orchestration already share the action engine.
 There is no unknown-callback forwarding or fallback to whichever session is active.
 If Start fails before producing a public session handle, its failed reservation
 does not occupy the retained-session budget. Failures after a handle was issued

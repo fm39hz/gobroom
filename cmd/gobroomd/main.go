@@ -39,6 +39,8 @@ func main() {
 	artifactStoreDir := flag.String("artifact-store", defaults.ArtifactStoreDir, "parent directory for bounded, temporary artifact body spools")
 	artifactStoreMaxBytes := flag.Int64("artifact-store-max-bytes", 256<<20, "maximum total bytes held by the artifact body store")
 	artifactStoreMaxBodyBytes := flag.Int64("artifact-store-max-body-bytes", 64<<20, "maximum bytes in one artifact body")
+	callbackOrigin := flag.String("callback-origin", "", "public HTTPS origin for proxied authorization callbacks")
+	callbackAddr := flag.String("callback-addr", "", "private loopback address for proxied authorization callbacks (host:port)")
 	flag.Parse()
 	if *providerManifestDir == defaults.ProviderManifestDir {
 		if err := os.MkdirAll(*providerManifestDir, 0o700); err != nil {
@@ -47,7 +49,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	config := daemonConfig(defaults, *dbPath, *runtimeSpoolPath, *ipcPath)
+	config := daemonConfig(defaults, *dbPath, *runtimeSpoolPath, *ipcPath, *callbackOrigin, *callbackAddr)
 	config.HTTPEnabled = *httpEnabled
 	config.HTTPAddr = *addr
 	config.HTTPControl = *httpControl
@@ -63,15 +65,16 @@ func main() {
 		log.Fatal(err)
 	}
 	addresses := d.Addresses()
-	log.Printf("gobroomd ready: ipc=%s http=%v addr=%s control_addr=%s", addresses.IPC, *httpEnabled, addresses.HTTP, addresses.HTTPControl)
+	log.Printf("gobroomd ready: ipc=%s http=%v addr=%s control_addr=%s callback_ingress=%s", addresses.IPC, *httpEnabled, addresses.HTTP, addresses.HTTPControl, addresses.CallbackIngress)
 	if err := d.Wait(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func daemonConfig(defaults daemon.Config, dbPath, runtimeSpoolPath, ipcPath string) daemon.Config {
+func daemonConfig(defaults daemon.Config, dbPath, runtimeSpoolPath, ipcPath, callbackOrigin, callbackAddr string) daemon.Config {
 	defaults.DBPath = dbPath
 	defaults.RuntimeSpoolPath = runtimeSpoolPath
 	defaults.IPCPath = ipcPath
+	defaults.CallbackIngress = daemon.AuthorizationCallbackIngressConfig{PublicOrigin: callbackOrigin, ListenAddress: callbackAddr}
 	return defaults
 }

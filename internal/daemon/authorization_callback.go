@@ -19,8 +19,9 @@ import (
 type AuthorizationCallbackMode = provider.AuthorizationCallbackMode
 
 const (
-	AuthorizationCallbackLoopback = provider.AuthorizationCallbackLoopback
-	AuthorizationCallbackManual   = provider.AuthorizationCallbackManual
+	AuthorizationCallbackLoopback     = provider.AuthorizationCallbackLoopback
+	AuthorizationCallbackManual       = provider.AuthorizationCallbackManual
+	AuthorizationCallbackProxiedHTTPS = provider.AuthorizationCallbackProxiedHTTPS
 )
 
 type AuthorizationCallbackView struct {
@@ -37,6 +38,7 @@ type authorizationCallbackBinding struct {
 	fixed       url.Values
 	allowed     map[string]bool
 	bindAddress string
+	mode        provider.AuthorizationCallbackMode
 }
 
 type authorizationCallbackListener struct {
@@ -90,12 +92,12 @@ func (d *Daemon) replaceAuthorizationCallbacks(owner string, bindings []authoriz
 			return nil, fmt.Errorf("duplicate callback grant")
 		}
 		target, _ := url.Parse(binding.spec.URL)
-		_, address, ok := loopbackCallbackAddress(target, false)
-		if !ok {
-			return nil, fmt.Errorf("callback listener target is not local")
+		mode, address, err := d.authorizationCallbackRoute(target, binding.spec.Required, false)
+		if err != nil {
+			return nil, err
 		}
 		fixed, _ := url.ParseQuery(target.RawQuery)
-		binding.target, binding.fixed, binding.bindAddress = target, fixed, address
+		binding.target, binding.fixed, binding.bindAddress, binding.mode = target, fixed, address, mode
 		binding.spec.ResponseParameters = append([]string(nil), binding.spec.ResponseParameters...)
 		binding.allowed = make(map[string]bool, len(binding.spec.ResponseParameters))
 		for _, name := range binding.spec.ResponseParameters {
@@ -133,10 +135,15 @@ func (d *Daemon) replaceAuthorizationCallbacks(owner string, bindings []authoriz
 	for _, source := range bindings {
 		key := authorizationCallbackKey{owner: owner, action: source.spec.ActionID}
 		binding := compiled[key]
-		mode := AuthorizationCallbackLoopback
-		if reservation, exists := d.callbackReservations[key]; exists && reservation.mode == AuthorizationCallbackManual {
+		mode := binding.mode
+		reservation, reserved := d.callbackReservations[key]
+		if mode == AuthorizationCallbackManual || (reserved && reservation.mode == AuthorizationCallbackManual) {
 			delete(compiled, key)
 			views = append(views, AuthorizationCallbackView{ActionID: source.spec.ActionID, Mode: AuthorizationCallbackManual})
+			continue
+		}
+		if mode == AuthorizationCallbackProxiedHTTPS {
+			views = append(views, AuthorizationCallbackView{ActionID: source.spec.ActionID, Mode: mode})
 			continue
 		}
 		if d.callbackListeners[binding.bindAddress] == nil && created[binding.bindAddress] == nil {
@@ -270,7 +277,7 @@ func sameCallbackGrant(a, b provider.AuthorizationCallback) bool {
 
 func (binding authorizationCallbackBinding) matches(actual *url.URL, query url.Values) bool {
 	want := binding.target
-	if want == nil || actual.Scheme != want.Scheme || actual.Host != want.Host || actual.EscapedPath() != want.EscapedPath() {
+	if want == nil || !sameCallbackOrigin(actual, want) || actual.EscapedPath() != want.EscapedPath() {
 		return false
 	}
 	for name, values := range binding.fixed {
@@ -298,6 +305,10 @@ func (binding authorizationCallbackBinding) matches(actual *url.URL, query url.V
 }
 
 func (d *Daemon) handleAuthorizationCallback(w http.ResponseWriter, r *http.Request) {
+	d.dispatchAuthorizationCallback(w, r, provider.AuthorizationCallbackLoopback)
+}
+
+func (d *Daemon) dispatchAuthorizationCallback(w http.ResponseWriter, r *http.Request, mode provider.AuthorizationCallbackMode) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -309,7 +320,15 @@ func (d *Daemon) handleAuthorizationCallback(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Callback is loopback-only", http.StatusForbidden)
 		return
 	}
-	actual := &url.URL{Scheme: "http", Host: r.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
+	scheme := "http"
+	if mode == provider.AuthorizationCallbackProxiedHTTPS {
+		if d.callbackIngress == nil || !sameCallbackOrigin(&url.URL{Scheme: "https", Host: r.Host}, d.callbackIngress.origin) {
+			http.Error(w, "Callback origin is not configured", http.StatusBadRequest)
+			return
+		}
+		scheme = "https" // configured TLS terminator, never an untrusted proxy header
+	}
+	actual := &url.URL{Scheme: scheme, Host: r.Host, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
 	encoded := actual.String()
 	query, err := url.ParseQuery(actual.RawQuery)
 	if err != nil || len(encoded) > 8192 || len(query) > 33 {
@@ -320,7 +339,7 @@ func (d *Daemon) handleAuthorizationCallback(w http.ResponseWriter, r *http.Requ
 	var selected authorizationCallbackBinding
 	matches := 0
 	for _, binding := range d.callbackBindings {
-		if binding.matches(actual, query) {
+		if binding.mode == mode && binding.matches(actual, query) {
 			selected = binding
 			matches++
 		}
@@ -332,7 +351,12 @@ func (d *Daemon) handleAuthorizationCallback(w http.ResponseWriter, r *http.Requ
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), authorizationStepTimeout)
 	defer cancel()
-	if err := selected.invoke(ctx, encoded); err != nil {
+	// Preserve the issuer-registered target spelling (including an explicit
+	// default port). Only the already validated response query is supplied by
+	// the request; proxy headers never reconstruct an authorization target.
+	delivered := *selected.target
+	delivered.RawQuery = actual.RawQuery
+	if err := selected.invoke(ctx, delivered.String()); err != nil {
 		http.Error(w, "Authorization could not be completed. Return to GoBroom for details.", http.StatusBadRequest)
 		return
 	}

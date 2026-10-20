@@ -109,6 +109,12 @@ Setup reattachment uses the coordinator's existing completion channel and
 standard context cancellation. Lookup/reservation remains under its existing
 mutex, while waiting and public projection happen outside it. No second session
 cache, external lock, polling worker or provider token exchange is needed.
+Proxied HTTPS callbacks reuse standard `net/http` listener/shutdown and
+`httputil.ReverseProxy` in independent TLS fixtures. Host syntax and DNS label
+validation use the already-pinned `x/net/httpguts` and `x/net/idna` profiles;
+there is no handwritten DNS grammar, certificate manager or new TLS framework.
+The deployment owns TLS termination. Existing OAuth verifier/challenge helpers
+and the common grant engine remain the auth protocol/resource boundary.
 
 | Area | Library/tool | Version checked | Decision |
 |---|---|---:|---|

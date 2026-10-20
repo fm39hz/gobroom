@@ -27,6 +27,32 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Auth callbacks can now use an explicitly configured public HTTPS origin through
+a private loopback receiver and an external local TLS proxy. It is off by
+default. Provider HTTPS intent alone never opens a listener; optional unavailable
+receivers become manual, required ones fail before consent. The existing grant
+engine checks receiver/origin/path/query/nonce and revision, ignores forwarded
+origin headers, rejects early/replayed delivery and preserves registered URI
+spelling for the provider. The ingress has no data/admin mux and no authority
+to bypass their bearer policy. Startup reserves/rolls back its socket and Stop
+drains it before storage cleanup. Host contract v6 rejects older callback-resource
+semantics rather than retaining an adapter.
+
+This adds a deterministic remote-browser/TLS deployment seam, not certificate
+management or broad live OAuth support. Full auth fault composition, deployment
+acceptance, catalog/harness breadth, alternate stores and measured latency/RSS
+remain separate open gates. C4/SG2/M15 is not declared complete.
+
+Verification: full regression/vet and architecture conformance passed. Receiver,
+grant, driver/host-contract and lifecycle cases passed three race runs after
+origin comparison was fixed to preserve the registered URI. The independent
+TLS-proxy/PKCE/activation/protected-inference/restart case passed three race
+runs with certificate verification enabled. Installed CLI acceptance follows
+installation; this is fake-provider evidence, not public deployment or broad
+live OAuth acceptance.
+
+Previous integrated milestone:
+
 Fresh frontends can reattach by connection using explicit setup `resume` mode.
 The daemon atomically chooses reuse or new admission, without repeating provider
 Begin for an active session. Initial/submitted steps can be observed with a

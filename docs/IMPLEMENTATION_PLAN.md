@@ -308,8 +308,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    unpublished/submitted steps, not daemon-owned await, and validates the live
    credential binding before reuse. Resource→callback→replacement fault
    composition and daemon-restart/new-session distinctions have fixtures.
-   Remaining: broader lifecycle/fault composition and HTTPS/non-loopback callback
-   integrations. Prepared request signing now
+   An optional private loopback receiver now accepts callbacks for one explicitly
+   configured public HTTPS origin behind local TLS termination. It uses the
+   same grant/revision/CAS engine, is reserved before IPC startup and does not
+   trust forwarded headers or expose data/admin routes. HTTPS code setup uses
+   resource readiness before consent, or manual mode only when optional.
+   Remaining: broader lifecycle/fault composition and live deployment/provider
+   acceptance. Prepared request signing now
    has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations
    remain auth-driver work. Validate full lifecycle fixtures, not token-only

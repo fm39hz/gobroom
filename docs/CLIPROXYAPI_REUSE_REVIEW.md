@@ -78,6 +78,16 @@ reused, and native `database/sql` plus SQLite writer reservation enforce the
 commit boundary. No reference registry, model alias state or custom HTTP stack
 is imported. Probes use the same issuer rather than a second auth resolver.
 
+HTTPS receiver boundary: the adjacent OAuth helpers remain useful source
+evidence for actual socket ownership and state correlation, not a reusable
+deployment policy. The local JavaScript OAuth server in
+`../9router/src/lib/oauth/utils/server.js` and CLIProxyAPI's Devin callback server
+both own their local listener. Gobroom retains its grant engine and adds an
+opt-in private receiver for an explicitly configured HTTPS origin; standard Go
+HTTP lifecycle and a verified `httputil` TLS-proxy fixture exercise that boundary.
+It never derives redirect authority from proxy headers or imports an application's
+admin mux/listener implementation. TLS termination remains deployment-owned.
+
 Callback ownership follow-up: `internal/auth/claude/oauth_server.go` and the
 Codex equivalent probe a port before starting a listener, while Devin's
 `internal/auth/devin/devin_auth.go` retains a directly bound loopback listener.

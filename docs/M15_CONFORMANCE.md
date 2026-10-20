@@ -844,3 +844,28 @@ race runs using the installed CLI. Main control=serving=481 and bundle-v9
 validation remained healthy. The new flag appears in installed help. These
 observations establish the stated deterministic composition subset, not full
 C4/SG2 or live-provider OAuth acceptance.
+
+### Proxied HTTPS callback receiver
+
+`TestAuthorizationCallbackValidation*` admits bounded HTTPS intents without
+granting listener authority. Code-driver fixtures require readiness before
+consent and reject incompatible receipt modes/targets or required-manual
+downgrades. Host contract v6 rejects v5 and earlier lifecycle hosts.
+`TestCallbackIngress*` covers default-disabled behavior, explicit origin/private
+bind validation, startup bind rollback before storage/IPC, and actual port-zero
+address publication. The ingress uses its own bounded server and lifecycle.
+
+`TestProxiedHTTPS*` checks rejection before final grant activation, public mode
+privacy, owner/correlation isolation, wrong Host/path/escaped path/static query,
+duplicate/unexpected fields, method and non-loopback peers. Forged forwarded
+headers cannot create origin authority. DNS case/default-port origin matching
+preserves the issuer-registered target spelling delivered to the driver.
+
+`TestExternalAuthorizationCodeThroughPublicHTTPSProxy` links an independent
+module and a real certificate-verifying `httptest` TLS proxy. A fully correlated
+early callback is rejected before exchange; a valid callback completes PKCE and
+activation, replay is rejected, and API-key-protected public-model inference
+uses the new credential before and after restart. Callback delivery needs no
+data/admin bearer token and does not expose those muxes. This proves the
+declared local TLS-termination deployment boundary, not native certificate
+management, arbitrary remote proxy trust or full C4/SG2/M15 closure.

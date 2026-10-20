@@ -118,15 +118,16 @@ const MaxAuthorizationStateBytes = core.MaxAuthorizationStateBytes
 const MaxAuthorizationDuration = core.MaxAuthorizationDuration
 
 const (
-	AuthorizationOpenURL          = core.AuthorizationOpenURL
-	AuthorizationDisplayCode      = core.AuthorizationDisplayCode
-	AuthorizationInput            = core.AuthorizationInput
-	AuthorizationSubmit           = core.AuthorizationSubmit
-	AuthorizationPoll             = core.AuthorizationPoll
-	AuthorizationCallbacksReady   = core.AuthorizationCallbacksReady
-	AuthorizationCallbackLoopback = core.AuthorizationCallbackLoopback
-	AuthorizationCallbackManual   = core.AuthorizationCallbackManual
-	AuthorizationAwait            = core.AuthorizationAwait
+	AuthorizationOpenURL              = core.AuthorizationOpenURL
+	AuthorizationDisplayCode          = core.AuthorizationDisplayCode
+	AuthorizationInput                = core.AuthorizationInput
+	AuthorizationSubmit               = core.AuthorizationSubmit
+	AuthorizationPoll                 = core.AuthorizationPoll
+	AuthorizationCallbacksReady       = core.AuthorizationCallbacksReady
+	AuthorizationCallbackLoopback     = core.AuthorizationCallbackLoopback
+	AuthorizationCallbackProxiedHTTPS = core.AuthorizationCallbackProxiedHTTPS
+	AuthorizationCallbackManual       = core.AuthorizationCallbackManual
+	AuthorizationAwait                = core.AuthorizationAwait
 )
 
 func NewCredentialState(encoded string) (CredentialState, error) {

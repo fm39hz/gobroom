@@ -48,6 +48,7 @@ type Config struct {
 	ArtifactStoreDir          string
 	ArtifactStoreMaxBytes     int64
 	ArtifactStoreMaxBodyBytes int64
+	CallbackIngress           AuthorizationCallbackIngressConfig
 }
 
 type Daemon struct {
@@ -61,6 +62,8 @@ type Daemon struct {
 	ipcLease             *ipcSocket
 	http                 *http.Server
 	httpControl          *http.Server
+	httpCallback         *http.Server
+	callbackIngress      *authorizationCallbackIngress
 	listeners            httpListeners
 	addresses            atomic.Pointer[ListenerAddresses]
 	kernel               *kernel.Kernel
@@ -174,6 +177,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if d.stop != nil {
 		return fmt.Errorf("daemon is already started")
 	}
+	callbackIngress, err := callbackIngressConfig(d.config.CallbackIngress)
+	if err != nil {
+		return err
+	}
 	d.stopErr = nil
 	if err := ctx.Err(); err != nil {
 		return err
@@ -182,10 +189,16 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if listeners.callback != nil {
+		d.callbackIngress = &authorizationCallbackIngress{origin: callbackIngress.origin, address: listeners.callback.Addr().String()}
+	} else {
+		d.callbackIngress = nil
+	}
 	started := false
 	defer func() {
 		if !started {
 			listeners.close()
+			d.callbackIngress = nil
 		}
 	}()
 	ipcReservation, err := acquireIPCSocket(ctx, d.config.IPCPath)
@@ -542,6 +555,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.httpControl = newDaemonHTTPServer(addresses.HTTPControl, d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true}), ctx)
 		d.serveHTTP(d.httpControl, listeners.control, "control plane")
 	}
+	if listeners.callback != nil {
+		addresses.CallbackIngress = listeners.callback.Addr().String()
+		d.httpCallback = d.newAuthorizationIngressServer(ctx, addresses.CallbackIngress)
+		d.serveHTTP(d.httpCallback, listeners.callback, "authorization callback ingress")
+	}
 	d.addresses.Store(&addresses)
 	started = true
 	return nil
@@ -851,6 +869,11 @@ func (d *Daemon) Stop(ctx context.Context) error {
 			_ = d.httpControl.Close()
 		}
 	}
+	if d.httpCallback != nil {
+		if err := d.httpCallback.Shutdown(ctx); err != nil {
+			_ = d.httpCallback.Close()
+		}
+	}
 	d.listeners.close()
 	var ipcErr error
 	if d.ipc != nil {
@@ -864,6 +887,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.runCancel = nil
 	d.http = nil
 	d.httpControl = nil
+	d.httpCallback = nil
+	d.callbackIngress = nil
 	d.ipc = nil
 	d.ipcLease = nil
 	d.listeners = httpListeners{}
