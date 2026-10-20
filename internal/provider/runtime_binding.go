@@ -76,7 +76,6 @@ type AuthModeMetadata struct {
 	ID                  string                    `json:"id"`
 	Recovery            kernel.CredentialRecovery `json:"recovery,omitempty"`
 	SetupSchema         SetupSchema               `json:"setupSchema"`
-	AuthorizationCode   bool                      `json:"authorizationCode,omitempty"`
 	ActionAuthorization bool                      `json:"actionAuthorization,omitempty"`
 }
 
@@ -127,9 +126,8 @@ func (r *RuntimeRegistry) DefinitionCatalog() ([]DefinitionMetadata, error) {
 			}
 			metadata := AuthModeMetadata{CredentialType: mode.CredentialType, ID: flow.ID(), Recovery: mode.Recovery.Effective(), SetupSchema: flow.SetupSchema()}
 			metadata.SetupSchema.Fields = append([]SetupField(nil), metadata.SetupSchema.Fields...)
-			metadata.AuthorizationCode = AuthorizationCodeEnabled(flow)
 			_, metadata.ActionAuthorization = flow.(AuthorizationFlow)
-			if metadata.ActionAuthorization || metadata.AuthorizationCode {
+			if metadata.ActionAuthorization {
 				for i := range metadata.SetupSchema.Fields {
 					if metadata.SetupSchema.Fields[i].Secret {
 						metadata.SetupSchema.Fields[i].Required = false

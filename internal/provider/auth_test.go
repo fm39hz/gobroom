@@ -94,8 +94,17 @@ func TestOAuthAuthFactoryBuildsGenericDeviceAuthorizationWithoutAuthURL(t *testi
 	if _, ok := flow.(AuthorizationFlow); !ok {
 		t.Fatalf("device OAuth flow does not implement generic authorization: %T", flow)
 	}
-	if AuthorizationCodeEnabled(flow) {
-		t.Fatal("device-only OAuth flow advertised authorization-code support")
+}
+
+func TestOAuthAuthFactoryKeepsTokenOnlyConfigurationNoninteractive(t *testing.T) {
+	flow, err := OAuthAuthFactory(AuthOptions{OAuth: &OAuthFlowOptions{
+		ClientID: "token-client", AuthURL: "https://identity.example/authorize", TokenURL: "https://identity.example/token",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := flow.(AuthorizationFlow); ok {
+		t.Fatalf("OAuth configuration without a redirect unexpectedly enabled interactive setup: %T", flow)
 	}
 }
 

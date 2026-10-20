@@ -202,10 +202,6 @@ func (f *ownerCompletionGateFlow) awaitToken() (provider.CredentialState, error)
 	return provider.NewCredentialState("new-token")
 }
 
-func (f *ownerCompletionGateFlow) ExchangeAuthorizationCode(context.Context, string, string) (provider.CredentialState, error) {
-	return f.awaitToken()
-}
-
 func (*ownerCompletionGateFlow) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
 	return provider.DeviceAuthorization{
 		DeviceCode: "private-device-code", UserCode: "USER-CODE",
@@ -220,7 +216,7 @@ func (f *ownerCompletionGateFlow) WaitForDeviceAuthorization(context.Context, pr
 func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 	for _, kind := range []string{"code", "device"} {
 		t.Run(kind, func(t *testing.T) {
-			flow := &ownerCompletionGateFlow{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://client.test/callback"}, entered: make(chan struct{}), release: make(chan struct{})}
+			flow := &ownerCompletionGateFlow{entered: make(chan struct{}), release: make(chan struct{})}
 			authFlow := provider.AuthFlow(flow)
 			if kind == "device" {
 				authFlow = deviceAuthorizationDriver(t, flow,
@@ -231,6 +227,10 @@ func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 						return flow.WaitForDeviceAuthorization(ctx, device)
 					},
 				)
+			} else {
+				authFlow = authorizationCodeFixture(t, flow, "https://client.test/callback", false, func(context.Context, provider.AuthorizationCodeExchange) (provider.CredentialState, error) {
+					return flow.awaitToken()
+				})
 			}
 			d, connectionID := cancellationAuthDaemon(t, authFlow)
 			t.Cleanup(flow.releaseToken)
@@ -240,14 +240,15 @@ func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 			}
 			var sessionID string
 			if kind == "code" {
-				challenge, err := d.startAuthorization(connectionID)
+				challenge, err := d.startSetupAuthorization(context.Background(), connectionID)
 				if err != nil {
 					t.Fatal(err)
 				}
 				sessionID = challenge.SessionID
+				event := codeSubmitEvent(t, challenge, "approved")
 				result := make(chan error, 1)
 				go func() {
-					_, completeErr := d.completeAuthorization(context.Background(), sessionID, sessionID, "approved", "")
+					_, completeErr := d.advanceSetupAuthorization(context.Background(), sessionID, challenge.Revision, event)
 					result <- completeErr
 				}()
 				awaitAuthorizationSignal(t, flow.entered)
@@ -257,7 +258,7 @@ func TestAuthorizationCompletionRejectsProviderDefinitionRebind(t *testing.T) {
 				if err := <-result; err == nil {
 					t.Fatal("authorization code completion committed after provider definition changed away and back")
 				}
-				status, err := d.authorizationStatus(sessionID)
+				status, err := d.setupAuthorizationStatus(sessionID)
 				if err != nil || status.Status != "failed" {
 					t.Fatalf("authorization status=%+v err=%v; want failed", status, err)
 				}

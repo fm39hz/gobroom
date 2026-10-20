@@ -80,8 +80,8 @@ type Daemon struct {
 	transformBindingsMu  sync.Mutex
 	usageCancel          context.CancelFunc
 	mu                   sync.Mutex
-	oauthMu              sync.Mutex
-	oauth                *authorizationSessions
+	authorizationMu      sync.Mutex
+	authorizations       *authorizationSessions
 	callbackMu           sync.Mutex
 	callbackListeners    map[string]*authorizationCallbackListener
 	callbackBindings     map[authorizationCallbackKey]authorizationCallbackBinding
@@ -866,9 +866,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.ipcLease = nil
 	d.listeners = httpListeners{}
 	d.addresses.Store(nil)
-	d.oauthMu.Lock()
-	d.oauth = nil
-	d.oauthMu.Unlock()
+	d.authorizationMu.Lock()
+	d.authorizations = nil
+	d.authorizationMu.Unlock()
 	d.stopErr = ipcErr
 	return ipcErr
 }
@@ -1414,12 +1414,6 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, err.Error())
 		}
 		return success(request, items)
-	case "auth.authorization.start":
-		challenge, err := d.startAuthorization(stringParam(request.Params, "connectionID"))
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, challenge)
 	case "auth.setup.start":
 		view, err := d.startSetupAuthorization(ctx, stringParam(request.Params, "connectionID"))
 		if err != nil {
@@ -1452,40 +1446,6 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			return fail(request, "active authorization setup session not found")
 		}
 		return d.handleIPC(ctx, IPCRequest{ID: request.ID, Method: "auth.setup.get", Params: request.Params})
-	case "auth.authorization.get":
-		result, err := d.authorizationStatus(stringParam(request.Params, "sessionID"))
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, result)
-	case "auth.authorization.complete":
-		sessionID := stringParam(request.Params, "sessionID")
-		state := stringParam(request.Params, "state")
-		code := stringParam(request.Params, "code")
-		callbackURL := stringParam(request.Params, "callbackURL")
-		if callbackURL != "" {
-			parsedCode, parsedState, err := authorizationCallbackCode(callbackURL)
-			if err != nil {
-				if errors.Is(err, errOAuthAuthorizationDenied) {
-					if denyErr := d.denyAuthorization(sessionID, parsedState, callbackURL); denyErr != nil {
-						return fail(request, denyErr.Error())
-					}
-					return fail(request, err.Error())
-				}
-				return fail(request, err.Error())
-			}
-			code, state = parsedCode, parsedState
-		}
-		result, err := d.completeAuthorization(ctx, sessionID, state, code, callbackURL)
-		if err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, result)
-	case "auth.authorization.cancel":
-		if err := d.cancelAuthorization(stringParam(request.Params, "sessionID")); err != nil {
-			return fail(request, err.Error())
-		}
-		return success(request, map[string]string{"status": "cancelled"})
 	case "connections.test":
 		connectionID := stringParam(request.Params, "connectionID")
 		nodeID, err := d.providerNodeForConnection(connectionID)
@@ -1913,9 +1873,8 @@ func (d *Daemon) validateConnectionSecret(ctx context.Context, providerNodeID, c
 		return fmt.Errorf("credential type none does not accept credential secret")
 	}
 	if strings.TrimSpace(secret) == "" {
-		authorizationCode := provider.AuthorizationCodeEnabled(flow)
 		_, actionAuthorization := flow.(provider.AuthorizationFlow)
-		if authorizationCode || actionAuthorization {
+		if actionAuthorization {
 			return nil
 		}
 	}

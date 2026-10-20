@@ -38,7 +38,14 @@ refresh return bounded `CredentialState`; `Resolve` derives the wire ticket
 and runtime context. After daemon restart the next chat call verifies the
 refreshed metadata survived, while config/IPC omit it. With `GOBROOM_TEST_CLI`,
 successful device setup and post-restart inference also use the installed CLI.
-The module host contract is v4; old auth/device/recovery contracts are rejected.
+The module host contract is v5; old specialized auth/device/recovery contracts are rejected.
+
+`TestExternalGenericAuthorizationCodePersistsOpaqueCredential` composes the
+public code strategy with an independent issuer and opaque credential binding.
+It checks allocation before consent registration, S256 and exact verifier/URI
+exchange, bad callback/replay rejection, activation and restart inference. Set
+`GOBROOM_TEST_CLI` to run setup views through the installed generic control client;
+there are no code/device-specific setup commands or compatibility interfaces.
 The auth mode explicitly opts into `recovery: refresh`. The fixture normalizes
 HTTP498/`credential_expired` through typed classifier options, while separate
 403 permission/quota roles and a recovery-disabled 401 do not refresh. The

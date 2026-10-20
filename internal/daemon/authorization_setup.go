@@ -52,7 +52,7 @@ func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID strin
 		sessions.mu.Unlock()
 		return AuthorizationSetupView{}, fmt.Errorf("authorization coordinator is stopped, full or connection is busy")
 	}
-	sessions.byID[id] = authorizationSession{kind: "actions", connectionID: connectionID, authFlow: flow, setupFlow: driver, expectedCredential: credential, expiresAt: time.Now().Add(provider.MaxAuthorizationDuration), status: "starting", cancel: cancel, setupCallDone: make(chan struct{})}
+	sessions.byID[id] = authorizationSession{connectionID: connectionID, authFlow: flow, setupFlow: driver, expectedCredential: credential, expiresAt: time.Now().Add(provider.MaxAuthorizationDuration), status: "starting", cancel: cancel, setupCallDone: make(chan struct{})}
 	sessions.byConnection[connectionID] = id
 	sessions.inFlight[id] = true
 	d.authWG.Add(1)
@@ -119,7 +119,7 @@ func (d *Daemon) advanceSetupAuthorization(ctx context.Context, id string, revis
 	sessions := d.authorizationSessions()
 	sessions.mu.Lock()
 	session, exists := sessions.byID[id]
-	if sessions.closed || !exists || session.kind != "actions" || session.status != "awaiting_user" || sessions.inFlight[id] || session.setupRevision != revision || !session.expiresAt.After(time.Now()) {
+	if sessions.closed || !exists || session.status != "awaiting_user" || sessions.inFlight[id] || session.setupRevision != revision || !session.expiresAt.After(time.Now()) {
 		sessions.mu.Unlock()
 		return AuthorizationSetupView{}, fmt.Errorf("authorization action is stale, busy, expired or unavailable")
 	}
@@ -169,6 +169,10 @@ func (d *Daemon) advanceSetupAuthorization(ctx context.Context, id string, revis
 		err = d.applySetupTransition(callCtx, id, transition)
 	}
 	if err != nil {
+		var rejected provider.AuthorizationInputRejected
+		if errors.As(err, &rejected) {
+			return AuthorizationSetupView{}, rejected
+		}
 		return AuthorizationSetupView{}, d.failSetupCall(id, err)
 	}
 	return d.setupAuthorizationStatus(id)
@@ -211,7 +215,7 @@ func (d *Daemon) applySetupTransition(ctx context.Context, id string, transition
 		sessions.mu.Unlock()
 		return ctx.Err()
 	}
-	if sessions.closed || !exists || session.kind != "actions" || (session.status != "starting" && session.status != "awaiting_user") || !session.expiresAt.After(time.Now()) {
+	if sessions.closed || !exists || (session.status != "starting" && session.status != "awaiting_user") || !session.expiresAt.After(time.Now()) {
 		sessions.mu.Unlock()
 		return context.Canceled
 	}
@@ -300,7 +304,7 @@ func (d *Daemon) deliverSetupCallback(ctx context.Context, id string, revision u
 		sessions := d.authorizationSessions()
 		sessions.mu.Lock()
 		session, exists := sessions.byID[id]
-		if sessions.closed || !exists || session.kind != "actions" || session.status != "awaiting_user" || session.setupRevision != revision {
+		if sessions.closed || !exists || session.status != "awaiting_user" || session.setupRevision != revision {
 			sessions.mu.Unlock()
 			return fmt.Errorf("callback grant is no longer active")
 		}
@@ -390,7 +394,7 @@ func (d *Daemon) finishSetupAuthorization(id, status, message string) bool {
 	sessions := d.authorizationSessions()
 	sessions.mu.Lock()
 	session, exists := sessions.byID[id]
-	if !exists || session.kind != "actions" || (session.status != "starting" && session.status != "awaiting_user") {
+	if !exists || (session.status != "starting" && session.status != "awaiting_user") {
 		sessions.mu.Unlock()
 		return false
 	}
@@ -438,7 +442,7 @@ func (d *Daemon) setupAuthorizationStatus(id string) (AuthorizationSetupView, er
 	sessions.mu.Lock()
 	session, exists := sessions.byID[id]
 	sessions.mu.Unlock()
-	if !exists || session.kind != "actions" {
+	if !exists {
 		return AuthorizationSetupView{}, fmt.Errorf("authorization setup session not found")
 	}
 	view := AuthorizationSetupView{SessionID: id, ConnectionID: session.connectionID, Status: session.status, Revision: session.setupRevision, Actions: cloneSetupActions(session.setupActions), ExpiresAt: session.expiresAt, Error: session.statusError, CallbackModes: append([]AuthorizationCallbackView(nil), session.setupCallbackModes...)}

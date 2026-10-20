@@ -41,28 +41,6 @@ type AuthFlow interface {
 	Refresh(context.Context, AuthInput, kernel.Credential) (CredentialState, error)
 }
 
-// AuthorizationCodeCapability advertises a flow that can begin OAuth code authorization.
-type AuthorizationCodeCapability interface {
-	CanAuthorizeCode() bool
-}
-
-func AuthorizationCodeEnabled(flow AuthFlow) bool {
-	capability, ok := flow.(AuthorizationCodeCapability)
-	if !ok || !capability.CanAuthorizeCode() {
-		return false
-	}
-	_, ok = flow.(AuthorizationCodeFlow)
-	return ok
-}
-
-// AuthorizationCodeFlow is an optional interactive capability. The daemon
-// owns state and PKCE verifier lifecycle; frontends only display the URL and
-// submit the callback code plus the returned session ID.
-type AuthorizationCodeFlow interface {
-	AuthorizationURL(state, verifier string) (string, error)
-	ExchangeAuthorizationCode(context.Context, string, string) (CredentialState, error)
-}
-
 type DeviceAuthorization struct {
 	DeviceCode              string          `json:"-"`
 	UserCode                string          `json:"userCode"`
@@ -149,29 +127,7 @@ func OAuthAuthFactory(options AuthOptions) (AuthFlow, error) {
 		return nil, fmt.Errorf("oauth2 requires clientId, tokenUrl and authUrl or deviceAuthUrl in authOptions.oauth")
 	}
 	config := appauth.OAuthConfig{ClientID: options.OAuth.ClientID, AuthURL: options.OAuth.AuthURL, TokenURL: options.OAuth.TokenURL, DeviceAuthURL: options.OAuth.DeviceAuthURL, Scopes: append([]string(nil), options.OAuth.Scopes...), RedirectURL: options.OAuth.RedirectURL}
-	if config.DeviceAuthURL != "" {
-		base := OAuthAuth{Config: config}
-		generic, err := NewDeviceAuthorizationDriver(base, base.BeginDeviceAuthorization, base.WaitForDeviceAuthorization)
-		if err != nil {
-			return nil, err
-		}
-		return oauthDeviceAuth{OAuthAuth: base, device: generic.(AuthorizationFlow)}, nil
-	}
-	return OAuthAuth{Config: config}, nil
-}
-
-// The code capability remains available when a configured OAuth flow also
-// offers device authorization; only the device lifecycle uses the shared strategy.
-type oauthDeviceAuth struct {
-	OAuthAuth
-	device AuthorizationFlow
-}
-
-func (f oauthDeviceAuth) BeginAuthorization(ctx context.Context, input AuthInput) (AuthorizationTransition, error) {
-	return f.device.BeginAuthorization(ctx, input)
-}
-func (f oauthDeviceAuth) AdvanceAuthorization(ctx context.Context, state AuthorizationState, event AuthorizationEvent) (AuthorizationTransition, error) {
-	return f.device.AdvanceAuthorization(ctx, state, event)
+	return buildOAuthSetup(OAuthAuth{Config: config}, options.OAuth.SetupMode)
 }
 
 func (a OAuthAuth) Resolve(_ context.Context, input AuthInput) (kernel.Credential, error) {
@@ -208,22 +164,25 @@ func (a OAuthAuth) Refresh(ctx context.Context, input AuthInput, _ kernel.Creden
 	return oauthCredentialState(OAuthTokenState{AccessToken: refreshed.AccessToken, RefreshToken: refreshed.RefreshToken, ExpiresAt: refreshed.Expiry, ClientID: config.ClientID, ClientSecret: config.ClientSecret})
 }
 
-func (a OAuthAuth) AuthorizationURL(state, verifier string) (string, error) {
-	if state == "" || verifier == "" || a.Config.ClientID == "" || a.Config.AuthURL == "" || a.Config.TokenURL == "" || a.Config.RedirectURL == "" {
+func (a OAuthAuth) authorizationCodeURL(ctx context.Context, request AuthorizationCodeRequest) (string, error) {
+	_ = ctx
+	state, verifier := request.State, request.Verifier
+	if state == "" || verifier == "" || a.Config.ClientID == "" || a.Config.AuthURL == "" || a.Config.TokenURL == "" || request.RedirectURL == "" {
 		return "", fmt.Errorf("OAuth authorization requires state, PKCE verifier, client ID, auth/token URLs and redirect URL")
 	}
-	return a.Config.AuthCodeURL(state, verifier), nil
+	config := a.Config
+	config.RedirectURL = request.RedirectURL
+	return config.AuthCodeURL(state, verifier), nil
 }
 
-func (a OAuthAuth) CanAuthorizeCode() bool {
-	return a.Config.ClientID != "" && a.Config.AuthURL != "" && a.Config.TokenURL != "" && a.Config.RedirectURL != ""
-}
-
-func (a OAuthAuth) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (CredentialState, error) {
+func (a OAuthAuth) exchangeCode(ctx context.Context, request AuthorizationCodeExchange) (CredentialState, error) {
+	code, verifier := request.Code, request.Verifier
 	if strings.TrimSpace(code) == "" || verifier == "" {
 		return CredentialState{}, fmt.Errorf("OAuth authorization code and PKCE verifier are required")
 	}
-	token, err := a.Config.Exchange(ctx, code, verifier)
+	config := a.Config
+	config.RedirectURL = request.RedirectURL
+	token, err := config.Exchange(ctx, code, verifier)
 	if err != nil {
 		return CredentialState{}, fmt.Errorf("exchange OAuth authorization code: %w", err)
 	}

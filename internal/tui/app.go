@@ -193,7 +193,6 @@ func authActivationCompletion(flow, connectionID string, activation *authActivat
 }
 
 type setupPollTick struct{ sessionID string }
-type authorizationCodePollTick struct{ sessionID string }
 
 type keyHelp struct{ app *app }
 
@@ -214,7 +213,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 		case "providers":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/c"), key.WithHelp("e/t/c", "edit/test/connect")))
 		case "connections":
-			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/P/i/m/a/A/D/O/d"), key.WithHelp("e/t/T/P/i/m/a/A/D/O/d", "edit/test/import/auth/setup/delete")))
+			bindings = append(bindings, key.NewBinding(key.WithKeys("e/t/T/P/i/m/a/D/O/d"), key.WithHelp("e/t/T/P/i/m/a/D/O/d", "edit/test/import/setup/delete")))
 		case "discovered":
 			bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 		case "physical", "combos":
@@ -235,7 +234,7 @@ func (h keyHelp) shortHelp() []key.Binding {
 	case "providers":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("n/t"), key.WithHelp("n/t", "new/test")))
 	case "connections":
-		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/P/i/m/a/A/D/O"), key.WithHelp("t/T/P/i/m/a/A/D/O", "test/import/auth/setup")))
+		bindings = append(bindings, key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "new connection")), key.NewBinding(key.WithKeys("t/T/P/i/m/a/D/O"), key.WithHelp("t/T/P/i/m/a/D/O", "test/import/setup")))
 	case "discovered":
 		bindings = append(bindings, key.NewBinding(key.WithKeys("e/f"), key.WithHelp("e/f", "edit custom assignment/create Physical")))
 	case "physical", "combos":
@@ -265,7 +264,6 @@ func (keyHelp) FullHelp() [][]key.Binding {
 		{key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "toggle model exposure")), key.NewBinding(key.WithKeys("t/i"), key.WithHelp("t/i", "test/preview · selectively import"))},
 		{key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "connection-scoped custom ID / edit model members")), key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select assigned connections in custom-model editor"))},
 		{key.NewBinding(key.WithKeys("D/O"), key.WithHelp("D/O", "start/cancel connection setup"))},
-		{key.NewBinding(key.WithKeys("a/A"), key.WithHelp("a/A", "start/cancel OAuth authorization-code flow"))},
 	}
 }
 
@@ -326,7 +324,6 @@ type app struct {
 	confirmAction     string
 	lastG             bool
 	setupSessionID    string
-	authCodeSessionID string
 }
 
 func newApp(ipcPath string) *app {
@@ -677,11 +674,6 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.invoke("auth.setup.get", map[string]any{"sessionID": message.sessionID})
 		}
 		return m, nil
-	case authorizationCodePollTick:
-		if message.sessionID != "" && message.sessionID == m.authCodeSessionID {
-			return m, m.invoke("auth.authorization.get", map[string]any{"sessionID": message.sessionID})
-		}
-		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = message.Width, message.Height
 		m.resize()
@@ -761,9 +753,6 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if message.err != nil {
 			m.lastError = message.err.Error()
 			m.status = "action failed"
-			if message.method == "auth.authorization.get" {
-				m.authCodeSessionID = ""
-			}
 			if message.method == "auth.setup.get" {
 				m.setupSessionID = ""
 			}
@@ -836,63 +825,6 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "catalog baseline not loaded · all returned IDs checked; verify before apply"
 			}
 			m.resize()
-			return m, nil
-		}
-		if message.method == "auth.authorization.start" || message.method == "auth.authorization.get" {
-			var result struct {
-				SessionID        string                `json:"sessionId"`
-				ConnectionID     string                `json:"connectionId"`
-				AuthorizationURL string                `json:"authorizationUrl,omitempty"`
-				CallbackMode     string                `json:"callbackMode"`
-				Status           string                `json:"status"`
-				ExpiresAt        time.Time             `json:"expiresAt"`
-				Error            string                `json:"error,omitempty"`
-				Activation       *authActivationResult `json:"activation,omitempty"`
-			}
-			if err := json.Unmarshal(message.result, &result); err != nil {
-				m.status = "decode authorization-code state: " + err.Error()
-				return m, nil
-			}
-			m.authCodeSessionID = result.SessionID
-			m.previewExtra = pretty(message.result)
-			m.previewTitle = "OAuth authorization-code flow"
-			m.previewKey = ""
-			if message.method == "auth.authorization.start" || result.Status == "awaiting_user" {
-				if result.CallbackMode == "loopback" {
-					m.status = "open consent URL · daemon will receive the registered loopback callback"
-				} else {
-					m.status = "open consent URL · complete with gobroom connections authorize-complete"
-				}
-				m.syncDetail()
-				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return authorizationCodePollTick{sessionID: result.SessionID} })
-			}
-			m.status = "OAuth authorization " + result.Status
-			if result.Status == "completed" {
-				var poll bool
-				var retryHint string
-				m.status, poll, retryHint = authActivationCompletion("OAuth authorization", result.ConnectionID, result.Activation)
-				if retryHint != "" {
-					m.previewExtra += "\n\n" + retryHint
-				}
-				if poll {
-					m.syncDetail()
-					return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return authorizationCodePollTick{sessionID: result.SessionID} })
-				}
-				m.authCodeSessionID = ""
-			} else if result.Status == "failed" || result.Status == "expired" {
-				if result.Error != "" {
-					m.status += " · " + result.Error
-				}
-				m.authCodeSessionID = ""
-			}
-			m.syncDetail()
-			return m, nil
-		}
-		if message.method == "auth.authorization.cancel" {
-			m.authCodeSessionID = ""
-			m.status = "OAuth authorization cancelled"
-			m.previewExtra, m.previewTitle = "", ""
-			m.syncDetail()
 			return m, nil
 		}
 		if message.method == "auth.setup.start" || message.method == "auth.setup.get" {
@@ -1207,7 +1139,7 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.focus == focusInspector {
 		switch keyText {
-		case "e", "p", "d", "t", "T", "P", "c", "f", "a", "A", "m", "r", "o", "O":
+		case "e", "p", "d", "t", "T", "P", "c", "f", "a", "m", "r", "o", "O":
 			m.focus = focusDashboard
 			model, cmd := m.updateDashboardAction(msg)
 			if m.mode != modeBrowse {
@@ -1458,21 +1390,11 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "cancelling connection setup…"
 			return m, m.invoke("auth.setup.cancel", map[string]any{"sessionID": m.setupSessionID})
 		}
-	case "A":
-		if m.authCodeSessionID != "" {
-			m.loading = true
-			m.status = "cancelling authorization-code flow…"
-			return m, m.invoke("auth.authorization.cancel", map[string]any{"sessionID": m.authCodeSessionID})
-		}
 	case "a":
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
 				if _, ok := selected.payload.(providerNode); ok {
 					m.status = "select a connection and press m to assign a custom upstream model ID"
-				} else if value, ok := selected.payload.(connection); ok {
-					m.loading = true
-					m.status = "starting OAuth authorization; callback stays in daemon…"
-					return m, m.invoke("auth.authorization.start", map[string]any{"connectionID": value.ID})
 				}
 			}
 		} else if current.definition.view == "discovered" {
@@ -1859,7 +1781,7 @@ func (m *app) mainPreview(selected entry) string {
 	case providerNode:
 		actions = append(actions, "e            edit provider", "t            test and discover", "c            add connection")
 	case connection:
-		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "a            OAuth authorization-code flow", "A            cancel authorization", "D            start connection setup", "O            cancel connection setup", "d            delete connection")
+		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "D            start connection setup", "O            cancel connection setup", "d            delete connection")
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 		if value, ok := selected.payload.(discoveredRoute); ok && value.Kind == "custom" {
@@ -2628,7 +2550,7 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 	switch method {
 	case "connections.test", "connections.test_inference", "connections.test_operation":
 		return nil
-	case "auth.setup.start", "auth.setup.get", "auth.setup.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.cancel":
+	case "auth.setup.start", "auth.setup.get", "auth.setup.cancel":
 		return nil
 	case "providers.refresh_models":
 		resources = []sectionID{sectionProviders, sectionModels, sectionDiscovered}

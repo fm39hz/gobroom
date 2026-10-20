@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/provider"
@@ -40,6 +42,35 @@ type authorizationCallbackBinding struct {
 type authorizationCallbackListener struct {
 	server   *http.Server
 	listener net.Listener
+}
+
+func loopbackCallbackAddress(target *url.URL, allowDynamic bool) (key, bindAddress string, ok bool) {
+	if target == nil || target.Scheme != "http" || target.User != nil || target.Host == "" || target.Port() == "" || target.Fragment != "" || target.Path == "" {
+		return "", "", false
+	}
+	port, err := strconv.Atoi(target.Port())
+	if err != nil || port < 0 || (port == 0 && !allowDynamic) || port > 65535 {
+		return "", "", false
+	}
+	host := strings.TrimSuffix(strings.ToLower(target.Hostname()), ".")
+	if host == "localhost" {
+		return net.JoinHostPort(host, strconv.Itoa(port)), net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return "", "", false
+	}
+	canonical := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	return canonical, canonical, true
+}
+
+func remoteAddressIsLoopback(raw string) bool {
+	host, _, err := net.SplitHostPort(raw)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Replacing one owner's grants is atomic with respect to dispatch. New listeners

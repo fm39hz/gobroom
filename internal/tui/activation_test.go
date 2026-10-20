@@ -19,7 +19,6 @@ func TestAuthCompletionWaitsForCredentialActivation(t *testing.T) {
 		method    string
 		sessionID func(*app) string
 	}{
-		{name: "authorization code", method: "auth.authorization.get", sessionID: func(model *app) string { return model.authCodeSessionID }},
 		{name: "generic setup", method: "auth.setup.get", sessionID: func(model *app) string { return model.setupSessionID }},
 	}
 	for _, flow := range flows {

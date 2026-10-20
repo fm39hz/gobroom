@@ -588,12 +588,13 @@ type CapabilitySet struct {
 }
 
 type OAuthFlowOptions struct {
-	ClientID      string   `json:"clientId"`
-	AuthURL       string   `json:"authUrl"`
-	TokenURL      string   `json:"tokenUrl"`
-	DeviceAuthURL string   `json:"deviceAuthUrl,omitempty"`
-	Scopes        []string `json:"scopes,omitempty"`
-	RedirectURL   string   `json:"redirectUrl,omitempty"`
+	ClientID      string         `json:"clientId"`
+	AuthURL       string         `json:"authUrl"`
+	TokenURL      string         `json:"tokenUrl"`
+	DeviceAuthURL string         `json:"deviceAuthUrl,omitempty"`
+	Scopes        []string       `json:"scopes,omitempty"`
+	RedirectURL   string         `json:"redirectUrl,omitempty"`
+	SetupMode     OAuthSetupMode `json:"setupMode,omitempty"`
 }
 
 type AuthOptions struct {
@@ -704,7 +705,7 @@ type RuntimeModule interface {
 	Register(*RuntimeRegistry) error
 }
 
-const RuntimeModuleHostContractVersion uint64 = 4
+const RuntimeModuleHostContractVersion uint64 = 5
 
 type RuntimeModuleFunc struct {
 	Name                string
@@ -883,6 +884,9 @@ func NewRuntimeRegistryWithModules(modules ...RuntimeModule) (*RuntimeRegistry, 
 		return nil, err
 	}
 	runtime := &RuntimeRegistry{Primitives: primitives, Auth: NewAuthRegistry(), endpoints: map[extensions.Ref]kernel.Endpoint{}, transports: map[extensions.Ref]kernel.Transport{}, requestCodecs: map[extensions.Ref]kernel.RequestCodec{}, responseDecoders: map[extensions.Ref]kernel.ResponseDecoder{}, renderers: map[normalize.Format]kernel.ResponseRenderer{}, modelSources: map[extensions.Ref]ModelSource{}, usageSources: map[extensions.Ref]UsageSource{}, sessionStores: map[extensions.Ref]kernel.SessionStore{}, errorClassifiers: map[extensions.Ref]ErrorClassifier{}, quotaSources: map[extensions.Ref]QuotaSource{}, clientIngresses: map[extensions.Ref]ClientIngress{}}
+	if err := registerAuthorizationInputSchemas(runtime); err != nil {
+		return nil, err
+	}
 	if err := registerMultipartRequestCodec(runtime); err != nil {
 		return nil, fmt.Errorf("register generic multipart request codec: %w", err)
 	}

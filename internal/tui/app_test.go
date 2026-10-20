@@ -269,32 +269,6 @@ func TestTUISetupCancellationUsesGenericSession(t *testing.T) {
 	}
 }
 
-func TestTUIAuthorizationCodeFlowShowsLoopbackModeAndPollsTerminalStatus(t *testing.T) {
-	model := newApp("/tmp/gobroom.sock")
-	model.width, model.height = 120, 40
-	model.activePanel = int(dashboardConnections)
-	model.activeTabs[dashboardConnections] = 1
-	model.resize()
-	model.setPaneItems(model.activeContextIndex(), []entry{{key: "connection-oauth", title: "oauth account", payload: connection{ID: "connection-oauth", ProviderNodeID: "provider-oauth", Name: "oauth account", CredentialType: "oauth2", Enabled: true}}})
-	updated, command := model.updateDashboardAction(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	if command == nil || !strings.Contains(updated.(*app).status, "starting OAuth authorization") {
-		t.Fatalf("authorization-code flow did not start from selected connection: %#v", updated.(*app))
-	}
-	model = updated.(*app)
-	challenge := json.RawMessage(`{"sessionId":"code-session-1","authorizationUrl":"https://identity.test/authorize","callbackMode":"loopback","expiresAt":"2026-10-07T13:00:00Z"}`)
-	updatedModel, poll := model.Update(actionMsg{method: "auth.authorization.start", result: challenge})
-	model = updatedModel.(*app)
-	if model.authCodeSessionID != "code-session-1" || poll == nil || !strings.Contains(model.status, "loopback callback") || !strings.Contains(model.previewExtra, "identity.test/authorize") {
-		t.Fatalf("loopback authorization instructions were not displayed: status=%q preview=%q session=%q", model.status, model.previewExtra, model.authCodeSessionID)
-	}
-	completed := json.RawMessage(`{"sessionId":"code-session-1","status":"completed","callbackMode":"loopback","activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
-	updatedModel, next := model.Update(actionMsg{method: "auth.authorization.get", result: completed})
-	model = updatedModel.(*app)
-	if next != nil || model.authCodeSessionID != "" || !strings.Contains(model.status, "credential saved") {
-		t.Fatalf("authorization completion not reflected in TUI: status=%q session=%q", model.status, model.authCodeSessionID)
-	}
-}
-
 func TestTUITestsSelectedConnectionAndShowsNonMutatingPreview(t *testing.T) {
 	model := newApp("/tmp/gobroom.sock")
 	model.width, model.height = 120, 40
@@ -373,9 +347,9 @@ func TestConnectionFormUsesProviderAuthSetupSchema(t *testing.T) {
 	}
 }
 
-func TestInteractiveOAuthConnectionFormAllowsDeferredAuthorization(t *testing.T) {
+func TestInteractiveConnectionFormUsesGenericOptionalSchemaFields(t *testing.T) {
 	catalog := []provider.DefinitionMetadata{{
-		ID: "oauth-actions", AuthModes: []provider.AuthModeMetadata{{CredentialType: "oauth2", ID: "oauth2", ActionAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
+		ID: "oauth-actions", AuthModes: []provider.AuthModeMetadata{{CredentialType: "oauth2", ID: "oauth2", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{
 			{Name: "access_token", Type: "string", Secret: true},
 			{Name: "refresh_token", Type: "string", Secret: true},
 		}}}},
@@ -391,7 +365,7 @@ func TestInteractiveOAuthConnectionFormAllowsDeferredAuthorization(t *testing.T)
 		t.Fatal(err)
 	}
 	if secret, ok := params["secret"].(string); !ok || secret != "" {
-		t.Fatalf("empty interactive credential should be sent as empty, got %#v", params["secret"])
+		t.Fatalf("empty optional schema fields should remain empty, got %#v", params["secret"])
 	}
 }
 
@@ -399,7 +373,7 @@ func TestConnectionFormCyclesAuthModesAndRebuildsFields(t *testing.T) {
 	catalog := []provider.DefinitionMetadata{{
 		ID: "dual-auth", DefaultCredentialType: "api_key", AuthModes: []provider.AuthModeMetadata{
 			{CredentialType: "api_key", ID: "static-secret", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "secret", Type: "string", Required: true, Secret: true}}}},
-			{CredentialType: "oauth2", ID: "oauth2", ActionAuthorization: true, SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "access_token", Type: "string", Secret: true}}}},
+			{CredentialType: "oauth2", ID: "oauth2", SetupSchema: provider.SetupSchema{Fields: []provider.SetupField{{Name: "access_token", Type: "string", Secret: true}}}},
 		},
 	}}
 	form := newConnectionFormWithMetadata(providerNode{ID: "node-dual", DefinitionID: "dual-auth", AuthMode: "api_key"}, catalog)

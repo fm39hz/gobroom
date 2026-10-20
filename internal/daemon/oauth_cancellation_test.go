@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"net/url"
 	"testing"
 	"time"
 
@@ -29,8 +28,10 @@ func (f *lateAuthorizationFixture) lateToken(ctx context.Context) (provider.Cred
 	return oauthFixtureState(provider.OAuthTokenState{AccessToken: "must-not-be-stored", RefreshToken: "late-refresh-token", ClientID: "late-client"})
 }
 
-func (f *lateAuthorizationFixture) ExchangeAuthorizationCode(ctx context.Context, _, _ string) (provider.CredentialState, error) {
-	return f.lateToken(ctx)
+func (f *lateAuthorizationFixture) codeDriver(t *testing.T) provider.AuthFlow {
+	return authorizationCodeFixture(t, f, "https://identity.test/callback", false, func(ctx context.Context, _ provider.AuthorizationCodeExchange) (provider.CredentialState, error) {
+		return f.lateToken(ctx)
+	})
 }
 
 func (f *lateAuthorizationFixture) BeginDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
@@ -59,6 +60,14 @@ func cancellationAuthDaemon(t *testing.T, flow provider.AuthFlow) (*Daemon, stri
 	d := &Daemon{store: s, server: api.NewServer(s),
 		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth", 1): {"oauth2": "oauth:oauth2"}},
 		authFlows:           map[string]provider.AuthFlow{"oauth:oauth2": flow},
+	}
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.setupSchemas, err = registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(d.cancelAuthorizationSessions)
 	return d, connection.ID
@@ -126,13 +135,13 @@ func TestDeviceAuthorizationStartCancelsAndDrainsBeforeLateSuccess(t *testing.T)
 }
 
 func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
-	for _, kind := range []string{"authorization_code", "device"} {
+	for _, kind := range []string{"code", "device"} {
 		for _, cause := range []string{"session_cancel", "coordinator_stop", "daemon_cancel", "caller_cancel", "session_expiry"} {
 			if kind == "device" && (cause == "caller_cancel" || cause == "session_expiry") {
 				continue // Device polling intentionally outlives its initiating RPC.
 			}
 			t.Run(kind+"/"+cause, func(t *testing.T) {
-				flow := &lateAuthorizationFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://identity.test/callback"}, entered: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
+				flow := &lateAuthorizationFixture{entered: make(chan struct{}), cancelled: make(chan struct{}), release: make(chan struct{})}
 				d, connectionID := cancellationAuthDaemon(t, flow)
 				if kind == "device" {
 					driver := deviceAuthorizationDriver(t, flow,
@@ -152,15 +161,16 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 				defer close(flow.release)
 				var sessionID string
 				result := make(chan error, 1)
-				if kind == "authorization_code" {
-					challenge, err := d.startAuthorization(connectionID)
+				if kind == "code" {
+					d.authFlows["oauth:oauth2"] = flow.codeDriver(t)
+					challenge, err := d.startSetupAuthorization(context.Background(), connectionID)
 					if err != nil {
 						t.Fatal(err)
 					}
 					sessionID = challenge.SessionID
-					parsed, _ := url.Parse(challenge.AuthorizationURL)
+					event := codeSubmitEvent(t, challenge, "approved")
 					go func() {
-						_, err := d.completeAuthorization(caller, sessionID, parsed.Query().Get("state"), "approved", "")
+						_, err := d.advanceSetupAuthorization(caller, sessionID, challenge.Revision, event)
 						result <- err
 					}()
 				} else {
@@ -174,12 +184,8 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 				switch cause {
 				case "session_cancel":
 					var err error
-					if kind == "authorization_code" {
-						err = d.cancelAuthorization(sessionID)
-					} else {
-						if !d.finishSetupAuthorization(sessionID, "cancelled", "authorization was cancelled") {
-							err = context.Canceled
-						}
+					if !d.finishSetupAuthorization(sessionID, "cancelled", "authorization was cancelled") {
+						err = context.Canceled
 					}
 					if err != nil {
 						t.Fatal(err)
@@ -191,7 +197,9 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 				case "caller_cancel":
 					stopCaller()
 				case "session_expiry":
-					d.expireAuthorizationSession(sessionID)
+					if !d.finishSetupAuthorization(sessionID, "expired", "authorization expired") {
+						t.Fatal("could not expire authorization session")
+					}
 				}
 				awaitAuthorizationSignal(t, flow.cancelled)
 				drained := make(chan struct{})
@@ -203,7 +211,7 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 				}
 				flow.release <- struct{}{}
 				awaitAuthorizationSignal(t, drained)
-				if kind == "authorization_code" {
+				if kind == "code" {
 					if err := <-result; err == nil {
 						t.Fatal("cancelled authorization returned success")
 					}
@@ -213,13 +221,13 @@ func TestAuthorizationCancellationFencesLateSuccessfulToken(t *testing.T) {
 					t.Fatal("late successful driver overwrote the connection credential")
 				}
 				if cause == "session_expiry" {
-					status, err := d.authorizationStatus(sessionID)
+					status, err := d.setupAuthorizationStatus(sessionID)
 					if err != nil || status.Status != "expired" {
 						t.Fatalf("expiry was overwritten by the returning exchange: %#v %v", status, err)
 					}
 				}
 				if cause == "coordinator_stop" {
-					if _, err := d.startAuthorization(connectionID); err == nil {
+					if _, err := d.startSetupAuthorization(context.Background(), connectionID); err == nil {
 						t.Fatal("stopped coordinator admitted another authorization")
 					}
 				}

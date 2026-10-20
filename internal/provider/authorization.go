@@ -15,6 +15,12 @@ const MaxAuthorizationStateBytes = 64 << 10
 // Host safety ceiling for a provider-declared interactive deadline.
 const MaxAuthorizationDuration = time.Hour
 
+// AuthorizationInputRejected is a safe, recoverable rejection of this input,
+// not failure of the pending authorization challenge or its provider.
+type AuthorizationInputRejected struct{}
+
+func (AuthorizationInputRejected) Error() string { return "authorization input rejected" }
+
 // AuthorizationState is opaque provider-owned state for an interactive flow.
 type AuthorizationState struct{ encoded string }
 
@@ -99,14 +105,15 @@ type AuthorizationEvent struct {
 }
 
 type AuthorizationTransition struct {
-	Failure    AuthorizationFailure    `json:"failure,omitempty"`
-	State      AuthorizationState      `json:"-"`
-	Credential *CredentialState        `json:"-"`
-	Actions    []AuthorizationAction   `json:"actions,omitempty"`
-	Callbacks  []AuthorizationCallback `json:"-"`
-	PollAfter  time.Duration           `json:"-"`
-	Await      bool                    `json:"-"`
-	ExpiresAt  time.Time               `json:"expiresAt"`
+	Failure          AuthorizationFailure    `json:"failure,omitempty"`
+	State            AuthorizationState      `json:"-"`
+	Credential       *CredentialState        `json:"-"`
+	Actions          []AuthorizationAction   `json:"actions,omitempty"`
+	Callbacks        []AuthorizationCallback `json:"-"`
+	PrepareCallbacks bool                    `json:"-"`
+	PollAfter        time.Duration           `json:"-"`
+	Await            bool                    `json:"-"`
+	ExpiresAt        time.Time               `json:"expiresAt"`
 }
 
 type AuthorizationFailure string
@@ -122,7 +129,7 @@ func (t AuthorizationTransition) Validate(now time.Time) error {
 		if t.Failure != AuthorizationDenied && t.Failure != AuthorizationExpired && t.Failure != AuthorizationUnavailable {
 			return fmt.Errorf("unknown authorization failure")
 		}
-		if t.Credential != nil || t.State.Encoded() != "" || len(t.Actions) != 0 || len(t.Callbacks) != 0 || t.PollAfter != 0 || t.Await {
+		if t.Credential != nil || t.State.Encoded() != "" || len(t.Actions) != 0 || len(t.Callbacks) != 0 || t.PollAfter != 0 || t.Await || t.PrepareCallbacks {
 			return fmt.Errorf("failed authorization cannot contain credentials, state, actions or polling")
 		}
 		return nil
@@ -131,7 +138,7 @@ func (t AuthorizationTransition) Validate(now time.Time) error {
 		if err := t.Credential.Validate(); err != nil {
 			return fmt.Errorf("authorization credential: %w", err)
 		}
-		if t.State.Encoded() != "" || len(t.Actions) != 0 || len(t.Callbacks) != 0 || t.PollAfter != 0 || t.Await {
+		if t.State.Encoded() != "" || len(t.Actions) != 0 || len(t.Callbacks) != 0 || t.PollAfter != 0 || t.Await || t.PrepareCallbacks {
 			return fmt.Errorf("completed authorization cannot contain state, actions or polling")
 		}
 		return nil
@@ -147,6 +154,9 @@ func (t AuthorizationTransition) Validate(now time.Time) error {
 	}
 	if len(t.Callbacks) > 8 {
 		return fmt.Errorf("authorization transition exceeds 8 callbacks")
+	}
+	if t.PrepareCallbacks && (len(t.Callbacks) == 0 || t.PollAfter != 0 || t.Await) {
+		return fmt.Errorf("callback preparation requires callback intents without polling or waiting")
 	}
 	if t.PollAfter != 0 && (t.PollAfter < 100*time.Millisecond || t.PollAfter > time.Minute) {
 		return fmt.Errorf("authorization poll interval must be 100ms..1m")

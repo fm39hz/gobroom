@@ -90,7 +90,7 @@ configured without a kernel change, for example in its operation binding:
 
 Declared signals replace default 401 matching. Replay policy still controls
 whether the business request can be resent; recovery never permits switching
-issuer after an ambiguous keyed attempt. Module builds use host contract v4;
+issuer after an ambiguous keyed attempt. Module builds use host contract v5;
 old auth/device/recovery contracts are not automatically adapted. Credential
 renewal preserves configured-principal quota/operational cooldown, while old-token
 authentication failures use their separate credential revision. Explicit
@@ -202,9 +202,9 @@ Use a mode-0600 file or stdin; do not put secret values on the command line.
 The daemon owns requested polling, so keeping a CLI/TUI open is unnecessary.
 `completed` means the credential committed; inspect the separate activation
 receipt before assuming a new routing snapshot is ready. Restart retains durable
-credentials/activation, not private interactive sessions. Existing OAuth code/
-device commands have not yet been replaced by this action surface; no built-in
-provider action-flow coverage is implied by the generic fixture.
+credentials/activation, not private interactive sessions. Code and device flows
+use this same action surface; their previous dedicated IPC/CLI commands are gone.
+Configured factory/strategy fixtures do not establish live-provider acceptance.
 
 Action setup may now report `callbackModes` per input action. `loopback` means
 the daemon owns a matching fixed-loopback listener; `manual` means an optional
@@ -218,12 +218,18 @@ credentials, not a pending callback session. A driver may request port zero:
 the daemon owns the OS-assigned port before the driver registers its redirect
 URI or returns consent actions. The CLI only sees the resolved final actions;
 there is no frontend port probe or port-selection command. Generic TUI callback
-forms and fully migrated authorization-code orchestration remain unfinished.
+input forms remain unfinished.
 Device setup already uses `connections setup start/get/cancel` and the same
 generic public actions in TUI. Its upstream await continues without a frontend;
 the OAuth library owns pending/slow-down timing. `device-start/get/cancel` and
-`auth.device.*` no longer exist. Generic setup deadlines are provider-declared
-within a one-hour host ceiling; code-flow sessions remain capped at ten minutes.
+`auth.device.*`, `auth.authorization.*` and `authorize-*` no longer exist. Generic
+setup deadlines are provider-declared within a one-hour host ceiling; the code
+strategy defaults to ten minutes. For a definition supporting both OAuth methods,
+submit `{"method":"code"}` or `{"method":"device"}` at its `select_method` input
+action, or configure `authOptions.oauth.setupMode` to select a method directly.
+Callback input can be `{"url":"..."}` or `{"code":"...","state":"..."}` in the
+private submit file/stdin; never pass these values in argv. A rejected input leaves
+its challenge available for correction, while exchange/cancellation failures do not.
 
 ## Data-plane exposure
 

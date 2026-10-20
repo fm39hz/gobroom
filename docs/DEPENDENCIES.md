@@ -125,6 +125,13 @@ already wired into the build; that integration remains engineering work.
 
 ## Explicit non-adoptions
 
+Code setup convergence uses the pinned `x/oauth2.GenerateVerifier`, S256 helper
+and verifier exchange option, existing JSON Schema binding and generic callback
+resources/CAS. The daemon no longer contains an OAuth-specific coordinator or
+parser. Standard URL/JSON binding replaces provider-wire guessing; a private
+typed method-choice wrapper composes the existing code/device strategies. No
+new OAuth implementation, template engine or workflow dependency is introduced.
+Host contract v5 deliberately removes the old code interfaces and control paths.
 Device lifecycle convergence reuses the already-pinned `x/oauth2` device flow.
 Its `deviceauth.go` owns server interval, `authorization_pending`, `slow_down`,
 expiry and token retrieval; Gobroom does not implement another RFC poll loop.

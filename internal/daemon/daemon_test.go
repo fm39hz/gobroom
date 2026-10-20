@@ -42,7 +42,9 @@ func (f oauthRoundTripperFunc) RoundTrip(request *http.Request) (*http.Response,
 	return f(request)
 }
 
-type callbackOAuthFixture struct{ redirectURL string }
+// callbackOAuthFixture is deliberately only the ordinary AuthFlow base. Code
+// authorization is attached explicitly with authorizationCodeFixture below.
+type callbackOAuthFixture struct{}
 
 type daemonExplainAdapter struct{ attempts *int }
 type daemonTransformFixture struct{}
@@ -169,15 +171,56 @@ func (callbackOAuthFixture) Resolve(_ context.Context, input provider.AuthInput)
 func (callbackOAuthFixture) Refresh(_ context.Context, _ provider.AuthInput, credential kernel.Credential) (provider.CredentialState, error) {
 	return provider.NewCredentialState(credential.Secret)
 }
-func (f callbackOAuthFixture) AuthorizationURL(state, verifier string) (string, error) {
-	query := url.Values{"client_id": {"fixture"}, "redirect_uri": {f.redirectURL}, "state": {state}, "code_challenge": {oauth2.S256ChallengeFromVerifier(verifier)}, "code_challenge_method": {"S256"}}
-	return "https://identity.test/authorize?" + query.Encode(), nil
+func authorizationCodeFixture(t *testing.T, base provider.AuthFlow, redirectURL string, callbackRequired bool, exchange func(context.Context, provider.AuthorizationCodeExchange) (provider.CredentialState, error)) provider.AuthFlow {
+	t.Helper()
+	ref := provider.AuthorizationCodeInputSchemaRef
+	driver, err := provider.NewAuthorizationCodeDriver(base, provider.AuthorizationCodeOptions{RedirectURL: redirectURL, InputSchemaRef: ref, CallbackRequired: callbackRequired}, func(_ context.Context, request provider.AuthorizationCodeRequest) (string, error) {
+		query := url.Values{"client_id": {"fixture"}, "redirect_uri": {request.RedirectURL}, "state": {request.State}, "code_challenge": {oauth2.S256ChallengeFromVerifier(request.Verifier)}, "code_challenge_method": {"S256"}}
+		return "https://identity.test/authorize?" + query.Encode(), nil
+	}, exchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return driver
 }
-func (callbackOAuthFixture) ExchangeAuthorizationCode(_ context.Context, code, verifier string) (provider.CredentialState, error) {
-	if code != "loopback-code" || verifier == "" {
+
+func defaultCodeExchange(_ context.Context, request provider.AuthorizationCodeExchange) (provider.CredentialState, error) {
+	if request.Code != "loopback-code" || request.Verifier == "" {
 		return provider.CredentialState{}, fmt.Errorf("unexpected authorization exchange input")
 	}
 	return oauthFixtureState(provider.OAuthTokenState{AccessToken: "loopback-access", RefreshToken: "loopback-refresh", ClientID: "loopback-client"})
+}
+
+func getConsentURL(t *testing.T, view AuthorizationSetupView) *url.URL {
+	t.Helper()
+	for _, action := range view.Actions {
+		if action.Kind == provider.AuthorizationOpenURL && action.URL != "" {
+			parsed, err := url.Parse(action.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return parsed
+		}
+	}
+	t.Fatal("authorization view has no open_url consent action")
+	return nil
+}
+
+func codeSubmitEvent(t *testing.T, view AuthorizationSetupView, code string) provider.AuthorizationEvent {
+	t.Helper()
+	consent := getConsentURL(t, view)
+	value, err := json.Marshal(provider.AuthorizationCodeInput{Code: code, State: consent.Query().Get("state")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actionID := "callback"
+	for _, action := range view.Actions {
+		if action.Kind == provider.AuthorizationInput {
+			actionID = action.ID
+			break
+		}
+	}
+	return provider.AuthorizationEvent{Kind: provider.AuthorizationSubmit, ActionID: actionID, Value: value}
 }
 
 type blockingCallbackOAuthFixture struct {
@@ -186,7 +229,7 @@ type blockingCallbackOAuthFixture struct {
 	release chan struct{}
 }
 
-func (f *blockingCallbackOAuthFixture) ExchangeAuthorizationCode(ctx context.Context, code, verifier string) (provider.CredentialState, error) {
+func (f *blockingCallbackOAuthFixture) exchange(ctx context.Context, _ provider.AuthorizationCodeExchange) (provider.CredentialState, error) {
 	close(f.entered)
 	select {
 	case <-f.release:
@@ -797,45 +840,65 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Daemon{
-		store: s, server: api.NewServer(s),
-		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth", 1): {"oauth2": "oauth:oauth2"}},
-		authFlows: map[string]provider.AuthFlow{"oauth:oauth2": provider.OAuthAuth{Config: auth.OAuthConfig{
-			ClientID: "client", AuthURL: "https://identity.test/authorize", TokenURL: "https://identity.test/token",
-			RedirectURL: "https://identity.test/oauth/callback", Scopes: []string{"models.read"},
-		}}},
-	}
-	started := d.handleIPC(context.Background(), IPCRequest{ID: "start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
-	if !started.OK {
-		t.Fatal(started.Error)
-	}
-	challenge := started.Result.(authorizationChallenge)
-	if challenge.CallbackMode != "manual" {
-		t.Fatalf("non-loopback HTTPS callback should use explicit manual handoff: %q", challenge.CallbackMode)
-	}
-	duplicate := d.handleIPC(context.Background(), IPCRequest{ID: "duplicate", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
-	if duplicate.OK {
-		t.Fatal("second pending OAuth session for the same connection was accepted")
-	}
-	parsedURL, err := url.Parse(challenge.AuthorizationURL)
+	oauthCodeFlow, err := provider.OAuthAuthFactory(provider.AuthOptions{OAuth: &provider.OAuthFlowOptions{ClientID: "client", AuthURL: "https://identity.test/authorize", TokenURL: "https://identity.test/token", RedirectURL: "https://identity.test/oauth/callback", Scopes: []string{"models.read"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	d := &Daemon{
+		store: s, server: api.NewServer(s),
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth", 1): {"oauth2": "oauth:oauth2"}},
+		authFlows:           map[string]provider.AuthFlow{"oauth:oauth2": oauthCodeFlow},
+	}
+	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.setupSchemas, err = runtimeRegistry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := d.handleIPC(context.Background(), IPCRequest{ID: "start", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
+	if !started.OK {
+		t.Fatal(started.Error)
+	}
+	challenge := started.Result.(AuthorizationSetupView)
+	duplicate := d.handleIPC(context.Background(), IPCRequest{ID: "duplicate", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
+	if duplicate.OK {
+		t.Fatal("second pending OAuth session for the same connection was accepted")
+	}
+	parsedURL := getConsentURL(t, challenge)
 	state := parsedURL.Query().Get("state")
 	challengeValue := parsedURL.Query().Get("code_challenge")
-	if state != challenge.SessionID || challengeValue == "" || parsedURL.Query().Get("code_challenge_method") != "S256" {
+	if state == "" || challengeValue == "" || parsedURL.Query().Get("code_challenge_method") != "S256" || parsedURL.Query().Get("redirect_uri") != "https://identity.test/oauth/callback" {
 		t.Fatalf("authorization challenge does not carry daemon state + S256 PKCE: %#v", parsedURL.Query())
 	}
-	if _, err := d.completeAuthorization(context.Background(), challenge.SessionID, "wrong-state", "code", ""); err == nil {
+	inputAction := "callback"
+	for _, action := range challenge.Actions {
+		if action.Kind == provider.AuthorizationInput {
+			inputAction = action.ID
+		}
+	}
+	wrongState, _ := json.Marshal(provider.AuthorizationCodeInput{Code: "approved-code", State: "incorrect-nonce"})
+	if rejected := d.handleIPC(context.Background(), IPCRequest{ID: "wrong-state", Method: "auth.setup.advance", Params: map[string]any{"sessionID": challenge.SessionID, "revision": challenge.Revision, "actionID": inputAction, "value": json.RawMessage(wrongState)}}); rejected.OK {
 		t.Fatal("wrong OAuth state was accepted")
 	}
-	callback := "https://identity.test/oauth/callback?code=approved-code&state=" + url.QueryEscape(state)
-	wrongTarget := d.handleIPC(context.Background(), IPCRequest{ID: "wrong-target", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": challenge.SessionID, "callbackURL": "https://attacker.test/oauth/callback?code=approved-code&state=" + url.QueryEscape(state)}})
+	state = getConsentURL(t, challenge).Query().Get("state")
+	wrongValue, _ := json.Marshal(provider.AuthorizationCodeInput{URL: "https://attacker.test/oauth/callback?code=approved-code&state=" + url.QueryEscape(state)})
+	wrongTarget := d.handleIPC(context.Background(), IPCRequest{ID: "wrong-target", Method: "auth.setup.advance", Params: map[string]any{"sessionID": challenge.SessionID, "revision": challenge.Revision, "actionID": inputAction, "value": json.RawMessage(wrongValue)}})
 	if wrongTarget.OK {
 		t.Fatal("callback from an unbound redirect target was accepted")
 	}
+	parsedURL = getConsentURL(t, challenge)
+	state = parsedURL.Query().Get("state")
+	callback := "https://identity.test/oauth/callback?code=approved-code&state=" + url.QueryEscape(state)
+	for _, action := range challenge.Actions {
+		if action.Kind == provider.AuthorizationInput {
+			inputAction = action.ID
+		}
+	}
 	exchangeContext := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Transport: transport})
-	completed := d.handleIPC(exchangeContext, IPCRequest{ID: "complete", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": challenge.SessionID, "callbackURL": callback}})
+	value, _ := json.Marshal(provider.AuthorizationCodeInput{URL: callback})
+	completed := d.handleIPC(exchangeContext, IPCRequest{ID: "complete", Method: "auth.setup.advance", Params: map[string]any{"sessionID": challenge.SessionID, "revision": challenge.Revision, "actionID": inputAction, "value": json.RawMessage(value)}})
 	if !completed.OK {
 		t.Fatal(completed.Error)
 	}
@@ -847,31 +910,32 @@ func TestDaemonOwnsOAuthStatePKCEExchangeAndRejectsCallbackReplay(t *testing.T) 
 	if err != nil || tokenState.AccessToken != "issued-access" || tokenState.RefreshToken != "issued-refresh" || tokenState.ClientID != "client" {
 		t.Fatalf("persisted OAuth token state=%#v err=%v", tokenState, err)
 	}
-	replay := d.handleIPC(context.Background(), IPCRequest{ID: "replay", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": challenge.SessionID, "state": state, "code": "approved-code"}})
+	replay := d.handleIPC(context.Background(), IPCRequest{ID: "replay", Method: "auth.setup.advance", Params: map[string]any{"sessionID": challenge.SessionID, "revision": challenge.Revision, "actionID": inputAction, "value": json.RawMessage(value)}})
 	if replay.OK {
 		t.Fatal("OAuth callback replay was accepted")
 	}
-	startedAgain := d.handleIPC(context.Background(), IPCRequest{ID: "start-again", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	startedAgain := d.handleIPC(context.Background(), IPCRequest{ID: "start-again", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	if !startedAgain.OK {
 		t.Fatalf("new authorization after completion failed: %s", startedAgain.Error)
 	}
-	deniedChallenge := startedAgain.Result.(authorizationChallenge)
-	deniedCallback := "https://identity.test/oauth/callback?error=access_denied&state=" + url.QueryEscape(deniedChallenge.SessionID)
-	denied := d.handleIPC(context.Background(), IPCRequest{ID: "denied", Method: "auth.authorization.complete", Params: map[string]any{"sessionID": deniedChallenge.SessionID, "callbackURL": deniedCallback}})
-	if denied.OK || !strings.Contains(denied.Error, "denied") {
-		t.Fatalf("manual OAuth denial should be reported to CLI: %#v", denied)
+	deniedChallenge := startedAgain.Result.(AuthorizationSetupView)
+	deniedURL := getConsentURL(t, deniedChallenge)
+	deniedInput, _ := json.Marshal(provider.AuthorizationCodeInput{URL: "https://identity.test/oauth/callback?error=access_denied&state=" + url.QueryEscape(deniedURL.Query().Get("state"))})
+	denied := d.handleIPC(context.Background(), IPCRequest{ID: "denied", Method: "auth.setup.advance", Params: map[string]any{"sessionID": deniedChallenge.SessionID, "revision": deniedChallenge.Revision, "actionID": inputAction, "value": json.RawMessage(deniedInput)}})
+	if !denied.OK {
+		t.Fatal(denied.Error)
 	}
-	deniedStatus := d.handleIPC(context.Background(), IPCRequest{ID: "denied-status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": deniedChallenge.SessionID}})
-	deniedView, deniedStatusOK := deniedStatus.Result.(authorizationStatusView)
+	deniedStatus := d.handleIPC(context.Background(), IPCRequest{ID: "denied-status", Method: "auth.setup.get", Params: map[string]any{"sessionID": deniedChallenge.SessionID}})
+	deniedView, deniedStatusOK := deniedStatus.Result.(AuthorizationSetupView)
 	if !deniedStatus.OK || !deniedStatusOK || deniedView.Status != "denied" {
-		t.Fatalf("manual OAuth denial did not retain terminal state: %#v error=%q", deniedStatus.Result, deniedStatus.Error)
+		t.Fatalf("manual OAuth denial did not retain terminal state: %#v", deniedStatus.Result)
 	}
-	thirdStart := d.handleIPC(context.Background(), IPCRequest{ID: "third-start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
+	thirdStart := d.handleIPC(context.Background(), IPCRequest{ID: "third-start", Method: "auth.setup.start", Params: map[string]any{"connectionID": connection.ID}})
 	if !thirdStart.OK {
 		t.Fatalf("new authorization after denial failed: %s", thirdStart.Error)
 	}
-	third := thirdStart.Result.(authorizationChallenge)
-	cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.authorization.cancel", Params: map[string]any{"sessionID": third.SessionID}})
+	third := thirdStart.Result.(AuthorizationSetupView)
+	cancelled := d.handleIPC(context.Background(), IPCRequest{ID: "cancel", Method: "auth.setup.cancel", Params: map[string]any{"sessionID": third.SessionID}})
 	if !cancelled.OK {
 		t.Fatalf("cancel authorization: %s", cancelled.Error)
 	}
@@ -891,28 +955,32 @@ func TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	flow := &blockingCallbackOAuthFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://identity.test/oauth/callback"}, entered: make(chan struct{}), release: make(chan struct{})}
+	flow := &blockingCallbackOAuthFixture{entered: make(chan struct{}), release: make(chan struct{})}
+	codeFlow := authorizationCodeFixture(t, flow, "https://identity.test/oauth/callback", false, flow.exchange)
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
 		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("oauth", 1): {"oauth2": "oauth:oauth2"}},
-		authFlows:           map[string]provider.AuthFlow{"oauth:oauth2": flow},
+		authFlows:           map[string]provider.AuthFlow{"oauth:oauth2": codeFlow},
 	}
-	challenge, err := d.startAuthorization(connection.ID)
+	registry, err := provider.NewRuntimeRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := url.Parse(challenge.AuthorizationURL)
+	d.setupSchemas, err = registry.FreezeCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := parsed.Query().Get("state")
-	callback := "https://identity.test/oauth/callback?code=approved&state=" + url.QueryEscape(state)
+	challenge, err := d.startSetupAuthorization(context.Background(), connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := codeSubmitEvent(t, challenge, "approved")
 	completed := make(chan error, 1)
 	var releaseOnce sync.Once
 	releaseExchange := func() { releaseOnce.Do(func() { close(flow.release) }) }
 	defer releaseExchange()
 	go func() {
-		_, completeErr := d.completeAuthorization(context.Background(), challenge.SessionID, state, "approved", callback)
+		_, completeErr := d.advanceSetupAuthorization(context.Background(), challenge.SessionID, challenge.Revision, event)
 		completed <- completeErr
 	}()
 	select {
@@ -932,7 +1000,7 @@ func TestAuthorizationCodeExchangeCannotOverwriteNewerConnectionCredential(t *te
 	if !ok || stored.Secret != "credential-generation-new" {
 		t.Fatalf("newer connection credential was overwritten: stored=%#v ok=%v", stored, ok)
 	}
-	status, err := d.authorizationStatus(challenge.SessionID)
+	status, err := d.setupAuthorizationStatus(challenge.SessionID)
 	if err != nil || status.Status != "failed" {
 		t.Fatalf("stale authorization terminal state=%#v err=%v", status, err)
 	}
@@ -961,20 +1029,30 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if err != nil {
 		t.Fatal(err)
 	}
+	base := callbackOAuthFixture{}
+	codeFlow := authorizationCodeFixture(t, base, redirectURL, true, defaultCodeExchange)
 	d := &Daemon{
 		store: s, server: api.NewServer(s),
 		providerAuthFlowIDs: map[extensions.Ref]map[string]string{provider.ProviderDefinitionRef("loopback-oauth", 1): {"oauth2": "loopback-oauth:auth"}},
-		authFlows:           map[string]provider.AuthFlow{"loopback-oauth:auth": callbackOAuthFixture{redirectURL: redirectURL}},
+		authFlows:           map[string]provider.AuthFlow{"loopback-oauth:auth": codeFlow},
 	}
-	started := d.handleIPC(context.Background(), IPCRequest{ID: "start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
-	if !started.OK {
-		t.Fatal(started.Error)
+	registry, err := provider.NewRuntimeRegistry()
+	if err != nil {
+		t.Fatal(err)
 	}
-	challenge := started.Result.(authorizationChallenge)
-	if challenge.CallbackMode != "loopback" {
+	d.setupSchemas, err = registry.FreezeCatalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := d.startSetupAuthorization(context.Background(), connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(challenge.CallbackModes) != 1 || challenge.CallbackModes[0].Mode != AuthorizationCallbackLoopback {
 		t.Fatalf("loopback redirect did not activate callback server: %#v", challenge)
 	}
-	forged := fmt.Sprintf("http://127.0.0.1:%d/attacker?error=access_denied&state=%s", port, url.QueryEscape(challenge.SessionID))
+	state := getConsentURL(t, challenge).Query().Get("state")
+	forged := fmt.Sprintf("http://127.0.0.1:%d/attacker?error=access_denied&state=%s", port, url.QueryEscape(state))
 	forgedResponse, err := http.Get(forged)
 	if err != nil {
 		t.Fatal(err)
@@ -983,10 +1061,10 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if forgedResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("forged callback target returned status %d", forgedResponse.StatusCode)
 	}
-	if status, err := d.authorizationStatus(challenge.SessionID); err != nil || status.Status != "awaiting_user" {
+	if status, err := d.setupAuthorizationStatus(challenge.SessionID); err != nil || status.Status != "awaiting_user" {
 		t.Fatalf("wrong-path error callback altered session: status=%#v err=%v", status, err)
 	}
-	callback := redirectURL + "?code=loopback-code&state=" + url.QueryEscape(challenge.SessionID)
+	callback := redirectURL + "?code=loopback-code&state=" + url.QueryEscape(state)
 	response, err := http.Get(callback)
 	if err != nil {
 		t.Fatal(err)
@@ -996,10 +1074,9 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if readErr != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Authorization response received") {
 		t.Fatalf("loopback callback response: status=%d body=%q readErr=%v", response.StatusCode, body, readErr)
 	}
-	status := d.handleIPC(context.Background(), IPCRequest{ID: "status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": challenge.SessionID}})
-	view, ok := status.Result.(authorizationStatusView)
-	if !status.OK || !ok || view.Status != "completed" || view.CallbackMode != "loopback" {
-		t.Fatalf("authorization terminal status=%#v error=%q", status.Result, status.Error)
+	view, err := d.setupAuthorizationStatus(challenge.SessionID)
+	if err != nil || view.Status != "completed" {
+		t.Fatalf("authorization terminal status=%#v error=%v", view, err)
 	}
 	stored, ok := s.ConnectionCredentialByID(connection.ID)
 	if !ok {
@@ -1015,24 +1092,23 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if remainingListeners != 0 {
 		t.Fatalf("callback listener remained after completed session: %d", remainingListeners)
 	}
-	deniedStart := d.handleIPC(context.Background(), IPCRequest{ID: "denied-start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
-	if !deniedStart.OK {
-		t.Fatalf("start denied-flow fixture: %s", deniedStart.Error)
+	deniedChallenge, err := d.startSetupAuthorization(context.Background(), connection.ID)
+	if err != nil {
+		t.Fatalf("start denied-flow fixture: %v", err)
 	}
-	deniedChallenge := deniedStart.Result.(authorizationChallenge)
-	deniedCallback := redirectURL + "?error=access_denied&state=" + url.QueryEscape(deniedChallenge.SessionID)
+	deniedState := getConsentURL(t, deniedChallenge).Query().Get("state")
+	deniedCallback := redirectURL + "?error=access_denied&state=" + url.QueryEscape(deniedState)
 	deniedResponse, err := http.Get(deniedCallback)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = deniedResponse.Body.Close()
-	if deniedResponse.StatusCode != http.StatusBadRequest {
+	if deniedResponse.StatusCode != http.StatusOK {
 		t.Fatalf("denied callback returned HTTP %d", deniedResponse.StatusCode)
 	}
-	deniedStatus := d.handleIPC(context.Background(), IPCRequest{ID: "denied-status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": deniedChallenge.SessionID}})
-	deniedView, deniedOK := deniedStatus.Result.(authorizationStatusView)
-	if !deniedStatus.OK || !deniedOK || deniedView.Status != "denied" || deniedView.Error != errOAuthAuthorizationDenied.Error() {
-		t.Fatalf("denied OAuth session not retained as a terminal state: %#v error=%q", deniedStatus.Result, deniedStatus.Error)
+	deniedView, err := d.setupAuthorizationStatus(deniedChallenge.SessionID)
+	if err != nil || deniedView.Status != "denied" {
+		t.Fatalf("denied OAuth session not retained as a terminal state: %#v error=%v", deniedView, err)
 	}
 	stored, ok = s.ConnectionCredentialByID(connection.ID)
 	if !ok {
@@ -1042,16 +1118,16 @@ func TestAuthorizationCodeLoopbackCallbackCompletesWithoutFrontendExchangeCall(t
 	if err != nil || token.AccessToken != "loopback-access" {
 		t.Fatalf("OAuth denial changed the existing credential: %#v err=%v", token, err)
 	}
-	startedExpiry := d.handleIPC(context.Background(), IPCRequest{ID: "expiry-start", Method: "auth.authorization.start", Params: map[string]any{"connectionID": connection.ID}})
-	if !startedExpiry.OK {
-		t.Fatalf("start expiry-flow fixture after denial: %s", startedExpiry.Error)
+	expiryChallenge, err := d.startSetupAuthorization(context.Background(), connection.ID)
+	if err != nil {
+		t.Fatalf("start expiry-flow fixture after denial: %v", err)
 	}
-	expiryChallenge := startedExpiry.Result.(authorizationChallenge)
-	d.expireAuthorizationSession(expiryChallenge.SessionID)
-	expiredStatus := d.handleIPC(context.Background(), IPCRequest{ID: "expired-status", Method: "auth.authorization.get", Params: map[string]any{"sessionID": expiryChallenge.SessionID}})
-	expiredView, expiredOK := expiredStatus.Result.(authorizationStatusView)
-	if !expiredStatus.OK || !expiredOK || expiredView.Status != "expired" {
-		t.Fatalf("expired OAuth session not retained as a terminal state: %#v error=%q", expiredStatus.Result, expiredStatus.Error)
+	if !d.finishSetupAuthorization(expiryChallenge.SessionID, "expired", "authorization expired") {
+		t.Fatal("could not expire authorization")
+	}
+	expiredView, err := d.setupAuthorizationStatus(expiryChallenge.SessionID)
+	if err != nil || expiredView.Status != "expired" {
+		t.Fatalf("expired OAuth session not retained as a terminal state: %#v error=%v", expiredView, err)
 	}
 	d.callbackMu.Lock()
 	remainingListeners = len(d.callbackListeners)

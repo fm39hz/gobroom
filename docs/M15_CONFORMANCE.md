@@ -650,3 +650,26 @@ passed three installed-CLI race runs, including ABA. Main control=serving=474,
 activation queue empty, bundle-v9 export/validate valid. Removed device commands
 are absent from installed help, old device RPCs are rejected and module host v3
 is rejected. No live provider or complete C4/SG2 claim follows from these cases.
+
+### Single interactive coordinator
+
+Both specialized code/device coordinators, interfaces, capability fields and
+control commands are removed; host contract v5 admits only the current contract.
+`TestAuthorizationCodeFixedLoopbackPreparesBeforeConsent`,
+`TestAuthorizationCodeAllocatedLoopbackBindsResolvedURIBeforeConsent` and
+`TestAuthorizationCodeRemoteHTTPSBeginsConsentWithoutCallbackGrant` cover
+resource ordering and manual delivery. Input/PKCE/redaction tests use exact
+typed state and exercise the real driver after preparation. The factory choice/
+explicit-mode tests retain both OAuth methods through the single interface.
+Root state/PKCE/replay, wrong input/target, denial, late result, owner/generation,
+expiry, shutdown and post-commit activation assertions now traverse setup actions.
+`AuthorizationInputRejected` is a typed safe rejection before exchange, not a
+request to kill the current challenge.
+
+`TestExternalGenericAuthorizationCodePersistsOpaqueCredential` links an
+independent provider: it registers the held URI with a fake issuer, rejects an
+early fully correlated callback, verifies the S256 challenge and exact verifier/
+URI at token exchange, rejects bad callbacks/replay, and restarts before HTTP
+inference with the unchanged opaque credential state. This is not a live provider
+or the complete fault-composition matrix. TUI input editing, leases, full SG2
+and performance/whole-product gates remain unproven.

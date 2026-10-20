@@ -402,6 +402,23 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fixtures and virtual-time long-wait tests retain the previous acceptance scope.
    Remaining: authorization-code coordinator convergence, inline TUI input editor,
    credential leases, live OAuth acceptance and full C4/SG2 composition.
+
+   Code orchestration now also converges: the daemon has one generic session
+   state and no OAuth state/verifier/redirect parser or code capability branch.
+   The old code coordinator, IPC and CLI commands are removed without aliases.
+   `NewAuthorizationCodeDriver` owns typed private state, PKCE/nonces through the
+   pinned OAuth library, exact callback/code input validation and provider exchange
+   hooks. Fixed and dynamic local callbacks prepare resources before consent;
+   remote HTTPS remains manual. A typed recoverable input rejection preserves
+   the challenge without exchanging or exposing input; fatal driver/owner/context
+   errors terminate normally. The factory offers a registered-schema method
+   choice when code/device coexist, or `setupMode` selects directly. Host v5
+   declares removal of the specialized interfaces/metadata. All clients consume
+   `auth.setup.*`; lifecycle assertions for state, replay, denial, expiry, owner/
+   generation, activation and drain remain. Independent-module opaque credential
+   exchange/restart inference is covered. Remaining C4/SG2 gates are inline TUI
+   input, credential leases, live acceptance and complete fault composition;
+   convergence alone does not complete the milestone or product.
 5. **C5 — attempt replay and operation execution (in progress):** operation
    replay declarations now reach the kernel attempt executor. Ambiguous transport
    failure and accepted-response decode/render failure stop instead of trying a

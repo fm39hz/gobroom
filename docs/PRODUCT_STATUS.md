@@ -1,6 +1,6 @@
 # Product progress
 
-Snapshot: 2026-10-18. This is a use-case-level review, not a completion
+Snapshot: 2026-10-20. This is a use-case-level review, not a completion
 percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
@@ -26,6 +26,22 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+Interactive code and device setup now share one daemon coordinator, session,
+resource/revision/CAS/activation path and CLI/TUI public action view. The old
+code coordinator/interfaces/metadata/IPC/commands and daemon PKCE/state/redirect
+fields are removed; host contract v5 rejects them. Provider strategies compose
+the pinned OAuth helpers and own protocol input/exchange. Code/device selection
+is schema-backed, with an explicit config option to avoid a selection roundtrip.
+Recoverable bad input leaves its challenge available; fatal exchange, owner and
+context errors do not. Existing code lifecycle and device/library fixtures were
+migrated, while an external module proves S256, resource-before-consent, rejected
+callback/replay and opaque credential use after restart. This closes specialized
+orchestration divergence, not all auth safety or provider acceptance. Inline TUI
+input, leases and full C4/SG2/M15 remain open, as do broader catalog UX, harness/
+modality coverage and measured latency/RSS/load gates across the product.
+
+Previous integrated milestone:
 
 Device authorization now uses the generic setup coordinator and typed action
 view throughout daemon, CLI and TUI. A reusable provider strategy owns device

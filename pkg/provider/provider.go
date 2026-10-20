@@ -72,12 +72,29 @@ type AuthModeDefinition = core.AuthModeDefinition
 type AuthModeMetadata = core.AuthModeMetadata
 type BoundAuthMode = core.BoundAuthMode
 type AuthFlow = core.AuthFlow
-type AuthorizationCodeCapability = core.AuthorizationCodeCapability
-type AuthorizationCodeFlow = core.AuthorizationCodeFlow
+type AuthorizationCodeOptions = core.AuthorizationCodeOptions
+type AuthorizationCodeRequest = core.AuthorizationCodeRequest
+type AuthorizationCodeExchange = core.AuthorizationCodeExchange
+type AuthorizationCodeInput = core.AuthorizationCodeInput
+type OAuthSetupMode = core.OAuthSetupMode
+
+const (
+	OAuthSetupAuto   = core.OAuthSetupAuto
+	OAuthSetupCode   = core.OAuthSetupCode
+	OAuthSetupDevice = core.OAuthSetupDevice
+)
+
+var AuthorizationCodeInputSchemaRef = core.AuthorizationCodeInputSchemaRef
+
+func NewAuthorizationCodeDriver(auth AuthFlow, options AuthorizationCodeOptions, authorize func(context.Context, AuthorizationCodeRequest) (string, error), exchange func(context.Context, AuthorizationCodeExchange) (CredentialState, error)) (AuthFlow, error) {
+	return core.NewAuthorizationCodeDriver(auth, options, authorize, exchange)
+}
+
 type DeviceAuthorization = core.DeviceAuthorization
 type AuthInput = core.AuthInput
 type CredentialState = core.CredentialState
 type AuthorizationFlow = core.AuthorizationFlow
+type AuthorizationInputRejected = core.AuthorizationInputRejected
 type AuthorizationState = core.AuthorizationState
 type AuthorizationActionKind = core.AuthorizationActionKind
 type AuthorizationAction = core.AuthorizationAction
@@ -118,7 +135,6 @@ func NewCredentialState(encoded string) (CredentialState, error) {
 func NewDeviceAuthorizationDriver(auth AuthFlow, begin func(context.Context, AuthInput) (DeviceAuthorization, error), await func(context.Context, DeviceAuthorization) (CredentialState, error)) (AuthFlow, error) {
 	return core.NewDeviceAuthorizationDriver(auth, begin, await)
 }
-func AuthorizationCodeEnabled(flow AuthFlow) bool { return core.AuthorizationCodeEnabled(flow) }
 func NewAuthorizationState(encoded string) (AuthorizationState, error) {
 	return core.NewAuthorizationState(encoded)
 }

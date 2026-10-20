@@ -666,8 +666,8 @@ can authorize the single allowed auth retry even when the bearer secret stays
 the same; existing operation replay and issuer restrictions still apply.
 OAuth alone owns `OAuthTokenState`, its encode/decode helpers and the existing
 `x/oauth2` exchange; those helpers/factory are public for module composition.
-The static-module host contract is version 4 for opaque-state, explicit
-credential recovery and device-to-action lifecycle convergence;
+The static-module host contract is version 5 for opaque-state, explicit
+credential recovery and a single action-based interactive lifecycle;
 old module contracts are rejected, not adapted. Interactive sessions are not
 durably resumed after restart.
 
@@ -697,17 +697,16 @@ not retained in public status or logs.
 There are at most 64 retained authorization sessions shared with code/device
 setup, at most eight actions per transition and 64 KiB private/input documents.
 A generic session cannot exceed one hour or extend its provider-declared deadline.
-The separate code-flow coordinator still caps its sessions at ten minutes. Poll intervals are
+The reusable code strategy defaults to ten minutes. Poll intervals are
 100 ms..one minute and only run for active sessions that request them; no poll
 timer exists for ordinary input-only waiting. Provider network calls are bounded,
 cancellable and never hold the coordinator mutex. Cancellation/shutdown fences
 late completion; final credential validation, owner/revision CAS and activation
 use the existing shared commit path, with principal replacement semantics.
 
-This is not full C4/SG2 closure. Device setup now uses the action engine, while
-the code-flow coordinator still needs convergence; no old action schema or
-compatibility decoder is introduced.
-Generic TUI rendering/editing, full callback resource negotiation, credential leases and
+This is not full C4/SG2 closure. Code and device setup share the action engine;
+no old coordinator/schema/command compatibility adapter is retained.
+Inline generic TUI editing, credential leases and
 the full composition/fault matrix remain unfinished. A flow can already parse a
 cookie or service-account state through `AuthFlow.Resolve`; the new seam addresses
 multi-step interaction and ownership rather than inventing a special credential
@@ -780,15 +779,25 @@ If Start fails before producing a public session handle, its failed reservation
 does not occupy the retained-session budget. Failures after a handle was issued
 retain their public terminal status through the usual bounded retention period.
 
-The daemon coordinator owns the state machine. The current authorization-code
-slice exposes `auth.authorization.start`, `auth.authorization.complete` and
-`auth.authorization.cancel` over local IPC (with headless CLI commands). Start
-returns a consent URL and opaque one-use session ID; the frontend opens the
-URL, then submits either the callback URL or code/state. The daemon holds the
-verifier in memory, enforces S256 PKCE, a ten-minute session TTL, a cap of 64
-pending sessions, one pending session per connection, bounded callback/code
-sizes, redirect-target matching and a bounded exchange deadline, state
-matching and replay rejection.
+All interactive flows use `auth.setup.start/get/advance/cancel`. The specialized
+code coordinator, code capability metadata/interfaces, daemon state/verifier/
+redirect fields and `auth.authorization.*`/`authorize-*` controls are removed.
+`NewAuthorizationCodeDriver` composes provider-owned authorize/exchange hooks.
+It uses the pinned OAuth verifier generator, opaque typed private state, exact
+registered input schema and typed denial/expiry outcomes. Provider code owns
+state/S256/redirect/query interpretation; the daemon only owns generic resources,
+revision admission, deadlines, cancellation, CAS and activation.
+
+Code input is either a callback URL or an explicit code/state object. The reusable
+strategy rejects incorrect targets, changed fixed query, unknown/duplicate fields,
+wrong state and oversized values before exchange. `AuthorizationInputRejected`
+is a safe recoverable input error: the current challenge survives and no exchange
+has run. Driver/exchange errors, cancellation and owner changes remain terminal.
+Local redirects request `PrepareCallbacks`, including fixed-port registration,
+so the actual listener is held before any consent-building/issuer-registration
+hook. The ready event carries its resolved URI; the final callback grant must
+preserve that exact authority. Remote HTTPS redirects use manual input without a
+daemon listener. Public actions never contain the verifier or resulting token.
 
 OAuth definitions may declare `deviceAuthUrl` without an authorization-code URL.
 The factory composes `NewDeviceAuthorizationDriver` over the existing OAuth
@@ -796,7 +805,10 @@ implementation. It produces public code/URL actions and private `Await` intent;
 the same `auth.setup.*` coordinator owns reservation, expiry, worker lifetime,
 CAS and activation. `auth.device.*`, its separate coordinator/session fields,
 device capability metadata and the three device-specific CLI commands are removed,
-not aliased. Code capability is preserved when a definition also supports it.
+not aliased. If both methods are configured, the OAuth factory exposes a typed
+`select_method` input action. `authOptions.oauth.setupMode` can explicitly choose
+`code` or `device` to avoid that selection step; `auto` selects the sole available
+method or offers both. Invalid/unconfigured modes fail validation, not fallback.
 
 `Await` schedules one cancellable background driver call with the session
 deadline, rather than the short interactive-RPC timeout. It inherits daemon-owned
@@ -815,20 +827,16 @@ its one-second get calls only observe progress. Input actions display their exac
 schema ref and can be submitted through the CLI; the inline TUI editor remains
 unfinished. No public status contains the API device code or private state.
 
-The CLI and TUI expose both flows. For an HTTP loopback redirect URI, the
-daemon binds only the configured loopback address, routes the callback by the
-one-use state, verifies the exact redirect target, exchanges the code and
-returns a fixed non-secret completion page. Listener references are shared
-when multiple auth definitions use the same local port and released on session
-completion, cancellation, expiry or daemon shutdown. HTTPS/non-loopback
-redirects remain manual handoffs rather than causing the daemon to bind a
-public interface. The TUI polls only the public authorization status; the
-callback code, PKCE verifier and token exchange remain daemon-owned.
+The CLI/TUI expose only the common public setup view and actions. Provider hooks
+run in the daemon and return opaque credential state; frontends never exchange
+tokens. Callback listeners are shared by actual bind address and released on
+completion, denial, cancellation, expiry or shutdown. Their HTTP page acknowledges
+receipt; public terminal status and activation are separate outcomes.
 
 The daemon coordinator owns the state machine:
 
 ```text
-created → awaiting_user | polling | exchanging
+starting → awaiting_user (input | callback | poll | await)
         → completed | failed | expired | cancelled
 ```
 

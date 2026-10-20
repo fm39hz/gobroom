@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -66,7 +65,6 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	current.status = "completed"
 	current.expiresAt = time.Now().Add(authorizationSessionRetention)
 	current.expectedCredential = store.Credential{}
-	current.verifier = ""
 	current.authFlow = nil
 	clearSetupSession(&current)
 	sessions.byID[sessionID] = current
@@ -82,11 +80,4 @@ func (d *Daemon) commitAuthorizationCredential(ctx context.Context, sessions *au
 	}
 	d.signalCredentialActivation()
 	return view, nil
-}
-
-func authorizationCommitFailure(ctx context.Context, err error) (string, string) {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return classifyAuthorizationError(ctx, err)
-	}
-	return "failed", "credential could not be applied; the connection may have changed or been removed"
 }

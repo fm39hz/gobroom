@@ -17,7 +17,7 @@ type activationAuthFixture struct {
 	issued atomic.Int32
 }
 
-func (f *activationAuthFixture) ExchangeAuthorizationCode(context.Context, string, string) (provider.CredentialState, error) {
+func (f *activationAuthFixture) issueCode(context.Context, provider.AuthorizationCodeExchange) (provider.CredentialState, error) {
 	f.issued.Add(1)
 	return provider.NewCredentialState("replacement-state-canary")
 }
@@ -25,14 +25,14 @@ func (f *activationAuthFixture) BeginDeviceAuthorization(context.Context) (provi
 	return provider.DeviceAuthorization{DeviceCode: "private-code", UserCode: "USER", VerificationURL: "https://identity.test/device", ExpiresAt: time.Now().Add(time.Minute)}, nil
 }
 func (f *activationAuthFixture) WaitForDeviceAuthorization(context.Context, provider.DeviceAuthorization) (provider.CredentialState, error) {
-	return f.ExchangeAuthorizationCode(context.Background(), "", "")
+	return f.issueCode(context.Background(), provider.AuthorizationCodeExchange{})
 }
 
 func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *testing.T) {
 	for _, kind := range []string{"code", "device"} {
 		for _, failure := range []string{"routing_reset", "version_persist", "serve_before", "serve_after"} {
 			t.Run(kind+"/"+failure, func(t *testing.T) {
-				flow := &activationAuthFixture{callbackOAuthFixture: callbackOAuthFixture{redirectURL: "https://client.test/callback"}}
+				flow := &activationAuthFixture{}
 				authFlow := provider.AuthFlow(flow)
 				if kind == "device" {
 					authFlow = deviceAuthorizationDriver(t, flow,
@@ -41,6 +41,8 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 						},
 						flow.WaitForDeviceAuthorization,
 					)
+				} else {
+					authFlow = authorizationCodeFixture(t, flow, "https://client.test/callback", false, flow.issueCode)
 				}
 				d, id := cancellationAuthDaemon(t, authFlow)
 				initialVersion := d.server.Control().Version()
@@ -67,14 +69,14 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 				}
 				var sessionID string
 				if kind == "code" {
-					challenge, err := d.startAuthorization(id)
+					challenge, err := d.startSetupAuthorization(context.Background(), id)
 					if err != nil {
 						t.Fatal(err)
 					}
 					sessionID = challenge.SessionID
-					result, err := d.completeAuthorization(context.Background(), sessionID, sessionID, "approved", "")
-					if err != nil || !result.Activation.CredentialCommitted {
-						t.Fatalf("postcommit authorization=%+v err=%v", result, err)
+					status, err := d.advanceSetupAuthorization(context.Background(), sessionID, challenge.Revision, codeSubmitEvent(t, challenge, "approved"))
+					if err != nil || status.Activation == nil || !status.Activation.CredentialCommitted {
+						t.Fatalf("postcommit authorization=%+v err=%v", status, err)
 					}
 				} else {
 					challenge, err := d.startSetupAuthorization(context.Background(), id)
@@ -89,7 +91,7 @@ func TestAuthorizationCommitReportsActivationFailureWithoutRepeatingExchange(t *
 				get := func() *CredentialActivationView {
 					t.Helper()
 					if kind == "code" {
-						v, err := d.authorizationStatus(sessionID)
+						v, err := d.setupAuthorizationStatus(sessionID)
 						if err != nil || v.Status != "completed" {
 							t.Fatalf("code status=%+v %v", v, err)
 						}

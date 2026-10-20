@@ -34,20 +34,3 @@ func TestLoopbackCallbackAddressRejectsNonLocalAndInvalidRedirects(t *testing.T)
 		})
 	}
 }
-
-func TestOAuthCallbackTargetMatchesExactRegisteredPathAndQuery(t *testing.T) {
-	expected := "http://127.0.0.1:12345/oauth/callback?tenant=local"
-	if !sameOAuthCallbackTarget(expected, expected+"&code=abc&state=xyz") {
-		t.Fatal("registered callback target with OAuth response parameters did not match")
-	}
-	for _, actual := range []string{
-		"http://attacker.test:12345/oauth/callback?tenant=local&code=abc&state=xyz",
-		"http://127.0.0.1:12345/other?tenant=local&code=abc&state=xyz",
-		"http://127.0.0.1:12345/oauth/callback?tenant=other&code=abc&state=xyz",
-		"http://127.0.0.1:12345/oauth/callback?tenant=local&code=abc&state=xyz&next=https://attacker.test",
-	} {
-		if sameOAuthCallbackTarget(expected, actual) {
-			t.Fatalf("unbound callback target accepted: %s", actual)
-		}
-	}
-}

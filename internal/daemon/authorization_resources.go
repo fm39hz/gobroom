@@ -49,7 +49,7 @@ func (d *Daemon) prepareSetupCallbackResources(ctx context.Context, id string, t
 		if err := d.validateSetupTransition(transition); err != nil {
 			return provider.AuthorizationTransition{}, err
 		}
-		needs := false
+		needs := transition.PrepareCallbacks
 		for _, callback := range transition.Callbacks {
 			needs = needs || callback.NeedsAllocation()
 		}
@@ -62,7 +62,7 @@ func (d *Daemon) prepareSetupCallbackResources(ctx context.Context, id string, t
 		sessions := d.authorizationSessions()
 		sessions.mu.Lock()
 		session, exists := sessions.byID[id]
-		if sessions.closed || !exists || session.kind != "actions" || !sessions.inFlight[id] || (session.status != "starting" && session.status != "awaiting_user") || ctx.Err() != nil {
+		if sessions.closed || !exists || !sessions.inFlight[id] || (session.status != "starting" && session.status != "awaiting_user") || ctx.Err() != nil {
 			sessions.mu.Unlock()
 			return provider.AuthorizationTransition{}, context.Canceled
 		}

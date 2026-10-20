@@ -92,7 +92,7 @@ func TestGenericAuthorizationAwaitCancellationFencesLateResult(t *testing.T) {
 
 func TestGenericAuthorizationRemovedDeviceRPCsAreNotAliased(t *testing.T) {
 	d := &Daemon{}
-	for _, method := range []string{"auth.device.start", "auth.device.get", "auth.device.cancel"} {
+	for _, method := range []string{"auth.device.start", "auth.device.get", "auth.device.cancel", "auth.authorization.start", "auth.authorization.get", "auth.authorization.complete", "auth.authorization.cancel"} {
 		response := d.handleIPC(context.Background(), IPCRequest{Method: method})
 		if response.OK || response.Error != "unknown method: "+method {
 			t.Fatalf("removed device RPC still resolves: %+v", response)

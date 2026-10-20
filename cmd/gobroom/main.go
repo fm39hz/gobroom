@@ -126,7 +126,7 @@ func resourceCommands() []*cobra.Command {
 	providers.AddCommand(refresh)
 
 	connections := &cobra.Command{Use: "connections", Short: "manage provider connections"}
-	var nodeID, connID, connName, credentialType, secret, authorizationSessionID, callbackURL string
+	var nodeID, connID, connName, credentialType, secret string
 	var priority int
 	connections.AddCommand(listCommand("list", "connections.list", map[string]*string{"nodeID": &nodeID}))
 	var activationLimit int
@@ -215,27 +215,6 @@ func resourceCommands() []*cobra.Command {
 	testOperation.Flags().StringVar(&probePayloadFile, "payload-file", "", "operation input JSON file or - for stdin; request may incur provider cost")
 	testOperation.Flags().StringVar(&probeArtifactsFile, "artifacts-file", "", "JSON array of local artifact files or - for stdin")
 	connections.AddCommand(testOperation)
-	authorizeStart := &cobra.Command{Use: "authorize-start", Short: "begin daemon-owned OAuth authorization", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
-		return invoke("auth.authorization.start", map[string]any{"connectionID": connID})
-	}}
-	authorizeStart.Flags().StringVar(&connID, "connection-id", "", "enabled OAuth connection ID")
-	connections.AddCommand(authorizeStart)
-	authorizeGet := &cobra.Command{Use: "authorize-get", Short: "show authorization-code setup status", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
-		return invoke("auth.authorization.get", map[string]any{"sessionID": authorizationSessionID})
-	}}
-	authorizeGet.Flags().StringVar(&authorizationSessionID, "session-id", "", "authorization session ID")
-	connections.AddCommand(authorizeGet)
-	authorizeComplete := &cobra.Command{Use: "authorize-complete", Short: "complete OAuth authorization with the callback URL", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
-		return invoke("auth.authorization.complete", map[string]any{"sessionID": authorizationSessionID, "callbackURL": callbackURL})
-	}}
-	authorizeComplete.Flags().StringVar(&authorizationSessionID, "session-id", "", "session ID returned by authorize-start")
-	authorizeComplete.Flags().StringVar(&callbackURL, "callback-url", "", "full URL received after provider consent")
-	connections.AddCommand(authorizeComplete)
-	authorizeCancel := &cobra.Command{Use: "authorize-cancel", Short: "cancel a pending OAuth authorization", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
-		return invoke("auth.authorization.cancel", map[string]any{"sessionID": authorizationSessionID})
-	}}
-	authorizeCancel.Flags().StringVar(&authorizationSessionID, "session-id", "", "authorization session ID")
-	connections.AddCommand(authorizeCancel)
 	connections.AddCommand(setupCommand())
 	previewConnModels := &cobra.Command{Use: "preview-models", Short: "review one connection's full model catalog without importing", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		return invoke("connections.preview_models", map[string]any{"connectionID": connID})
