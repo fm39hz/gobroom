@@ -348,6 +348,14 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    TUI fresh-model/handoff each passed three race runs; main control=serving=481,
    bundle-v9 valid. The broader C4/SG2 transport/fault gate remains open.
 
+   HTTPS ingress checkpoint `17def5b` adds opt-in public-origin/private-loopback
+   receiver policy on the same grant engine; host-v6 code drivers require
+   readiness before consent. Full tests/vet/conformance and repeated root/TLS
+   races passed. Installed CLI HTTPS, loopback and device verticals each passed
+   three race runs; main control=serving=482, bundle-v9 valid. Main ingress was
+   not enabled. Remaining C4/SG2 composition/fault and live-deployment gates are
+   tracked separately from this deterministic receiver proof.
+
    Auth-owner fencing is implemented: state/revision/exact node-definition owner
    are read together, pinned route mode/auth bindings are checked before the
    driver, and final SQL CAS checks ownership. Definition ID/version changes

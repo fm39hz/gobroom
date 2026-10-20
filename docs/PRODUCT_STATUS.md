@@ -51,6 +51,16 @@ runs with certificate verification enabled. Installed CLI acceptance follows
 installation; this is fake-provider evidence, not public deployment or broad
 live OAuth acceptance.
 
+Installed checkpoint `17def5b`: `make install-all` completed and restarted the
+user service. HTTPS-proxy, loopback-code and device-setup public-module verticals
+passed three additional race runs with the installed CLI. The TLS fixture used
+certificate verification, PKCE exchange, activation, replay rejection and
+API-key-protected inference after restart. Main daemon status was `ok`,
+control=serving=482; bundle-v9 export/validate was valid. Installed daemon help
+contains both callback flags, but the running service ExecStart supplies neither,
+so its callback ingress remains disabled. No real-provider requests or user
+configuration reset were needed.
+
 Previous integrated milestone:
 
 Fresh frontends can reattach by connection using explicit setup `resume` mode.

@@ -869,3 +869,11 @@ uses the new credential before and after restart. Callback delivery needs no
 data/admin bearer token and does not expose those muxes. This proves the
 declared local TLS-termination deployment boundary, not native certificate
 management, arbitrary remote proxy trust or full C4/SG2/M15 closure.
+
+Installed checkpoint `17def5b`: full regression/vet/conformance and three focused
+root/external race runs passed after the origin comparison correction. After
+`make install-all`, HTTPS-proxy, loopback-code and device setup each passed three
+installed-CLI race runs. Main control=serving=482 and bundle-v9 validation passed.
+The binary exposes `--callback-origin`/`--callback-addr`; service ExecStart omits
+them, preserving default-disabled ingress. This is deterministic TLS-termination
+composition evidence, not certificate deployment or broad live OAuth acceptance.
