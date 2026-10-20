@@ -36,7 +36,7 @@ func TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges(t *testing.T) {
 	observed := &refreshContextAdapter{issuerReplayAdapter: first}
 	k.Adapters[first.id] = observed
 	refreshCalls := 0
-	k.RefreshCredential = func(_ context.Context, _ Route, selected Credential) (Credential, error) {
+	setTestCredentialRefresher(k, func(_ context.Context, _ Route, selected Credential) (Credential, error) {
 		refreshCalls++
 		if selected.Secret != "same-access-token" {
 			t.Fatalf("selected credential secret=%q", selected.Secret)
@@ -51,7 +51,7 @@ func TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges(t *testing.T) {
 			},
 			AuthContext: AuthContext{"account": "refreshed"},
 		}, nil
-	}
+	})
 
 	err := k.Execute(context.Background(), replayKeyRequest("refresh-context-key"), Credential{
 		ConnectionID: "conn-a",

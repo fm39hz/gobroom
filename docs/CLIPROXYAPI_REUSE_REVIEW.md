@@ -45,6 +45,18 @@ it does not copy the scheduler, import the auth conductor or add a job branch.
 
 ### Request path and execution
 
+Dispatch-authority follow-up: `sdk/cliproxy/auth/conductor_execution.go` selects
+an auth snapshot before executor preparation; the reviewed dispatch path does
+not reread its revision immediately before sending. `conductor_refresh.go`
+serializes refresh by account and checks registration epochs, while
+`conductor_cooldown.go` fences stale execution results. These solve publication
+and feedback problems, not authorization of an already prepared request.
+Gobroom uses that distinction for attempt-scoped leases with a final secret-free
+SQLite metadata read. Its existing CAS, standard `sync.Mutex`, context and time
+primitives cover the mechanism; OAuth remains delegated to `x/oauth2`. No new
+token cache, conductor or custom OAuth implementation is introduced. This does
+not assert atomic revocation against a network dispatch already in progress.
+
 Callback ownership follow-up: `internal/auth/claude/oauth_server.go` and the
 Codex equivalent probe a port before starting a listener, while Devin's
 `internal/auth/devin/devin_auth.go` retains a directly bound loopback listener.

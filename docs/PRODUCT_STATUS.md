@@ -9,7 +9,7 @@ milestone status, [use cases](USE_CASES.md) own product acceptance, and
 
 | User journey | What is demonstrated | What is not yet closed |
 |---|---|---|
-| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device lifecycle and generic action-based setup have fixtures; installed CLI actions complete headless setup and persist usable credentials. | Broad live-provider auth acceptance, code/device/callback convergence onto the action engine, generic TUI action editing, credential leases and the full lifecycle race matrix. |
+| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device setup shares the action coordinator; installed CLI actions complete headless setup and persist usable credentials. Inference attempt credentials use scoped expiring leases and live revision fences. | Broad live-provider auth acceptance, generic TUI action editing, discovery/quota outbound lease convergence and the full lifecycle race matrix. |
 | Turn sources into Physical models | Typed identity/revision/fidelity, source evidence, capability/limit projections, conservative grouping and model policies. | Whole-catalog review/split UX, stronger identity evidence and convenient capability comparison across sources. |
 | Build role Combos and expose selected names | Ordered typed members, registry-backed strategy/options, source-prefix filtering, exposure and `/v1/models` have onboarding and editor acceptance fixtures. | Complete interactive/headless acceptance for every management action, including Physical exposure through the UI. |
 | Consume the provider endpoint | Chat has fake verticals and a limited live acceptance history. Responses/Anthropic/Gemini, tools, JSON/SSE and committed-stream fallback have many deterministic IR fixtures. | The complete cross-protocol, reasoning/signature/history/continuity/modality matrix and live harness coverage. A supported vertical is not universal wire compatibility. |
@@ -26,6 +26,29 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+Inference now owns an opaque credential lease for each attempt. Exact
+owner/principal/route/operation scope and bounded expiry are checked locally;
+the final dispatch fence reads live binding metadata without reading secrets.
+Refresh issues a new revision lease and releases the old one, while the existing
+effect/replay/idempotency gates remain authoritative. Release is idempotent on
+normal terminal paths; expiry does not interrupt accepted responses. An external
+module fixture replaces a credential over the control plane while its codec is
+blocked in preparation, verifies zero upstream requests, then succeeds with the
+new credential. Local admission/fence errors do not become upstream health
+evidence. No custom OAuth implementation or third-party lease service was added.
+
+This closes the inference-attempt slice, not all C4/SG2. Discovery, quota and
+other outbound jobs still need lease convergence; inline TUI auth action editing,
+broader catalog UX, protocol/harness coverage and RSS/latency/load remain open.
+
+Verification: full root regression and vet passed; architectural conformance
+including the independent module passed. Focused kernel/store/daemon lease and
+concurrent-refresh race tests passed three runs; external dispatch-fence and
+principal-renewal continuity fixtures also passed three race runs. Installed-CLI
+acceptance is recorded separately after installation.
+
+Previous integrated milestone:
 
 Interactive code and device setup now share one daemon coordinator, session,
 resource/revision/CAS/activation path and CLI/TUI public action view. The old

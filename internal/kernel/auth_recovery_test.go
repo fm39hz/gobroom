@@ -20,7 +20,7 @@ func TestCredentialRecoveryDoesNotInferHintsFromHTTPStatus(t *testing.T) {
 		second := &issuerReplayAdapter{id: "issuer-b-adapter"}
 		k := newReplayKeyKernelWithRecovery(t, first, second, CredentialRecoveryRefresh)
 		calls := 0
-		k.RefreshCredential = func(context.Context, Route, Credential) (Credential, error) { calls++; return Credential{}, nil }
+		setTestCredentialRefresher(k, func(context.Context, Route, Credential) (Credential, error) { calls++; return Credential{}, nil })
 		_ = k.Execute(context.Background(), replayKeyRequest("no-hint"), Credential{Secret: "expired"}, httptest.NewRecorder())
 		if calls != 0 {
 			t.Fatalf("HTTP status %d manufactured a credential recovery hint", status)
@@ -34,11 +34,11 @@ func TestCredentialRecoveryAllowsAmbiguousEffectOnlyWithScopedReplayProof(t *tes
 	k := newReplayKernelWithRecoverySafety(t, first, second, CredentialRecoveryRefresh, operations.ReplayWithKey)
 	k.Adapters[first.id] = &recoveryOutcomeAdapter{issuerReplayAdapter: first, outcome: ClassifiedOutcome{Cause: CauseAuth, Recovery: CredentialRecoveryRefresh, Effect: EffectUnknown, Scope: ScopeConnection, Retry: RetryNever}}
 	calls := 0
-	k.RefreshCredential = func(_ context.Context, _ Route, selected Credential) (Credential, error) {
+	setTestCredentialRefresher(k, func(_ context.Context, _ Route, selected Credential) (Credential, error) {
 		calls++
 		selected.Secret = "replacement"
 		return selected, nil
-	}
+	})
 	if err := k.Execute(context.Background(), replayKeyRequest("scoped-proof"), Credential{ConnectionID: "conn-a", Secret: "expired"}, httptest.NewRecorder()); err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +81,10 @@ func TestCredentialRecoveryRequiresAuthClassificationAndRoutePolicy(t *testing.T
 			}}
 			k.Adapters[first.id] = classified
 			refreshCalls := 0
-			k.RefreshCredential = func(_ context.Context, _ Route, selected Credential) (Credential, error) {
+			setTestCredentialRefresher(k, func(_ context.Context, _ Route, selected Credential) (Credential, error) {
 				refreshCalls++
 				return Credential{ConnectionID: selected.ConnectionID, Type: selected.Type, Secret: "refreshed"}, nil
-			}
+			})
 			_ = k.Execute(context.Background(), replayKeyRequest("credential-recovery-"+test.name), Credential{ConnectionID: "conn-a", Type: "oauth2", Secret: "expired"}, httptest.NewRecorder())
 			if refreshCalls != test.want {
 				t.Fatalf("refresh calls=%d, want %d", refreshCalls, test.want)
@@ -106,10 +106,10 @@ func TestCredentialRecoveryUnknownHintAndUnknownRoutePolicy(t *testing.T) {
 			Scope: ScopeConnection, Retry: RetryNever, Confidence: 1,
 		}}
 		refreshCalls := 0
-		k.RefreshCredential = func(_ context.Context, _ Route, credential Credential) (Credential, error) {
+		setTestCredentialRefresher(k, func(_ context.Context, _ Route, credential Credential) (Credential, error) {
 			refreshCalls++
 			return credential, nil
-		}
+		})
 		_ = k.Execute(context.Background(), replayKeyRequest("unknown-recovery-hint"), Credential{ConnectionID: "conn-a", Type: "oauth2", Secret: "expired"}, httptest.NewRecorder())
 		if refreshCalls != 0 {
 			t.Fatalf("unknown recovery hint triggered %d refreshes", refreshCalls)
@@ -149,10 +149,10 @@ func TestCredentialRecoveryStillRequiresReplaySafeEffect(t *testing.T) {
 				Scope: ScopeConnection, Retry: RetryNever, Confidence: 1,
 			}}
 			refreshCalls := 0
-			k.RefreshCredential = func(_ context.Context, _ Route, selected Credential) (Credential, error) {
+			setTestCredentialRefresher(k, func(_ context.Context, _ Route, selected Credential) (Credential, error) {
 				refreshCalls++
 				return Credential{ConnectionID: selected.ConnectionID, Type: selected.Type, Secret: "refreshed"}, nil
-			}
+			})
 			request := replayKeyRequest("effect-" + test.name)
 			if test.effect == EffectUnknown {
 				request = replayKeyRequest("")

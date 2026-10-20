@@ -107,10 +107,10 @@ func TestReplayWithKeyExpiresBeforeAnotherDispatch(t *testing.T) {
 						Cause: CauseAuth, Recovery: CredentialRecoveryRefresh, Effect: EffectRejected,
 						Scope: ScopeConnection, Retry: RetryNever, Confidence: 1,
 					}}
-					k.RefreshCredential = func(_ context.Context, _ Route, _ Credential) (Credential, error) {
+					setTestCredentialRefresher(k, func(_ context.Context, _ Route, _ Credential) (Credential, error) {
 						time.Sleep(time.Minute)
 						return Credential{Secret: "refreshed"}, nil
-					}
+					})
 				}
 				err := k.Execute(context.Background(), replayKeyRequest("expiry-key"), Credential{Secret: "initial"}, httptest.NewRecorder())
 				var suppressed *ReplaySuppressedError

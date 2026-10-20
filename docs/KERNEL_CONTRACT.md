@@ -52,7 +52,9 @@ semantic invocation
   -> ask each node's strategy to order eligible members
   -> recursively retain the selected member's policy boundary
   -> acquire route credential lease
-  -> provider encode + endpoint resolution + auth apply/sign + transport
+  -> provider encode + endpoint resolution + auth apply/sign
+  -> validate lease scope/expiry and live credential revision
+  -> transport dispatch
   -> provider decode into semantic response events
   -> optional response transform and client rendering
   -> classify attempt evidence
@@ -99,6 +101,36 @@ client writer. The renderer controls response commitment; the kernel may retry
 only while that renderer has not emitted client bytes. See the
 [solution architecture](SOLUTION_ARCHITECTURE.md) for the full compatibility
 and fidelity contract.
+
+## Attempt credential authority
+
+Each admitted attempt owns a bounded `CredentialLease`. Its exact scope binds
+route, provider node/definition contract, connection/mode/flow, base URL, model,
+protocol, stable principal and operation contract. The issuer's credential
+revision remains private. `Credential` is transient codec/signing material, not
+authority to dispatch; borrowed headers/context are copied. An installed issuer
+cannot be bypassed by supplying raw caller material.
+
+The daemon resolves through its selected auth primitive and issues only if that
+material still matches the live durable owner/revision. The kernel checks scope,
+expiry, cancellation and the live revision fence after preparation and before
+every dispatch, including replay. This is a last-boundary check, not an atomic
+transaction with an external server. No scheduler/lease lock spans network I/O.
+Local fence rejection does not become an upstream health failure or silently
+fall back after preparation. Successful refresh replaces and releases the old
+lease without relaxing effect/idempotency/replay gates. Attempt completion and
+every normal error path release authority idempotently. Expiry prevents a new
+dispatch; it does not abort a response already accepted by upstream.
+
+Leases last at most one hour, capped by the caller deadline and credential
+expiry. Expired renewable material can be refreshed before admission; auth
+modes without refresh fail locally. Scope/lease formatting and JSON are
+redacted. Dropping references does not claim to erase immutable Go strings or
+copies retained by trusted in-process codecs.
+
+This integration covers kernel inference attempts. Discovery, quota reads and
+other daemon-owned outbound jobs still require convergence before the whole
+credential-lease architecture gate is closed.
 
 ## Runtime events
 

@@ -287,11 +287,14 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    the subsequent poll. Per-connection waits use context-aware `x/sync/semaphore`;
    Resolve/Refresh propagate caller/daemon cancellation, and concurrent refresh
    callers share one persisted replacement. Public optional auth types have an
-   external-module device-race fixture. Remaining: generic action/client
-   convergence, credential leases, broader lifecycle races and HTTPS/non-loopback
+   external-module device-race fixture. Code/device orchestration now converges
+   on the generic action engine. Kernel inference attempts use opaque scoped
+   credential leases, with a live metadata fence after preparation/before each
+   dispatch, refresh replacement and release. Remaining: generic TUI action
+   editing, discovery/quota outbound lease convergence, broader lifecycle races and HTTPS/non-loopback
    callback integrations. Prepared request signing now has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations
-   and opaque leases remain auth-driver work. Validate full
+   remain auth-driver work. Validate full
    lifecycle fixtures, not token-only stubs.
 
    Auth-owner fencing is implemented: state/revision/exact node-definition owner

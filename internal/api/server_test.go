@@ -715,12 +715,12 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 	defer k.Close()
 	binding := bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef("openai-compatible-chat", 1), provider.OperationChat)]
 	k.Adapters[binding.AdapterID] = binding.Adapter
-	k.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
+	k.AcquireCredential = func(_ context.Context, route kernel.Route) (*kernel.CredentialLease, error) {
 		credential, ok := s.ConnectionCredentialByID(route.CredentialID)
 		if !ok {
-			return kernel.Credential{}, fmt.Errorf("credential missing")
+			return nil, fmt.Errorf("credential missing")
 		}
-		return kernel.Credential{Secret: credential.Secret}, nil
+		return kernel.NewCredentialLease(kernel.CredentialLeaseScopeForRoute(route), kernel.Credential{ConnectionID: route.CredentialID, Type: route.CredentialType, Secret: credential.Secret}, time.Now().Add(time.Minute), nil, nil)
 	}
 	server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return k.Execute(ctx, request, kernel.Credential{}, writer)
@@ -796,12 +796,12 @@ INSERT INTO physical_model_sources(physical_name,position,route_id,fidelity) VAL
 	defer k.Close()
 	binding := bindings[provider.RuntimeBindingKey(provider.ProviderDefinitionRef("anthropic-messages", 1), provider.OperationMessages)]
 	k.Adapters[binding.AdapterID] = binding.Adapter
-	k.ResolveCredential = func(_ context.Context, route kernel.Route) (kernel.Credential, error) {
+	k.AcquireCredential = func(_ context.Context, route kernel.Route) (*kernel.CredentialLease, error) {
 		credential, ok := s.ConnectionCredentialByID(route.CredentialID)
 		if !ok {
-			return kernel.Credential{}, fmt.Errorf("credential missing")
+			return nil, fmt.Errorf("credential missing")
 		}
-		return kernel.Credential{Secret: credential.Secret}, nil
+		return kernel.NewCredentialLease(kernel.CredentialLeaseScopeForRoute(route), kernel.Credential{ConnectionID: route.CredentialID, Type: route.CredentialType, Secret: credential.Secret}, time.Now().Add(time.Minute), nil, nil)
 	}
 	server.SetExecutor(func(ctx context.Context, request normalize.Request, writer http.ResponseWriter) error {
 		return k.Execute(ctx, request, kernel.Credential{}, writer)

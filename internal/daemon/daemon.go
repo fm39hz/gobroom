@@ -418,8 +418,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 			Enabled: d.config.QuotaPolling,
 		}).Run(ctx)
 	}()
-	d.kernel.ResolveCredential = d.resolveCredential
-	d.kernel.RefreshCredential = d.refreshCredential
+	d.kernel.AcquireCredential = d.acquireCredentialLease
+	d.kernel.RefreshCredentialLease = d.refreshCredentialLease
 	healthQueue := runtimehealth.NewHealthObservationQueue(8192, func(observation runtimehealth.HealthObservation) error {
 		return d.persistHealthObservation(observation)
 	}, func(observation runtimehealth.HealthObservation, err error) {

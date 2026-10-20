@@ -84,6 +84,12 @@ the independent external-provider fixture are tidied against that graph.
 
 ## Keep optional
 
+Credential leases use standard `context`, `sync`, `time`, `net/http.Header.Clone`
+and the existing SQLite/CAS boundary. No third-party lease service or token
+cache is needed for an in-process attempt authority. OAuth protocol exchanges,
+PKCE and polling remain the pinned `x/oauth2` implementation; provider-specific
+durable state continues to use typed serialization, not kernel token parsing.
+
 | Area | Library/tool | Version checked | Decision |
 |---|---|---:|---|
 | Structured logging | `log/slog` | stdlib | prefer stdlib; no zerolog dependency initially |

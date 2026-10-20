@@ -23,21 +23,21 @@ import (
 )
 
 type Kernel struct {
-	Snapshots          *SnapshotStore
-	Scheduler          *Scheduler
-	Adapters           map[string]ProviderAdapter
-	ErrorClassifiers   map[extensions.Ref]ErrorClassifier
-	UsageSources       map[extensions.Ref]UsageEnricher
-	SessionStores      map[extensions.Ref]SessionStore
-	Transforms         *RequestTransformRegistry
-	ResponseTransforms *ResponseTransformRegistry
-	Features           *FeatureRegistry
-	Operations         *operations.Snapshot
-	ArtifactStore      *artifacts.Store
-	Events             chan UsageEvent
-	ResolveCredential  CredentialResolver
-	RefreshCredential  CredentialRefresher
-	closed             atomic.Bool
+	Snapshots              *SnapshotStore
+	Scheduler              *Scheduler
+	Adapters               map[string]ProviderAdapter
+	ErrorClassifiers       map[extensions.Ref]ErrorClassifier
+	UsageSources           map[extensions.Ref]UsageEnricher
+	SessionStores          map[extensions.Ref]SessionStore
+	Transforms             *RequestTransformRegistry
+	ResponseTransforms     *ResponseTransformRegistry
+	Features               *FeatureRegistry
+	Operations             *operations.Snapshot
+	ArtifactStore          *artifacts.Store
+	Events                 chan UsageEvent
+	AcquireCredential      CredentialLeaseResolver
+	RefreshCredentialLease CredentialLeaseRefresher
+	closed                 atomic.Bool
 }
 
 type FeedbackGate interface {
@@ -455,29 +455,28 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				failureClass = ErrorCooldown
 				continue
 			}
-			selectedCredential := credential
-			var err error
-			if selectedCredential.Secret == "" && k.ResolveCredential != nil {
-				selectedCredential, err = k.ResolveCredential(ctx, candidate)
-				if err != nil {
+			selectedLease, err := k.acquireAttemptCredential(ctx, candidate, credential)
+			candidateReleased := false
+			releaseCandidate := func() {
+				if !candidateReleased {
+					selectedLease.Release()
 					k.Scheduler.Release(candidate)
-					failureClass, memberErr = ErrorAuth, err
-					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-						feedback.MarkFailure(candidate, ErrorAuth, err)
-					}
-					continue
+					candidateReleased = true
 				}
+			}
+			if err != nil {
+				releaseCandidate()
+				// Local authority failures are not observations of upstream health.
+				failureClass, memberErr = ErrorAuth, err
+				continue
+			}
+			selectedCredential, err := selectedLease.Borrow(ctx, CredentialLeaseScopeForRoute(candidate))
+			if err != nil {
+				releaseCandidate()
+				return err
 			}
 			if selectedCredential.Generation != "" {
 				candidate.HealthGeneration.Credential = selectedCredential.Generation
-			}
-			if err := selectedCredential.ValidateRuntimeContext(); err != nil {
-				k.Scheduler.Release(candidate)
-				failureClass, memberErr = ErrorAuth, err
-				if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
-					feedback.MarkFailure(candidate, ErrorAuth, err)
-				}
-				continue
 			}
 			attemptCtx := ctx
 			if k.ArtifactStore != nil {
@@ -489,7 +488,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				clientOwner := extensions.ArtifactOwner{Domain: "harness", ClientContract: string(candidateRequest.SourceFormat), SessionID: requestSessionKey(candidateRequest)}
 				responseScope, err = artifacts.NewResponseScope(k.ArtifactStore, k.Operations.ExtensionCatalog(), receiver, clientOwner, operationRef, artifactOutputs, resourceBounds.MaxOutputBytes)
 				if err != nil {
-					k.Scheduler.Release(candidate)
+					releaseCandidate()
 					failureClass, memberErr = ErrorCapability, err
 					continue
 				}
@@ -521,7 +520,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if body, ok := upstream.Body.(io.Closer); ok {
 					_ = body.Close()
 				}
-				k.Scheduler.Release(candidate)
+				releaseCandidate()
 				if idempotencyRetried {
 					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: prepareErr}
 				}
@@ -545,11 +544,14 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if dispatchErr == nil && idempotencyRetried && !idempotency.permitsReplay(firstDispatch, time.Now()) {
 				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("provider idempotency retention window expired before replay dispatch")}
 			}
+			if dispatchErr == nil {
+				dispatchErr = selectedLease.ValidateForDispatch(attemptCtx, CredentialLeaseScopeForRoute(candidate))
+			}
 			if dispatchErr != nil {
 				if body, ok := upstream.Body.(io.Closer); ok {
 					_ = body.Close()
 				}
-				k.Scheduler.Release(candidate)
+				releaseCandidate()
 				return dispatchErr
 			}
 			if idempotencyKey != "" && firstDispatch.IsZero() {
@@ -563,7 +565,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 							observer.ObserveOutcome(candidate, ClassifiedOutcome{Class: ErrorCooldown, Cause: CauseTimeout, Effect: EffectUnknown, Scope: ScopeOperation, Retry: RetryAfter, Confidence: 1, Evidence: []EvidenceSource{EvidenceInferred}, Message: ctx.Err().Error()})
 						}
 					}
-					k.Scheduler.Release(candidate)
+					releaseCandidate()
 					return ctx.Err()
 				}
 				if idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) {
@@ -579,7 +581,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				} else if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
 					feedback.MarkFailure(candidate, kernelErrorClass(err), err)
 				}
-				k.Scheduler.Release(candidate)
+				releaseCandidate()
 				return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: err}
 			}
 			if response.Status >= 400 {
@@ -605,13 +607,19 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					goto retryUpstream
 				}
 				canRefresh := outcome.Effect != EffectAccepted && (canReplayAfterDispatch(replaySafety, outcome.Effect) || (replaySafety == operations.ReplayWithKey && idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now())))
-				if outcome.Cause == CauseAuth && outcome.Scope != ScopeRequest && outcome.Recovery == CredentialRecoveryRefresh && candidate.CredentialRecovery == CredentialRecoveryRefresh && !refreshed && k.RefreshCredential != nil && canRefresh {
-					refreshedCredential, refreshErr := k.RefreshCredential(ctx, candidate, selectedCredential)
+				if outcome.Cause == CauseAuth && outcome.Scope != ScopeRequest && outcome.Recovery == CredentialRecoveryRefresh && candidate.CredentialRecovery == CredentialRecoveryRefresh && !refreshed && k.RefreshCredentialLease != nil && canRefresh {
+					refreshedLease, refreshErr := k.RefreshCredentialLease(ctx, candidate, selectedLease)
+					var refreshedCredential Credential
+					if refreshErr == nil {
+						refreshedCredential, refreshErr = refreshedLease.Borrow(ctx, CredentialLeaseScopeForRoute(candidate))
+					}
 					if refreshErr == nil && refreshedCredential.ConnectionID == selectedCredential.ConnectionID && refreshedCredential.Type == selectedCredential.Type && refreshedCredential.ValidateRuntimeContext() == nil && !reflect.DeepEqual(refreshedCredential, selectedCredential) {
 						if body, ok := upstream.Body.(io.Closer); ok {
 							_ = body.Close()
 						}
 						_ = response.Body.Close()
+						selectedLease.Release()
+						selectedLease = refreshedLease
 						selectedCredential = refreshedCredential
 						if selectedCredential.Generation != "" {
 							candidate.HealthGeneration.Credential = selectedCredential.Generation
@@ -621,6 +629,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 							idempotencyRetried = true
 						}
 						goto retryUpstream
+					}
+					if refreshedLease != selectedLease {
+						refreshedLease.Release()
 					}
 				}
 				if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
@@ -634,7 +645,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						feedback.MarkFailureAfter(candidate, class, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))), retryAfter)
 					}
 				}
-				k.Scheduler.Release(candidate)
+				releaseCandidate()
 				_ = response.Body.Close()
 				if !canReplayAfterDispatch(replaySafety, outcome.Effect) {
 					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: outcome.Effect, Cause: memberErr}
@@ -757,13 +768,6 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					return updated, err
 				}
 			}
-			attemptReleased := false
-			releaseAttempt := func() {
-				if !attemptReleased {
-					k.Scheduler.Release(candidate)
-					attemptReleased = true
-				}
-			}
 			var stagedCompletion *UsageEvent
 			var providerUsage UsageEvent
 			providerUsageKnown := false
@@ -804,7 +808,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				responseTransformFailuresMu.Unlock()
 				compatibilitySummary := SummarizeCompatibilityPlan(compatibilityPlan)
 				event.CompatibilityPlan = &compatibilitySummary
-				releaseAttempt()
+				releaseCandidate()
 				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0 || len(sessionState.Signatures) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
 						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
@@ -919,11 +923,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if stagedCompletion != nil {
 					finishSuccess(*stagedCompletion)
 				}
-				releaseAttempt()
+				releaseCandidate()
 				return nil
 			}
 			reportFailure(renderErr)
-			releaseAttempt()
+			releaseCandidate()
 			failedUsage := providerUsage
 			if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
 				if enriched, err := source.EnrichUsage(ctx, candidate, response.Headers, failedUsage); err == nil {

@@ -514,8 +514,8 @@ func (c Credential) ValidateAuthContext() error {
 	return nil
 }
 
-type CredentialResolver func(context.Context, Route) (Credential, error)
-type CredentialRefresher func(context.Context, Route, Credential) (Credential, error)
+type CredentialLeaseResolver func(context.Context, Route) (*CredentialLease, error)
+type CredentialLeaseRefresher func(context.Context, Route, *CredentialLease) (*CredentialLease, error)
 
 type StreamHooks struct {
 	OnFirstByte       func(time.Time)

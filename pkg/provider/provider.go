@@ -212,9 +212,22 @@ type ResponseRenderSession = kernel.ResponseRenderSession
 type CompatibilityPolicy = kernel.CompatibilityPolicy
 type ProviderAdapter = kernel.ProviderAdapter
 type Credential = kernel.Credential
+type CredentialLease = kernel.CredentialLease
+type CredentialLeaseScope = kernel.CredentialLeaseScope
 type AuthContext = kernel.AuthContext
 type CredentialPresentation = kernel.CredentialPresentation
 type Route = kernel.Route
+
+const MaxCredentialLeaseDuration = kernel.MaxCredentialLeaseDuration
+
+func CredentialLeaseScopeForRoute(route Route) CredentialLeaseScope {
+	return kernel.CredentialLeaseScopeForRoute(route)
+}
+
+func NewCredentialLease(scope CredentialLeaseScope, credential Credential, expiresAt time.Time, check func(context.Context) error, release func()) (*CredentialLease, error) {
+	return kernel.NewCredentialLease(scope, credential, expiresAt, check, release)
+}
+
 type UpstreamRequest = kernel.UpstreamRequest
 type UpstreamResponse = kernel.UpstreamResponse
 type NormalizedRequest = kernel.NormalizedRequest

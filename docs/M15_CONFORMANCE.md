@@ -682,3 +682,25 @@ code and device through generic setup and verified opaque credential restart
 inference. Main control=serving=476, queue empty, bundle-v9 export/validate valid;
 old specialized command families are absent from installed help. The single-
 coordinator gate is proved for these cases; C4/SG2 as a whole remains open.
+
+### Inference-attempt credential leases
+
+`TestCredentialLease*` covers exact scope (including operation/definition
+version), copied runtime material, expiry, live revocation, release concurrency
+and redaction. Kernel fixtures prove a post-prepare fence stops dispatch/fallback
+without upstream health feedback, replacement releases old authority, and an
+accepted response finishes after expiry in virtual time.
+`TestConnectionCredentialBinding*` checks secret-free live metadata against
+durable credential revision/principal/owner changes. Daemon lease fixtures cover
+same-secret resave, owner rebind, disable/delete, stale issuance, renewal and
+expired credential refresh. Existing refresh policy/effect/idempotency fixtures
+now use lease issuance, not a compatibility callback.
+
+`TestExternalCredentialLeaseFencesPreparedCredentialBeforeUpstreamDispatch`
+links an independently registered codec and manifest into the public daemon.
+With preparation blocked, public connection updates remain responsive; the old
+request is rejected before either account dispatches. A fresh request uses the
+replacement credential. `GOBROOM_TEST_CLI` selects the installed CLI for those
+updates. This is deterministic fake-provider evidence, not a live provider or
+atomic network-revocation guarantee. Discovery/quota/job lease convergence and
+the remaining SG2/TUI/lifecycle matrix are still open.
