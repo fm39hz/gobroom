@@ -704,3 +704,9 @@ replacement credential. `GOBROOM_TEST_CLI` selects the installed CLI for those
 updates. This is deterministic fake-provider evidence, not a live provider or
 atomic network-revocation guarantee. Discovery/quota/job lease convergence and
 the remaining SG2/TUI/lifecycle matrix are still open.
+
+Installed checkpoint `a869763`: full regression/vet/conformance and repeated
+focused race tests passed. After `make install-all`, the dispatch-fence and
+principal-renewal external fixtures passed three installed-CLI race runs. Main
+daemon control=serving=477 and bundle-v9 export/validate remained valid. These
+checks use deterministic fake issuers/upstreams, not new live-provider coverage.

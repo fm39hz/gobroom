@@ -291,11 +291,14 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    on the generic action engine. Kernel inference attempts use opaque scoped
    credential leases, with a live metadata fence after preparation/before each
    dispatch, refresh replacement and release. Remaining: generic TUI action
-   editing, discovery/quota outbound lease convergence, broader lifecycle races and HTTPS/non-loopback
-   callback integrations. Prepared request signing now has a public frozen-body/renewable-authorization
+   editing, discovery/quota outbound lease convergence, broader lifecycle races
+   and HTTPS/non-loopback callback integrations. Prepared request signing now
+   has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations
-   remain auth-driver work. Validate full
-   lifecycle fixtures, not token-only stubs.
+   remain auth-driver work. Validate full lifecycle fixtures, not token-only
+   stubs. Installed checkpoint `a869763` covers the prepared-request revision
+   fence through three independent-module race runs using the installed CLI;
+   main control=serving=477 and bundle-v9 validation remain healthy.
 
    Auth-owner fencing is implemented: state/revision/exact node-definition owner
    are read together, pinned route mode/auth bindings are checked before the

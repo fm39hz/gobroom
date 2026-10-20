@@ -45,8 +45,15 @@ broader catalog UX, protocol/harness coverage and RSS/latency/load remain open.
 Verification: full root regression and vet passed; architectural conformance
 including the independent module passed. Focused kernel/store/daemon lease and
 concurrent-refresh race tests passed three runs; external dispatch-fence and
-principal-renewal continuity fixtures also passed three race runs. Installed-CLI
-acceptance is recorded separately after installation.
+principal-renewal continuity fixtures also passed three race runs.
+
+Installed checkpoint `a869763`: `make install-all` completed and restarted the
+user service. Both external fixtures passed three further race runs with
+`GOBROOM_TEST_CLI=/home/fm39hz/go/bin/gobroom`, so connection updates traversed
+the installed CLI while request preparation was held. Main daemon status was
+`ok`, control=serving=477; secret-free bundle-v9 export → validate was valid.
+No real-provider requests or config reset were needed. This is not performance
+acceptance or discovery/quota lease closure.
 
 Previous integrated milestone:
 
