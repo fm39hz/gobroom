@@ -27,6 +27,31 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Fresh frontends can reattach by connection using explicit setup `resume` mode.
+The daemon atomically chooses reuse or new admission, without repeating provider
+Begin for an active session. Initial/submitted steps can be observed with a
+cancellable wait; published daemon-await instructions remain immediately
+available. Live owner/principal/revision checks retire stale sessions/resources.
+TUI `D` uses this mode and CLI exposes `connections setup start --resume`.
+
+This is in-memory reattachment across frontend lifetimes, not pending-session
+recovery across daemon restart. New independent-module cases resume an OTP
+challenge without exposing prior proof, complete activation and inference, then
+separately verify restart creates a new challenge and rejects an old handle.
+Resource-to-HTTP-callback-to-manual-replacement composition checks late success
+cannot overwrite the new credential and releases the listener. Broader auth
+fault/transport composition, live coverage, catalog/protocol breadth and measured
+latency/RSS/load remain open; C4/SG2/M15 is not declared complete.
+
+Verification: full regression/vet and architecture conformance passed. Focused
+daemon/TUI/CLI admission and fault cases passed three race runs, including a
+new frontend that does not remember the previous session handle. Independent
+module resume/restart cases also passed three race runs. Installed CLI acceptance
+follows installation; these are deterministic fake-provider proofs, not new
+live OAuth coverage.
+
+Previous integrated milestone:
+
 The TUI can edit and submit generic auth actions through registered schemas.
 It reuses masked Bubbles inputs and the existing local-only schema validator,
 with named fields/enum choices plus lossless JSON fallback. Compilation is

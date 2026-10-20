@@ -357,6 +357,21 @@ func TestSetupAuthorizationE2EOverUnixIPC(t *testing.T) {
 	if model.form == nil || model.form.inputs[0].Value() != "" || model.form.inputs[1].Value() != "" {
 		t.Fatalf("reentered challenge retained rejected input: form=%#v", model.form)
 	}
+	// Simulate a frontend restart: the new model knows only its connection,
+	// not the old session ID or private input. D must attach rather than Begin.
+	sessionID := model.setupSessionID
+	model.discardSetupInput()
+	model = newApp(config.IPCPath)
+	model.width, model.height = 120, 40
+	model.activePanel, model.activeTabs[1] = 1, 1
+	model.resize()
+	model = setupIntegrationUpdate(t, model, model.fetch(sectionProviders))
+	model = setupIntegrationUpdate(t, model, model.fetch(sectionConnections))
+	_, command = model.updateKey(tea.KeyPressMsg{Code: 'D'})
+	model = setupIntegrationUpdate(t, model, command)
+	if model.setupSessionID != sessionID || model.setupView.Revision != 2 || model.form == nil || len(flow.observedInputs()) != 2 {
+		t.Fatal("new frontend could not reattach to the existing step by connection")
+	}
 	model.form.inputs[0].SetValue("43")
 	model.form.inputs[1].SetValue("otp-final-value")
 	if cli := os.Getenv("GOBROOM_TEST_CLI"); cli != "" {

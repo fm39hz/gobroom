@@ -36,6 +36,7 @@ type authorizationSession struct {
 	setupAwait, setupAwaitStarted bool
 	setupCallbackModes            []AuthorizationCallbackView
 	setupCallDone                 chan struct{}
+	setupCallKind                 provider.AuthorizationEventKind
 	callbackKey                   string
 }
 

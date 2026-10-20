@@ -694,6 +694,27 @@ can contain input secrets. Input comes from a bounded JSON file/stdin, never a
 secret-bearing argv option. Private state is redacted in formatting/JSON and is
 not retained in public status or logs.
 
+`auth.setup.start` accepts typed `mode: new | resume` (default `new`). `new`
+rejects a busy connection. `resume` returns its existing active session and
+current public revision, or starts one if no active session exists. Admission
+and lookup share the same coordinator lock; no second Begin/consent/token call
+is performed for a valid active session. CLI `connections setup start --resume`
+and a fresh TUI's `D` use this mode, so reattachment needs only the connection ID.
+
+Reattachment waits, without holding the lock, for an unpublished Begin or a
+submitted step to finish. Its own bounded caller context cancels only that
+observation, not the owner call. Daemon-owned poll/await work leaves its already
+published instructions immediately available. Live credential revision,
+principal, mode and definition ownership fence reuse; a changed owner retires
+the old session/resources and requires an explicit retry rather than silently
+starting a new flow on the same request. Public views never include retained
+form values or private driver state.
+
+This is frontend reattachment to daemon memory, not durable interactive-session
+recovery. Daemon restart drops pending challenges and grants; `resume` then
+creates a new session, while old handles are rejected. Saved credentials and
+activation receipts retain their separate durable lifecycle.
+
 There are at most 64 retained authorization sessions shared with code/device
 setup, at most eight actions per transition and 64 KiB private/input documents.
 A generic session cannot exceed one hour or extend its provider-declared deadline.
@@ -706,8 +727,8 @@ use the existing shared commit path, with principal replacement semantics.
 
 This is not full C4/SG2 closure. Code and device setup share the action engine;
 no old coordinator/schema/command compatibility adapter is retained.
-Inline generic TUI editing, credential leases and
-the full composition/fault matrix remain unfinished. A flow can already parse a
+Inline generic TUI editing and scoped credential leases are implemented. The
+complete composition/fault matrix remains open. A flow can already parse a
 cookie or service-account state through `AuthFlow.Resolve`; the new seam addresses
 multi-step interaction and ownership rather than inventing a special credential
 type for every setup method.

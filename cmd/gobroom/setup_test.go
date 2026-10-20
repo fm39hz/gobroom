@@ -22,6 +22,7 @@ func TestConnectionSetupCommandsInvokeTypedRPCs(t *testing.T) {
 		params map[string]any
 	}{
 		{name: "start", args: []string{"connections", "setup", "start", "--connection-id", "conn-1"}, method: "auth.setup.start", params: map[string]any{"connectionID": "conn-1"}},
+		{name: "resume", args: []string{"connections", "setup", "start", "--connection-id", "conn-1", "--resume"}, method: "auth.setup.start", params: map[string]any{"connectionID": "conn-1", "mode": "resume"}},
 		{name: "get", args: []string{"connections", "setup", "get", "--session-id", "session-1"}, method: "auth.setup.get", params: map[string]any{"sessionID": "session-1"}},
 		{name: "cancel", args: []string{"connections", "setup", "cancel", "--session-id", "session-2"}, method: "auth.setup.cancel", params: map[string]any{"sessionID": "session-2"}},
 		{name: "submit file", args: []string{"connections", "setup", "submit", "--session-id", "session-3", "--action-id", "action-1", "--revision", "42", "--input-file", "-"}, input: `{"apiKey":"hidden-secret","nested":{"enabled":true},"account":9007199254740993}`, method: "auth.setup.advance", params: map[string]any{"sessionID": "session-3", "actionID": "action-1", "revision": json.Number("42"), "value": map[string]any{"apiKey": "hidden-secret", "nested": map[string]any{"enabled": true}, "account": json.Number("9007199254740993")}}},

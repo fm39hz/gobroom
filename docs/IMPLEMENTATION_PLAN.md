@@ -302,8 +302,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    Generic TUI input now uses exact registered schemas, masked local forms,
    asynchronous compilation, revision/action-bound submit and stale-reply/error
    fencing. Close clears the draft without ending daemon setup; explicit cancel
-   and multi-step rejection/activation have real Unix IPC fixtures. Remaining:
-   broader lifecycle/fault composition and HTTPS/non-loopback callback
+   and multi-step rejection/activation have real Unix IPC fixtures.
+   Explicit `new`/`resume` admission now reattaches a fresh frontend by connection
+   without another provider Begin. Context-cancellable observation waits for
+   unpublished/submitted steps, not daemon-owned await, and validates the live
+   credential binding before reuse. Resource→callback→replacement fault
+   composition and daemon-restart/new-session distinctions have fixtures.
+   Remaining: broader lifecycle/fault composition and HTTPS/non-loopback callback
    integrations. Prepared request signing now
    has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations

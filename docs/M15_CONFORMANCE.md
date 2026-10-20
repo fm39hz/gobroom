@@ -809,3 +809,30 @@ TUI entered/exited alt-screen in a real PTY; the main daemon stayed healthy
 afterward (control=serving=480), and bundle-v9 validation passed. Terminal form
 coverage remains model/render tests plus that launch smoke check, not an
 exhaustive manual UX or live-provider auth claim.
+
+### Frontend reattachment and composed auth faults
+
+`TestAuthorizationSetupResume*` covers same-session observation without another
+Begin, strict-new busy rejection, invalid mode, cancellation of a waiting caller,
+latest submitted-step revision, published background-await instructions,
+replacement/owner rebind, terminal-session replacement and resource release.
+Waiting uses the existing completion channel and does not cancel its owner;
+the submitted-step test uses virtual-time synchronization rather than an
+ordering sleep. The TUI Unix IPC fixture now drops its original model and
+reattaches by connection at the same revision with no retained private input.
+
+`TestAuthorizationCompositionResourceCallbackManualReplacement` crosses actual
+reservation, ready-event, active-grant HTTP delivery and credential-CAS
+boundaries: a late valid driver result cannot replace a manually updated
+credential, retain callback authority or acknowledge success. Its companion
+resource-failure case leaves no public session/private credential mutation.
+
+`TestExternalAuthorizationSetupResumeAcrossFrontends` links an independent auth
+module, advances to OTP, resumes from a separate frontend without the old handle,
+rejects a strict-new start, then completes polling/activation and public-model
+inference. `TestExternalAuthorizationResumeAfterDaemonRestartStartsFreshSession`
+separates in-memory reattachment from durable credential persistence: new
+challenge/handle, old handle rejected. `GOBROOM_TEST_CLI` selects the installed
+CLI for the first scenario. Full auth composition and HTTPS/non-loopback
+callback integration remain separate open gates; live credentials are not
+required for the architecture simulations.

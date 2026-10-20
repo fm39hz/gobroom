@@ -105,6 +105,10 @@ existing extension catalog's frozen `jsonschema/v6` validator. JSON parsing uses
 Compilation runs in a Tea command with stale-result fencing, and schema-declared
 enum choices use the existing form controls. No additional form framework,
 OAuth client, callback listener or frontend worker queue is introduced.
+Setup reattachment uses the coordinator's existing completion channel and
+standard context cancellation. Lookup/reservation remains under its existing
+mutex, while waiting and public projection happen outside it. No second session
+cache, external lock, polling worker or provider token exchange is needed.
 
 | Area | Library/tool | Version checked | Decision |
 |---|---|---:|---|

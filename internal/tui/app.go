@@ -1406,7 +1406,7 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					m.lastError = ""
 					m.loading = true
 					m.status = "starting connection setup…"
-					return m, m.invokeSetup("auth.setup.start", map[string]any{"connectionID": value.ID})
+					return m, m.invokeSetup("auth.setup.start", map[string]any{"connectionID": value.ID, "mode": daemon.AuthorizationSetupResume})
 				}
 			}
 		}

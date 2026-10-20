@@ -26,6 +26,16 @@ type AuthorizationSetupView struct {
 }
 
 func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID string) (AuthorizationSetupView, error) {
+	return d.openSetupAuthorization(ctx, connectionID, AuthorizationSetupNew)
+}
+
+func (d *Daemon) openSetupAuthorization(ctx context.Context, connectionID string, mode AuthorizationSetupStartMode) (AuthorizationSetupView, error) {
+	if mode == "" {
+		mode = AuthorizationSetupNew
+	}
+	if mode != AuthorizationSetupNew && mode != AuthorizationSetupResume {
+		return AuthorizationSetupView{}, fmt.Errorf("invalid authorization setup start mode")
+	}
 	credential, ok := d.store.ConnectionCredentialByID(connectionID)
 	if !ok {
 		return AuthorizationSetupView{}, fmt.Errorf("enabled connection not found")
@@ -36,9 +46,6 @@ func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID strin
 	}
 	flow := d.authFlows[d.authFlowID(node.DefinitionRef(), credential.Type)]
 	driver, ok := flow.(provider.AuthorizationFlow)
-	if !ok {
-		return AuthorizationSetupView{}, fmt.Errorf("connection auth mode does not support action-based setup")
-	}
 	id, err := randomURLToken(24)
 	if err != nil {
 		return AuthorizationSetupView{}, err
@@ -48,9 +55,21 @@ func (d *Daemon) startSetupAuthorization(ctx context.Context, connectionID strin
 	sessions := d.authorizationSessions()
 	d.pruneAuthorizationSessions(sessions, time.Now())
 	sessions.mu.Lock()
-	if sessions.closed || len(sessions.byID) >= maxAuthorizationSessions || sessions.byConnection[connectionID] != "" {
+	if sessions.closed {
+		sessions.mu.Unlock()
+		return AuthorizationSetupView{}, fmt.Errorf("authorization coordinator is stopped")
+	}
+	if active := sessions.byConnection[connectionID]; active != "" && mode == AuthorizationSetupResume {
+		sessions.mu.Unlock()
+		return d.resumeSetupAuthorization(callCtx, active, credential)
+	}
+	if len(sessions.byID) >= maxAuthorizationSessions || sessions.byConnection[connectionID] != "" {
 		sessions.mu.Unlock()
 		return AuthorizationSetupView{}, fmt.Errorf("authorization coordinator is stopped, full or connection is busy")
+	}
+	if !ok {
+		sessions.mu.Unlock()
+		return AuthorizationSetupView{}, fmt.Errorf("connection auth mode does not support action-based setup")
 	}
 	sessions.byID[id] = authorizationSession{connectionID: connectionID, authFlow: flow, setupFlow: driver, expectedCredential: credential, expiresAt: time.Now().Add(provider.MaxAuthorizationDuration), status: "starting", cancel: cancel, setupCallDone: make(chan struct{})}
 	sessions.byConnection[connectionID] = id
@@ -138,6 +157,7 @@ func (d *Daemon) advanceSetupAuthorization(ctx context.Context, id string, revis
 	defer cancel()
 	session.cancel = cancel
 	session.setupCallDone = make(chan struct{})
+	session.setupCallKind = event.Kind
 	if session.setupPollTimer != nil {
 		session.setupPollTimer.Stop()
 		session.setupPollTimer = nil
@@ -385,6 +405,7 @@ func clearSetupSession(session *authorizationSession) {
 	session.setupPollAfter = 0
 	session.setupAwait = false
 	session.setupAwaitStarted = false
+	session.setupCallKind = ""
 	session.expectedCredential = store.Credential{}
 	session.authFlow = nil
 	session.setupCallbackModes = nil

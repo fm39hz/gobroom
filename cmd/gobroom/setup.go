@@ -8,14 +8,13 @@ import (
 	"io"
 	"os"
 
+	"github.com/fm39hz/gobroom/internal/daemon"
 	"github.com/spf13/cobra"
 )
 
 const maxSetupInputBytes = 64 * 1024
 
-type setupStartParams struct {
-	ConnectionID string `json:"connectionID"`
-}
+type setupStartParams = daemon.AuthorizationSetupStartInput
 
 type setupSessionParams struct {
 	SessionID string `json:"sessionID"`
@@ -31,12 +30,17 @@ type setupAdvanceParams struct {
 func setupCommand() *cobra.Command {
 	command := &cobra.Command{Use: "setup", Short: "run interactive connection setup"}
 	var connectionID, sessionID string
+	var resume bool
 
 	start := &cobra.Command{Use: "start", Short: "start connection setup", Args: cobra.NoArgs, RunE: func(*cobra.Command, []string) error {
 		params := setupStartParams{ConnectionID: connectionID}
+		if resume {
+			params.Mode = daemon.AuthorizationSetupResume
+		}
 		return invokeSetup("auth.setup.start", params)
 	}}
 	start.Flags().StringVar(&connectionID, "connection-id", "", "connection ID")
+	start.Flags().BoolVar(&resume, "resume", false, "reuse the active setup for this connection; start if none exists")
 	_ = start.MarkFlagRequired("connection-id")
 	command.AddCommand(start)
 

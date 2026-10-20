@@ -189,7 +189,7 @@ func (m *app) cancelSetup() tea.Cmd {
 		}
 		m.setupStartPending, m.loading = false, false
 		m.discardSetupInput()
-		m.status = "connection setup start cancelled"
+		m.status = "connection setup request cancelled"
 		return nil
 	}
 	if m.setupSessionID == "" {

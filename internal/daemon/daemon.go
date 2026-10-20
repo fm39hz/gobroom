@@ -1417,7 +1417,11 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		}
 		return success(request, items)
 	case "auth.setup.start":
-		view, err := d.startSetupAuthorization(ctx, stringParam(request.Params, "connectionID"))
+		var input AuthorizationSetupStartInput
+		if err := decodeParams(request.Params, &input); err != nil {
+			return fail(request, "invalid authorization setup start input")
+		}
+		view, err := d.openSetupAuthorization(ctx, input.ConnectionID, input.Mode)
 		if err != nil {
 			return fail(request, err.Error())
 		}

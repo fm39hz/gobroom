@@ -18,10 +18,14 @@ type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec
 type CredentialActivationView = core.CredentialActivationView
 type AuthorizationSetupView = core.AuthorizationSetupView
+type AuthorizationSetupStartMode = core.AuthorizationSetupStartMode
+type AuthorizationSetupStartInput = core.AuthorizationSetupStartInput
 type AuthorizationCallbackView = core.AuthorizationCallbackView
 type AuthorizationCallbackMode = core.AuthorizationCallbackMode
 
 const (
+	AuthorizationSetupNew         = core.AuthorizationSetupNew
+	AuthorizationSetupResume      = core.AuthorizationSetupResume
 	AuthorizationCallbackLoopback = core.AuthorizationCallbackLoopback
 	AuthorizationCallbackManual   = core.AuthorizationCallbackManual
 )

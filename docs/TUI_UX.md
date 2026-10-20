@@ -104,7 +104,10 @@ validates exact refs/options and the full binding set before publish.
 
 ### Interactive auth actions
 
-On a connection, `D` starts setup or resumes the active input action. Public
+On a connection, `D` starts setup or resumes the active input action. A newly
+opened TUI reattaches by connection through the daemon, without remembering the
+old session ID or repeating provider authorization. This does not preserve
+pending challenges across daemon restart. Public
 URL/code/callback instructions stay in the inspector. The TUI renders the exact
 registered input schema using existing Bubbles text inputs; schema compilation
 runs off the Tea update loop. Closed object shapes expose named fields,
