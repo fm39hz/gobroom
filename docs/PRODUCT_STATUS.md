@@ -48,6 +48,15 @@ adding stale old-step error fencing. These are registered fake-provider and
 model/command integration fixtures; installed-client/terminal acceptance follows
 installation and does not imply broad live OAuth or all-schema UX coverage.
 
+Installed checkpoint `b635d42`: `make install-all` completed and restarted the
+user service. Three race runs used `GOBROOM_TEST_CLI` to close the TUI editor,
+submit the final auth step with the installed CLI, observe activation from the
+TUI model and authenticate against a fake upstream. The default installed
+`gobroom` also opened its alt-screen in a real PTY and exited cleanly with `q`;
+this is a launch/exit smoke check, not a visual audit of every auth form. Main
+daemon status remained `ok`, control=serving=480, with bundle-v9 export/validate
+valid. No real-provider auth or user configuration reset was performed.
+
 Previous integrated milestone:
 
 Discovery and connection probes now use the daemon's issuer without a raw auth

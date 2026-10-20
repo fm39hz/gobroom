@@ -800,3 +800,12 @@ closes, then TUI status catches up through the same public session. Inputs never
 appear in retained preview/status/error data. This is command/model integration,
 not a claim of exhaustive terminal UX or live OAuth acceptance. Full C4/SG2/M15
 composition/fault and whole-product performance gates remain open.
+
+Installed checkpoint `b635d42`: full regression/vet/conformance passed, and the
+editor/lifecycle/IPC fixtures passed five race runs. After `make install-all`,
+the TUI/installed-CLI session handoff and cancel/resume fixtures passed three
+more race runs, including activation and fake inference. The default installed
+TUI entered/exited alt-screen in a real PTY; the main daemon stayed healthy
+afterward (control=serving=480), and bundle-v9 validation passed. Terminal form
+coverage remains model/render tests plus that launch smoke check, not an
+exhaustive manual UX or live-provider auth claim.

@@ -324,6 +324,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    passed. Five public-module lease/renewal verticals passed three installed-CLI
    race runs after installation; main control=serving=479, bundle-v9 valid.
 
+   TUI action-input checkpoint `b635d42` adds schema-bound masked editing,
+   asynchronous compilation, option/action selection and stale-reply/error
+   fencing. Regression/vet/conformance and five focused race runs passed.
+   Installed CLI completed a session after TUI editor closure in three race
+   runs; the default TUI passed PTY launch/exit smoke. Main control=serving=480
+   and bundle-v9 validation passed. Full C4/SG2 fault composition remains open.
+
    Auth-owner fencing is implemented: state/revision/exact node-definition owner
    are read together, pinned route mode/auth bindings are checked before the
    driver, and final SQL CAS checks ownership. Definition ID/version changes
