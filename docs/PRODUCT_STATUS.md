@@ -41,6 +41,21 @@ orchestration divergence, not all auth safety or provider acceptance. Inline TUI
 input, leases and full C4/SG2/M15 remain open, as do broader catalog UX, harness/
 modality coverage and measured latency/RSS/load gates across the product.
 
+Implementation checkpoint: `cb50006`. Full tests/vet/conformance passed. Focused
+provider/daemon/TUI/CLI race cases passed twice; the independent code module
+passed five race runs, then three more after its registration request was bound
+to the caller context and activation readiness was made explicit. Existing wrong-
+input tests now bind actual JSON objects and retain the same challenge before
+a valid exchange, rather than silently bypassing driver validation.
+
+After `make install-all`, installed generic setup CLI exercised both the new code
+strategy and the migrated opaque device fixture, with callback/PKCE exchange,
+activation, refresh, restart and HTTP inference. Main daemon status was `ok`,
+control=serving=476, activation queue empty and bundle-v9 export → validate valid.
+Installed help lists only `setup` for interactive auth: no `authorize-*` or
+`device-*` commands remain. These are fake-provider acceptances, not new live
+OAuth, inline TUI or performance coverage.
+
 Previous integrated milestone:
 
 Device authorization now uses the generic setup coordinator and typed action

@@ -673,3 +673,12 @@ URI at token exchange, rejects bad callbacks/replay, and restarts before HTTP
 inference with the unchanged opaque credential state. This is not a live provider
 or the complete fault-composition matrix. TUI input editing, leases, full SG2
 and performance/whole-product gates remain unproven.
+
+Installed checkpoint `cb50006`: full tests/vet/conformance and repeated focused
+root/provider/client race cases passed. The external code strategy passed five
+race runs and three final runs with context-bound registration and actual
+activation readiness. After `make install-all`, `GOBROOM_TEST_CLI` exercised both
+code and device through generic setup and verified opaque credential restart
+inference. Main control=serving=476, queue empty, bundle-v9 export/validate valid;
+old specialized command families are absent from installed help. The single-
+coordinator gate is proved for these cases; C4/SG2 as a whole remains open.
