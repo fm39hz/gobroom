@@ -336,6 +336,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    runs; the default TUI passed PTY launch/exit smoke. Main control=serving=480
    and bundle-v9 validation passed. Full C4/SG2 fault composition remains open.
 
+   Frontend reattach checkpoint `be0ea67` adds typed new/resume admission and
+   observer-only cancellation without another Begin. Callback resource/manual-
+   replacement and stale-owner/restart cases have composed fixtures. Full tests,
+   vet/conformance and repeated race runs passed. Installed CLI `--resume` plus
+   TUI fresh-model/handoff each passed three race runs; main control=serving=481,
+   bundle-v9 valid. The broader C4/SG2 transport/fault gate remains open.
+
    Auth-owner fencing is implemented: state/revision/exact node-definition owner
    are read together, pinned route mode/auth bindings are checked before the
    driver, and final SQL CAS checks ownership. Definition ID/version changes

@@ -836,3 +836,11 @@ challenge/handle, old handle rejected. `GOBROOM_TEST_CLI` selects the installed
 CLI for the first scenario. Full auth composition and HTTPS/non-loopback
 callback integration remain separate open gates; live credentials are not
 required for the architecture simulations.
+
+Installed checkpoint `be0ea67`: full regression/vet/conformance and three focused
+root/external race runs passed. After `make install-all`, independent-module
+resume/restart and TUI fresh-model/CLI-handoff cases each passed three more
+race runs using the installed CLI. Main control=serving=481 and bundle-v9
+validation remained healthy. The new flag appears in installed help. These
+observations establish the stated deterministic composition subset, not full
+C4/SG2 or live-provider OAuth acceptance.

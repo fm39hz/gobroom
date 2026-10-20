@@ -50,6 +50,15 @@ module resume/restart cases also passed three race runs. Installed CLI acceptanc
 follows installation; these are deterministic fake-provider proofs, not new
 live OAuth coverage.
 
+Installed checkpoint `be0ea67`: `make install-all` completed and restarted the
+user service. The independent resume/restart cases passed three race runs with
+the installed CLI, including `start --resume`, OTP/daemon polling, activation
+and public-model inference. The TUI fresh-model reattach/CLI-handoff cases also
+passed three installed-client race runs. Main daemon status was `ok`,
+control=serving=481; bundle-v9 export → validate was valid, and installed help
+documents `--resume`. User configuration was preserved; no live-provider calls
+or durable interactive-session recovery are claimed.
+
 Previous integrated milestone:
 
 The TUI can edit and submit generic auth actions through registered schemas.
