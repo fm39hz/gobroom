@@ -304,6 +304,12 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fence through three independent-module race runs using the installed CLI;
    main control=serving=477 and bundle-v9 validation remain healthy.
 
+   Quota checkpoint `8a76e34` adds consumer-ref authority, per-report dispatch
+   fencing, stale partial-result rejection and bounded cancel/drain. Full tests,
+   vet/conformance and repeated race fixtures passed; installed CLI connection
+   replacement and `quota` reads passed against the independent module host.
+   Main control=serving=478 and bundle-v9 validation passed after installation.
+
    Auth-owner fencing is implemented: state/revision/exact node-definition owner
    are read together, pinned route mode/auth bindings are checked before the
    driver, and final SQL CAS checks ownership. Definition ID/version changes

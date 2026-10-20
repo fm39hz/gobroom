@@ -188,7 +188,13 @@ func TestExternalQuotaLeaseFencesFetchBeforeUpstreamDispatch(t *testing.T) {
 	}
 	chatURL = "http://" + service.Addresses().HTTP + "/v1/chat/completions"
 	var snapshots map[string]provider.QuotaSnapshot
-	if err := json.Unmarshal(rpc("quota.list", nil), &snapshots); err != nil {
+	var quotaJSON []byte
+	if cli := os.Getenv("GOBROOM_TEST_CLI"); cli != "" {
+		quotaJSON = runDeviceRaceCLI(t, cli, config.IPCPath, "quota")
+	} else {
+		quotaJSON = rpc("quota.list", nil)
+	}
+	if err := json.Unmarshal(quotaJSON, &snapshots); err != nil {
 		t.Fatal(err)
 	}
 	for _, snapshot := range snapshots {

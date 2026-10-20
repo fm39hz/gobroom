@@ -52,6 +52,16 @@ passed ten race runs. Installed-CLI acceptance follows the implementation
 checkpoint; these remain fake-provider tests, not latency/RSS or live-provider
 acceptance.
 
+Installed checkpoint `8a76e34`: `make install-all` completed and restarted the
+user service. Three further external-module race runs used the installed CLI
+for connection replacement across quota/inference-lease and renewal fixtures.
+The quota fixture then passed three additional installed-CLI race runs reading
+durable quota through `gobroom quota` after restart. The module host is the
+independently compiled test daemon, not a dynamically loaded plugin in the
+installed daemon. Main daemon status was `ok`, control=serving=478, and bundle-v9
+export → validate was valid. User configuration was not reset and no live
+provider calls were made.
+
 Previous integrated milestone:
 
 Inference now owns an opaque credential lease for each attempt. Exact

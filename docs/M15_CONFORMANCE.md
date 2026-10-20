@@ -732,3 +732,11 @@ quota window. Fresh inference succeeds with the replacement. The fixture can
 use the installed CLI via `GOBROOM_TEST_CLI`. Sources remain trusted code and
 must use the host-provided transport; no plugin sandbox or atomic network
 revocation is claimed. Discovery/probes and remaining C4/SG2 gates remain open.
+
+Installed checkpoint `8a76e34`: full regression/vet/conformance passed; focused
+root and external quota/inference/renewal cases passed three race runs, with ten
+virtual-time/concurrency runs for quota runtime. After `make install-all`, all
+three external verticals passed three installed-CLI race runs; the quota case
+passed three more with CLI `quota` reading state after restart. The main daemon
+reported control=serving=478 and bundle-v9 validation succeeded. No new live
+provider or whole-product performance acceptance is implied.
