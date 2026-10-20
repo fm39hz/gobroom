@@ -1765,9 +1765,11 @@ func TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation(t *testing.T) {
 	binding := provider.RuntimeBinding{
 		DefinitionID: "inference-only", DefinitionRef: provider.ProviderDefinitionRef("inference-only", 1), Operation: provider.OperationChat,
 		TaskRef: *provider.OperationRef(normalize.OperationChatGenerate, 1), Protocol: kernel.ProtocolOpenAIChat,
-		ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
+		ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {FlowID: "inference-only:api_key", Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}},
 	}
-	d := &Daemon{store: state, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionRef, binding.Operation): binding}}
+	d := &Daemon{store: state, providerBindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionRef, binding.Operation): binding},
+		authFlows:           map[string]provider.AuthFlow{"inference-only:api_key": provider.StaticSecretAuth{}},
+		providerAuthFlowIDs: map[extensions.Ref]map[string]string{binding.DefinitionRef: {"api_key": "inference-only:api_key"}}}
 	response := d.handleIPC(context.Background(), IPCRequest{ID: "probe", Method: "connections.test_inference", Params: map[string]any{"connectionID": connection.ID, "modelID": "manual/model-x"}})
 	if !response.OK {
 		t.Fatalf("inference probe failed: %s", response.Error)

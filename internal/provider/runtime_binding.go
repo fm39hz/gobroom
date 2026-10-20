@@ -37,6 +37,7 @@ type RuntimeBinding struct {
 	Adapter             kernel.ProviderAdapter
 	AuthModes           map[string]BoundAuthMode
 	ModelSourceID       string
+	ModelSourceRef      extensions.Ref
 	ModelSource         ModelSource
 	UsageSourceID       string
 	UsageSourceRef      extensions.Ref
@@ -352,6 +353,7 @@ func (b *RuntimeBindingBuilder) Build(definitionRef extensions.Ref, operation Op
 		return RuntimeBinding{}, fmt.Errorf("provider %q %q inference binding requires a semantic task ref", definitionID, operation)
 	}
 	result := RuntimeBinding{DefinitionID: definitionID, DefinitionRef: ProviderDefinitionRef(definition.ID, definition.ContractVersion), Operation: operation, TaskRef: taskRef, Idempotency: binding.Idempotency, Protocol: binding.Protocol, ProviderFormat: binding.ProviderFormat, EndpointID: binding.Endpoint.ID, EndpointRef: extensionRef(binding.Endpoint), Endpoint: endpoint, EndpointOptions: endpointOptions, TransportID: binding.Transport.ID, TransportRef: extensionRef(binding.Transport), Transport: transport, RequestCodecID: binding.RequestCodec.ID, RequestCodecOptions: append(json.RawMessage(nil), binding.RequestCodecOptions...), ResponseDecoderID: binding.ResponseDecoder.ID, AuthModes: authModes, ModelSourceID: binding.ModelSource.ID, ModelSource: modelSource, UsageSourceID: binding.UsageSource.ID, UsageSourceRef: usageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreID: sessionStoreID, SessionStoreRef: sessionStoreRef, SessionStore: sessionStore, ErrorClassifierID: errorClassifierID, ErrorClassifierRef: errorClassifierRef, ErrorClassifier: classifier, QuotaSourceID: binding.QuotaSource.ID, QuotaSourceRef: quotaSourceRef, QuotaEndpointRef: extensionRef(binding.Endpoint), QuotaTransportRef: extensionRef(binding.Transport), QuotaSource: quotaSource, QuotaWindowName: binding.QuotaWindowName}
+	result.ModelSourceRef = extensionRef(binding.ModelSource)
 	if binding.RequestCodec.ID == "" && binding.ResponseDecoder.ID == "" {
 		return result, nil
 	}

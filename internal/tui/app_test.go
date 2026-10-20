@@ -3,12 +3,14 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -1146,7 +1148,24 @@ func TestConnectionModelListToPublicComboOnboardingEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoveryService := discovery.Service{Store: db, Client: upstream.Client(), Bindings: bindings}
+	discoveryService := discovery.Service{Store: db, Client: upstream.Client(), Bindings: bindings,
+		AcquireCredential: func(ctx context.Context, route kernel.Route, scope kernel.CredentialLeaseScope) (*kernel.CredentialLease, error) {
+			credential, ok := db.ConnectionCredentialByID(route.CredentialID)
+			if !ok || credential.Type != "api_key" || credential.OperationalGeneration() != route.HealthGeneration.Connection {
+				return nil, fmt.Errorf("fixture API-key binding is unavailable")
+			}
+			binding, err := db.ConnectionCredentialBinding(ctx, route.CredentialID)
+			if err != nil {
+				return nil, err
+			}
+			return kernel.NewCredentialLease(scope, kernel.Credential{Generation: credential.Revision, ConnectionID: credential.ID, Type: credential.Type, Secret: credential.Secret}, time.Now().Add(time.Minute), func(ctx context.Context) error {
+				live, err := db.ConnectionCredentialBinding(ctx, route.CredentialID)
+				if err != nil || live != binding {
+					return fmt.Errorf("fixture credential was changed")
+				}
+				return nil
+			}, nil)
+		}}
 	extensionSnapshot, err := runtimeRegistry.FreezeCatalog()
 	if err != nil {
 		t.Fatal(err)

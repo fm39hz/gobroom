@@ -22,22 +22,24 @@ import (
 )
 
 type Service struct {
-	Store      *store.Store
-	Client     *http.Client
-	Bindings   map[string]provider.RuntimeBinding
-	Operations *operations.Snapshot
-	Artifacts  *artifacts.Store
+	Store             *store.Store
+	Client            *http.Client
+	Bindings          map[string]provider.RuntimeBinding
+	Operations        *operations.Snapshot
+	Artifacts         *artifacts.Store
+	AcquireCredential kernel.ScopedCredentialLeaseResolver
 }
 type Result struct {
-	NodeID        string                        `json:"nodeId"`
-	ConnectionID  string                        `json:"connectionId"`
-	Models        int                           `json:"models"`
-	ModelIDs      []string                      `json:"modelIds,omitempty"`
-	Available     int                           `json:"available"`
-	CatalogModels int                           `json:"catalogModels"`
-	Evidence      provider.ModelCatalogEvidence `json:"evidence"`
-	Complete      bool                          `json:"complete"`
-	URL           string                        `json:"url"`
+	NodeID               string                        `json:"nodeId"`
+	ConnectionID         string                        `json:"connectionId"`
+	Models               int                           `json:"models"`
+	ModelIDs             []string                      `json:"modelIds,omitempty"`
+	Available            int                           `json:"available"`
+	CatalogModels        int                           `json:"catalogModels"`
+	Evidence             provider.ModelCatalogEvidence `json:"evidence"`
+	Complete             bool                          `json:"complete"`
+	URL                  string                        `json:"url"`
+	ConnectionGeneration string                        `json:"-"`
 }
 
 type ConnectionTestResult struct {
@@ -66,6 +68,7 @@ type ConnectionModelsPreview struct {
 
 type fetchedModelCatalog struct {
 	Node     store.ProviderNode
+	Binding  store.CredentialBinding
 	Endpoint string
 	Snapshot provider.ModelCatalogSnapshot
 }
@@ -151,10 +154,6 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 	if s.Operations == nil {
 		return OperationTestResult{}, fmt.Errorf("operation catalog is unavailable")
 	}
-	credential, found := s.Store.ConnectionCredentialByID(connectionID)
-	if !found {
-		return OperationTestResult{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
-	}
 	node, err := s.Store.ProviderNodeByConnection(connectionID)
 	if err != nil {
 		return OperationTestResult{}, fmt.Errorf("resolve provider for connection %q: %w", connectionID, err)
@@ -173,6 +172,10 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 	if selected.ID == "" {
 		return OperationTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
 	}
+	credential, err := s.Store.ConnectionCredentialBinding(ctx, connectionID)
+	if err != nil {
+		return OperationTestResult{}, err
+	}
 	if err := validateCredentialBinding(node, selected, credential); err != nil {
 		return OperationTestResult{}, err
 	}
@@ -188,7 +191,7 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 	if input.ExpectedProvider != (extensions.Ref{}) && input.ExpectedProvider != definitionRef {
 		return OperationTestResult{}, fmt.Errorf("provider definition changed during probe upload")
 	}
-	authMode, authModeExists := binding.AuthModes[selected.CredentialType]
+	authMode, authModeExists := binding.AuthModes[credential.Type]
 	if !authModeExists || authMode.Flow == nil {
 		return OperationTestResult{}, fmt.Errorf("provider definition %q does not bind credential type %q", node.DefinitionID, selected.CredentialType)
 	}
@@ -222,6 +225,8 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 		ID: connectionID + ":operation-probe", NodeID: node.ID, DefinitionID: node.DefinitionID, DefinitionRef: definitionRef,
 		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
 		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
+		AuthFlowID: authMode.FlowID, CredentialRecovery: authMode.Recovery,
+		HealthGeneration:       kernel.RouteHealthGeneration{Connection: credential.OperationalGeneration(), Credential: credential.Revision},
 		CredentialPresentation: authMode.Presentation,
 		Enabled:                true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
 			task: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
@@ -239,21 +244,27 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 	if s.Artifacts != nil {
 		ctx = artifacts.WithAccess(ctx, artifacts.Access{Store: s.Artifacts, Catalog: s.Operations.ExtensionCatalog(), Receiver: receiver, Recipient: definitionRef})
 	}
-	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
+	route.SessionOperationRef = binding.TaskRef
+	lease, err := s.acquireCredentialLease(ctx, route, kernel.CredentialLeaseScopeForRoute(route))
 	if err != nil {
-		return OperationTestResult{}, fmt.Errorf("resolve operation-probe credential: %w", err)
+		return OperationTestResult{}, fmt.Errorf("acquire operation-probe credential lease: %w", err)
 	}
-	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
+	defer lease.Release()
+	resolvedCredential, err := lease.Borrow(ctx, kernel.CredentialLeaseScopeForRoute(route))
+	if err != nil {
 		return OperationTestResult{}, err
 	}
 	upstream, err := binding.Adapter.Prepare(ctx, request, route, resolvedCredential)
-	if err != nil {
-		return OperationTestResult{}, fmt.Errorf("prepare operation probe %q: %w", operationID, err)
-	}
 	if body, ok := upstream.Body.(io.Closer); ok {
 		defer body.Close()
 	}
+	if err != nil {
+		return OperationTestResult{}, fmt.Errorf("prepare operation probe %q: %w", operationID, err)
+	}
 	if err := ctx.Err(); err != nil {
+		return OperationTestResult{}, err
+	}
+	if err := lease.ValidateForDispatch(ctx, kernel.CredentialLeaseScopeForRoute(route)); err != nil {
 		return OperationTestResult{}, err
 	}
 	response, err := binding.Adapter.Execute(ctx, upstream)
@@ -294,6 +305,9 @@ func (s Service) TestOperation(ctx context.Context, input OperationProbeInput) (
 		class := binding.Adapter.ClassifyError(response.Status, capturedBody)
 		return result, fmt.Errorf("operation probe returned HTTP %d (%s)", response.Status, class)
 	}
+	if err := lease.ValidateForDispatch(ctx, kernel.CredentialLeaseScopeForRoute(route)); err != nil {
+		return result, fmt.Errorf("credential lease expired after provider accepted operation probe; probe was not retried: %w", err)
+	}
 	return result, nil
 }
 
@@ -317,7 +331,7 @@ func cloneProbeArtifacts(input []extensions.ArtifactRef) []extensions.ArtifactRe
 
 // OperationProbeContract resolves the exact current binding before accepting
 // binary files. TestOperation checks these refs again after upload.
-func (s Service) OperationProbeContract(input OperationProbeInput) (extensions.Ref, extensions.Ref, []extensions.ArtifactInput, error) {
+func (s Service) OperationProbeContract(ctx context.Context, input OperationProbeInput) (extensions.Ref, extensions.Ref, []extensions.ArtifactInput, error) {
 	if s.Operations == nil {
 		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("operation catalog is unavailable")
 	}
@@ -325,8 +339,8 @@ func (s Service) OperationProbeContract(input OperationProbeInput) (extensions.R
 	if err != nil {
 		return extensions.Ref{}, extensions.Ref{}, nil, err
 	}
-	credential, ok := s.Store.ConnectionCredentialByID(input.ConnectionID)
-	if !ok {
+	credential, err := s.Store.ConnectionCredentialBinding(ctx, input.ConnectionID)
+	if err != nil {
 		return extensions.Ref{}, extensions.Ref{}, nil, fmt.Errorf("enabled probe connection is unavailable")
 	}
 	if !credential.Owner.Matches(node.ID, node.DefinitionRef()) {
@@ -357,10 +371,6 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	if strings.TrimSpace(modelID) == "" {
 		return InferenceTestResult{}, fmt.Errorf("exact upstream model ID is required")
 	}
-	credential, found := s.Store.ConnectionCredentialByID(connectionID)
-	if !found {
-		return InferenceTestResult{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
-	}
 	node, err := s.Store.ProviderNodeByConnection(connectionID)
 	if err != nil {
 		return InferenceTestResult{}, fmt.Errorf("resolve provider for connection %q: %w", connectionID, err)
@@ -378,6 +388,10 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	}
 	if selected.ID == "" {
 		return InferenceTestResult{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, node.ID)
+	}
+	credential, err := s.Store.ConnectionCredentialBinding(ctx, connectionID)
+	if err != nil {
+		return InferenceTestResult{}, err
 	}
 	if err := validateCredentialBinding(node, selected, credential); err != nil {
 		return InferenceTestResult{}, err
@@ -397,13 +411,6 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	if !authModeExists || authMode.Flow == nil {
 		return InferenceTestResult{}, fmt.Errorf("provider definition %q does not bind credential type %q", node.DefinitionID, credential.Type)
 	}
-	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
-	if err != nil {
-		return InferenceTestResult{}, fmt.Errorf("resolve inference credential: %w", err)
-	}
-	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
-		return InferenceTestResult{}, err
-	}
 	sourceFormat, path, body, err := inferenceProbePayload(binding.Operation, modelID)
 	if err != nil {
 		return InferenceTestResult{}, err
@@ -419,17 +426,34 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	request.SourceFormat = sourceFormat
 	request.Stream = false
 	route := kernel.Route{
-		ID: connectionID + ":inference-probe", NodeID: node.ID, DefinitionID: node.DefinitionID,
+		ID: connectionID + ":inference-probe", NodeID: node.ID, DefinitionID: node.DefinitionID, DefinitionRef: node.DefinitionRef(),
 		DisplayPrefix: node.Prefix, ExternalModel: modelID, Protocol: binding.Protocol,
-		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType,
+		BaseURL: node.BaseURL, CredentialID: connectionID, CredentialType: selected.CredentialType, AuthFlowID: authMode.FlowID, CredentialRecovery: authMode.Recovery,
+		HealthGeneration:       kernel.RouteHealthGeneration{Connection: credential.OperationalGeneration(), Credential: credential.Revision},
 		CredentialPresentation: authMode.Presentation,
 		Enabled:                true, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{
 			request.Operation: {ContractVersion: binding.TaskRef.ContractVersion, AdapterIDs: []string{binding.AdapterID}},
 		},
 	}
+	route.SessionOperationRef = binding.TaskRef
+	lease, err := s.acquireCredentialLease(ctx, route, kernel.CredentialLeaseScopeForRoute(route))
+	if err != nil {
+		return InferenceTestResult{}, fmt.Errorf("acquire inference-probe credential lease: %w", err)
+	}
+	defer lease.Release()
+	resolvedCredential, err := lease.Borrow(ctx, kernel.CredentialLeaseScopeForRoute(route))
+	if err != nil {
+		return InferenceTestResult{}, err
+	}
 	upstream, err := binding.Adapter.Prepare(ctx, request, route, resolvedCredential)
+	if body, ok := upstream.Body.(io.Closer); ok {
+		defer body.Close()
+	}
 	if err != nil {
 		return InferenceTestResult{}, fmt.Errorf("prepare inference probe for model %q: %w", modelID, err)
+	}
+	if err := lease.ValidateForDispatch(ctx, kernel.CredentialLeaseScopeForRoute(route)); err != nil {
+		return InferenceTestResult{}, err
 	}
 	response, err := binding.Adapter.Execute(ctx, upstream)
 	if err != nil {
@@ -456,6 +480,9 @@ func (s Service) TestInference(ctx context.Context, connectionID, modelID string
 	}
 	if len(payload) == 0 || !json.Valid(payload) {
 		return result, fmt.Errorf("inference probe returned a non-JSON or empty response")
+	}
+	if err := lease.ValidateForDispatch(ctx, kernel.CredentialLeaseScopeForRoute(route)); err != nil {
+		return result, fmt.Errorf("credential lease expired after provider accepted inference probe; probe was not retried: %w", err)
 	}
 	return result, nil
 }
@@ -533,6 +560,13 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	if selected.ID == "" {
 		return fetchedModelCatalog{}, fmt.Errorf("enabled connection %q does not belong to provider %q", connectionID, nodeID)
 	}
+	credential, err := s.Store.ConnectionCredentialBinding(ctx, connectionID)
+	if err != nil {
+		return fetchedModelCatalog{}, err
+	}
+	if err := validateCredentialBinding(node, selected, credential); err != nil {
+		return fetchedModelCatalog{}, err
+	}
 	binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionRef(), provider.OperationModels)]
 	if !ok || binding.ModelSource == nil {
 		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q does not provide model discovery", node.DefinitionID)
@@ -545,7 +579,7 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 		if err != nil {
 			return fetchedModelCatalog{}, err
 		}
-		return fetchedModelCatalog{Node: node, Snapshot: catalog}, nil
+		return fetchedModelCatalog{Node: node, Binding: credential, Snapshot: catalog}, nil
 	}
 	if binding.Endpoint == nil || binding.Transport == nil {
 		return fetchedModelCatalog{}, fmt.Errorf("model source %q requires endpoint and transport primitives", binding.ModelSource.ID())
@@ -554,25 +588,28 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	if err != nil {
 		return fetchedModelCatalog{}, fmt.Errorf("resolve model-list endpoint: %w", err)
 	}
-	credential, found := s.Store.ConnectionCredentialByID(connectionID)
-	if !found {
-		return fetchedModelCatalog{}, fmt.Errorf("enabled credential for connection %q is unavailable", connectionID)
-	}
-	if err := validateCredentialBinding(node, selected, credential); err != nil {
-		return fetchedModelCatalog{}, err
-	}
 	authMode, authModeExists := binding.AuthModes[credential.Type]
 	if !authModeExists || authMode.Flow == nil {
 		return fetchedModelCatalog{}, fmt.Errorf("provider definition %q does not bind credential type %q for model discovery", node.DefinitionID, credential.Type)
 	}
-	resolvedCredential, err := authMode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: connectionID, Type: credential.Type, Secret: credential.Secret})
-	if err != nil {
-		return fetchedModelCatalog{}, fmt.Errorf("resolve discovery credential: %w", err)
+	if s.AcquireCredential == nil {
+		return fetchedModelCatalog{}, fmt.Errorf("credential lease resolver is unavailable")
 	}
-	if err := resolvedCredential.ValidateRuntimeContext(); err != nil {
+	if binding.ModelSourceRef.Validate() != nil {
+		return fetchedModelCatalog{}, fmt.Errorf("model source %q has no exact runtime reference", binding.ModelSource.ID())
+	}
+	route := discoveryRoute(node, selected, credential, binding, "", false)
+	scope := kernel.CredentialLeaseScopeForConsumer(route, binding.ModelSourceRef)
+	lease, err := s.acquireCredentialLease(ctx, route, scope)
+	if err != nil {
+		return fetchedModelCatalog{}, fmt.Errorf("acquire discovery credential lease: %w", err)
+	}
+	defer lease.Release()
+	resolvedCredential, err := lease.Borrow(ctx, scope)
+	if err != nil {
 		return fetchedModelCatalog{}, err
 	}
-	input := provider.ModelSourceInput{URL: endpoint, Credential: resolvedCredential, Presentation: authMode.Presentation, Client: s.Client}
+	input := provider.ModelSourceInput{URL: endpoint, Credential: resolvedCredential, Presentation: authMode.Presentation, Client: lease.GuardHTTPClient(scope, discoveryHTTPClient(s.Client))}
 	var catalog provider.ModelCatalogSnapshot
 	if test {
 		if tester, ok := binding.ModelSource.(provider.ConnectionTestModelCatalogSnapshotSource); ok {
@@ -587,23 +624,24 @@ func (s Service) fetchModels(ctx context.Context, nodeID, connectionID string, t
 	} else {
 		catalog.Models, err = binding.ModelSource.List(ctx, input)
 	}
+	validateErr := lease.ValidateForDispatch(ctx, scope)
 	if err != nil {
 		if test {
 			return fetchedModelCatalog{}, fmt.Errorf("test model-list endpoint for connection %q: %w", connectionID, err)
 		}
 		return fetchedModelCatalog{}, err
 	}
+	if validateErr != nil {
+		return fetchedModelCatalog{}, fmt.Errorf("discovery lease expired after accepted response: %w", validateErr)
+	}
+	if lease.Generation() == "" {
+		return fetchedModelCatalog{}, fmt.Errorf("discovery credential lease has no generation")
+	}
+	credential.Revision = lease.Generation()
 	if catalog.Evidence == "" {
 		catalog.Evidence = provider.ModelCatalogConnectionObserved
 	}
-	return fetchedModelCatalog{Node: node, Endpoint: endpoint, Snapshot: catalog}, nil
-}
-
-func validateCredentialBinding(node store.ProviderNode, selected store.ConnectionRecord, credential store.Credential) error {
-	if credential.ID != selected.ID || credential.Type != selected.CredentialType || !credential.Owner.Matches(node.ID, node.DefinitionRef()) {
-		return fmt.Errorf("connection auth binding changed; retry the connection operation")
-	}
-	return nil
+	return fetchedModelCatalog{Node: node, Binding: credential, Endpoint: endpoint, Snapshot: catalog}, nil
 }
 
 func endpointSummary(raw string) string {
@@ -618,20 +656,30 @@ func endpointSummary(raw string) string {
 }
 
 func (s Service) RefreshNode(ctx context.Context, nodeID string) (Result, error) {
-	stored, found := s.Store.ConnectionCredential(nodeID)
-	if !found {
-		return Result{}, fmt.Errorf("provider node %q has no enabled connection", nodeID)
-	}
 	node, err := s.Store.ProviderNode(nodeID)
 	if err != nil {
 		return Result{}, err
+	}
+	connections, err := s.Store.Connections(nodeID)
+	if err != nil {
+		return Result{}, err
+	}
+	var selected store.ConnectionRecord
+	for _, connection := range connections {
+		if connection.Enabled {
+			selected = connection
+			break
+		}
+	}
+	if selected.ID == "" {
+		return Result{}, fmt.Errorf("provider node %q has no enabled connection", nodeID)
 	}
 	if binding, ok := s.Bindings[provider.RuntimeBindingKey(node.DefinitionRef(), provider.OperationModels)]; ok {
 		if source, static := binding.ModelSource.(provider.StaticModelCatalogSource); static && source.StaticCatalog() {
 			return Result{}, fmt.Errorf("static model catalogs require an explicitly selected connection")
 		}
 	}
-	return s.RefreshConnection(ctx, nodeID, stored.ID)
+	return s.RefreshConnection(ctx, nodeID, selected.ID)
 }
 
 // RefreshConnection imports model IDs using the explicitly selected enabled
@@ -670,8 +718,8 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 	if err != nil {
 		return Result{}, err
 	}
-	var selectedRouteIDs []string
 	var selectedModelIDs []string
+	var modelInputs []store.UpsertCatalogModelInput
 	for _, model := range modelsToImport {
 		id := model.ID
 		routeID := "route_" + hash(nodeID+"\x00"+id)
@@ -680,10 +728,7 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 			raw[key] = value
 		}
 		raw["source"] = evidenceSource
-		if err := s.Store.UpsertCatalogModel(store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: nodeID, Kind: "discovered", ExternalID: id, DisplayName: model.DisplayName, Profile: model.Profile, Raw: raw}); err != nil {
-			return Result{}, err
-		}
-		selectedRouteIDs = append(selectedRouteIDs, routeID)
+		modelInputs = append(modelInputs, store.UpsertCatalogModelInput{ID: routeID, ProviderNodeID: nodeID, Kind: "discovered", ExternalID: id, DisplayName: model.DisplayName, Profile: model.Profile, Raw: raw})
 		selectedModelIDs = append(selectedModelIDs, id)
 	}
 	externalIDs := make([]string, 0, len(catalog.Models))
@@ -693,20 +738,13 @@ func (s Service) ImportConnectionModels(ctx context.Context, nodeID, connectionI
 	available := len(catalog.Models)
 	modelIDs := externalIDs
 	if catalog.Evidence == provider.ModelCatalogProviderRegistry {
-		if err := s.Store.SetStaticCatalogAssignments(connectionID, fetched.Node.ID, selectedRouteIDs); err != nil {
-			return Result{}, err
-		}
 		available = 0
 		modelIDs = selectedModelIDs
-	} else {
-		if err := s.Store.RecordConnectionModelSnapshot(connectionID, fetched.Node.ID, externalIDs, catalog.Complete, evidenceSource); err != nil {
-			return Result{}, err
-		}
-		if err := s.Store.ClearInvalidModelHealth(connectionID, externalIDs); err != nil {
-			return Result{}, err
-		}
 	}
-	return Result{NodeID: nodeID, ConnectionID: connectionID, Models: len(modelsToImport), ModelIDs: modelIDs, Available: available, CatalogModels: len(catalog.Models), Evidence: catalog.Evidence, Complete: catalog.Complete, URL: fetched.EndpointLabel()}, nil
+	if err := s.Store.ImportConnectionCatalog(ctx, store.CatalogImportInput{Expected: fetched.Binding, Node: fetched.Node, Models: modelInputs, ExternalIDs: externalIDs, Complete: catalog.Complete, Source: evidenceSource, Static: catalog.Evidence == provider.ModelCatalogProviderRegistry}); err != nil {
+		return Result{}, err
+	}
+	return Result{NodeID: nodeID, ConnectionID: connectionID, Models: len(modelsToImport), ModelIDs: modelIDs, Available: available, CatalogModels: len(catalog.Models), Evidence: catalog.Evidence, Complete: catalog.Complete, URL: fetched.EndpointLabel(), ConnectionGeneration: fetched.Binding.OperationalGeneration()}, nil
 }
 
 func selectModels(models []provider.ModelDescriptor, selectedIDs []string) ([]provider.ModelDescriptor, error) {

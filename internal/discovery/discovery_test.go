@@ -3,12 +3,15 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	openai "github.com/fm39hz/gobroom/internal/adapter/openai"
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -23,13 +26,92 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-type operationProbeAdapterFixture struct{ client *http.Client }
+// testLeaseIssuer models the composition root's lease issuer for discovery
+// tests. It intentionally lives in test code; production must provide an issuer.
+func testLeaseIssuer(state *store.Store, bindings map[string]provider.RuntimeBinding) kernel.ScopedCredentialLeaseResolver {
+	return func(ctx context.Context, route kernel.Route, scope kernel.CredentialLeaseScope) (*kernel.CredentialLease, error) {
+		expected := kernel.CredentialLeaseScopeForRoute(route)
+		if scope.UseRef != (extensions.Ref{}) {
+			expected = kernel.CredentialLeaseScopeForConsumer(route, scope.UseRef)
+		}
+		if scope != expected {
+			return nil, fmt.Errorf("lease scope does not match selected discovery route")
+		}
+		if route.AuthFlowID == "" || route.DefinitionRef.Kind != "provider-definition" || route.DefinitionRef.Validate() != nil || route.HealthGeneration.Connection == "" {
+			return nil, fmt.Errorf("discovery route is missing exact auth or owner metadata")
+		}
+		var mode *provider.BoundAuthMode
+		for _, binding := range bindings {
+			if binding.DefinitionRef != route.DefinitionRef {
+				continue
+			}
+			for _, candidate := range binding.AuthModes {
+				if candidate.FlowID == route.AuthFlowID {
+					selected := candidate
+					mode = &selected
+					break
+				}
+			}
+			if mode != nil {
+				break
+			}
+		}
+		if mode == nil || mode.Flow == nil {
+			return nil, fmt.Errorf("exact bound auth flow is unavailable")
+		}
+		stored, found := state.ConnectionCredentialByID(route.CredentialID)
+		if !found || stored.Type != route.CredentialType || stored.Owner.ProviderNodeID != route.NodeID || stored.Owner.Definition != route.DefinitionRef || stored.OperationalGeneration() != route.HealthGeneration.Connection {
+			return nil, fmt.Errorf("stored credential owner, principal, or type changed")
+		}
+		metadata, err := state.ConnectionCredentialBinding(ctx, route.CredentialID)
+		if err != nil || metadata.Revision != stored.Revision || metadata.PrincipalGeneration != stored.PrincipalGeneration || metadata.Owner != stored.Owner || metadata.Type != stored.Type {
+			return nil, fmt.Errorf("live credential metadata does not match stored credential")
+		}
+		material, err := mode.Flow.Resolve(ctx, provider.AuthInput{ConnectionID: stored.ID, Type: stored.Type, Secret: stored.Secret})
+		if err != nil {
+			return nil, err
+		}
+		material.Generation = stored.Revision
+		lease, err := kernel.NewCredentialLease(scope, material, time.Now().Add(time.Minute), func(checkCtx context.Context) error {
+			current, err := state.ConnectionCredentialBinding(checkCtx, route.CredentialID)
+			if err != nil || current.Revision != stored.Revision || current.PrincipalGeneration != stored.PrincipalGeneration || current.Owner != stored.Owner || current.Type != stored.Type {
+				return fmt.Errorf("credential binding changed during discovery")
+			}
+			return nil
+		}, nil)
+		if err != nil {
+			return nil, err
+		}
+		return lease, nil
+	}
+}
+
+type operationProbeAdapterFixture struct {
+	client       *http.Client
+	onPrepare    func()
+	executeCount *atomic.Int32
+	preparedBody *trackedProbeBody
+}
+
+type trackedProbeBody struct {
+	reader *strings.Reader
+	closed atomic.Bool
+}
+
+func (b *trackedProbeBody) Read(p []byte) (int, error) { return b.reader.Read(p) }
+func (b *trackedProbeBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
 
 func (a operationProbeAdapterFixture) ID() string { return "fixture-operation-probe" }
 func (a operationProbeAdapterFixture) PlanCompatibility(kernel.CompatibilityContext) kernel.CompatibilityPlan {
 	return kernel.CompatibilityPlan{Supported: true}
 }
 func (a operationProbeAdapterFixture) Prepare(_ context.Context, request kernel.NormalizedRequest, route kernel.Route, credential kernel.Credential) (kernel.UpstreamRequest, error) {
+	if a.onPrepare != nil {
+		a.onPrepare()
+	}
 	endpoint, err := (kernel.HTTPJSONEndpoint{}).Resolve(route.BaseURL, "/audio/transcriptions", kernel.EndpointOptions{})
 	if err != nil {
 		return kernel.UpstreamRequest{}, err
@@ -37,9 +119,16 @@ func (a operationProbeAdapterFixture) Prepare(_ context.Context, request kernel.
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+credential.Secret)
 	headers.Set("Content-Type", "application/json")
-	return kernel.UpstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: strings.NewReader(string(request.OperationPayload))}, nil
+	body := io.ReadCloser(io.NopCloser(strings.NewReader(string(request.OperationPayload))))
+	if a.preparedBody != nil {
+		body = a.preparedBody
+	}
+	return kernel.UpstreamRequest{Method: http.MethodPost, URL: endpoint, Headers: headers, Body: body}, nil
 }
 func (a operationProbeAdapterFixture) Execute(ctx context.Context, upstream kernel.UpstreamRequest) (kernel.UpstreamResponse, error) {
+	if a.executeCount != nil {
+		a.executeCount.Add(1)
+	}
 	request, err := http.NewRequestWithContext(ctx, upstream.Method, upstream.URL, upstream.Body)
 	if err != nil {
 		return kernel.UpstreamResponse{}, err
@@ -88,7 +177,7 @@ func TestRefreshNodeNormalizesModelsCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := (Service{Store: s, Client: client, Bindings: bindings}).RefreshNode(context.Background(), node.ID)
+	result, err := (Service{Store: s, Client: client, Bindings: bindings, AcquireCredential: testLeaseIssuer(s, bindings)}).RefreshNode(context.Background(), node.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +227,7 @@ func TestAnthropicConnectionModelDiscoveryUsesMessagesDefinitionAndAPIKey(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	preview, err := (Service{Store: s, Client: client, Bindings: bindings}).TestConnection(context.Background(), node.ID, connection.ID)
+	preview, err := (Service{Store: s, Client: client, Bindings: bindings, AcquireCredential: testLeaseIssuer(s, bindings)}).TestConnection(context.Background(), node.ID, connection.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +269,7 @@ func TestSelectiveImportStoresOnlyChosenRoutesAndConnectionEntitlements(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Store: s, Client: client, Bindings: bindings}
+	service := Service{Store: s, Client: client, Bindings: bindings, AcquireCredential: testLeaseIssuer(s, bindings)}
 	preview, err := service.PreviewConnectionModels(context.Background(), node.ID, selected.ID)
 	if err != nil || preview.ModelsFound != 3 || !preview.Complete || len(preview.Models) != 3 {
 		t.Fatalf("read-only import preview=%#v err=%v", preview, err)
@@ -268,7 +357,7 @@ func TestConnectionTestUsesSelectedCredentialAndRefreshImportsOnDemand(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Store: s, Client: client, Bindings: bindings}
+	service := Service{Store: s, Client: client, Bindings: bindings, AcquireCredential: testLeaseIssuer(s, bindings)}
 	preview, err := service.TestConnection(context.Background(), node.ID, selected.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +418,11 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Store: s, Bindings: bindings}
+	var leaseRequests int
+	service := Service{Store: s, Bindings: bindings, AcquireCredential: func(context.Context, kernel.Route, kernel.CredentialLeaseScope) (*kernel.CredentialLease, error) {
+		leaseRequests++
+		return nil, fmt.Errorf("static catalog must not request a credential lease")
+	}}
 	if _, err := service.TestConnection(context.Background(), node.ID, connection.ID); err == nil || !strings.Contains(err.Error(), "static catalog") {
 		t.Fatalf("static catalog produced a false-positive endpoint test: %v", err)
 	}
@@ -367,6 +460,9 @@ func TestConnectionTestRejectsStaticCatalogAsEndpointProbe(t *testing.T) {
 	}
 	if err != nil || len(assignedRoutes) != 1 || !assignedHere {
 		t.Fatalf("static provider assignment evidence=%#v err=%v", assignedRoutes, err)
+	}
+	if leaseRequests != 0 {
+		t.Fatalf("static catalog requested %d credential leases", leaseRequests)
 	}
 	if _, err := service.ImportConnectionModels(context.Background(), node.ID, connection.ID, ModelImportOptions{ModelIDs: []string{}}); err != nil {
 		t.Fatalf("clear static model assignments: %v", err)
@@ -420,8 +516,9 @@ func TestInferenceProbeWorksWithoutModelListOperationAndDoesNotImport(t *testing
 	}
 	adapter := openai.NewAdapter()
 	task := *provider.OperationRef(normalize.OperationChatGenerate, 1)
-	binding := provider.RuntimeBinding{DefinitionID: "inference-only", DefinitionRef: provider.ProviderDefinitionRef("inference-only", 1), Operation: provider.OperationChat, TaskRef: task, Protocol: kernel.ProtocolOpenAIChat, ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}}}
-	service := Service{Store: state, Bindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(provider.ProviderDefinitionRef("inference-only", 1), provider.OperationChat): binding}}
+	binding := provider.RuntimeBinding{DefinitionID: "inference-only", DefinitionRef: provider.ProviderDefinitionRef("inference-only", 1), Operation: provider.OperationChat, TaskRef: task, Protocol: kernel.ProtocolOpenAIChat, ProviderFormat: normalize.FormatOpenAIChat, AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {FlowID: "static-secret", Flow: provider.StaticSecretAuth{}, Presentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "}}}}
+	inferenceBindings := map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(provider.ProviderDefinitionRef("inference-only", 1), provider.OperationChat): binding}
+	service := Service{Store: state, Bindings: inferenceBindings, AcquireCredential: testLeaseIssuer(state, inferenceBindings)}
 	result, err := service.TestInference(context.Background(), connection.ID, "manual/model-x")
 	if err != nil {
 		t.Fatal(err)
@@ -452,7 +549,8 @@ func TestInferenceProbeRequiresAnInferenceOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Store: state, Bindings: map[string]provider.RuntimeBinding{}}
+	emptyBindings := map[string]provider.RuntimeBinding{}
+	service := Service{Store: state, Bindings: emptyBindings, AcquireCredential: testLeaseIssuer(state, emptyBindings)}
 	if _, err := service.TestInference(context.Background(), connection.ID, "manual/model-x"); err == nil || !strings.Contains(err.Error(), "no compatible inference operation") {
 		t.Fatalf("missing inference operation was accepted: %v", err)
 	}
@@ -505,16 +603,18 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := operationProbeAdapterFixture{client: upstream.Client()}
+	var executeCount atomic.Int32
+	adapter := operationProbeAdapterFixture{client: upstream.Client(), executeCount: &executeCount}
 	binding := provider.RuntimeBinding{
 		DefinitionID: node.DefinitionID, DefinitionRef: node.DefinitionRef(), Operation: provider.OperationAudio, TaskRef: operationRef,
 		Protocol: kernel.Protocol(node.Protocol), ProviderFormat: normalize.Format("vendor-audio"),
-		AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {Flow: provider.StaticSecretAuth{}}},
+		AdapterID: adapter.ID(), Adapter: adapter, AuthModes: map[string]provider.BoundAuthMode{"api_key": {FlowID: "static-secret", Flow: provider.StaticSecretAuth{}}},
 	}
 	service := Service{
 		Store: state, Bindings: map[string]provider.RuntimeBinding{provider.RuntimeBindingKey(binding.DefinitionRef, provider.OperationAudio): binding},
 		Operations: operationSnapshot,
 	}
+	service.AcquireCredential = testLeaseIssuer(state, service.Bindings)
 	payload := json.RawMessage(`{"audio_url":"https://assets.example/audio.wav","language":"vi"}`)
 	result, err := service.TestOperation(context.Background(), OperationProbeInput{ConnectionID: connection.ID, OperationID: string(provider.OperationAudio), ModelID: "asr-v4", Payload: payload})
 	if err != nil {
@@ -532,6 +632,28 @@ func TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage(t *test
 	}
 	if upstreamCalls != 1 {
 		t.Fatalf("invalid operation payload dispatched to provider: calls=%d", upstreamCalls)
+	}
+	storedCredential, found := state.ConnectionCredentialByID(connection.ID)
+	if !found {
+		t.Fatal("probe credential disappeared")
+	}
+	trackedBody := &trackedProbeBody{reader: strings.NewReader("probe body")}
+	adapter.onPrepare = func() {
+		if _, err := state.CompareAndSwapConnectionCredential(context.Background(), storedCredential, "rotated-during-prepare", store.CredentialRenewal); err != nil {
+			t.Errorf("rotate credential during probe preparation: %v", err)
+		}
+	}
+	adapter.preparedBody = trackedBody
+	binding.Adapter = adapter
+	service.Bindings[provider.RuntimeBindingKey(binding.DefinitionRef, provider.OperationAudio)] = binding
+	if _, err := service.TestOperation(context.Background(), OperationProbeInput{ConnectionID: connection.ID, OperationID: string(provider.OperationAudio), ModelID: "asr-v4", Payload: payload}); err == nil {
+		t.Fatal("operation probe executed after credential revision changed during preparation")
+	}
+	if executeCount.Load() != 1 || upstreamCalls != 1 {
+		t.Fatalf("probe executed after stale preparation: adapter calls=%d HTTP calls=%d", executeCount.Load(), upstreamCalls)
+	}
+	if !trackedBody.closed.Load() {
+		t.Fatal("prepared probe body was not closed after the dispatch fence rejected it")
 	}
 	chatBinding := binding
 	chatBinding.Operation = provider.OperationChat
@@ -583,7 +705,7 @@ func TestConnectionTestUsesSelectedCredentialAndRefreshCanImportThatConnection(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Store: s, Client: client, Bindings: bindings}
+	service := Service{Store: s, Client: client, Bindings: bindings, AcquireCredential: testLeaseIssuer(s, bindings)}
 	preview, err := service.TestConnection(context.Background(), node.ID, selected.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -642,7 +764,7 @@ func TestConnectionTestUsesSelectedAccountAndPreviewsWithoutImporting(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := Service{Store: s, Client: client, Bindings: bindings}
+	service := Service{Store: s, Client: client, Bindings: bindings, AcquireCredential: testLeaseIssuer(s, bindings)}
 	result, err := service.TestConnection(context.Background(), node.ID, selected.ID)
 	if err != nil {
 		t.Fatal(err)

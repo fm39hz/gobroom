@@ -651,6 +651,18 @@ const (
 // complete upstream snapshot is authoritative enough to mark previously known
 // routes absent; incomplete pages can never revoke access evidence.
 func (s *Store) RecordConnectionModelSnapshot(connectionID, providerNodeID string, externalIDs []string, complete bool, source string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := recordConnectionModelSnapshotTx(tx, connectionID, providerNodeID, externalIDs, complete, source); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func recordConnectionModelSnapshotTx(tx *sql.Tx, connectionID, providerNodeID string, externalIDs []string, complete bool, source string) error {
 	if connectionID == "" || providerNodeID == "" {
 		return fmt.Errorf("connection ID and provider node ID are required")
 	}
@@ -658,7 +670,7 @@ func (s *Store) RecordConnectionModelSnapshot(connectionID, providerNodeID strin
 		source = "models_endpoint"
 	}
 	var actualNodeID string
-	if err := s.DB.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&actualNodeID); err != nil {
+	if err := tx.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&actualNodeID); err != nil {
 		return fmt.Errorf("load connection %q: %w", connectionID, err)
 	}
 	if actualNodeID != providerNodeID {
@@ -671,11 +683,6 @@ func (s *Store) RecordConnectionModelSnapshot(connectionID, providerNodeID strin
 		}
 		seen[externalID] = struct{}{}
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	if complete {
 		if _, err := tx.Exec(`UPDATE connection_model_catalog SET status=?,source=?,observed_at=CURRENT_TIMESTAMP WHERE connection_id=? AND provider_node_id=?`, EntitlementNotListed, source, connectionID, providerNodeID); err != nil {
 			return err
@@ -712,7 +719,7 @@ func (s *Store) RecordConnectionModelSnapshot(connectionID, providerNodeID strin
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) ConnectionModelEntitlements(providerNodeID string) ([]ConnectionModelEntitlement, error) {
@@ -742,11 +749,23 @@ func (s *Store) ConnectionModelEntitlements(providerNodeID string) ([]Connection
 // SetStaticCatalogAssignments replaces the explicit user selection for one
 // connection. These assignments are routing intent, not observed entitlement.
 func (s *Store) SetStaticCatalogAssignments(connectionID, providerNodeID string, routeIDs []string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := setStaticCatalogAssignmentsTx(tx, connectionID, providerNodeID, routeIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func setStaticCatalogAssignmentsTx(tx *sql.Tx, connectionID, providerNodeID string, routeIDs []string) error {
 	if connectionID == "" || providerNodeID == "" {
 		return fmt.Errorf("connection ID and provider node ID are required")
 	}
 	var actualNodeID string
-	if err := s.DB.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&actualNodeID); err != nil {
+	if err := tx.QueryRow(`SELECT provider_node_id FROM connections WHERE id=?`, connectionID).Scan(&actualNodeID); err != nil {
 		return fmt.Errorf("load connection %q: %w", connectionID, err)
 	}
 	if actualNodeID != providerNodeID {
@@ -762,11 +781,6 @@ func (s *Store) SetStaticCatalogAssignments(connectionID, providerNodeID string,
 		}
 		seen[routeID] = struct{}{}
 	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 	if _, err := tx.Exec(`DELETE FROM model_connection_assignments WHERE connection_id=? AND source=? AND model_id IN (SELECT id FROM model_catalog WHERE provider_node_id=? AND kind='discovered')`, connectionID, ModelAssignmentStaticCatalog, providerNodeID); err != nil {
 		return err
 	}
@@ -782,7 +796,7 @@ func (s *Store) SetStaticCatalogAssignments(connectionID, providerNodeID string,
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) StaticCatalogAssignedModels(connectionID, providerNodeID string) ([]string, error) {
@@ -934,14 +948,21 @@ func (s *Store) ResetProviderRoutingState(providerNodeID string) error {
 }
 
 func (s *Store) ClearInvalidModelHealth(connectionID string, modelIDs []string) error {
-	if connectionID == "" {
-		return fmt.Errorf("connection ID is required")
-	}
 	tx, err := s.DB.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := clearInvalidModelHealthTx(tx, connectionID, modelIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func clearInvalidModelHealthTx(tx *sql.Tx, connectionID string, modelIDs []string) error {
+	if connectionID == "" {
+		return fmt.Errorf("connection ID is required")
+	}
 	for _, modelID := range modelIDs {
 		if modelID == "" {
 			continue
@@ -950,7 +971,7 @@ func (s *Store) ClearInvalidModelHealth(connectionID string, modelIDs []string) 
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) SaveConnectionTransport(item ConnectionTransport) error {
@@ -1591,6 +1612,19 @@ func (s *Store) UpsertCatalogModel(input UpsertCatalogModelInput) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := upsertCatalogModelTx(tx, input); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func upsertCatalogModelTx(tx *sql.Tx, input UpsertCatalogModelInput) error {
+	if input.ID == "" || input.DisplayName == "" {
+		return fmt.Errorf("model ID and display name are required")
+	}
+	if input.Kind == "" {
+		input.Kind = "custom"
+	}
 	if input.Kind == "custom" {
 		if input.ProviderNodeID == "" || input.ExternalID == "" {
 			return fmt.Errorf("custom models require a provider and exact upstream model ID")
@@ -1626,10 +1660,22 @@ func (s *Store) UpsertCatalogModel(input UpsertCatalogModelInput) error {
 			return fmt.Errorf("custom model connection %q belongs to provider %q, not %q", connectionID, owner, input.ProviderNodeID)
 		}
 	}
-	caps, _ := json.Marshal(input.Profile)
-	limits, _ := json.Marshal(input.Limits)
-	overrides, _ := json.Marshal(input.Overrides)
-	raw, _ := json.Marshal(input.Raw)
+	caps, err := json.Marshal(input.Profile)
+	if err != nil {
+		return err
+	}
+	limits, err := json.Marshal(input.Limits)
+	if err != nil {
+		return err
+	}
+	overrides, err := json.Marshal(input.Overrides)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(input.Raw)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.Exec(`INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,capabilities_json,limits_json,overrides_json,raw_json,enabled,last_seen_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,1,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
 ON CONFLICT(id) DO UPDATE SET provider_node_id=excluded.provider_node_id,kind=excluded.kind,external_id=excluded.external_id,
@@ -1647,7 +1693,7 @@ raw_json=excluded.raw_json,enabled=1,updated_at=CURRENT_TIMESTAMP`, input.ID, in
 			}
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) DeleteCatalogModel(id string) error {

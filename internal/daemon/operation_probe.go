@@ -241,8 +241,8 @@ func (d *Daemon) serveOperationProbe(w http.ResponseWriter, r *http.Request) {
 		failProbe(err)
 		return
 	}
-	service := discovery.Service{Store: d.store, Bindings: d.providerBindings, Operations: snapshot, Artifacts: d.artifactStore}
-	definition, task, ports, err := service.OperationProbeContract(metadata.Request)
+	service := d.discoveryService(snapshot)
+	definition, task, ports, err := service.OperationProbeContract(r.Context(), metadata.Request)
 	if err != nil {
 		failProbe(err)
 		return

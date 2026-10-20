@@ -740,3 +740,31 @@ three external verticals passed three installed-CLI race runs; the quota case
 passed three more with CLI `quota` reading state after restart. The main daemon
 reported control=serving=478 and bundle-v9 validation succeeded. No new live
 provider or whole-product performance acceptance is implied.
+
+### Discovery, probe and catalog commit authority
+
+`TestCredentialLeaseHTTPGuard*` covers independent client settings, per-page
+authority checks, rejected-body cleanup, cancellation and redirect prevention.
+`TestDiscoveryMissingLeaseIssuerFailsClosedBeforeHTTP` removes the raw resolver
+alternative; revision/pagination and wrong-scope fixtures exercise rejection and
+lease release. Existing static-catalog and onboarding fixtures now use the
+mandatory issuer contract without introducing network work for local catalogs.
+`TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage` also
+rotates material during preparation and checks no dispatch plus body cleanup.
+`TestDiscoveryCredentialLeaseRenewalCanCommitCatalog` proves the new revision
+after proactive renewal is the one used for publication.
+
+`TestImportConnectionCatalog*` exercises complete vs incomplete evidence,
+explicit static assignment, stale owner/principal/revision/endpoint rejection,
+mid-import rollback and cancellation after a prior model write. The existing
+immediate-writer transaction fixture supplies the SQL reservation invariant;
+all catalog/evidence/invalid-health operations reuse transaction helpers.
+
+`TestExternalDiscoveryLeaseFencesPaginationAndCatalogImport` uses the existing
+Anthropic pagination primitive through a manifest, replaces credentials after
+the first page is accepted, checks no second send/no stale import, imports a
+fresh catalog and verifies it after restart. Redirect targets remain untouched.
+`TestExternalInferenceProbeLeaseFencesPreparedCredential` stops a probe between
+prepare and dispatch, then succeeds with new material. Both support installed
+CLI control via `GOBROOM_TEST_CLI`; they are fake-provider tests, not live OAuth
+or full C4/SG2/M15 closure.

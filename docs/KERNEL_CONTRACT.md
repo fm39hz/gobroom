@@ -144,9 +144,31 @@ signals are dropped without advancing their cooldown, rather than queuing more
 goroutines. Polling remains opt-in. Trusted in-process sources must use the provided
 transport; this is a lifecycle contract, not a plugin sandbox.
 
-This integration covers inference and quota reads. Discovery, connection probes
-and other daemon-owned outbound jobs still require convergence before the whole
-credential-lease architecture gate is closed.
+Discovery uses the same issuer with an exact model-source consumer ref. A cloned
+standard HTTP client guards each RoundTrip, including pagination, and refuses
+redirects without mutating the injected client. Static registries remain local
+and do not request a network credential lease. Discovery reads binding metadata,
+not durable secrets; a renewed lease supplies the post-renewal private revision.
+
+Catalog import reserves the SQLite writer before validating that revision,
+principal/owner and selected provider definition/endpoint. Catalog rows,
+connection entitlement/assignment evidence and invalid-model health updates
+commit together through shared transaction helpers, or all roll back. Incomplete
+snapshots still cannot revoke absent models; static selection remains explicit
+assignment rather than entitlement evidence. Runtime invalid-model clearing is
+also fenced by the imported principal generation.
+
+Connection inference/operation probes acquire operation-scoped leases and check
+after preparation/before dispatch. Prepared bodies close even on preparation
+failure. A lease invalidated after acceptance returns a stale-test error without
+repeating a billable or resource-creating operation. Caller context reaches
+probe metadata admission and the SQL transaction.
+
+This covers the current inference, quota, discovery and connection-probe
+credential consumers. Setup/exchange/state-validation remain issuer/coordinator
+work, not permission to bypass these consumer boundaries. Full auth composition,
+frontend action editing, live-provider acceptance and the broader architecture
+gates still require separate proof; these are not plugin-sandbox guarantees.
 
 ## Runtime events
 

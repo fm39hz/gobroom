@@ -93,6 +93,12 @@ Quota enrichment keeps `golang.org/x/sync/singleflight` for deduplication and
 standard context/WaitGroup for cancellation and drain. Private deduplication
 identities use a typed JSON binding rather than delimiter-based field packing;
 no additional task scheduler or lease cache is introduced.
+Discovery adds a thin `net/http.RoundTripper` lease guard and clones the standard
+client; existing OpenAI/Anthropic catalog primitives still own decoding and
+pagination. Import atomicity reuses `database/sql` transactions and the current
+SQLite driver's immediate writer reservation. Credential-binding reads and
+catalog/evidence writes share DB/transaction helpers rather than duplicated SQL
+or an additional persistence/locking library.
 
 | Area | Library/tool | Version checked | Decision |
 |---|---|---:|---|

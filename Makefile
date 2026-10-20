@@ -37,6 +37,7 @@ test: test-external-provider-module ## unit and integration tests, including the
 	go test ./...
 
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
+	go test ./internal/store ./internal/discovery ./internal/kernel ./internal/daemon -run '^(TestImportConnectionCatalog|TestDiscovery|TestCredentialLeaseHTTP|TestOperationProbeValidatesExactNonChatPayloadAndDoesNotRecordUsage|TestIPCInferenceProbeWorksWithoutModelDiscoveryOperation)' -count=1
 	go test ./internal/runtime ./internal/daemon -run '^(TestQuotaLease|TestOpportunisticQuota|TestQuotaRequestKey|TestAcquireQuotaCredentialLease|TestQuotaCredentialLease)' -count=1
 	go test ./internal/kernel ./internal/store ./internal/daemon -run '^(TestCredentialLease|TestConnectionCredentialBinding|TestIssueCredentialLease|TestRefreshCredentialLease|TestAcquireCredentialLease)' -count=1
 	go test ./internal/daemon -run '^TestCallOperationProbe' -count=1

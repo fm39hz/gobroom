@@ -14,11 +14,23 @@ type CredentialBinding struct {
 	Owner                                   CredentialOwner
 }
 
+func (b CredentialBinding) OperationalGeneration() string {
+	return configGeneration(b.ID, b.Type, b.PrincipalGeneration)
+}
+
 // ConnectionCredentialBinding reads the current enabled binding for a
 // connection without selecting its secret.
 func (s *Store) ConnectionCredentialBinding(ctx context.Context, id string) (CredentialBinding, error) {
+	return readCredentialBinding(ctx, s.DB, id)
+}
+
+type credentialBindingReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func readCredentialBinding(ctx context.Context, reader credentialBindingReader, id string) (CredentialBinding, error) {
 	var binding CredentialBinding
-	err := s.DB.QueryRowContext(ctx, `SELECT c.id,c.credential_type,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version
+	err := reader.QueryRowContext(ctx, `SELECT c.id,c.credential_type,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version
 FROM connections c
 JOIN connection_credential_revisions r ON r.connection_id=c.id
 JOIN connection_principals cp ON cp.connection_id=c.id

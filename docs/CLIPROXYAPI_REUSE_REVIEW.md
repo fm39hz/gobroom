@@ -68,6 +68,16 @@ still owns deduplication; typed principal/revision identities isolate old work.
 Standard contexts and WaitGroup track queued/admitted workers through daemon
 shutdown. No management handler, conductor or custom singleflight is copied.
 
+Discovery follow-up: the reference registry (`internal/registry/model_registry.go`)
+keeps client-specific model metadata separately from request execution. Gobroom
+keeps its own model-source/import workflow and extends the already observed
+stale-owner problem to catalog publication: every HTTP page uses a standard
+guarded client and catalog/entitlement/health updates validate the observed
+binding inside one SQL transaction. Existing provider pagination/decoding is
+reused, and native `database/sql` plus SQLite writer reservation enforce the
+commit boundary. No reference registry, model alias state or custom HTTP stack
+is imported. Probes use the same issuer rather than a second auth resolver.
+
 Callback ownership follow-up: `internal/auth/claude/oauth_server.go` and the
 Codex equivalent probe a port before starting a listener, while Devin's
 `internal/auth/devin/devin_auth.go` retains a directly bound loopback listener.

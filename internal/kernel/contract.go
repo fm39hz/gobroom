@@ -515,6 +515,7 @@ func (c Credential) ValidateAuthContext() error {
 }
 
 type CredentialLeaseResolver func(context.Context, Route) (*CredentialLease, error)
+type ScopedCredentialLeaseResolver func(context.Context, Route, CredentialLeaseScope) (*CredentialLease, error)
 type CredentialLeaseRefresher func(context.Context, Route, *CredentialLease) (*CredentialLease, error)
 
 type StreamHooks struct {

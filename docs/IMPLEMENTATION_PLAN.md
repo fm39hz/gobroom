@@ -294,8 +294,12 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    now use exact consumer refs and guarded per-report transport dispatch;
    revision-fenced partial results are discarded. Detached enrichment is
    bounded by `x/sync/semaphore` and canceled/drained by daemon lifetime.
-   Remaining: generic TUI action editing, discovery/probe outbound lease
-   convergence, broader lifecycle races
+   Discovery now uses an exact model-source consumer ref and guards each HTTP
+   page; connection probes use operation leases before dispatch. Import checks
+   binding revision/owner and provider endpoint in the same immediate SQL
+   transaction as catalog, evidence and invalid-model health updates. Shared
+   transaction helpers preserve static assignment and incomplete-list semantics.
+   Remaining: generic TUI action editing, broader lifecycle races
    and HTTPS/non-loopback callback integrations. Prepared request signing now
    has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations
@@ -314,7 +318,8 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    are read together, pinned route mode/auth bindings are checked before the
    driver, and final SQL CAS checks ownership. Definition ID/version changes
    transactionally rotate child revisions, including ABA; provider-node renames
-   and unchanged definition values do not. Serving and quota share one resolver.
+   and unchanged definition values do not. Serving, quota, discovery and probes
+   share one issuer; source services do not resolve durable credential state.
    Unit fixtures cover stale route/code/device/refresh rejection, forged owner,
    rollback and unrelated-node isolation; a public daemon fixture rejects old
    setup after version rebind/ABA, then accepts a fresh current-owner setup and

@@ -1098,7 +1098,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if input.NodeID == "" {
 			return fail(request, "nodeID is required")
 		}
-		service := discovery.Service{Store: d.store, Bindings: d.providerBindings}
+		service := d.discoveryService(nil)
 		var result discovery.Result
 		var err error
 		if input.ConnectionID == "" {
@@ -1118,7 +1118,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 				availableModels[modelID] = struct{}{}
 			}
 			for _, route := range d.kernel.Snapshots.Load().Routes {
-				if route.NodeID != result.NodeID || route.CredentialID != result.ConnectionID {
+				if route.NodeID != result.NodeID || route.CredentialID != result.ConnectionID || route.HealthGeneration.Connection != result.ConnectionGeneration {
 					continue
 				}
 				if _, found := availableModels[route.ExternalModel]; !found {
@@ -1454,13 +1454,13 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings}).TestConnection(ctx, nodeID, connectionID)
+		result, err := d.discoveryService(nil).TestConnection(ctx, nodeID, connectionID)
 		if err != nil {
 			return fail(request, err.Error())
 		}
 		return success(request, result)
 	case "connections.test_inference":
-		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings}).TestInference(ctx, stringParam(request.Params, "connectionID"), stringParam(request.Params, "modelID"))
+		result, err := d.discoveryService(nil).TestInference(ctx, stringParam(request.Params, "connectionID"), stringParam(request.Params, "modelID"))
 		if err != nil {
 			return fail(request, err.Error())
 		}
@@ -1482,7 +1482,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings, Operations: operationSnapshot, Artifacts: d.artifactStore}).TestOperation(ctx, input)
+		result, err := d.discoveryService(operationSnapshot).TestOperation(ctx, input)
 		if err != nil {
 			return fail(request, err.Error())
 		}
@@ -1493,7 +1493,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, err.Error())
 		}
-		result, err := (discovery.Service{Store: d.store, Bindings: d.providerBindings}).PreviewConnectionModels(ctx, nodeID, connectionID)
+		result, err := d.discoveryService(nil).PreviewConnectionModels(ctx, nodeID, connectionID)
 		if err != nil {
 			return fail(request, err.Error())
 		}
