@@ -710,3 +710,25 @@ focused race tests passed. After `make install-all`, the dispatch-fence and
 principal-renewal external fixtures passed three installed-CLI race runs. Main
 daemon control=serving=477 and bundle-v9 export/validate remained valid. These
 checks use deterministic fake issuers/upstreams, not new live-provider coverage.
+
+### Quota consumer authority and worker lifetime
+
+`TestCredentialLeaseQuotaScopeIsDistinctAndExact` validates exclusive operation
+vs exact consumer scope without adding a provider-kind switch to the kernel.
+`TestCredentialLeaseGuard*` exercises per-send validation, nil/released authority,
+body cleanup, response preservation and expiry without holding locks across the
+transport. Quota issuer fixtures use live SQLite metadata to reject resaves.
+`TestQuotaLease*` checks stale multi-report/partial-result rejection, release on
+success/error and virtual expiry. `TestQuotaRequestKey*` isolates generations
+while retaining connection-scoped deduplication. `TestOpportunisticQuota*`
+retains detached client behavior, tests lifetime cancellation/Close drain, and
+bounds admitted workers without cooldowning dropped signals.
+
+The external quota module reuses the HTTP JSON quota primitive, triggers work
+from an actual upstream 429, and blocks before the host transport. It replaces
+the selected credential through public control, verifies zero quota HTTP calls,
+then stops/restarts the daemon to inspect durable absence of its obsolete
+quota window. Fresh inference succeeds with the replacement. The fixture can
+use the installed CLI via `GOBROOM_TEST_CLI`. Sources remain trusted code and
+must use the host-provided transport; no plugin sandbox or atomic network
+revocation is claimed. Discovery/probes and remaining C4/SG2 gates remain open.

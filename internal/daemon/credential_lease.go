@@ -12,6 +12,14 @@ import (
 // Credential resolution and provider refresh may perform network I/O. The
 // final dispatch fence reads only live owner/revision metadata, never secrets.
 func (d *Daemon) acquireCredentialLease(ctx context.Context, route kernel.Route) (*kernel.CredentialLease, error) {
+	return d.acquireScopedCredentialLease(ctx, route, kernel.CredentialLeaseScopeForRoute(route))
+}
+
+func (d *Daemon) acquireQuotaCredentialLease(ctx context.Context, route kernel.Route) (*kernel.CredentialLease, error) {
+	return d.acquireScopedCredentialLease(ctx, route, kernel.CredentialLeaseScopeForQuota(route))
+}
+
+func (d *Daemon) acquireScopedCredentialLease(ctx context.Context, route kernel.Route, scope kernel.CredentialLeaseScope) (*kernel.CredentialLease, error) {
 	material, err := d.resolveCredential(ctx, route)
 	if err != nil {
 		return nil, err
@@ -22,7 +30,7 @@ func (d *Daemon) acquireCredentialLease(ctx context.Context, route kernel.Route)
 			return nil, err
 		}
 	}
-	return d.issueCredentialLease(ctx, route, material)
+	return d.issueScopedCredentialLease(ctx, route, scope, material)
 }
 
 func (d *Daemon) refreshCredentialLease(ctx context.Context, route kernel.Route, previous *kernel.CredentialLease) (*kernel.CredentialLease, error) {
@@ -38,6 +46,10 @@ func (d *Daemon) refreshCredentialLease(ctx context.Context, route kernel.Route,
 }
 
 func (d *Daemon) issueCredentialLease(ctx context.Context, route kernel.Route, material kernel.Credential) (*kernel.CredentialLease, error) {
+	return d.issueScopedCredentialLease(ctx, route, kernel.CredentialLeaseScopeForRoute(route), material)
+}
+
+func (d *Daemon) issueScopedCredentialLease(ctx context.Context, route kernel.Route, scope kernel.CredentialLeaseScope, material kernel.Credential) (*kernel.CredentialLease, error) {
 	ctx, cancel := d.credentialOperationContext(ctx)
 	defer cancel()
 	if err := d.credentialContextError(ctx); err != nil {
@@ -60,7 +72,7 @@ func (d *Daemon) issueCredentialLease(ctx context.Context, route kernel.Route, m
 	if deadline, ok := ctx.Deadline(); ok && deadline.Before(expires) {
 		expires = deadline
 	}
-	return kernel.NewCredentialLease(kernel.CredentialLeaseScopeForRoute(route), material, expires, func(dispatchCtx context.Context) error {
+	return kernel.NewCredentialLease(scope, material, expires, func(dispatchCtx context.Context) error {
 		if err := d.credentialContextError(dispatchCtx); err != nil {
 			return err
 		}

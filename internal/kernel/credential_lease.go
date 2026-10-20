@@ -34,6 +34,23 @@ type CredentialLeaseScope struct {
 	DefinitionRef       extensions.Ref
 	Protocol            Protocol
 	OperationRef        extensions.Ref
+	// UseRef identifies a non-inference credential consumer. Exactly one of
+	// OperationRef or UseRef is set; quota reads cannot borrow inference rights.
+	UseRef extensions.Ref
+}
+
+func CredentialLeaseScopeForQuota(route Route) CredentialLeaseScope {
+	return CredentialLeaseScopeForConsumer(route, route.QuotaSourceRef)
+}
+
+// CredentialLeaseScopeForConsumer binds a control/background primitive without
+// borrowing the selected inference operation's authority. The composition root
+// resolves the exact consumer from its frozen extension catalog.
+func CredentialLeaseScopeForConsumer(route Route, consumer extensions.Ref) CredentialLeaseScope {
+	scope := CredentialLeaseScopeForRoute(route)
+	scope.OperationRef = extensions.Ref{}
+	scope.UseRef = consumer
+	return scope
 }
 
 func CredentialLeaseScopeForRoute(route Route) CredentialLeaseScope {
@@ -46,8 +63,15 @@ func CredentialLeaseScopeForRoute(route Route) CredentialLeaseScope {
 }
 
 func (s CredentialLeaseScope) validate() error {
-	if s.RouteID == "" || s.OperationRef.Kind != "operation" || s.OperationRef.Validate() != nil {
-		return fmt.Errorf("%w: route ID and valid operation reference are required", errInvalidCredentialLease)
+	if s.RouteID == "" {
+		return fmt.Errorf("%w: route ID is required", errInvalidCredentialLease)
+	}
+	if s.UseRef != (extensions.Ref{}) {
+		if s.OperationRef != (extensions.Ref{}) || s.UseRef.Validate() != nil {
+			return fmt.Errorf("%w: an exact consumer without inference authority is required", errInvalidCredentialLease)
+		}
+	} else if s.OperationRef.Kind != "operation" || s.OperationRef.Validate() != nil {
+		return fmt.Errorf("%w: valid operation reference is required", errInvalidCredentialLease)
 	}
 	return nil
 }

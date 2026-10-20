@@ -106,8 +106,11 @@ and fidelity contract.
 
 Each admitted attempt owns a bounded `CredentialLease`. Its exact scope binds
 route, provider node/definition contract, connection/mode/flow, base URL, model,
-protocol, stable principal and operation contract. The issuer's credential
-revision remains private. `Credential` is transient codec/signing material, not
+protocol, stable principal and one exact operation or consumer contract. A
+background consumer ref (`UseRef`) never carries inference `OperationRef`
+authority; the composition root resolves it from the frozen catalog. The
+kernel validates exact refs without a provider/consumer-kind whitelist. The
+issuer's credential revision remains private. `Credential` is transient codec/signing material, not
 authority to dispatch; borrowed headers/context are copied. An installed issuer
 cannot be bypassed by supplying raw caller material.
 
@@ -128,8 +131,21 @@ modes without refresh fail locally. Scope/lease formatting and JSON are
 redacted. Dropping references does not claim to erase immutable Go strings or
 copies retained by trusted in-process codecs.
 
-This integration covers kernel inference attempts. Discovery, quota reads and
-other daemon-owned outbound jobs still require convergence before the whole
+Quota reads share lease issuance but use the exact quota-source ref. Polling
+and opportunistic enrichment borrow transient material and pass the source a
+lease-guarded transport: every report send is fenced independently after source
+preparation. Final validation discards the whole result if authority changed,
+even when a source returns partial data. Singleflight/cooldown identities bind
+principal and credential revision; old work cannot suppress a new account's
+read. Caller disconnect is detached, but daemon lifetime and explicit close
+cancel/drain queued and admitted work before quota persistence or the DB closes.
+An `x/sync/semaphore` bounds enrichment admission (default 16 workers); excess
+signals are dropped without advancing their cooldown, rather than queuing more
+goroutines. Polling remains opt-in. Trusted in-process sources must use the provided
+transport; this is a lifecycle contract, not a plugin sandbox.
+
+This integration covers inference and quota reads. Discovery, connection probes
+and other daemon-owned outbound jobs still require convergence before the whole
 credential-lease architecture gate is closed.
 
 ## Runtime events

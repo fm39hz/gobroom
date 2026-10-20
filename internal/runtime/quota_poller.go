@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -11,25 +13,42 @@ import (
 )
 
 type QuotaPoller struct {
-	Sources    map[extensions.Ref]provider.QuotaSource
-	Endpoints  map[extensions.Ref]kernel.Endpoint
-	Transports map[extensions.Ref]kernel.Transport
-	Snapshot   func() kernel.Snapshot
-	Credential func(context.Context, kernel.Route) (kernel.Credential, error)
-	Record     func(quota.Snapshot)
-	OnError    func(kernel.Route, string, string)
-	Interval   time.Duration
+	Sources           map[extensions.Ref]provider.QuotaSource
+	Endpoints         map[extensions.Ref]kernel.Endpoint
+	Transports        map[extensions.Ref]kernel.Transport
+	Snapshot          func() kernel.Snapshot
+	AcquireCredential kernel.CredentialLeaseResolver
+	Record            func(quota.Snapshot)
+	OnError           func(kernel.Route, string, string)
+	Interval          time.Duration
 	// Enabled is opt-in. Runtime quota evidence normally comes from real
 	// attempts; polling is reserved for explicitly configured providers.
 	Enabled bool
 }
 
-func quotaRequestKey(route kernel.Route, source provider.QuotaSource) string {
-	key := route.NodeID + "\x00" + route.QuotaSourceRef.Key() + "\x00" + route.CredentialID
+type quotaRequestIdentity struct {
+	ProviderNodeID      string
+	ConnectionID        string
+	SourceRef           extensions.Ref
+	PrincipalGeneration string
+	CredentialRevision  string
+	ModelRef            string
+}
+
+func quotaRequestKey(route kernel.Route, source provider.QuotaSource) quotaRequestIdentity {
+	key := quotaRequestIdentity{
+		ProviderNodeID: route.NodeID, ConnectionID: route.CredentialID, SourceRef: route.QuotaSourceRef,
+		PrincipalGeneration: route.HealthGeneration.Connection, CredentialRevision: route.HealthGeneration.Credential,
+	}
 	if provider.QuotaScopeOf(source) == provider.QuotaScopeModel {
-		key += "\x00" + route.ExternalModel
+		key.ModelRef = route.ExternalModel
 	}
 	return key
+}
+
+func (key quotaRequestIdentity) singleflightKey() string {
+	encoded, _ := json.Marshal(key)
+	return string(encoded)
 }
 
 func (p QuotaPoller) reportFailure(route kernel.Route, stage, code string) {
@@ -60,10 +79,10 @@ func (p QuotaPoller) Run(ctx context.Context) {
 }
 
 func (p QuotaPoller) poll(ctx context.Context) {
-	if ctx.Err() != nil || p.Snapshot == nil || p.Credential == nil || p.Record == nil {
+	if ctx.Err() != nil || p.Snapshot == nil || p.AcquireCredential == nil || p.Record == nil {
 		return
 	}
-	seen := map[string]bool{}
+	seen := map[quotaRequestIdentity]bool{}
 	for _, route := range p.Snapshot().Routes {
 		if route.QuotaSourceRef.ID == "" || route.CredentialID == "" {
 			continue
@@ -78,27 +97,15 @@ func (p QuotaPoller) poll(ctx context.Context) {
 			continue
 		}
 		seen[key] = true
-		credential, err := p.Credential(ctx, route)
-		if err != nil {
-			if ctx.Err() == nil {
-				p.reportFailure(route, "credential", "credential_error")
-			}
-			continue
-		}
 		endpoint := p.Endpoints[route.QuotaEndpointRef]
 		transport := p.Transports[route.QuotaTransportRef]
 		if endpoint == nil || transport == nil {
 			p.reportFailure(route, "binding", "unavailable")
 			continue
 		}
-		requestedAt := time.Now()
-		snapshots, err := source.Fetch(ctx, provider.QuotaRequest{
-			Credential: credential, Route: route, Endpoint: endpoint, Transport: transport,
-			EndpointOptions: route.QuotaEndpointOptions, WindowName: route.QuotaWindowName,
-			ReportFailure: func(reportErr error) { p.reportFailure(route, "report", provider.QuotaFailureCode(reportErr)) },
-		})
+		snapshots, requestedAt, err := fetchQuotaWithLease(ctx, route, source, endpoint, transport, p.AcquireCredential, func(stage, code string) { p.reportFailure(route, stage, code) })
 		if err != nil {
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !errors.Is(err, errQuotaLease) {
 				p.reportFailure(route, "fetch", provider.QuotaFailureCode(err))
 			}
 			continue

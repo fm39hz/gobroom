@@ -43,11 +43,9 @@ func TestQuotaPollerResolvesRouteSourceAndRecordsSnapshot(t *testing.T) {
 		Endpoints:  map[extensions.Ref]kernel.Endpoint{{Kind: "endpoint", ID: "http-json", ContractVersion: 1}: kernel.HTTPJSONEndpoint{}},
 		Transports: map[extensions.Ref]kernel.Transport{{Kind: "transport", ID: "http", ContractVersion: 1}: kernel.HTTPTransport{}},
 		Snapshot: func() kernel.Snapshot {
-			return kernel.Snapshot{Routes: map[string]kernel.Route{"r": {NodeID: "node", CredentialID: "conn", ExternalModel: "model", QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "test", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, Enabled: true}}}
+			return kernel.Snapshot{Routes: map[string]kernel.Route{"r": {ID: "r", NodeID: "node", CredentialID: "conn", CredentialType: "api_key", ExternalModel: "model", QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "test", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, Enabled: true}}}
 		},
-		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
-			return kernel.Credential{Secret: "secret"}, nil
-		},
+		AcquireCredential: quotaTestAcquirer("secret", nil),
 		Record: func(snapshot quota.Snapshot) {
 			got++
 			if snapshot.ConnectionID != "conn" {
@@ -83,14 +81,12 @@ func TestQuotaPollerDeduplicatesConnectionScopedSourcesAcrossModels(t *testing.T
 	}
 	var snapshots []quota.Snapshot
 	poller := QuotaPoller{
-		Sources:    map[extensions.Ref]provider.QuotaSource{quotaRef: source},
-		Endpoints:  map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
-		Transports: map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
-		Snapshot:   func() kernel.Snapshot { return kernel.Snapshot{Routes: routes} },
-		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
-			return kernel.Credential{Secret: "secret"}, nil
-		},
-		Record: func(snapshot quota.Snapshot) { snapshots = append(snapshots, snapshot) },
+		Sources:           map[extensions.Ref]provider.QuotaSource{quotaRef: source},
+		Endpoints:         map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
+		Transports:        map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
+		Snapshot:          func() kernel.Snapshot { return kernel.Snapshot{Routes: routes} },
+		AcquireCredential: quotaTestAcquirer("secret", nil),
+		Record:            func(snapshot quota.Snapshot) { snapshots = append(snapshots, snapshot) },
 	}
 	poller.poll(context.Background())
 	if source.calls != 1 || len(snapshots) != 1 || snapshots[0].ConnectionID != "connection" || snapshots[0].ModelRef != "" {
@@ -106,14 +102,12 @@ func TestQuotaPollerReportsSanitizedProviderFailureWithoutRouteFeedback(t *testi
 	marked := false
 	route := kernel.Route{ID: "route", NodeID: "provider", CredentialID: "connection", ExternalModel: "model", Enabled: true, QuotaSourceRef: quotaRef, QuotaEndpointRef: endpointRef, QuotaTransportRef: transportRef}
 	poller := QuotaPoller{
-		Sources:    map[extensions.Ref]provider.QuotaSource{quotaRef: failingQuotaTestSource{err: &provider.QuotaHTTPError{Status: 403}}},
-		Endpoints:  map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
-		Transports: map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
-		Snapshot:   func() kernel.Snapshot { return kernel.Snapshot{Routes: map[string]kernel.Route{route.ID: route}} },
-		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
-			return kernel.Credential{Secret: "key"}, nil
-		},
-		Record: func(quota.Snapshot) { marked = true },
+		Sources:           map[extensions.Ref]provider.QuotaSource{quotaRef: failingQuotaTestSource{err: &provider.QuotaHTTPError{Status: 403}}},
+		Endpoints:         map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
+		Transports:        map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
+		Snapshot:          func() kernel.Snapshot { return kernel.Snapshot{Routes: map[string]kernel.Route{route.ID: route}} },
+		AcquireCredential: quotaTestAcquirer("key", nil),
+		Record:            func(quota.Snapshot) { marked = true },
 		OnError: func(gotRoute kernel.Route, gotStage, gotCode string) {
 			if gotRoute.ID != route.ID {
 				t.Errorf("failure was attributed to route %q", gotRoute.ID)

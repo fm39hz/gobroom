@@ -57,6 +57,17 @@ primitives cover the mechanism; OAuth remains delegated to `x/oauth2`. No new
 token cache, conductor or custom OAuth implementation is introduced. This does
 not assert atomic revocation against a network dispatch already in progress.
 
+Quota follow-up: management `plugin_quota.go:FetchCredentialQuota` explicitly
+selects one credential independently of registry-backed model listing;
+`conductor_cooldown.go:isStaleExecutionResult` fences older material/registration
+results, and `quota_signals.go` merges observations without treating them as
+cooldown state. Gobroom retains those separate concerns: exact quota-consumer
+lease scope, a guard at every host transport call, and final revision validation
+before recording partial/multi-report results. Existing `x/sync/singleflight`
+still owns deduplication; typed principal/revision identities isolate old work.
+Standard contexts and WaitGroup track queued/admitted workers through daemon
+shutdown. No management handler, conductor or custom singleflight is copied.
+
 Callback ownership follow-up: `internal/auth/claude/oauth_server.go` and the
 Codex equivalent probe a port before starting a listener, while Devin's
 `internal/auth/devin/devin_auth.go` retains a directly bound loopback listener.

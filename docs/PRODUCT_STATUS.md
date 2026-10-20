@@ -9,7 +9,7 @@ milestone status, [use cases](USE_CASES.md) own product acceptance, and
 
 | User journey | What is demonstrated | What is not yet closed |
 |---|---|---|
-| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device setup shares the action coordinator; installed CLI actions complete headless setup and persist usable credentials. Inference attempt credentials use scoped expiring leases and live revision fences. | Broad live-provider auth acceptance, generic TUI action editing, discovery/quota outbound lease convergence and the full lifecycle race matrix. |
+| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device setup shares the action coordinator; installed CLI actions complete headless setup and persist usable credentials. Inference and quota reads use scoped expiring leases and live revision fences. | Broad live-provider auth acceptance, generic TUI action editing, discovery/probe outbound lease convergence and the full lifecycle race matrix. |
 | Turn sources into Physical models | Typed identity/revision/fidelity, source evidence, capability/limit projections, conservative grouping and model policies. | Whole-catalog review/split UX, stronger identity evidence and convenient capability comparison across sources. |
 | Build role Combos and expose selected names | Ordered typed members, registry-backed strategy/options, source-prefix filtering, exposure and `/v1/models` have onboarding and editor acceptance fixtures. | Complete interactive/headless acceptance for every management action, including Physical exposure through the UI. |
 | Consume the provider endpoint | Chat has fake verticals and a limited live acceptance history. Responses/Anthropic/Gemini, tools, JSON/SSE and committed-stream fallback have many deterministic IR fixtures. | The complete cross-protocol, reasoning/signature/history/continuity/modality matrix and live harness coverage. A supported vertical is not universal wire compatibility. |
@@ -26,6 +26,33 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+Quota polling and opportunistic enrichment now share the inference issuer but
+use exact consumer refs rather than inference operation authority. Sources
+receive borrowed transient material and a guarded transport; every report send
+is fenced, and final validation rejects obsolete partial results. Typed exact
+source/principal/revision keys isolate old cooldown/singleflight work. The
+existing `x/sync/singleflight` and `semaphore` provide deduplication and bounded
+admission; standard contexts and WaitGroup cancel/drain admitted work on daemon
+shutdown before persistence/DB close. Client disconnect remains detached, and
+polling is still opt-in. The default enrichment limit is 16; a dropped signal
+does not acquire a cooldown. Existing HTTP JSON quota logic is exposed as a
+reusable public primitive rather than rewritten by external modules.
+
+This improves headless quota/control safety and resource bounds. Discovery and
+connection probes still resolve credentials outside the lease issuer; inline
+TUI setup editing, catalog curation, harness/protocol/modality coverage and
+measured RSS/latency/load remain open. This is not whole C4/SG2/M15 closure.
+
+Verification: full regression, vet and architecture conformance passed. Focused
+kernel/runtime/daemon quota/lease/shutdown cases and the independent quota,
+inference-lease and principal-renewal module fixtures passed three race runs.
+The strengthened virtual-time singleflight/drain and quota runtime cases also
+passed ten race runs. Installed-CLI acceptance follows the implementation
+checkpoint; these remain fake-provider tests, not latency/RSS or live-provider
+acceptance.
+
+Previous integrated milestone:
 
 Inference now owns an opaque credential lease for each attempt. Exact
 owner/principal/route/operation scope and bounded expiry are checked locally;

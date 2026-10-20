@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -48,65 +49,67 @@ func (s *countingQuotaSource) Fetch(_ context.Context, request provider.QuotaReq
 }
 
 func TestOpportunisticQuotaIsSingleflightAndCooldowned(t *testing.T) {
-	source := &countingQuotaSource{started: make(chan struct{}, 2), release: make(chan struct{})}
-	recorded := make(chan quota.Snapshot, 2)
-	enricher := &OpportunisticQuota{
-		Sources:    map[extensions.Ref]provider.QuotaSource{{Kind: "quota_source", ID: "counting", ContractVersion: 1}: source},
-		Endpoints:  map[extensions.Ref]kernel.Endpoint{{Kind: "endpoint", ID: "http-json", ContractVersion: 1}: kernel.HTTPJSONEndpoint{}},
-		Transports: map[extensions.Ref]kernel.Transport{{Kind: "transport", ID: "http", ContractVersion: 1}: kernel.HTTPTransport{}},
-		Cooldown:   time.Nanosecond,
-		Timeout:    time.Second,
-		Credential: func(ctx context.Context, _ kernel.Route) (kernel.Credential, error) {
-			if ctx.Err() != nil {
-				t.Errorf("quota enrichment inherited canceled request context: %v", ctx.Err())
-			}
-			return kernel.Credential{Secret: "x"}, nil
-		},
-		Record: func(snapshot quota.Snapshot) { recorded <- snapshot },
-	}
-	route := kernel.Route{QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "counting", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, CredentialID: "conn", ExternalModel: "model"}
-	requestCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	enricher.Trigger(requestCtx, route)
-	select {
-	case <-source.started:
-	case <-time.After(time.Second):
-		t.Fatal("quota source was not called")
-	}
-	// A near-immediate repeat bypasses the cooldown while the first source call
-	// is still blocked, so this assertion exercises singleflight itself.
-	enricher.Trigger(context.Background(), route)
-	time.Sleep(time.Millisecond)
-	close(source.release)
-	select {
-	case <-recorded:
-	case <-time.After(time.Second):
-		t.Fatal("enrichment did not complete")
-	}
-	time.Sleep(10 * time.Millisecond)
-	source.mu.Lock()
-	calls := source.calls
-	source.mu.Unlock()
-	if calls != 1 {
-		t.Fatalf("expected one quota call, got %d", calls)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		source := &countingQuotaSource{started: make(chan struct{}, 2), release: make(chan struct{})}
+		recorded := make(chan quota.Snapshot, 2)
+		enricher := &OpportunisticQuota{
+			Sources:    map[extensions.Ref]provider.QuotaSource{{Kind: "quota_source", ID: "counting", ContractVersion: 1}: source},
+			Endpoints:  map[extensions.Ref]kernel.Endpoint{{Kind: "endpoint", ID: "http-json", ContractVersion: 1}: kernel.HTTPJSONEndpoint{}},
+			Transports: map[extensions.Ref]kernel.Transport{{Kind: "transport", ID: "http", ContractVersion: 1}: kernel.HTTPTransport{}},
+			Cooldown:   time.Nanosecond,
+			Timeout:    time.Second,
+			AcquireCredential: func(ctx context.Context, route kernel.Route) (*kernel.CredentialLease, error) {
+				if ctx.Err() != nil {
+					t.Errorf("quota enrichment inherited canceled request context: %v", ctx.Err())
+				}
+				return quotaTestAcquirer("x", nil)(ctx, route)
+			},
+			Record: func(snapshot quota.Snapshot) { recorded <- snapshot },
+		}
+		route := kernel.Route{ID: "route-counting", CredentialType: "api_key", QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "counting", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, CredentialID: "conn", ExternalModel: "model"}
+		requestCtx, cancel := context.WithCancel(context.Background())
+		cancel()
+		enricher.Trigger(requestCtx, route)
+		select {
+		case <-source.started:
+		case <-time.After(time.Second):
+			t.Fatal("quota source was not called")
+		}
+		// A near-immediate repeat bypasses the cooldown while the first source call
+		// is still blocked, so this assertion exercises singleflight itself.
+		time.Sleep(time.Nanosecond) // advance the virtual cooldown clock
+		enricher.Trigger(context.Background(), route)
+		synctest.Wait() // the second worker is now blocked in the library's group
+		close(source.release)
+		select {
+		case <-recorded:
+		case <-time.After(time.Second):
+			t.Fatal("enrichment did not complete")
+		}
+		synctest.Wait()
+		enricher.Close()
+		source.mu.Lock()
+		calls := source.calls
+		source.mu.Unlock()
+		if calls != 1 {
+			t.Fatalf("expected one quota call, got %d", calls)
+		}
+	})
 }
 
 func TestOpportunisticQuotaBoundsCooldownKeys(t *testing.T) {
 	source := &countingQuotaSource{}
 	recorded := make(chan quota.Snapshot, 2)
 	enricher := &OpportunisticQuota{
-		Sources:         map[extensions.Ref]provider.QuotaSource{{Kind: "quota_source", ID: "counting", ContractVersion: 1}: source},
-		Endpoints:       map[extensions.Ref]kernel.Endpoint{{Kind: "endpoint", ID: "http-json", ContractVersion: 1}: kernel.HTTPJSONEndpoint{}},
-		Transports:      map[extensions.Ref]kernel.Transport{{Kind: "transport", ID: "http", ContractVersion: 1}: kernel.HTTPTransport{}},
-		Cooldown:        time.Hour,
-		MaxCooldownKeys: 1,
-		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
-			return kernel.Credential{Secret: "x"}, nil
-		},
-		Record: func(snapshot quota.Snapshot) { recorded <- snapshot },
+		Sources:           map[extensions.Ref]provider.QuotaSource{{Kind: "quota_source", ID: "counting", ContractVersion: 1}: source},
+		Endpoints:         map[extensions.Ref]kernel.Endpoint{{Kind: "endpoint", ID: "http-json", ContractVersion: 1}: kernel.HTTPJSONEndpoint{}},
+		Transports:        map[extensions.Ref]kernel.Transport{{Kind: "transport", ID: "http", ContractVersion: 1}: kernel.HTTPTransport{}},
+		Cooldown:          time.Hour,
+		MaxCooldownKeys:   1,
+		AcquireCredential: quotaTestAcquirer("x", nil),
+		Record:            func(snapshot quota.Snapshot) { recorded <- snapshot },
 	}
-	base := kernel.Route{QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "counting", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, CredentialID: "conn"}
+	base := kernel.Route{ID: "route-bounded", CredentialType: "api_key", QuotaSourceRef: extensions.Ref{Kind: "quota_source", ID: "counting", ContractVersion: 1}, QuotaEndpointRef: extensions.Ref{Kind: "endpoint", ID: "http-json", ContractVersion: 1}, QuotaTransportRef: extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}, CredentialID: "conn"}
 	first := base
 	first.ExternalModel = "model-a"
 	second := base
@@ -140,17 +143,15 @@ func TestOpportunisticQuotaCooldownSharesConnectionScopedSourceAcrossModels(t *t
 	transportRef := extensions.Ref{Kind: "transport", ID: "http", ContractVersion: 1}
 	recorded := make(chan quota.Snapshot, 2)
 	enricher := &OpportunisticQuota{
-		Sources:    map[extensions.Ref]provider.QuotaSource{quotaRef: source},
-		Endpoints:  map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
-		Transports: map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
-		Cooldown:   time.Hour,
-		Credential: func(context.Context, kernel.Route) (kernel.Credential, error) {
-			return kernel.Credential{Secret: "secret"}, nil
-		},
-		Record: func(snapshot quota.Snapshot) { recorded <- snapshot },
+		Sources:           map[extensions.Ref]provider.QuotaSource{quotaRef: source},
+		Endpoints:         map[extensions.Ref]kernel.Endpoint{endpointRef: kernel.HTTPJSONEndpoint{}},
+		Transports:        map[extensions.Ref]kernel.Transport{transportRef: kernel.HTTPTransport{}},
+		Cooldown:          time.Hour,
+		AcquireCredential: quotaTestAcquirer("secret", nil),
+		Record:            func(snapshot quota.Snapshot) { recorded <- snapshot },
 	}
 	for _, model := range []string{"model-a", "model-b"} {
-		enricher.Trigger(context.Background(), kernel.Route{NodeID: "provider", CredentialID: "connection", ExternalModel: model, QuotaSourceRef: quotaRef, QuotaEndpointRef: endpointRef, QuotaTransportRef: transportRef})
+		enricher.Trigger(context.Background(), kernel.Route{ID: "route-" + model, NodeID: "provider", CredentialID: "connection", CredentialType: "api_key", ExternalModel: model, QuotaSourceRef: quotaRef, QuotaEndpointRef: endpointRef, QuotaTransportRef: transportRef})
 	}
 	select {
 	case snapshot := <-recorded:
@@ -160,7 +161,7 @@ func TestOpportunisticQuotaCooldownSharesConnectionScopedSourceAcrossModels(t *t
 	case <-time.After(time.Second):
 		t.Fatal("connection quota enrichment did not complete")
 	}
-	time.Sleep(10 * time.Millisecond)
+	enricher.Close()
 	if source.calls != 1 {
 		t.Fatalf("connection-scoped opportunistic source called %d times", source.calls)
 	}

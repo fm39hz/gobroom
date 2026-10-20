@@ -162,6 +162,7 @@ type HTTPJSONQuotaWindow = core.HTTPJSONQuotaWindow
 type QuotaReportFailureMode = core.QuotaReportFailureMode
 type UsageSource = core.UsageSource
 type QuotaSource = core.QuotaSource
+type HTTPJSONQuotaSource = core.HTTPJSONQuotaSource
 type QuotaScope = core.QuotaScope
 type ScopedQuotaSource = core.ScopedQuotaSource
 type QuotaSourceFactory = core.QuotaSourceFactory
@@ -222,6 +223,14 @@ const MaxCredentialLeaseDuration = kernel.MaxCredentialLeaseDuration
 
 func CredentialLeaseScopeForRoute(route Route) CredentialLeaseScope {
 	return kernel.CredentialLeaseScopeForRoute(route)
+}
+
+func CredentialLeaseScopeForQuota(route Route) CredentialLeaseScope {
+	return kernel.CredentialLeaseScopeForQuota(route)
+}
+
+func CredentialLeaseScopeForConsumer(route Route, consumer Ref) CredentialLeaseScope {
+	return kernel.CredentialLeaseScopeForConsumer(route, consumer)
 }
 
 func NewCredentialLease(scope CredentialLeaseScope, credential Credential, expiresAt time.Time, check func(context.Context) error, release func()) (*CredentialLease, error) {

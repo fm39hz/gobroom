@@ -371,10 +371,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.kernel.UsageSources = runtimeRegistry.UsageSources()
 	d.kernel.SessionStores = runtimeRegistry.SessionStores()
 	opportunisticQuota := &runtimehealth.OpportunisticQuota{
-		Sources:    runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
-		Endpoints:  runtimeRegistry.Endpoints(),
-		Transports: runtimeRegistry.Transports(),
-		Credential: d.resolveCredential,
+		Context:           ctx,
+		Sources:           runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
+		Endpoints:         runtimeRegistry.Endpoints(),
+		Transports:        runtimeRegistry.Transports(),
+		AcquireCredential: d.acquireQuotaCredentialLease,
 		Record: func(snapshot quota.Snapshot) {
 			resolved, accepted := d.policy.UpsertQuota(snapshot)
 			if !accepted {
@@ -398,11 +399,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	go func() {
 		defer close(quotaPollerDone)
 		(runtimehealth.QuotaPoller{
-			Sources:    runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
-			Endpoints:  runtimeRegistry.Endpoints(),
-			Transports: runtimeRegistry.Transports(),
-			Snapshot:   func() kernel.Snapshot { return d.kernel.Snapshots.Load() },
-			Credential: d.resolveCredential,
+			Sources:           runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
+			Endpoints:         runtimeRegistry.Endpoints(),
+			Transports:        runtimeRegistry.Transports(),
+			Snapshot:          func() kernel.Snapshot { return d.kernel.Snapshots.Load() },
+			AcquireCredential: d.acquireQuotaCredentialLease,
 			Record: func(snapshot quota.Snapshot) {
 				resolved, accepted := d.policy.UpsertQuota(snapshot)
 				if !accepted {
@@ -500,6 +501,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		<-sessionDone
 		<-healthEventsDone
 		<-quotaPollerDone
+		opportunisticQuota.Close()
 		quotaPersistence.Close()
 		<-quotaPersistenceDone
 		if d.artifactStore != nil {

@@ -290,8 +290,12 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    external-module device-race fixture. Code/device orchestration now converges
    on the generic action engine. Kernel inference attempts use opaque scoped
    credential leases, with a live metadata fence after preparation/before each
-   dispatch, refresh replacement and release. Remaining: generic TUI action
-   editing, discovery/quota outbound lease convergence, broader lifecycle races
+   dispatch, refresh replacement and release. Quota polling/opportunistic reads
+   now use exact consumer refs and guarded per-report transport dispatch;
+   revision-fenced partial results are discarded. Detached enrichment is
+   bounded by `x/sync/semaphore` and canceled/drained by daemon lifetime.
+   Remaining: generic TUI action editing, discovery/probe outbound lease
+   convergence, broader lifecycle races
    and HTTPS/non-loopback callback integrations. Prepared request signing now
    has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations

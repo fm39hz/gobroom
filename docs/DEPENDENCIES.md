@@ -89,6 +89,10 @@ and the existing SQLite/CAS boundary. No third-party lease service or token
 cache is needed for an in-process attempt authority. OAuth protocol exchanges,
 PKCE and polling remain the pinned `x/oauth2` implementation; provider-specific
 durable state continues to use typed serialization, not kernel token parsing.
+Quota enrichment keeps `golang.org/x/sync/singleflight` for deduplication and
+standard context/WaitGroup for cancellation and drain. Private deduplication
+identities use a typed JSON binding rather than delimiter-based field packing;
+no additional task scheduler or lease cache is introduced.
 
 | Area | Library/tool | Version checked | Decision |
 |---|---|---:|---|
