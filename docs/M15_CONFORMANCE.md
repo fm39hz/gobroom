@@ -768,3 +768,12 @@ fresh catalog and verifies it after restart. Redirect targets remain untouched.
 prepare and dispatch, then succeeds with new material. Both support installed
 CLI control via `GOBROOM_TEST_CLI`; they are fake-provider tests, not live OAuth
 or full C4/SG2/M15 closure.
+
+Installed checkpoint `172a4a5`: full regression/vet/conformance and focused
+root race cases passed. Both new external verticals passed three race runs;
+after `make install-all`, all five lease/renewal verticals passed three more
+using installed CLI commands. Discovery request counts distinguish explicit
+refresh and preview from forbidden extra pagination; failure cleanup releases
+the held handler before closing its fake upstream. Main control=serving=479
+and bundle-v9 validation succeeded. No live-provider, universal auth-composition
+or whole-product performance acceptance is implied.

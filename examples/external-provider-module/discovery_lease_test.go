@@ -134,7 +134,6 @@ func TestExternalDiscoveryLeaseFencesPaginationAndCatalogImport(t *testing.T) {
 	releaseFirstPage := make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(releaseFirstPage) }) }
-	defer release()
 	var calls atomic.Int32
 	var redirectMode atomic.Bool
 	var redirectCalls atomic.Int32
@@ -179,6 +178,7 @@ func TestExternalDiscoveryLeaseFencesPaginationAndCatalogImport(t *testing.T) {
 	modelsBinding.ModelSource = provider.PrimitiveRef{Kind: provider.PrimitiveModelSource, ID: "anthropic-models", ContractVersion: 1}
 	definition.Operations[provider.OperationModels] = modelsBinding
 	fixture, nodeID, connectionID := newDiscoveryLeaseFixture(t, root, upstream.URL, definition, opaqueStateModule{}, credentialLeaseModule{barrier: &credentialLeaseBarrier{entered: make(chan string, 1), release: make(chan struct{})}})
+	defer release() // unblock the HTTP handler before the upstream server closes
 
 	refreshResult := make(chan daemon.IPCResponse, 1)
 	if cli := os.Getenv("GOBROOM_TEST_CLI"); cli != "" {
@@ -225,24 +225,29 @@ func TestExternalDiscoveryLeaseFencesPaginationAndCatalogImport(t *testing.T) {
 	}
 	assertEmptyCatalog()
 
+	var preview []byte
 	if cli := os.Getenv("GOBROOM_TEST_CLI"); cli != "" {
 		before := calls.Load()
 		runDeviceRaceCLI(t, cli, fixture.config.IPCPath, "connections", "refresh-models", "--node-id", nodeID, "--connection-id", connectionID)
 		if calls.Load() != before+1 {
 			t.Fatalf("fresh installed-CLI refresh made %d requests, want one", calls.Load()-before)
 		}
-		preview := runDeviceRaceCLI(t, cli, fixture.config.IPCPath, "connections", "preview-models", "--connection-id", connectionID)
-		if !strings.Contains(string(preview), "fresh-model") || strings.Contains(string(preview), "first-model") {
-			t.Fatalf("fresh CLI preview has unexpected catalog: %s", preview)
-		}
+		preview = runDeviceRaceCLI(t, cli, fixture.config.IPCPath, "connections", "preview-models", "--connection-id", connectionID)
 	} else {
 		response := fixture.rpc("providers.refresh_models", map[string]any{"nodeID": nodeID, "connectionID": connectionID})
 		if !response.OK {
 			t.Fatalf("fresh catalog refresh failed: %s", response.Error)
 		}
+		if calls.Load() != 2 {
+			t.Fatal("fresh IPC refresh made more than one request")
+		}
+		preview = fixture.mustRPC("connections.preview_models", map[string]any{"connectionID": connectionID}, nil)
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("after fresh refresh HTTP request count=%d, want exactly two total", got)
+	if !strings.Contains(string(preview), "fresh-model") || strings.Contains(string(preview), "first-model") {
+		t.Fatalf("fresh preview has unexpected catalog: %s", preview)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("stale page + fresh import + explicit preview made %d HTTP requests, want exactly three", got)
 	}
 	var discovered []json.RawMessage
 	if err := json.Unmarshal(fixture.mustRPC("discovered_models.list", map[string]any{"providerNodeID": nodeID}, nil), &discovered); err != nil || len(discovered) != 1 || !strings.Contains(string(discovered[0]), "fresh-model") {
@@ -280,7 +285,6 @@ func TestExternalInferenceProbeLeaseFencesPreparedCredential(t *testing.T) {
 	barrier := &credentialLeaseBarrier{entered: make(chan string, 1), release: make(chan struct{})}
 	var releaseOnce sync.Once
 	releasePreparation := func() { releaseOnce.Do(func() { close(barrier.release) }) }
-	defer releasePreparation()
 	var upstreamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalls.Add(1)
@@ -298,6 +302,7 @@ func TestExternalInferenceProbeLeaseFencesPreparedCredential(t *testing.T) {
 	chatBinding.RequestCodec = provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: credentialLeaseCodecID, ContractVersion: 1}
 	definition.Operations[provider.OperationChat] = chatBinding
 	fixture, nodeID, connectionID := newDiscoveryLeaseFixture(t, root, upstream.URL, definition, opaqueStateModule{}, credentialLeaseModule{barrier: barrier})
+	defer releasePreparation()
 	connectionIDs := []string{connectionID}
 	_ = fixture.mustRPC("custom_models.upsert", map[string]any{"id": "probe-route", "providerNodeID": nodeID, "kind": "custom", "externalID": "probe-model", "displayName": "Probe model", "connectionIds": connectionIDs}, nil)
 	_ = fixture.mustRPC("physical_models.upsert", map[string]any{"name": "probe-physical", "identity": map[string]any{"canonicalName": "probe-model"}, "sources": []map[string]any{{"routeId": "probe-route", "fidelity": "exact"}}, "enabled": true}, nil)

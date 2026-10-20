@@ -314,6 +314,12 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    replacement and `quota` reads passed against the independent module host.
    Main control=serving=478 and bundle-v9 validation passed after installation.
 
+   Discovery/probe checkpoint `172a4a5` converges model-list and probe credential
+   consumers on the daemon issuer and atomically fences catalog
+   publication. Full tests/vet/conformance and repeated root/external race cases
+   passed. Five public-module lease/renewal verticals passed three installed-CLI
+   race runs after installation; main control=serving=479, bundle-v9 valid.
+
    Auth-owner fencing is implemented: state/revision/exact node-definition owner
    are read together, pinned route mode/auth bindings are checked before the
    driver, and final SQL CAS checks ownership. Definition ID/version changes

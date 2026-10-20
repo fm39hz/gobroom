@@ -49,6 +49,16 @@ verticals also passed three race runs. Installed-CLI acceptance is recorded
 after installation; no live-provider or performance claim follows from these
 fake-upstream checks.
 
+Installed checkpoint `172a4a5`: `make install-all` completed and restarted the
+user service. Five external verticals (discovery, probe, quota, inference lease
+and renewal) passed three race runs with the installed CLI. Discovery explicitly
+checks one stale first-page request, one fresh import and one user-requested
+preview; the redirected target receives no call. The independently linked test
+daemon verifies catalog persistence after restart, while installed CLI commands
+perform refresh/preview/test-inference and credential updates. Main daemon
+status was `ok`, control=serving=479; bundle-v9 export → validate was valid.
+User configuration was preserved and no real-provider requests were made.
+
 Previous integrated milestone:
 
 Quota polling and opportunistic enrichment now share the inference issuer but
