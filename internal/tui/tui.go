@@ -10,6 +10,8 @@ func Run(ipcPath, appVersion string) error {
 	if appVersion != "" {
 		version = appVersion
 	}
-	_, err := tea.NewProgram(newApp(ipcPath)).Run()
+	model := newApp(ipcPath)
+	defer model.discardSetupInput()
+	_, err := tea.NewProgram(model).Run()
 	return err
 }

@@ -45,6 +45,7 @@ type formState struct {
 	authModeIndex      int
 	transformOptions   map[string]transformOptionSpec
 	operationChoices   []provider.OperationMetadata
+	setup              *setupFormBinding
 }
 
 type transformOptionSpec struct {
@@ -711,6 +712,9 @@ func (f *formState) removeMember() {
 }
 
 func (f *formState) Params() (map[string]any, error) {
+	if f.method == "auth.setup.advance" {
+		return f.setupActionParams()
+	}
 	if f.method == "transform_bindings.upsert" {
 		return f.transformBindingParams()
 	}

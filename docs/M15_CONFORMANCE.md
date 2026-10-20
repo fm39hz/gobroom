@@ -777,3 +777,26 @@ refresh and preview from forbidden extra pagination; failure cleanup releases
 the held handler before closing its fake upstream. Main control=serving=479
 and bundle-v9 validation succeeded. No live-provider, universal auth-composition
 or whole-product performance acceptance is implied.
+
+### Generic TUI auth input
+
+`TestSetupForm*` binds input to the exact offered session/action/revision/schema,
+uses the frozen local schema validator, preserves JSON numbers and whitespace,
+and checks masking, bounded JSON fallback, conditional fields, enum choices and
+input cleanup. `TestSetupResult*`, same-revision/change fixtures and late-old-step
+failure coverage exercise async correlation, draft preservation and invalidation.
+Compiler/poll work is coalesced; cancel-in-flight and start cancellation prevent
+reopening a retired editor. Terminal setup updates do not replace unrelated
+resource forms. Existing activation fixtures now use the typed setup reply path;
+no old generic action-result route is retained for setup RPCs.
+
+`TestSetupAuthorizationE2EOverUnixIPC` drives real TUI commands through a daemon
+with a registered auth module. It submits multiple steps with exact large-number
+payloads, handles recoverable rejection without replay, waits for activation and
+uses the saved credential for fake-provider inference. The companion Esc/resume/
+Ctrl+x fixture proves editor closure and daemon cancellation are separate. With
+`GOBROOM_TEST_CLI`, the installed CLI can submit the final step after the editor
+closes, then TUI status catches up through the same public session. Inputs never
+appear in retained preview/status/error data. This is command/model integration,
+not a claim of exhaustive terminal UX or live OAuth acceptance. Full C4/SG2/M15
+composition/fault and whole-product performance gates remain open.

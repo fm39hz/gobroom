@@ -299,8 +299,12 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    binding revision/owner and provider endpoint in the same immediate SQL
    transaction as catalog, evidence and invalid-model health updates. Shared
    transaction helpers preserve static assignment and incomplete-list semantics.
-   Remaining: generic TUI action editing, broader lifecycle races
-   and HTTPS/non-loopback callback integrations. Prepared request signing now
+   Generic TUI input now uses exact registered schemas, masked local forms,
+   asynchronous compilation, revision/action-bound submit and stale-reply/error
+   fencing. Close clears the draft without ending daemon setup; explicit cancel
+   and multi-step rejection/activation have real Unix IPC fixtures. Remaining:
+   broader lifecycle/fault composition and HTTPS/non-loopback callback
+   integrations. Prepared request signing now
    has a public frozen-body/renewable-authorization
    seam with an external COSY fixture; provider-specific signer implementations
    remain auth-driver work. Validate full lifecycle fixtures, not token-only

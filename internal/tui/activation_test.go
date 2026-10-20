@@ -36,8 +36,9 @@ func TestAuthCompletionWaitsForCredentialActivation(t *testing.T) {
 			t.Run(flow.name+"/"+state.name, func(t *testing.T) {
 				model := newApp("/tmp/gobroom.sock")
 				sessionID := "activation-session"
-				result := json.RawMessage(`{"sessionId":"` + sessionID + `","connectionId":"connection-42","status":"completed","activation":{` + state.activation + `}}`)
-				updated, next := model.Update(actionMsg{method: flow.method, result: result})
+				model.setupSessionID = sessionID
+				result := json.RawMessage(`{"sessionId":"` + sessionID + `","connectionId":"connection-42","status":"completed","revision":1,"activation":{` + state.activation + `}}`)
+				updated, next := model.Update(setupResultMsg{epoch: model.setupEpoch, sessionID: sessionID, method: flow.method, result: result})
 				model = updated.(*app)
 				if !strings.Contains(model.status, state.wantStatus) {
 					t.Fatalf("status=%q, want substring %q", model.status, state.wantStatus)

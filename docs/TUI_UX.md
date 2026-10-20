@@ -102,6 +102,37 @@ validates exact refs/options and the full binding set before publish.
 
 ## Provider and connection onboarding
 
+### Interactive auth actions
+
+On a connection, `D` starts setup or resumes the active input action. Public
+URL/code/callback instructions stay in the inspector. The TUI renders the exact
+registered input schema using existing Bubbles text inputs; schema compilation
+runs off the Tea update loop. Closed object shapes expose named fields,
+including optional fields in conditional schemas. Compound values use JSON;
+open, reference-heavy or very large shapes retain a lossless JSON-object editor.
+Validation is the same local-only JSON Schema library used by the daemon, which
+still makes the final decision.
+
+Inside setup input: `Tab`/`Shift+Tab` move fields, `Ctrl+n/p` cycle declared enum
+choices, `Ctrl+o` chooses the next offered input action, and `Ctrl+s` submits.
+`Esc` closes and clears the editor while the daemon session continues; `D`
+reopens it. `Ctrl+x` cancels setup from the editor; `O` cancels from browse mode.
+An in-flight start can also be canceled before its session handle arrives.
+
+All entered text is masked. Only schema-declared public enum choices may be
+shown as selection feedback. Inputs are cleared/detached on submit, close,
+cancel, transition or TUI exit, never copied into the inspector or error/status
+history. This drops owned references; it does not promise to erase immutable Go
+strings or copies held by an in-flight IPC request.
+
+Replies bind session, client epoch, revision and the offered action/schema.
+Unchanged polls preserve a draft. Changed actions invalidate it; old replies
+and errors cannot retarget a new editor. Poll/compile work is coalesced, and
+background setup does not replace unrelated resource forms. Remote rejection
+clears submitted input and refreshes public state; retry is explicit and never
+replays the secret. The daemon owns setup expiry, callbacks, credential commit
+and activation even when no editor is open.
+
 The intended setup is account-specific and inspectable:
 
 ```text

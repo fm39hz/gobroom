@@ -234,8 +234,8 @@ func TestTUISetupShowsGenericPublicActionsAndPollsDaemon(t *testing.T) {
 		t.Fatalf("generic setup did not start from selected connection: status=%q", updated.(*app).status)
 	}
 	model = updated.(*app)
-	pending := json.RawMessage(`{"sessionId":"auth-session-1","connectionId":"connection-oauth","status":"awaiting_user","revision":4,"actions":[{"kind":"display_code","label":"Enter this code","code":"ABCD-EFGH"},{"kind":"open_url","label":"Open sign-in","url":"https://identity.test/activate"},{"kind":"input","label":"Provide account details","inputSchemaRef":{"kind":"schema","id":"provider.account","contractVersion":1}}],"expiresAt":"2026-10-07T13:00:00Z","callbackModes":[{"mode":"manual"},{"mode":"loopback"}],"privateState":"private-sentinel"}`)
-	updatedModel, poll := model.Update(actionMsg{method: "auth.setup.start", result: pending})
+	pending := json.RawMessage(`{"sessionId":"auth-session-1","connectionId":"connection-oauth","status":"awaiting_user","revision":4,"actions":[{"id":"show-code","kind":"display_code","label":"Enter this code","code":"ABCD-EFGH"},{"id":"open-login","kind":"open_url","label":"Open sign-in","url":"https://identity.test/activate"},{"id":"account-details","kind":"input","label":"Provide account details","inputSchemaRef":{"kind":"schema","id":"provider.account","contractVersion":1}}],"expiresAt":"2026-10-07T13:00:00Z","callbackModes":[{"mode":"manual"},{"mode":"loopback"}],"privateState":"private-sentinel"}`)
+	updatedModel, poll := model.Update(setupResultMsg{epoch: model.setupEpoch, method: "auth.setup.start", result: pending})
 	model = updatedModel.(*app)
 	for _, expected := range []string{"display_code", "ABCD-EFGH", "open_url", "identity.test/activate", "input", "Input schema", "Callback: manual", "Callback: loopback"} {
 		if !strings.Contains(model.previewExtra, expected) {
@@ -248,8 +248,8 @@ func TestTUISetupShowsGenericPublicActionsAndPollsDaemon(t *testing.T) {
 	if model.setupSessionID != "auth-session-1" || poll == nil || strings.Contains(model.previewExtra, "private-sentinel") || !strings.Contains(model.status, "revision 4") {
 		t.Fatalf("generic setup instructions/status are incomplete or private: status=%q preview=%q session=%q", model.status, model.previewExtra, model.setupSessionID)
 	}
-	completed := json.RawMessage(`{"sessionId":"auth-session-1","connectionId":"connection-oauth","status":"completed","activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
-	updatedModel, next := model.Update(actionMsg{method: "auth.setup.get", result: completed})
+	completed := json.RawMessage(`{"sessionId":"auth-session-1","connectionId":"connection-oauth","status":"completed","revision":5,"activation":{"status":"active","credentialCommitted":true,"progress":{"servingPublished":true}}}`)
+	updatedModel, next := model.Update(setupResultMsg{epoch: model.setupEpoch, sessionID: "auth-session-1", method: "auth.setup.get", revision: model.setupView.Revision, result: completed})
 	model = updatedModel.(*app)
 	if next != nil || model.setupSessionID != "" || !strings.Contains(model.status, "credential saved") {
 		t.Fatalf("completed generic setup was not rendered as terminal: status=%q session=%q", model.status, model.setupSessionID)
@@ -264,7 +264,7 @@ func TestTUISetupCancellationUsesGenericSession(t *testing.T) {
 	if command == nil || !strings.Contains(model.status, "cancelling connection setup") {
 		t.Fatalf("generic setup cancellation did not start: status=%q command=%v", model.status, command)
 	}
-	updated, _ = model.Update(actionMsg{method: "auth.setup.cancel", result: json.RawMessage(`{}`)})
+	updated, _ = model.Update(setupResultMsg{epoch: model.setupEpoch, sessionID: "setup-session", method: "auth.setup.cancel", result: json.RawMessage(`{}`)})
 	model = updated.(*app)
 	if model.setupSessionID != "" || model.status != "connection setup cancelled" {
 		t.Fatalf("generic setup cancellation did not clear session: status=%q session=%q", model.status, model.setupSessionID)

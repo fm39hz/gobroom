@@ -192,7 +192,10 @@ func authActivationCompletion(flow, connectionID string, activation *authActivat
 	return flow + " completed · activation " + activation.Status, false, ""
 }
 
-type setupPollTick struct{ sessionID string }
+type setupPollTick struct {
+	sessionID     string
+	epoch, pollID uint64
+}
 
 type keyHelp struct{ app *app }
 
@@ -263,7 +266,7 @@ func (keyHelp) FullHelp() [][]key.Binding {
 		{key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "assign discovered routes to Physical")), key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "compose selected models"))},
 		{key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "toggle model exposure")), key.NewBinding(key.WithKeys("t/i"), key.WithHelp("t/i", "test/preview · selectively import"))},
 		{key.NewBinding(key.WithKeys("m"), key.WithHelp("m", "connection-scoped custom ID / edit model members")), key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select assigned connections in custom-model editor"))},
-		{key.NewBinding(key.WithKeys("D/O"), key.WithHelp("D/O", "start/cancel connection setup"))},
+		{key.NewBinding(key.WithKeys("D/O"), key.WithHelp("D/O", "start/resume setup input · cancel setup"))},
 	}
 }
 
@@ -311,19 +314,33 @@ type app struct {
 	pickerModel         any
 	pickerSourceRefs    map[string]routeReference
 
-	status            string
-	previewExtra      string
-	previewTitle      string
-	previewKey        string
-	pendingPreviewKey string
-	lastError         string
-	loading           bool
-	confirmTitle      string
-	confirmMethod     string
-	confirmParams     map[string]any
-	confirmAction     string
-	lastG             bool
-	setupSessionID    string
+	status             string
+	previewExtra       string
+	previewTitle       string
+	previewKey         string
+	pendingPreviewKey  string
+	lastError          string
+	loading            bool
+	confirmTitle       string
+	confirmMethod      string
+	confirmParams      map[string]any
+	confirmAction      string
+	lastG              bool
+	setupSessionID     string
+	setupEpoch         uint64
+	setupView          daemon.AuthorizationSetupView
+	setupSubmitting    bool
+	setupCancelPending bool
+	setupStartPending  bool
+	setupStartCancel   context.CancelFunc
+	setupActionIndex   int
+	setupInputNonce    uint64
+	setupFormPending   bool
+	pendingSetupInput  bool
+	setupInputPane     int
+	setupAutoOpen      bool
+	setupNeedsRefresh  bool
+	setupPollID        uint64
 }
 
 func newApp(ipcPath string) *app {
@@ -669,9 +686,13 @@ func (m *app) updateModelImportKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := msg.(type) {
+	case setupResultMsg:
+		return m, m.handleSetupResult(message)
+	case setupFormMsg:
+		return m, m.handleSetupForm(message)
 	case setupPollTick:
-		if message.sessionID != "" && message.sessionID == m.setupSessionID {
-			return m, m.invoke("auth.setup.get", map[string]any{"sessionID": message.sessionID})
+		if message.epoch == m.setupEpoch && message.pollID == m.setupPollID && message.sessionID != "" && message.sessionID == m.setupSessionID && !m.setupSubmitting && !m.setupCancelPending {
+			return m, m.invokeSetup("auth.setup.get", map[string]any{"sessionID": message.sessionID})
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
@@ -679,6 +700,17 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case fetchMsg:
+		if message.section == sectionExtensionCatalog && m.pendingSetupInput {
+			m.pendingSetupInput = false
+			if message.err != nil {
+				m.status = "setup schema catalog is unavailable; D retries"
+				return m, nil
+			}
+			m.raw[message.section] = message.result
+			if m.mode == modeBrowse && m.activeContextIndex() == m.setupInputPane && m.setupAutoOpen {
+				return m, m.openSetupInput()
+			}
+		}
 		if message.section == sectionProviderCatalog {
 			if message.err != nil {
 				m.status = "provider setup metadata unavailable: " + message.err.Error()
@@ -753,9 +785,6 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if message.err != nil {
 			m.lastError = message.err.Error()
 			m.status = "action failed"
-			if message.method == "auth.setup.get" {
-				m.setupSessionID = ""
-			}
 			m.pendingPreviewKey = ""
 			m.mode = modeBrowse
 			m.form = nil
@@ -825,66 +854,6 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "catalog baseline not loaded · all returned IDs checked; verify before apply"
 			}
 			m.resize()
-			return m, nil
-		}
-		if message.method == "auth.setup.start" || message.method == "auth.setup.get" {
-			var result daemon.AuthorizationSetupView
-			if err := json.Unmarshal(message.result, &result); err != nil {
-				m.status = "decode connection setup state: " + err.Error()
-				return m, nil
-			}
-			m.setupSessionID = result.SessionID
-			var actions strings.Builder
-			for _, action := range result.Actions {
-				fmt.Fprintf(&actions, "%s · %s\n", action.Kind, action.Label)
-				if action.Code != "" {
-					fmt.Fprintf(&actions, "  Code: %s\n", action.Code)
-				}
-				if action.URL != "" {
-					fmt.Fprintf(&actions, "  URL: %s\n", action.URL)
-				}
-				if action.InputSchemaRef != nil {
-					fmt.Fprintf(&actions, "  Input schema: %s\n", action.InputSchemaRef.Key())
-				}
-			}
-			for _, callback := range result.CallbackModes {
-				fmt.Fprintf(&actions, "Callback: %s\n", callback.Mode)
-			}
-			m.previewExtra = strings.TrimSpace(actions.String())
-			m.previewTitle = "Connection setup actions"
-			m.previewKey = ""
-			if result.Status == "awaiting_user" {
-				m.status = fmt.Sprintf("connection setup · %d public action(s) · revision %d", len(result.Actions), result.Revision)
-				m.syncDetail()
-				return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return setupPollTick{sessionID: result.SessionID} })
-			}
-			m.status = "connection setup " + result.Status
-			if result.Status == "completed" {
-				var poll bool
-				var retryHint string
-				m.status, poll, retryHint = authActivationCompletion("Connection setup", result.ConnectionID, result.Activation)
-				if retryHint != "" {
-					m.previewExtra += "\n\n" + retryHint
-				}
-				if poll {
-					m.syncDetail()
-					return m, tea.Tick(time.Second, func(time.Time) tea.Msg { return setupPollTick{sessionID: result.SessionID} })
-				}
-				m.setupSessionID = ""
-			} else if result.Status == "failed" || result.Status == "expired" || result.Status == "cancelled" || result.Status == "denied" {
-				if result.Error != "" {
-					m.status += " · " + result.Error
-				}
-				m.setupSessionID = ""
-			}
-			m.syncDetail()
-			return m, nil
-		}
-		if message.method == "auth.setup.cancel" {
-			m.setupSessionID = ""
-			m.status = "connection setup cancelled"
-			m.previewExtra, m.previewTitle = "", ""
-			m.syncDetail()
 			return m, nil
 		}
 		m.mode = modeBrowse
@@ -972,11 +941,39 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keyText := msg.String()
+	if keyText == "esc" && (m.setupFormPending || m.pendingSetupInput || m.setupStartPending) && m.mode == modeBrowse {
+		m.discardSetupInput()
+		m.status = "setup input closed; daemon session continues"
+		return m, m.setupPoll()
+	}
 	if m.mode == modeForm {
 		if m.form == nil {
 			m.pendingStrategyPicker = false
 			m.mode = modeBrowse
 			return m, nil
+		}
+		if m.form.setup != nil {
+			switch keyText {
+			case "ctrl+n", "ctrl+p":
+				delta := 1
+				if keyText == "ctrl+p" {
+					delta = -1
+				}
+				if choice := m.form.cycleSetupOption(delta); choice != "" {
+					m.status = "declared setup option · " + choice
+				}
+				return m, nil
+			case "esc":
+				m.discardSetupInput()
+				m.status = "setup input closed; daemon session continues · D resumes"
+				return m, m.setupPoll()
+			case "ctrl+x":
+				return m, m.cancelSetup()
+			case "ctrl+o":
+				m.discardSetupInput()
+				m.setupActionIndex++
+				return m, m.openSetupInput()
+			}
 		}
 		if keyText == "a" && m.form.method == "custom_models.upsert" && m.form.memberMode {
 			return m, m.openCustomConnectionPicker()
@@ -999,6 +996,18 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if save {
+			if m.form.setup != nil {
+				if !m.setupBindingCurrent(m.form.setup) {
+					m.discardSetupInput()
+					m.status = "setup action changed; values cleared · D resumes"
+					return m, m.setupPoll()
+				}
+				m.discardSetupInput()
+				m.setupSubmitting, m.loading, m.setupAutoOpen = true, true, true
+				m.setupInputPane = m.activeContextIndex()
+				m.status = "submitting setup input…"
+				return m, m.invokeSetup("auth.setup.advance", params)
+			}
 			m.pendingStrategyPicker = false
 			m.mode = modeBrowse
 			m.loading = true
@@ -1375,21 +1384,34 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case "D":
+		if m.setupSubmitting || m.setupStartPending || m.setupCancelPending {
+			m.status = "connection setup request is pending"
+			return m, nil
+		}
+		if m.setupSessionID != "" {
+			if m.setupNeedsRefresh {
+				return m, m.invokeSetup("auth.setup.get", map[string]any{"sessionID": m.setupSessionID})
+			}
+			return m, m.openSetupInput()
+		}
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
 				if value, ok := selected.payload.(connection); ok {
+					m.setupEpoch++
+					m.discardSetupInput()
+					m.setupView = daemon.AuthorizationSetupView{}
+					m.setupStartPending, m.setupAutoOpen = true, true
+					m.setupInputPane = m.activeContextIndex()
+					m.setupActionIndex = 0
+					m.lastError = ""
 					m.loading = true
 					m.status = "starting connection setup…"
-					return m, m.invoke("auth.setup.start", map[string]any{"connectionID": value.ID})
+					return m, m.invokeSetup("auth.setup.start", map[string]any{"connectionID": value.ID})
 				}
 			}
 		}
 	case "O":
-		if m.setupSessionID != "" {
-			m.loading = true
-			m.status = "cancelling connection setup…"
-			return m, m.invoke("auth.setup.cancel", map[string]any{"sessionID": m.setupSessionID})
-		}
+		return m, m.cancelSetup()
 	case "a":
 		if current.definition.id == dashboardConnections {
 			if selected := m.selectedEntry(); selected != nil {
@@ -1781,7 +1803,7 @@ func (m *app) mainPreview(selected entry) string {
 	case providerNode:
 		actions = append(actions, "e            edit provider", "t            test and discover", "c            add connection")
 	case connection:
-		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "D            start connection setup", "O            cancel connection setup", "d            delete connection")
+		actions = append(actions, "e            edit connection", "t            test model-list endpoint", "T            inference dry-run by exact model ID", "i            import models with this account", "m            add a custom ID for this account", "D            start/resume setup input", "O            cancel connection setup", "d            delete connection")
 	case discoveredRoute:
 		actions = append(actions, "Space        select route", "f            build Physical from selection")
 		if value, ok := selected.payload.(discoveredRoute); ok && value.Kind == "custom" {
@@ -2550,7 +2572,7 @@ func (m *app) refreshAfter(method string) tea.Cmd {
 	switch method {
 	case "connections.test", "connections.test_inference", "connections.test_operation":
 		return nil
-	case "auth.setup.start", "auth.setup.get", "auth.setup.cancel":
+	case "auth.setup.start", "auth.setup.get", "auth.setup.advance", "auth.setup.cancel":
 		return nil
 	case "providers.refresh_models":
 		resources = []sectionID{sectionProviders, sectionModels, sectionDiscovered}
@@ -2959,6 +2981,10 @@ func (m *app) renderForm() string {
 		}
 		lines = append(lines, "", keyLine("ctrl+p", "switch provider preset · "+preset))
 	}
+	if m.form.setup != nil {
+		lines = append(lines, "", keyLine("tab / shift+tab", "next / previous field"), keyLine("ctrl+n / ctrl+p", "cycle declared options"), keyLine("ctrl+s", "submit input"), keyLine("ctrl+o", "next offered input action"), keyLine("esc", "close input; session continues"), keyLine("ctrl+x", "cancel daemon setup"), muted.Render("All setup input is masked; submitted values are not retained."))
+		return strings.Join(lines, "\n")
+	}
 	lines = append(lines, "", keyLine("tab / shift+tab", "next / previous"), keyLine("ctrl+s", "save"), keyLine("esc", "cancel"))
 	return strings.Join(lines, "\n")
 }
@@ -2973,6 +2999,10 @@ func (m *app) renderFooter(width int) string {
 	}
 	if m.mode == modeCommand {
 		return lipgloss.NewStyle().Width(width).Render(m.command.View())
+	}
+	if m.mode == modeForm && m.form != nil && m.form.setup != nil {
+		return lipgloss.JoinVertical(lipgloss.Left, lipgloss.NewStyle().Width(width).Render(muted.Render(status)),
+			lipgloss.NewStyle().Width(width).Render(muted.Render("Tab field · ctrl+n/p option · ctrl+o action · ctrl+s submit · Esc close input · ctrl+x cancel setup")))
 	}
 	if m.mode == modeHelp {
 		return lipgloss.NewStyle().Width(width).Render(muted.Render("? / esc  close help"))

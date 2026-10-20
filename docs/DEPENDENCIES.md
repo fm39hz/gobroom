@@ -99,6 +99,12 @@ pagination. Import atomicity reuses `database/sql` transactions and the current
 SQLite driver's immediate writer reservation. Credential-binding reads and
 catalog/evidence writes share DB/transaction helpers rather than duplicated SQL
 or an additional persistence/locking library.
+The auth action editor reuses Bubbles `textinput` password rendering and the
+existing extension catalog's frozen `jsonschema/v6` validator. JSON parsing uses
+`UseNumber` and typed serde; schema constraints are not reimplemented in the UI.
+Compilation runs in a Tea command with stale-result fencing, and schema-declared
+enum choices use the existing form controls. No additional form framework,
+OAuth client, callback listener or frontend worker queue is introduced.
 
 | Area | Library/tool | Version checked | Decision |
 |---|---|---:|---|

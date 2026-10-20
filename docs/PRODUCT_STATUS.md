@@ -9,7 +9,7 @@ milestone status, [use cases](USE_CASES.md) own product acceptance, and
 
 | User journey | What is demonstrated | What is not yet closed |
 |---|---|---|
-| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. OAuth code/device setup shares the action coordinator; installed CLI actions complete headless setup and persist usable credentials. Inference, quota, discovery and probes share scoped leases. Discovery import atomically fences catalog/evidence/health writes. | Broad live-provider auth acceptance, generic TUI action editing and the full lifecycle race matrix. |
+| Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. Code/device setup shares the action coordinator; CLI and TUI can submit registered schema actions. Inference, quota, discovery and probes share scoped leases. Discovery import atomically fences catalog/evidence/health writes. | Broad live-provider auth acceptance, complete lifecycle/fault composition and polished acceptance across all provider schemas. |
 | Turn sources into Physical models | Typed identity/revision/fidelity, source evidence, capability/limit projections, conservative grouping and model policies. | Whole-catalog review/split UX, stronger identity evidence and convenient capability comparison across sources. |
 | Build role Combos and expose selected names | Ordered typed members, registry-backed strategy/options, source-prefix filtering, exposure and `/v1/models` have onboarding and editor acceptance fixtures. | Complete interactive/headless acceptance for every management action, including Physical exposure through the UI. |
 | Consume the provider endpoint | Chat has fake verticals and a limited live acceptance history. Responses/Anthropic/Gemini, tools, JSON/SSE and committed-stream fallback have many deterministic IR fixtures. | The complete cross-protocol, reasoning/signature/history/continuity/modality matrix and live harness coverage. A supported vertical is not universal wire compatibility. |
@@ -26,6 +26,29 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+The TUI can edit and submit generic auth actions through registered schemas.
+It reuses masked Bubbles inputs and the existing local-only schema validator,
+with named fields/enum choices plus lossless JSON fallback. Compilation is
+asynchronous; session/epoch/revision/action/schema fences prevent stale results
+or old RPC errors from overwriting a new draft. Close/submit/cancel/transition
+clear owned input, public state never retains it, and unrelated resource forms
+are not replaced by setup polling. The daemon remains the session/commit/
+activation owner. Real Unix IPC fixtures exercise multi-step input, recoverable
+rejection, explicit retry, activation and authenticated fake inference.
+
+This closes the basic generic input-editor gap, not the entire auth product.
+Full fault/composition and live-provider acceptance, all-schema UX polish,
+catalog curation, protocol/harness breadth, alternate stores and measured
+RSS/latency/load remain open. C4/SG2/M15 is not declared complete.
+
+Verification: full regression/vet and architecture conformance passed. Focused
+auth editor/lifecycle/model-to-daemon IPC cases passed five race runs after
+adding stale old-step error fencing. These are registered fake-provider and
+model/command integration fixtures; installed-client/terminal acceptance follows
+installation and does not imply broad live OAuth or all-schema UX coverage.
+
+Previous integrated milestone:
 
 Discovery and connection probes now use the daemon's issuer without a raw auth
 resolver fallback. Model sources carry exact runtime refs; a standard guarded
