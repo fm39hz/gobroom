@@ -36,6 +36,13 @@ restart, disable and deletion. This is selected SG5 lifecycle evidence, not
 complete transform-effect or live-harness acceptance. No kernel execution path,
 dependency or module-host version changed.
 
+Installed checkpoint `a10c29e`: full regression/vet/conformance passed, as did
+three focused CLI and separate-module race runs. After `make install-all`, three
+more separate-module race runs passed with the installed CLI, including actual
+binding CRUD. Main daemon status was `ok`, control=serving=492; secret-free
+export → validate returned valid bundle v9. User config/credentials were
+preserved; no live provider was called.
+
 Previous integrated milestone:
 
 A reproducible `make perf` baseline now exercises direct/proxy JSON/SSE, serial

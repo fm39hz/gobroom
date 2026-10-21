@@ -241,6 +241,12 @@ protected opaque provenance rejection before upstream, restart and removal.
 This closes the selected configured-input/content lifecycle gap, not all SG5
 effect permutations, artifact ownership changes or the full cancellation matrix.
 
+Installed checkpoint `a10c29e`: regression/vet/full conformance and three focused
+CLI/external-module race runs passed. `make install-all` completed; the two
+external lifecycle fixtures then passed three installed-CLI race runs. Main
+control=serving=492 and bundle-v9 validation were healthy. All provider traffic
+was to temporary fake upstreams, not live accounts.
+
 ## Full semantic closure gate
 
 Recovery-trigger evidence: `TestCredentialRecoveryRequiresAuthClassificationAndRoutePolicy`
