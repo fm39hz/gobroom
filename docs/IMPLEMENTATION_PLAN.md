@@ -686,6 +686,14 @@ reproduced that resurrection before the fix; the public module fixture now
 restarts at the expiry boundary. The activation fault injector also configures
 SQLite's bounded busy timeout instead of racing live persistence with DDL.
 
+Installed `cbbf00d`: final full regression/vet/conformance passed. Focused
+config/preload/privacy/drain races and three installed-CLI repetitions passed;
+three independent-module installed repetitions also covered activation recovery
+and graceful-restart expiry. Main control=serving=495; bundle v9 remained valid.
+Finite SG7 configuration/isolation boundaries are verified. Continue with the
+explicit storage-failure/whole-drain obligations and a requirement-by-requirement
+C1–C6 audit; do not substitute broad live-provider parity for core conformance.
+
 ## Transform ownership and lifecycle checkpoint
 
 The public SDK and CLI now expose the existing transform contracts and typed

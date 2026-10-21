@@ -42,6 +42,18 @@ fixture verifies 128 accepted rows after SQLite reopen. This does not establish
 durability after failed writes, a whole-drain deadline, alternate database
 support or full M15 completion.
 
+Installed checkpoint `cbbf00d` (including `f88b149`, `a434937`, `687bf16`,
+`be38416`): final full root/external regression, vet and conformance passed.
+Focused config/preload/privacy/drain races passed; three installed-CLI race
+runs verified exact config numbers, rejection during SSE and 128-row shutdown
+retention. Three installed public-module race runs verified activation recovery,
+failed usage retention and provider expiry across graceful restart. Main daemon
+was `ok`, control=serving=495; secret-free export/validate returned valid bundle
+v9. Tests used temporary stores/fake upstreams and real config/credentials were
+preserved. The finite SG7 configuration/isolation boundaries are verified;
+storage-failure durability, whole-drain budgets and remaining C1–C6/M15 audit
+are not closed by this checkpoint.
+
 Previous integrated milestone:
 
 Transform ownership guards now retain original artifact refs, deep-copy nested

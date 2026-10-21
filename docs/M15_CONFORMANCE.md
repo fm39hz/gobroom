@@ -656,6 +656,15 @@ did not synchronize channel send with close. A standard `sync.RWMutex` now
 protects that short non-blocking admission/close boundary; it does not hold a
 lock across persistence or network work.
 
+Verified checkpoint `cbbf00d`: final root/external regression, vet and full
+conformance passed. Config/preload/privacy/drain focused races passed. After
+`make install-all`, config numeric fidelity, rejection during SSE and shutdown
+retention passed three installed-CLI race runs; independent activation recovery
+and continuity expiry/restart passed three more. Main control=serving=495 and
+bundle-v9 validation were healthy. This verifies the stated finite SG7
+configuration/isolation boundaries, not whole-drain deadlines, storage-failure
+durability, every backend or full M15 closure.
+
 ### SG6 finite boundary evidence
 
 The local production built-ins/manifests currently contain no scoped-key replay
