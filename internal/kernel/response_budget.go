@@ -20,10 +20,13 @@ func (b *responseBodyLease) Close() error {
 type responseEventBudget struct{ maxEvent, maxOutput, total int64 }
 
 func (b *responseEventBudget) consume(event ResponseEvent) error {
+	if event.Kind == EventResponseError && !event.Error.Valid() || event.Kind != EventResponseError && event.Error != (ClientFailure{}) {
+		return fmt.Errorf("invalid response error descriptor")
+	}
 	if b.maxEvent <= 0 && b.maxOutput <= 0 {
 		return nil
 	}
-	eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.SignatureIssuer.ID)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
+	eventBytes := int64(len(event.Raw)) + int64(len(event.Opaque)) + int64(len(event.Text)) + int64(len(event.Signature)) + int64(len(event.SignatureIssuer.ID)) + int64(len(event.ToolCallID)) + int64(len(event.ToolName)) + int64(len(event.ToolArguments)) + int64(len(event.Error.Code)+len(event.Error.Type)+len(event.Error.Message)) + int64(len(event.ResponseID)) + int64(len(event.ItemID)) + int64(len(event.ContentType)) + int64(len(event.BlockType)) + int64(len(event.StopReason))
 	var bodyBytes int64
 	for _, artifact := range event.Artifacts {
 		eventBytes += int64(len(artifact.TypeRef.ID)+len(artifact.Role)+len(artifact.MediaType)+len(artifact.Sensitivity)+len(artifact.Value)) + 64

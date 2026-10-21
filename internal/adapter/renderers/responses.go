@@ -94,7 +94,7 @@ type openAIResponsesSession struct {
 	toolIndexesByCallID map[string]int
 	outputItemsByID     map[string]*responsesOutputItem
 	nextToolIndex       int
-	responseError       string
+	responseError       kernel.ClientFailure
 	responseErrored     bool
 	errorSent           bool
 }
@@ -198,7 +198,7 @@ func (s *openAIResponsesSession) Finish(_ context.Context, decodeErr error) erro
 		return decodeErr
 	}
 	if s.responseErrored {
-		return fmt.Errorf("upstream response error: %s", s.responseError)
+		return fmt.Errorf("upstream response error: %s", s.responseError.Message)
 	}
 	if s.passthrough {
 		return nil

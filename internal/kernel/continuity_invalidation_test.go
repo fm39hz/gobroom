@@ -190,6 +190,9 @@ func TestKernelContinuityInvalidationRequiresRestartWithoutFallback(t *testing.T
 		"wrong cause":  func(o *ClassifiedOutcome) { o.Cause = CauseRequestInvalid },
 		"wrong retry":  func(o *ClassifiedOutcome) { o.Retry = RetryAfter },
 		"wrong effect": func(o *ClassifiedOutcome) { o.Effect = EffectUnknown },
+		"invalid client metadata": func(o *ClassifiedOutcome) {
+			o.ClientFailure = ClientFailure{Code: "bad code", Type: "upstream_error", Message: "bad descriptor"}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			outcome := valid

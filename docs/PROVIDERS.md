@@ -80,7 +80,7 @@ auth/rate-limit/timeouts and server errors cannot invalidate continuity. A match
 clears only the failed attempt's still-current session state and returns a
 sanitized 409 requiring full input; it does not grant a retry or strip caller
 history. Runtime modules use the same typed `HTTPJSONErrorSignal` for auth and
-continuity declarations under host contract v9.
+continuity declarations under host contract v10.
 
 For errors inside an accepted response, configure the independent
 `responseContinuityResetSignals` array under `httpJson`, using the same code,
@@ -93,6 +93,14 @@ upstream effect is assigned to a successful HTTP stream. Before client commit
 the error can become a sanitized 409; after commit it becomes an in-band terminal
 error. Neither path replays or strips history. Unknown response errors still
 fail and do not publish successful state or completion.
+
+Custom classifiers may set `ClassifiedOutcome.ClientFailure` with a bounded
+public `provider.ClientFailure` (`Code`, `Type`, `Message`), or wrap an error
+using `provider.NewClientFailureError`. The public SDK also exports
+`ClientFailureForError` and the continuity sentinel so modules do not parse
+human messages. This is presentation metadata, independent of retry/health
+policy and private provider evidence. Do not copy secrets or raw provider error
+payloads into it. Host-v10 error events use this typed value exclusively.
 
 The daemon loads user definitions from `$XDG_CONFIG_HOME/gobroom/providers`
 (normally `~/.config/gobroom/providers`) by default. The directory is created

@@ -479,6 +479,44 @@ See the [implementation roadmap](IMPLEMENTATION_PLAN.md) for ordered slices.
 Vendor completeness and measured resource/latency performance remain separate
 gates even after semantic closure passes.
 
+### Typed client-failure evidence
+
+Typed client failures (2026-10-21, host contract v10):
+`TestClientFailureStableContinuityDescriptorAndPrivatePrefix` and explicit
+metadata cases prove safe known codes and cause preservation through wrapping.
+Validation, budget, operation-object projection and transform tests guard the
+typed value. HTTP tests check stable code/type/message without private prefixes,
+custom metadata and no overwrite after commit. Renderer fixtures compare
+canonical descriptors in Chat/Responses and the Anthropic details extension.
+The independent scope vertical compares the same public descriptor in a 409
+and a committed SSE terminal frame. These are executable interface proofs,
+not evidence of automatic harness request reconstruction.
+
+Verification: full root regression/vet, three focused core/API/renderer race
+runs and full conformance passed, including the separate-module HTTP/SSE
+descriptor comparison. Installed acceptance follows installation.
+
+### SG6 finite follow-up audit
+
+The local production built-ins/manifests currently contain no scoped-key replay
+opt-in. `examples/external-provider-module/jobs.go` declares keyed replay for an
+illustrative operation, not a production provider retention guarantee. A future
+production opt-in still needs provider-source evidence and a deterministic
+retention/deduplication fixture. The current absence does not establish that
+arbitrary provider APIs support idempotency.
+
+| Phase | Current proof | Remaining focused check |
+|---|---|---|
+| Prepare and retained bytes | `TestReplayWithKeyCancellationDuringPreparePreventsDispatch`, `TestPreparedBytesReplayFreezesPayloadAndRenewsBodyBoundAuthorization` | Cancellation during the final dispatch validation interval |
+| Ambiguous transport | `TestReplayWithKeyRetriesOnceWithinIssuerAndDerivesProviderScopedHeader`, cross-issuer/missing-key cases and HTTP no-implicit-replay tests | No new architecture rule identified |
+| Accepted before client commit | `TestKernelDoesNotReplayAcceptedResponseAfterSemanticFailure`, composed pipeline tests | Scoped-key cancellation at this boundary |
+| After client commit | `TestKernelDoesNotSwitchAfterResponseCommitment`, execution cancellation tests | Combined scoped-key cancellation after commit |
+| Retention expiry | `TestReplayWithKeyExpiresBeforeAnotherDispatch`, retention policy validation | No new architecture rule identified |
+| Daemon stop | `TestDaemonStopCancelsActiveHTTPRequestBeforeDraining` | In-flight scoped replay cancellation and drain |
+
+These checks refine the existing commit/cancellation requirement. They do not
+create a universal provider matrix or authorize replay of accepted operations.
+
 ### Renewal/principal continuity evidence
 
 Accepted-response failure (2026-10-21, host contract v9):

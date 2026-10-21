@@ -72,7 +72,7 @@ type openAIChatSession struct {
 	usage               *kernel.UsageEvent
 	finish              string
 	finishSent          bool
-	responseError       string
+	responseError       kernel.ClientFailure
 	responseErrored     bool
 	errorSent           bool
 }
@@ -190,7 +190,7 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 		return decodeErr
 	}
 	if s.responseErrored {
-		return fmt.Errorf("upstream response error: %s", s.responseError)
+		return fmt.Errorf("upstream response error: %s", s.responseError.Message)
 	}
 	if s.passthrough {
 		return nil
@@ -419,7 +419,7 @@ type wireSession struct {
 	committed       bool
 	format          normalize.Format
 	streaming       bool
-	responseError   string
+	responseError   kernel.ClientFailure
 	responseErrored bool
 	errorSent       bool
 }
@@ -457,7 +457,7 @@ func (s *wireSession) Finish(_ context.Context, err error) error {
 		return err
 	}
 	if s.responseErrored {
-		return fmt.Errorf("upstream response error: %s", s.responseError)
+		return fmt.Errorf("upstream response error: %s", s.responseError.Message)
 	}
 	if !s.committed {
 		s.writer.WriteHeader(s.status)
@@ -466,8 +466,37 @@ func (s *wireSession) Finish(_ context.Context, err error) error {
 	return nil
 }
 
-func writeOpenAIError(writer io.Writer, message string) error {
-	data, err := json.Marshal(map[string]any{"error": map[string]any{"message": message, "type": "upstream_error"}})
+type clientFailureBody struct {
+	Code    kernel.ClientFailureCode `json:"code"`
+	Type    string                   `json:"type"`
+	Message string                   `json:"message"`
+}
+
+type openAIErrorEnvelope struct {
+	Error clientFailureBody `json:"error"`
+}
+
+type responsesFailureEnvelope struct {
+	Type     string `json:"type"`
+	Response struct {
+		Status string            `json:"status"`
+		Error  clientFailureBody `json:"error"`
+	} `json:"response"`
+}
+
+type anthropicFailureEnvelope struct {
+	Type  string `json:"type"`
+	Error struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+		Details struct {
+			ErrorCode kernel.ClientFailureCode `json:"error_code"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
+func writeOpenAIError(writer io.Writer, failure kernel.ClientFailure) error {
+	data, err := json.Marshal(openAIErrorEnvelope{Error: clientFailureBody{Code: failure.Code, Type: failure.Type, Message: failure.Message}})
 	if err != nil {
 		return err
 	}
@@ -478,12 +507,15 @@ func writeOpenAIError(writer io.Writer, message string) error {
 	return err
 }
 
-func writeProtocolError(writer io.Writer, format normalize.Format, message string) error {
+func writeProtocolError(writer io.Writer, format normalize.Format, failure kernel.ClientFailure) error {
 	switch format {
 	case normalize.FormatOpenAIChat:
-		return writeOpenAIError(writer, message)
+		return writeOpenAIError(writer, failure)
 	case normalize.FormatOpenAIResponses:
-		data, err := json.Marshal(map[string]any{"type": "response.failed", "response": map[string]any{"status": "failed", "error": map[string]any{"code": "upstream_error", "message": message}}})
+		envelope := responsesFailureEnvelope{Type: "response.failed"}
+		envelope.Response.Status = "failed"
+		envelope.Response.Error = clientFailureBody{Code: failure.Code, Type: failure.Type, Message: failure.Message}
+		data, err := json.Marshal(envelope)
 		if err != nil {
 			return err
 		}
@@ -493,7 +525,15 @@ func writeProtocolError(writer io.Writer, format normalize.Format, message strin
 		}
 		return err
 	case normalize.FormatAnthropic:
-		data, err := json.Marshal(map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": message}})
+		typ := "api_error"
+		if failure.Type == "invalid_request_error" {
+			typ = failure.Type
+		}
+		envelope := anthropicFailureEnvelope{Type: "error"}
+		envelope.Error.Type = typ
+		envelope.Error.Message = failure.Message
+		envelope.Error.Details.ErrorCode = failure.Code
+		data, err := json.Marshal(envelope)
 		if err != nil {
 			return err
 		}

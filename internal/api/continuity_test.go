@@ -32,14 +32,43 @@ func TestContinuityRestartErrorIsSafeAndDoesNotOverwriteCommittedResponse(t *tes
 				return
 			}
 			var body struct {
-				Error struct{ Code, Message, Model string }
+				Error struct {
+					Code    string `json:"code"`
+					Type    string `json:"type"`
+					Message string `json:"message"`
+					Model   string `json:"model"`
+				} `json:"error"`
 			}
 			if err := json.Unmarshal(writer.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if writer.Code != http.StatusConflict || body.Error.Code != "continuity_restart_required" || body.Error.Model != "junior" || strings.Contains(body.Error.Message, "private") {
+			if writer.Code != http.StatusConflict || body.Error.Code != string(kernel.ClientFailureContinuityRestart) || body.Error.Type != "invalid_request_error" || body.Error.Model != "junior" || body.Error.Message != kernel.ErrContinuityRestartRequired.Error() || strings.Contains(body.Error.Message, "private") {
 				t.Fatalf("unsafe restart response: %d %s", writer.Code, writer.Body.String())
 			}
 		})
+	}
+}
+
+func TestTypedClientFailureIsProjectedSafely(t *testing.T) {
+	detail := kernel.ClientFailure{Code: kernel.ClientFailureCode("safe_custom_code"), Type: "invalid_request_error", Message: "safe public message"}
+	server := Server{executor: func(context.Context, normalize.Request, http.ResponseWriter) error {
+		return kernel.NewClientFailureError(detail, fmt.Errorf("private upstream detail"))
+	}}
+	writer := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	server.executeNormalized(writer, request, normalize.Request{Model: "junior"})
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+			Message string `json:"message"`
+			Model   string `json:"model"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(writer.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if writer.Code != http.StatusBadGateway || body.Error.Code != string(detail.Code) || body.Error.Type != detail.Type || body.Error.Message != detail.Message || body.Error.Model != "junior" || strings.Contains(writer.Body.String(), "private upstream detail") {
+		t.Fatalf("typed failure response was not projected safely: %d %s", writer.Code, writer.Body.String())
 	}
 }

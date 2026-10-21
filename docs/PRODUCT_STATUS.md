@@ -27,6 +27,24 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Client-visible error identity is now a bounded typed code/type/message value,
+separate from private provider evidence and replay policy. It survives standard
+Go error wrapping, HTTP executor projection and native/semantic streaming
+renderers. Event budgets and immutable transform checks include all fields;
+the event no longer accepts a string error shape. Extensions can supply explicit
+public metadata without a provider branch in the kernel. Host-v10 requires it.
+
+The independent module daemon vertical compares descriptor identity between
+HTTP 409 and committed SSE. HTTP/renderer/core fixtures cover custom metadata,
+private wrapper filtering, bounds and no postcommit overwrite. Full root
+regression/vet, three focused race runs and conformance (including the complete
+independent module suite) passed. Installed acceptance follows installation.
+Replay proof still needs the finite
+cancellation/dispatch/shutdown cases listed in M15; provider/harness breadth,
+catalog UX and measured latency/RSS remain open. This does not close M15.
+
+Previous integrated milestone:
+
 Accepted-response failures now use bounded private decoder evidence and a
 response classifier separate from HTTP rejection. Accepted upstream effects do
 not become replay grants. OpenAI error payloads are intercepted before raw data

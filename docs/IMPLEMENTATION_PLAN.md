@@ -287,6 +287,18 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    real CLI status/account update, committed error projection and durable failed
    usage/reset across restart. Main control=serving=486 and bundle-v9 validation
    remained valid; no live provider or real credential mutation was needed.
+
+   Typed client-failure checkpoint (2026-10-21): host-v10 replaces the event
+   error string with a bounded code/type/message value. HTTP and committed
+   streaming projection preserve the descriptor; standard error wrapping,
+   budgets, operation envelopes and transform guards retain its identity.
+   Classifier/module metadata cannot grant replay, change effect or bypass
+   invalidation validation. The independent daemon vertical compares descriptor
+   identity across HTTP and SSE. Harness-specific automatic recovery remains
+   unverified; no local standalone harness source was available.
+   Root regression/vet, three focused core/API/renderer race runs and full
+   conformance passed. SG6 follow-up is now a finite boundary/drain checklist in
+   M15, not a demand for a universal provider matrix.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

@@ -371,6 +371,7 @@ type ClassifiedOutcome struct {
 	Limits             []LimitWindow
 	StatusCode         int
 	Message            string
+	ClientFailure      ClientFailure
 }
 
 // ContinuityRecovery invalidates rejected provider state; it never grants a
@@ -588,7 +589,7 @@ type ResponseEvent struct {
 	ToolName        string
 	ToolArguments   string
 	Usage           *UsageEvent
-	Error           string
+	Error           ClientFailure
 	WireFormat      normalize.Format
 	Raw             []byte
 	Opaque          json.RawMessage

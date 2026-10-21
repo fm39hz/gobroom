@@ -35,7 +35,7 @@ func TestCommittedSemanticStreamsProjectTerminalErrorOnce(t *testing.T) {
 			if err := session.Emit(context.Background(), tt.prior); err != nil {
 				t.Fatal(err)
 			}
-			failure := kernel.ResponseEvent{Kind: kernel.EventResponseError, Error: "upstream said \"no\"\\again"}
+			failure := kernel.ResponseEvent{Kind: kernel.EventResponseError, Error: testUpstreamFailure("upstream said \"no\"\\again")}
 			if err := session.Emit(context.Background(), failure); err != nil {
 				t.Fatal(err)
 			}
@@ -61,6 +61,9 @@ func TestCommittedSemanticStreamsProjectTerminalErrorOnce(t *testing.T) {
 					if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &decoded); err != nil {
 						t.Fatalf("invalid JSON error frame %q: %v", line, err)
 					}
+					if !strings.Contains(line, `upstream said \"no\"\\again`) {
+						t.Fatalf("error message was not JSON escaped: %q", line)
+					}
 				}
 			}
 		})
@@ -74,7 +77,7 @@ func TestTerminalErrorBeforeCommitWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventResponseError, Error: "failed"}); err != nil {
+	if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventResponseError, Error: testUpstreamFailure("failed")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Finish(context.Background(), nil); err == nil {
@@ -108,7 +111,7 @@ func TestNativePassthroughProjectsTerminalErrorOnce(t *testing.T) {
 			if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventRawFrame, WireFormat: tt.format, Raw: []byte("data: prior\n\n")}); err != nil {
 				t.Fatal(err)
 			}
-			event := kernel.ResponseEvent{Kind: kernel.EventResponseError, Error: "failed"}
+			event := kernel.ResponseEvent{Kind: kernel.EventResponseError, Error: testUpstreamFailure("failed")}
 			if err := session.Emit(context.Background(), event); err != nil {
 				t.Fatal(err)
 			}

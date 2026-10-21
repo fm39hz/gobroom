@@ -444,7 +444,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	}
 	if decodeErr != nil {
 		decodeErr = WrapResponseFailure(ResponseFailureProvider, decodeErr)
-		errorEvent := ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: decodeErr.Error()}
+		errorEvent := ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: ClientFailureForError(decodeErr)}
 		if hooks.OnEvent != nil {
 			hooks.OnEvent(errorEvent)
 		}

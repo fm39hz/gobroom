@@ -632,7 +632,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					releaseCandidate()
 					// Without a proved full transcript, stripping the parent and
 					// replaying would silently change caller intent. No fallback.
-					return ErrContinuityRestartRequired
+					return withOutcomeClientFailure(outcome, ErrContinuityRestartRequired)
 				}
 				if idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
 					if body, ok := upstream.Body.(io.Closer); ok {
@@ -674,7 +674,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					observer.ObserveOutcome(candidate, outcome)
 				}
 				failureClass = class
-				memberErr = fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body)))
+				memberErr = withOutcomeClientFailure(outcome, fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body))))
 				retryAfter := retryAfterDuration(response.Headers.Get("Retry-After"))
 				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
 					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
@@ -687,7 +687,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					return &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: outcome.Effect, Cause: memberErr}
 				}
 				if class == ErrorTerminal {
-					terminalErr := fmt.Errorf("upstream status %d: %s", response.Status, strings.TrimSpace(string(body)))
+					terminalErr := memberErr
 					failure := StrategyFailure{NodeID: node.ID, Member: member, Class: class, Err: terminalErr}
 					if k.Scheduler.OnFailure(node, failure) == FailureStop {
 						return terminalErr
@@ -842,11 +842,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 					outcome.Message = ErrContinuityRestartRequired.Error()
 					providerFailureOutcome = &outcome
-					return ErrContinuityRestartRequired
+					return withOutcomeClientFailure(outcome, ErrContinuityRestartRequired)
 				}
 				outcome.Message = evidence.Error()
 				providerFailureOutcome = &outcome
-				return evidence
+				return withOutcomeClientFailure(outcome, evidence)
 			}
 			reportFailure := func(err error) {
 				if err == nil || terminalFailure != nil {
@@ -854,7 +854,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				terminalFailure = err
 				if emitEvent != nil {
-					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: err.Error()})
+					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: ClientFailureForError(err)})
 				}
 				if providerResponseFailure(ctx, err) {
 					if providerFailureOutcome != nil {
@@ -1065,7 +1065,7 @@ func operationEventPayload(event ResponseEvent, sequence uint64) (json.RawMessag
 	for key, value := range map[string]string{
 		"responseId": event.ResponseID, "contentType": event.ContentType, "blockType": event.BlockType,
 		"stopReason": event.StopReason, "text": event.Text, "toolCallId": event.ToolCallID,
-		"toolName": event.ToolName, "toolArguments": event.ToolArguments, "signature": event.Signature, "error": event.Error,
+		"toolName": event.ToolName, "toolArguments": event.ToolArguments, "signature": event.Signature,
 		"wireFormat": string(event.WireFormat),
 	} {
 		if value != "" {
@@ -1074,6 +1074,9 @@ func operationEventPayload(event ResponseEvent, sequence uint64) (json.RawMessag
 	}
 	if event.SignatureIssuer.ID != "" {
 		content["signatureIssuer"] = event.SignatureIssuer.Key()
+	}
+	if event.Error != (ClientFailure{}) {
+		content["error"] = event.Error
 	}
 	if event.Index != 0 {
 		content["index"] = event.Index

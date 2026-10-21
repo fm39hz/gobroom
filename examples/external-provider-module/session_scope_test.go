@@ -306,6 +306,41 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 		if mode == 2 && (!strings.Contains(string(responseBody), "partial-text") || !strings.Contains(string(responseBody), "resend the complete conversation")) {
 			t.Fatalf("committed stream lost text or error projection: %s", responseBody)
 		}
+		wantFailure := provider.ClientFailureForError(provider.ErrContinuityRestartRequired)
+		if mode == 1 {
+			var envelope struct {
+				Error provider.ClientFailure `json:"error"`
+			}
+			if err := json.Unmarshal(responseBody, &envelope); err != nil || envelope.Error != wantFailure {
+				t.Fatalf("HTTP failure lost typed identity: %s err=%v", responseBody, err)
+			}
+		} else {
+			failures := 0
+			for _, line := range strings.Split(string(responseBody), "\n") {
+				data, ok := strings.CutPrefix(line, "data:")
+				if !ok {
+					continue
+				}
+				var envelope struct {
+					Type     string `json:"type"`
+					Response struct {
+						Error provider.ClientFailure `json:"error"`
+					} `json:"response"`
+				}
+				if err := json.Unmarshal([]byte(data), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope.Type == "response.failed" {
+					failures++
+					if envelope.Response.Error != wantFailure {
+						t.Fatalf("stream failure lost typed identity: %#v", envelope.Response.Error)
+					}
+				}
+			}
+			if failures != 1 {
+				t.Fatalf("terminal frames=%d want1", failures)
+			}
+		}
 		if got := readRequest(); got.PreviousID != "respA" {
 			t.Fatalf("accepted failure parent=%q", got.PreviousID)
 		}

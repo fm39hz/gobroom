@@ -97,7 +97,7 @@ type anthropicSession struct {
 	blocksByKey     map[string]*anthropicBlock
 	toolBlocksByID  map[string]*anthropicBlock
 	blockOrder      []*anthropicBlock
-	responseError   string
+	responseError   kernel.ClientFailure
 	responseErrored bool
 	errorSent       bool
 }
@@ -269,7 +269,7 @@ func (s *anthropicSession) Finish(_ context.Context, decodeErr error) error {
 		return decodeErr
 	}
 	if s.responseErrored {
-		return fmt.Errorf("upstream response error: %s", s.responseError)
+		return fmt.Errorf("upstream response error: %s", s.responseError.Message)
 	}
 	if s.passthrough {
 		return nil

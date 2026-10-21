@@ -48,7 +48,7 @@ func TestOAuthFactoryOffersGenericAuthorizationForSelectedMethod(t *testing.T) {
 }
 
 func TestAuthorizationAwaitRejectsOldModuleHost(t *testing.T) {
-	for _, version := range []uint64{3, 4, 5, 6, 7, 8} {
+	for _, version := range []uint64{3, 4, 5, 6, 7, 8, 9} {
 		_, err := NewRuntimeRegistryWithModules(RuntimeModuleFunc{Name: "fixture.old-auth", Version: "1", HostContractVersion: version, Init: func(*RuntimeRegistry) error { return nil }})
 		if err == nil {
 			t.Fatal("removed lifecycle host contract was accepted")

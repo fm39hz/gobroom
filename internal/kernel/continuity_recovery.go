@@ -3,7 +3,7 @@ package kernel
 import "context"
 
 func validContinuityRecovery(outcome ClassifiedOutcome, effect UpstreamEffect) bool {
-	return outcome.ContinuityRecovery == ContinuityRecoveryInvalidate && outcome.Cause == CauseContinuityInvalid && outcome.Effect == effect && outcome.Scope == ScopeRequest && outcome.Class == ErrorTerminal && outcome.Retry == RetryNever && outcome.Recovery.Effective() == CredentialRecoveryNone && outcome.RetryAt.IsZero() && len(outcome.Limits) == 0
+	return outcome.ContinuityRecovery == ContinuityRecoveryInvalidate && outcome.Cause == CauseContinuityInvalid && outcome.Effect == effect && outcome.Scope == ScopeRequest && outcome.Class == ErrorTerminal && outcome.Retry == RetryNever && outcome.Recovery.Effective() == CredentialRecoveryNone && outcome.RetryAt.IsZero() && len(outcome.Limits) == 0 && (outcome.ClientFailure == (ClientFailure{}) || outcome.ClientFailure.Valid())
 }
 
 func (k *Kernel) invalidateLoadedContinuity(ctx context.Context, route Route, request NormalizedRequest, sessionID string, saved SessionState, loaded bool) error {

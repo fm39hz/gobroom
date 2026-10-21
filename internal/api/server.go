@@ -659,10 +659,7 @@ func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, reque
 	if s.executor != nil {
 		tracked := &trackingWriter{ResponseWriter: w}
 		if err := s.executor(r.Context(), request, tracked); err != nil && !tracked.committed {
-			if errors.Is(err, kernel.ErrContinuityRestartRequired) {
-				writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "continuity_restart_required", "message": kernel.ErrContinuityRestartRequired.Error(), "model": requestModel}})
-				return
-			}
+			failure := kernel.ClientFailureForError(err)
 			status := http.StatusBadGateway
 			var operationInput *operations.InputError
 			if errors.As(err, &operationInput) {
@@ -674,7 +671,12 @@ func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, reque
 			if errors.Is(err, kernel.ErrNoRoute) {
 				status = http.StatusServiceUnavailable
 			}
-			writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error(), "model": requestModel}})
+			if errors.Is(err, kernel.ErrContinuityRestartRequired) {
+				status = http.StatusConflict
+			}
+			writeJSON(w, status, normalizedExecutionErrorResponse{Error: normalizedExecutionError{
+				Code: failure.Code, Type: failure.Type, Message: failure.Message, Model: requestModel,
+			}})
 		}
 		return
 	}
@@ -685,6 +687,17 @@ func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, reque
 		}
 	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"message": "model is not published", "model": requestModel}})
+}
+
+type normalizedExecutionErrorResponse struct {
+	Error normalizedExecutionError `json:"error"`
+}
+
+type normalizedExecutionError struct {
+	Code    kernel.ClientFailureCode `json:"code"`
+	Type    string                   `json:"type"`
+	Message string                   `json:"message"`
+	Model   string                   `json:"model"`
 }
 
 type trackingWriter struct {

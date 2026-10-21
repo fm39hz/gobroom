@@ -154,6 +154,17 @@ renderers to emit a terminal error without a success sentinel. No reference
 stream executor, parser or cache is imported; healthy native frames keep their
 bytes and the ordinary path adds no second JSON decode per event.
 
+Client-error projection follow-up: `codex_executor_terminal.go` preserves
+separate type/code/message fields for missing previous responses and invalid
+thinking signatures. `sdk/api/handlers/claude/code_handlers.go` emits Anthropic
+type/message and adds `details.error_code` for a stale thread; the detector in
+`internal/clienterror/client_error.go` is provider-specific. Gobroom keeps that
+shape separation without copying the detectors or message heuristics: canonical
+typed failure metadata reaches protocol renderers and HTTP projection through
+standard Go error wrapping and JSON binding. No local standalone Codex/OpenCode
+harness checkout was found for this review, so source evidence does not establish
+their automatic recovery from Gobroom's canonical codes.
+
 Provider-state lesson: `sdk/cliproxy/auth/types.go` keeps arbitrary mutable
 account metadata (tokens/cookies/provider fields), rather than assuming all
 refresh results are a bearer token. Gobroom solves that preservation problem

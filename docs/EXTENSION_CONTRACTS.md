@@ -353,9 +353,34 @@ become successful because `[DONE]` follows. Healthy raw frames stay unchanged.
 An uncommitted client response can become a sanitized 409. Committed streaming
 responses keep their status and prior content and receive one format-specific
 terminal error, never a synthetic success or replay. Provider-specific envelope
-coverage and broad harness acceptance remain implementation gates. Module host
-contract v9 requires this private failure boundary and compare-and-invalidate
-semantics; no old-host adapter is retained.
+coverage and broad harness acceptance remain implementation gates.
+
+Public failure presentation is a separate value contract: `ClientFailure`
+contains bounded `code`, `type` and `message`, without provider evidence or
+retry instructions. `ResponseEvent.Error` is this comparable value, not a
+string or dual legacy shape. Its bytes count against event/output budgets,
+operation event envelopes encode it as an object, and transforms cannot rewrite
+any of its fields. Invalid identifiers, empty/oversized messages and invalid
+UTF-8 fail closed. Known continuity, input, model and routing failures receive
+stable host codes; private wrapper prefixes are not copied into known failures.
+
+`ClientFailureForError` unwraps errors through Go's standard error contracts.
+`NewClientFailureError` and `ClassifiedOutcome.ClientFailure` let an extension
+provide explicit valid public metadata while retaining its cause. This metadata
+does not alter upstream effect, credential recovery, HTTP status selection or
+replay permission. In particular, assigning a continuity-looking code does not
+authorize invalidation. Invalid classified metadata cannot trigger a reset.
+
+HTTP executor errors and committed Chat/Responses error frames carry the same
+code/type/message. Anthropic streaming errors use the protocol type/message
+shape with `details.error_code` carrying the canonical code; this is an explicit
+extension, not a claim that every Anthropic client consumes it. Native and
+semantic projections use JSON binding and preserve one terminal frame without
+success output. Canonical codes are Gobroom identifiers, not inferred provider
+codes; automated Codex/OpenCode recovery is not established by this contract.
+Module host contract v10 requires these typed failures, the private decoder
+boundary and compare-and-invalidate semantics; no string-error or old-host
+adapter is retained.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

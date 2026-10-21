@@ -278,6 +278,24 @@ func WrapResponseFailure(origin ResponseFailureOrigin, err error) error {
 type StreamHooks = kernel.StreamHooks
 type ErrorClass = kernel.ErrorClass
 type ClassifiedOutcome = kernel.ClassifiedOutcome
+type ClientFailure = kernel.ClientFailure
+type ClientFailureCode = kernel.ClientFailureCode
+
+const (
+	ClientFailureUpstream          = kernel.ClientFailureUpstream
+	ClientFailureContinuityRestart = kernel.ClientFailureContinuityRestart
+	ClientFailureInvalidRequest    = kernel.ClientFailureInvalidRequest
+	ClientFailureModelUnavailable  = kernel.ClientFailureModelUnavailable
+	ClientFailureNoRoute           = kernel.ClientFailureNoRoute
+)
+
+var ErrContinuityRestartRequired = kernel.ErrContinuityRestartRequired
+
+func ClientFailureForError(err error) ClientFailure { return kernel.ClientFailureForError(err) }
+func NewClientFailureError(detail ClientFailure, cause error) error {
+	return kernel.NewClientFailureError(detail, cause)
+}
+
 type OutcomeClassifier = kernel.OutcomeClassifier
 type OutcomeCause = kernel.OutcomeCause
 type UpstreamEffect = kernel.UpstreamEffect

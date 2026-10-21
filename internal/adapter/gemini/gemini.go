@@ -1077,7 +1077,7 @@ func openAIFinishReason(reason string) string {
 
 func reportError(hooks kernel.StreamHooks, err error) error {
 	if hooks.OnEvent != nil {
-		hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: err.Error()})
+		hooks.OnEvent(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseError, Error: kernel.ClientFailureForError(err)})
 	}
 	if hooks.OnError != nil {
 		hooks.OnError(err)
