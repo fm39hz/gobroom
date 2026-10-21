@@ -237,6 +237,7 @@ type Modalities struct {
 type TransportHints struct {
 	AcceptJSON            bool
 	AcceptSSE             bool
+	IncludeUsage          bool
 	ForceStream           bool
 	TargetFormat          Format
 	PreferredConnectionID string

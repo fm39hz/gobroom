@@ -27,6 +27,17 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Transform ownership guards now retain original artifact refs, deep-copy nested
+usage evidence, and protect operation ID/version together. A separate-module
+response fixture configures real JSON/SSE projection across updates/restart/
+removal and checks original provider accounting. It exposed a missing semantic
+Chat usage chunk; a typed immutable client hint now carries that opt-in to the
+renderer without provider-name checks. Existing SDK event contracts are
+exported directly. SG5 acceptance is now a finite core checklist; broad live
+provider/harness coverage and full M15 remain separate gates.
+
+Previous integrated milestone:
+
 Public transform configuration now reaches the same daemon path from an
 independent module and the CLI. The SDK exports existing request/response
 contracts, and `transforms list/upsert/delete` manages typed persisted bindings.

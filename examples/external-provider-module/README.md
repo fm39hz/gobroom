@@ -23,6 +23,13 @@ post-transform operation validation, persistence, disable and deletion. With
 `upsert --file` and `delete` commands. All upstreams and databases are temporary.
 These fixtures do not demonstrate arbitrary artifact mutation or every effect.
 
+The response lifecycle fixture adds JSON and SSE client projection, including
+explicit usage opt-in. A registered transform changes client-visible output
+tokens from 3 to 103 while all 14 persisted provider observations retain 3.
+An invalid option replacement leaves the valid binding active; options survive
+restart and disable/delete restore the original output. Installed CLI binding
+CRUD is selected with the same environment variable.
+
 Run from this directory with `GOWORK=off go test ./...`. The tests compile the
 module as an independent importer, bind the manifest, verify the custom quota
 source through the registry, then start the public daemon API with the module

@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -43,6 +44,23 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	}
 	if format == FormatOpenAIResponses && !responsesToolDefinitionsValid(body["tools"]) {
 		r.UnsupportedFacets = append(r.UnsupportedFacets, "tools.definitions")
+	}
+	if format == FormatOpenAIChat {
+		if raw, exists := body["stream_options"]; exists {
+			encoded, err := json.Marshal(raw)
+			if err != nil {
+				return Result{}, fmt.Errorf("invalid stream_options")
+			}
+			var options struct {
+				IncludeUsage bool `json:"include_usage"`
+			}
+			decoder := json.NewDecoder(bytes.NewReader(encoded))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&options); err != nil {
+				return Result{}, fmt.Errorf("invalid or unsupported stream_options")
+			}
+			r.Transport.IncludeUsage = r.Stream && options.IncludeUsage
+		}
 	}
 	if format == FormatAnthropic {
 		r.Messages, r.UnsupportedFacets = normalizeAnthropicMessages(body)
@@ -98,6 +116,9 @@ func Map(path string, headers http.Header, body map[string]any) (Result, error) 
 	r.Continuity = normalizeContinuity(body)
 	r.Modalities = detectModalities(body)
 	for k, v := range body {
+		if format == FormatOpenAIChat && k == "stream_options" {
+			continue
+		}
 		if !isCoreKey(k) && !(format == FormatAnthropic && isAnthropicCoreKey(k)) {
 			r.Extensions[k] = v
 		}

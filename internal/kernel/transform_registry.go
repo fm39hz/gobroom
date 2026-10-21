@@ -648,7 +648,7 @@ func (r *RequestTransformRegistry) ApplyScopesWithReport(ctx context.Context, re
 			}
 			return report, fmt.Errorf("request transform %q: %w", definition.Ref.Key(), applyErr)
 		}
-		if updated.Model != before.Model || updated.Operation != before.Operation || updated.SourceFormat != before.SourceFormat || updated.Stream != before.Stream || updated.Session.ID != before.Session.ID || updated.Session.Client != before.Session.Client || updated.Session.Conversation != before.Session.Conversation || !reflect.DeepEqual(updated.Transport, before.Transport) {
+		if updated.Model != before.Model || updated.Operation != before.Operation || updated.OperationContractVersion != before.OperationContractVersion || updated.SourceFormat != before.SourceFormat || updated.Stream != before.Stream || updated.Session.ID != before.Session.ID || updated.Session.Client != before.Session.Client || updated.Session.Conversation != before.Session.Conversation || !reflect.DeepEqual(updated.Transport, before.Transport) {
 			return report, fmt.Errorf("request transform %q: %w: changed immutable request identity or client contract", definition.Ref.Key(), ErrTransformSafetyViolation)
 		}
 		if updated.Mutations != before.Mutations {
@@ -706,12 +706,26 @@ func transformFailure(binding TransformBinding, ref extensions.Ref, reason Trans
 func cloneResponseEvent(event ResponseEvent) ResponseEvent {
 	event.Raw = append([]byte(nil), event.Raw...)
 	event.Opaque = append(json.RawMessage(nil), event.Opaque...)
-	event.Artifacts = make([]extensions.ArtifactRef, len(event.Artifacts))
+	event.Artifacts = slices.Clone(event.Artifacts)
 	for index := range event.Artifacts {
 		event.Artifacts[index] = event.Artifacts[index].Clone()
 	}
 	if event.Usage != nil {
 		usage := *event.Usage
+		usage.CompatibilityLosses = cloneLossRecords(usage.CompatibilityLosses)
+		if usage.CompatibilityPlan != nil {
+			plan := *usage.CompatibilityPlan
+			plan.Mappings = slices.Clone(plan.Mappings)
+			for index := range plan.Mappings {
+				plan.Mappings[index].Paths = slices.Clone(plan.Mappings[index].Paths)
+			}
+			plan.RequestTransformSteps = cloneRequestTransformSteps(plan.RequestTransformSteps)
+			plan.ResponseTransformSteps = cloneResponseTransformSteps(plan.ResponseTransformSteps)
+			plan.ArtifactTransfers = slices.Clone(plan.ArtifactTransfers)
+			plan.ArtifactOutputs = slices.Clone(plan.ArtifactOutputs)
+			plan.TransformFailures = slices.Clone(plan.TransformFailures)
+			usage.CompatibilityPlan = &plan
+		}
 		event.Usage = &usage
 	}
 	return event
@@ -751,9 +765,6 @@ func validateRequestTransformEffects(definition TransformDefinition, before, aft
 	}
 	if err := require(!reflect.DeepEqual(before.ToolChoice, after.ToolChoice), TransformTools, "tool choice"); err != nil {
 		return err
-	}
-	if !reflect.DeepEqual(before.ToolChoice.Metadata, after.ToolChoice.Metadata) {
-		return fmt.Errorf("%w: changed opaque tool-choice metadata", ErrTransformSafetyViolation)
 	}
 	if !reflect.DeepEqual(before.ToolChoice.Metadata, after.ToolChoice.Metadata) {
 		return fmt.Errorf("%w: changed opaque tool-choice metadata", ErrTransformSafetyViolation)

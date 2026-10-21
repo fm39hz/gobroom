@@ -26,6 +26,18 @@ notice and have an independent Gobroom fixture.
 
 ## Implementation map
 
+Streaming usage lesson: `internal/runtime/executor/openai_compat_executor.go`
+requests a final usage chunk for upstream accounting. The adjacent
+`../9router/open-sse/executors/iflow.js` also injects `include_usage`, while its
+Combo fusion removes stream options for non-streaming panel calls. These are
+provider-request concerns, distinct from a client's response visibility.
+Gobroom retains original provider accounting and uses a typed client transport
+hint for semantic Chat rendering. A real independent-module JSON/SSE fixture
+exposed the missing renderer projection when transforms disabled passthrough.
+It now verifies client-visible counters can change without changing stored
+provider counters. Standard JSON binding/encoding and the existing compositor
+cover this; no executor, byte-patching package or new routing framework is copied.
+
 Response-terminal lesson: `sdk/api/handlers/handlers_interceptors.go`
 (`completeError`) and `handlers_stream.go` (`streamDeliveryCompletion`)
 separate cancelled request lifecycles from stream delivery failure. Gobroom

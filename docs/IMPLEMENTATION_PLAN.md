@@ -655,6 +655,24 @@ update those milestones only against their own exit criteria. Secondary
 operation fixtures prove architecture without committing to ship every media
 product feature. No legacy compatibility path is retained during these changes.
 
+## Transform ownership and lifecycle checkpoint
+
+The public SDK and CLI now expose the existing transform contracts and typed
+binding CRUD (`a10c29e`). Request operation-input/canonical-content fixtures
+prove configured updates, restart and removal through the ordinary daemon.
+SG5 verification now includes response JSON/SSE lifecycle and original provider
+usage accounting, plus regression guards for deep artifact/usage ownership and
+immutable operation versions. Semantic Chat streaming honors typed client usage
+opt-in; it does not project modified client counters into provider accounting.
+The finite core checklist in
+[M15 conformance](M15_CONFORMANCE.md#sg5-finite-core-checklist) replaces an
+unspecified demand for a universal transform/cancellation matrix.
+
+These changes enforce existing contracts with standard typed copies and
+existing clone helpers; they do not introduce a second transform engine,
+provider-specific kernel branches, new dependencies or a compatibility path.
+Full C1–C6/M15 acceptance and the product-level performance gate remain separate.
+
 ## Measured performance checkpoint
 
 `make perf` now runs the standard Go benchmark fixture against direct and daemon

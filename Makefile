@@ -148,7 +148,9 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/runtime/sessionstore -run '^TestCachePersistsSessionStateOffTheReadPath$$' -count=1
 
 test-conformance-transform-boundaries:
-	go test ./internal/kernel -run '^(TestRequestTransformCannotAppendOpaqueMessageMetadata|TestRequestTransformAcceptsCanonicalMessageSuffix|TestRequestTransformEffectsAndOpaqueFacetsAreExhaustivelyGuarded)$$' -count=1
+	go test ./internal/kernel -run 'Transform' -count=1
+	go test ./internal/normalize -run '^TestChatStreamOptions' -count=1
+	go test ./internal/adapter/renderers -run '^TestOpenAIChat(SemanticStream|FailedFinish|NativePassthrough)' -count=1
 	go test ./internal/adapter/openai -run '^(TestChatTransformRegistryToWireEncodesCanonicalMessageSuffix|TestNativeChatMessageRejectsUnmappedCanonicalContentParts|TestNativeChatMessageRejectsUnmappedAddedMessageFields|TestNativeResponsesConvertsCanonicalNestedChatToolCallMetadata|TestNativeResponsesRejectsOpaqueNestedChatToolCallMetadata|TestNativeResponsesRejectsReorderedFunctionCallsWhenMessagesChange|TestNativeResponsesRejectsUnmappedAddedMessageFields|TestNativeResponsesOverlayRejectsSourceMessageRoleChange)$$' -count=1
 	go test ./internal/adapter/anthropic -run '^(TestNativeAnthropicOverlayAppendsTypedMessagesAndToolResults|TestNativeAnthropicOverlayRejectsAdditionsInsertedBetweenSourceMessages|TestNativeAnthropicOverlayRejectsUnrepresentableAddedContent|TestNativeAnthropicOverlayRejectsReorderedSourceMessages|TestNativeAnthropicOverlayRejectsSourceMessageRoleChange|TestNativeAnthropicAddedMessageRejectsUnmappedFields)$$' -count=1
 	go test ./internal/adapter/anthropic -run '^TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack$$' -count=1

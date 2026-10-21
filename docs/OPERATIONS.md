@@ -216,6 +216,12 @@ enable a transform; bindings survive restart. Canonical content and operation
 inputs may change only under declared effects; artifact ownership, opaque
 provenance and daemon-owned facts remain protected.
 
+For streaming OpenAI Chat clients, `stream_options: {"include_usage": true}`
+requests a final known-usage chunk before `[DONE]`, including when transforms
+force semantic rendering. Opt-out omits that chunk; unavailable counters are
+not invented. Typed binding rejects malformed/unsupported stream options.
+This changes client visibility, not stored provider usage or billed accounting.
+
 ## Service and logs
 
 The user service writes operational messages to stdout/stderr, so a service

@@ -47,7 +47,8 @@ func (OpenAIChat) Begin(_ context.Context, options kernel.ResponseRenderContext,
 	}
 	return &openAIChatSession{
 		writer: writer, status: options.Status, passthrough: passthrough, streaming: options.Streaming, model: options.Model,
-		id: fmt.Sprintf("chatcmpl-gobroom-%d", time.Now().UnixNano()), created: time.Now().Unix(), tools: map[int]*toolAccumulator{},
+		includeUsage: options.IncludeUsage,
+		id:           fmt.Sprintf("chatcmpl-gobroom-%d", time.Now().UnixNano()), created: time.Now().Unix(), tools: map[int]*toolAccumulator{},
 		toolIndexesByItemID: map[string]int{}, toolIndexesByCallID: map[string]int{},
 	}, nil
 }
@@ -62,6 +63,7 @@ type openAIChatSession struct {
 	committed           bool
 	passthrough         bool
 	streaming           bool
+	includeUsage        bool
 	model, id           string
 	created             int64
 	text, thinking      strings.Builder
@@ -213,6 +215,16 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 			}
 			s.finishSent = true
 		}
+		if s.includeUsage && s.usage != nil {
+			chunk := map[string]any{
+				"id": s.id, "object": "chat.completion.chunk", "created": s.created, "model": s.model,
+				"choices": []any{},
+				"usage":   map[string]any{"prompt_tokens": s.usage.InputTokens, "completion_tokens": s.usage.OutputTokens, "total_tokens": s.usage.InputTokens + s.usage.OutputTokens},
+			}
+			if err := writeSSEJSON(s.writer, chunk); err != nil {
+				return err
+			}
+		}
 		_, err := io.WriteString(s.writer, "data: [DONE]\n\n")
 		if flusher, ok := s.writer.(http.Flusher); ok {
 			flusher.Flush()
@@ -307,14 +319,18 @@ func (s *openAIChatSession) chunk(delta map[string]any, finish string) error {
 		finishValue = finish
 	}
 	chunk := map[string]any{"id": s.id, "object": "chat.completion.chunk", "created": s.created, "model": s.model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finishValue}}}
+	return writeSSEJSON(s.writer, chunk)
+}
+
+func writeSSEJSON(writer http.ResponseWriter, chunk any) error {
 	data, err := json.Marshal(chunk)
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(s.writer, "data: %s\n\n", data); err != nil {
+	if _, err := fmt.Fprintf(writer, "data: %s\n\n", data); err != nil {
 		return err
 	}
-	if flusher, ok := s.writer.(http.Flusher); ok {
+	if flusher, ok := writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
 	return nil

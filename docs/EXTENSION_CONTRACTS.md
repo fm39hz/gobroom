@@ -602,9 +602,21 @@ produces original provider events for accounting/outcome evidence; transforms
 then produce client-visible events. A client usage projection cannot rewrite
 measured provider usage, quota evidence or billed accounting.
 
+Client usage visibility is a typed, immutable transport hint, separate from
+provider accounting. The Chat ingress binds supported `stream_options` to
+`IncludeUsage`; it is not a provider extension or generation requirement.
+The compositor forwards that hint without inspecting a provider name. The
+Chat semantic renderer emits known usage once, after finish and before DONE,
+only when requested. It never fabricates unavailable counters or successful
+usage framing after a failed decode. Native passthrough remains byte-preserving.
+
 Transform chains are transactional: request transforms compose on a private
 working copy and the chain publishes only after every enabled step validates;
 response transforms likewise return no partial chain result on failure.
+That private copy includes artifact reference values/owners/body references and
+nested usage compatibility evidence. Operation ID and contract version remain
+immutable together; declaring an input effect does not permit switching the
+operation contract. These are ownership guards, not artifact-edit permissions.
 `safe_fail_open` is legal only when the descriptor
 allows it, the binding enables it, the original input remains intact and
 skipping preserves all hard requirements. Fail-open is observable. A response

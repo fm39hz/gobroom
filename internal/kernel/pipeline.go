@@ -46,6 +46,7 @@ type ResponseRenderContext struct {
 	ClientFormat            normalize.Format
 	ProviderFormat          normalize.Format
 	Streaming               bool
+	IncludeUsage            bool
 	ProviderStreaming       bool
 	SemanticTransformActive bool
 	ProviderEvents          []ResponseEventKind
@@ -178,6 +179,7 @@ func (a ComposedAdapter) planCompatibility(input CompatibilityContext) Compatibi
 	}
 	responseContext := ResponseRenderContext{
 		ClientFormat: format, ProviderFormat: a.ProviderFormat, Streaming: streaming, ProviderStreaming: streaming,
+		IncludeUsage:            input.Request.Transport.IncludeUsage,
 		SemanticTransformActive: input.ActiveResponseTransform, ProviderEvents: providerEvents, RequiredEvents: requiredEvents,
 	}
 	decision := renderer.SupportsResponse(responseContext)
@@ -307,6 +309,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	session, err := renderer.Begin(rendererCtx, ResponseRenderContext{
 		Status: response.Status, Headers: response.Headers, ClientFormat: source, ProviderFormat: a.ProviderFormat,
 		Streaming: hooks.Streaming, ProviderStreaming: providerStreaming, SemanticTransformActive: hooks.TransformResponse != nil, Model: hooks.Model,
+		IncludeUsage: hooks.IncludeUsage,
 	}, writer)
 	if err != nil {
 		return fail(ResponseFailureRenderer, err)

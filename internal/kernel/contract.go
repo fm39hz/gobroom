@@ -550,6 +550,7 @@ type StreamHooks struct {
 	TransformResponse        func(context.Context, ResponseEvent) (ResponseEvent, error)
 	ArtifactAccess           *artifacts.Access
 	Streaming                bool
+	IncludeUsage             bool
 	Model                    string
 	ProviderIssuer           extensions.Ref
 	MaxEventBytes            int64
