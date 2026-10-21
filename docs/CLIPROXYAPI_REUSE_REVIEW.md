@@ -126,6 +126,21 @@ account, configured endpoint, operation and upstream model. No extra cache,
 codec or provider-specific session framework is imported. Its single-bearer
 data plane is not yet a multi-tenant caller identity system.
 
+Continuity rejection follow-up: the WebSocket handler's
+`responsesWebsocketPreviousResponseNotFoundError` in
+`sdk/api/handlers/openai/openai_responses_websocket.go` emits a 409 with
+`previous_response_not_found` and asks for full conversation input without the
+parent. `clearCodexReasoningReplayOnInvalidSignature` in
+`internal/runtime/executor/codex_executor_reasoning.go` deletes matching
+model/session replay after the terminal classifier identifies invalid thinking;
+it does not repair and retry the payload. Gobroom adopts the distinction between
+invalidating private state and reconstructing caller intent. Its shared
+manifest classifier, standard JSON/schema binding, `reflect.DeepEqual` CAS and
+existing bounded persistence worker implement that distinction without importing
+the reference executor/cache or copying its status/string heuristics. The kernel
+requires typed confirmed-rejection evidence and returns a sanitized restart
+error rather than dropping history or treating a 409 as provider overload.
+
 Provider-state lesson: `sdk/cliproxy/auth/types.go` keeps arbitrary mutable
 account metadata (tokens/cookies/provider fields), rather than assuming all
 refresh results are a bearer token. Gobroom solves that preservation problem

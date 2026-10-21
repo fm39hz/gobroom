@@ -20,6 +20,19 @@ import (
 
 const sessionScopeDecoderID = "example.session-scope-responses"
 
+func TestExternalModuleCanDeclareTypedContinuityRejection(t *testing.T) {
+	outcome := provider.ClassifiedOutcome{
+		Class: provider.ErrorTerminal, Cause: provider.CauseContinuityInvalid,
+		Effect: provider.EffectRejected, Scope: provider.ScopeRequest,
+		Retry: provider.RetryNever, Recovery: provider.CredentialRecoveryNone,
+		ContinuityRecovery: provider.ContinuityRecoveryInvalidate,
+		Evidence:           []provider.EvidenceSource{provider.EvidenceErrorBody},
+	}
+	if outcome.ContinuityRecovery != provider.ContinuityRecoveryInvalidate {
+		t.Fatal("typed module outcome was not preserved")
+	}
+}
+
 type sessionScopeModule struct{}
 
 func (sessionScopeModule) ModuleDescriptor() provider.ModuleRef {
@@ -112,7 +125,10 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	binding := definition.Operations[provider.OperationResponses]
 	binding.ResponseDecoder = provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: sessionScopeDecoderID, ContractVersion: 1}
 	binding.ErrorClassifier = provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}
-	binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []provider.HTTPJSONAuthRecoverySignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}}}}
+	binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
+		AuthRecoverySignals:    []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}},
+		ContinuityResetSignals: []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{400, 409}, Codes: []string{"previous_response_not_found"}}},
+	}}
 	definition.Operations[provider.OperationResponses] = binding
 	manifest, err := provider.EncodeManifest(definition)
 	if err != nil {
@@ -130,6 +146,7 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	requests := make(chan observedRequest, 32)
 	var expireNext atomic.Bool
 	var expireContinuation, resetContinuation, failContinuation atomic.Bool
+	var missingParent atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {
 			t.Errorf("upstream path=%q; want /v1/responses", r.URL.Path)
@@ -144,6 +161,12 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 		}
 		body.Token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		requests <- body
+		if missingParent.Swap(false) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"error":{"code":"previous_response_not_found","type":"invalid_request_error","message":"No response found for previous_response_id private-response-marker"}}`)
+			return
+		}
 		if body.Token == "seed-runtime-ticket" && expireNext.CompareAndSwap(true, false) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(498)
@@ -201,6 +224,7 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	_ = rpc("custom_models.upsert", map[string]any{"id": "scope-response-route", "providerNodeID": node.ID, "kind": "custom", "externalID": "gpt-test", "displayName": "gpt-test", "connectionIds": []string{connection.ID}})
 	_ = rpc("physical_models.upsert", map[string]any{"name": "scope-response-physical", "identity": map[string]any{"canonicalName": "gpt-test"}, "sources": []map[string]any{{"routeId": "scope-response-route", "fidelity": "exact"}}, "enabled": true})
 	_ = rpc("combo_models.upsert", map[string]any{"name": "scope-response-role", "members": []map[string]any{{"kind": "physical", "id": "scope-response-physical"}}, "discoverable": true, "enabled": true})
+	var errorBody []byte
 	request := func() int {
 		t.Helper()
 		body := `{"model":"scope-response-role","input":"continue"}`
@@ -215,7 +239,12 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 			t.Fatal(err)
 		}
 		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
+		errorBody = nil
+		if resp.StatusCode >= 400 {
+			errorBody, _ = io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		} else {
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}
 		return resp.StatusCode
 	}
 	readRequest := func() observedRequest {
@@ -237,6 +266,38 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 		if got.PreviousID != want {
 			t.Fatalf("upstream previous_response_id=%q, want %q (token=%q)", got.PreviousID, want, got.Token)
 		}
+	}
+	assertPrevious("")
+	assertPrevious("respA")
+	missingParent.Store(true)
+	if status := request(); status != http.StatusConflict {
+		t.Fatalf("continuation failure status=%d body=%s", status, errorBody)
+	}
+	var restart struct {
+		Error struct{ Code, Message string }
+	}
+	if err := json.Unmarshal(errorBody, &restart); err != nil || restart.Error.Code != "continuity_restart_required" || strings.Contains(restart.Error.Message, "private-response-marker") {
+		t.Fatalf("restart error was not safely normalized: %s err=%v", errorBody, err)
+	}
+	if got := readRequest(); got.PreviousID != "respA" {
+		t.Fatalf("failed request parent=%q", got.PreviousID)
+	}
+	select {
+	case extra := <-requests:
+		t.Fatalf("rejected continuation was blindly replayed: %#v", extra)
+	default:
+	}
+	if cli := os.Getenv("GOBROOM_TEST_CLI"); cli != "" {
+		runDeviceRaceCLI(t, cli, config.IPCPath, "status")
+	}
+	// The 409 is sent only after the invalidation worker acknowledges its
+	// ordered tombstone. Restart must not resurrect the rejected parent.
+	if err := service.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service = daemon.NewWithProviderModules(config, opaqueStateModule{}, sessionScopeModule{})
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	assertPrevious("")
 	assertPrevious("respA")

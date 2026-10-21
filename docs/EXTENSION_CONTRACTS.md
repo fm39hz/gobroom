@@ -297,10 +297,39 @@ updates cannot publish usable continuation. Nonempty fields merge; a completely
 empty state explicitly clears all prior response IDs, opaque data and proofs.
 `ExpiresAt` limits provider continuity and is capped by the store TTL. The
 kernel persists only successful attempts after response rendering completes.
-This does not authorize retrying an expired upstream response reference or
-replaying a committed stream: classified continuity-error recovery remains a
-separate policy/implementation gate. Module host contract v7 requires these
-scope/reset semantics; no old-host adapter is retained.
+Classified HTTP rejection can invalidate continuity through
+`ClassifiedOutcome.ContinuityRecovery = invalidate`. The normalized contract is
+terminal, confirmed rejection, request scope, no credential recovery, no quota
+windows or delay, and `retry_never`. Configured `continuityResetSignals` require
+both bounded HTTP statuses and structured body evidence. Authentication,
+timeout, rate-limit, successful and server-error statuses cannot trigger this
+action. Auth and continuity reuse one typed `HTTPJSONErrorSignal` matcher,
+validator and clone path; a provider supplies declarations, not a kernel branch.
+
+`SessionStore.Invalidate` compares the attempt's loaded state with the current
+entry, including a positive store-assigned `StoreVersion`. Every save gets a new
+version even when provider data is identical, preventing ABA-style invalidation.
+The version is local to the store lifetime, never serialized or accepted as
+client/provider wire state; preload assigns fresh versions. Loaded state without
+a version fails closed. A late rejection cannot erase a newer success or a
+different principal or endpoint. A client-specified different parent cannot
+invalidate an unrelated cached parent. Durable invalidation enqueues a tombstone in the same ordered
+worker as ordinary saves and awaits its persistence acknowledgement without
+holding the cache lock. Queue saturation fails without changing state; a failed
+write restores the observed state only if no newer write has replaced it.
+Cancellation stops waiting, while the owned worker still completes/drains its
+queued write. Unsupported namespaces and empty tombstones are not restored as
+usable continuation on restart.
+
+Invalidation does not prove a complete conversation can be reconstructed. The
+failed invocation returns `ErrContinuityRestartRequired`; uncommitted HTTP
+projects a sanitized 409 with code `continuity_restart_required`, asking the
+caller to resend the complete conversation without rejected state. It cannot
+fall back, refresh credentials or replay through an idempotency grant. Committed
+responses are never rewritten. Automatic full-history reconstruction and
+provider-specific in-stream rejection remain separate gates; no header or
+message-count heuristic grants them. Module host contract v8 requires the
+compare-and-invalidate semantics; no old-host adapter is retained.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

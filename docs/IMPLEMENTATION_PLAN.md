@@ -254,6 +254,15 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    Installed `8165145` passed three further independent-module race runs with
    the real CLI account-update command; main daemon control=serving=484 and
    bundle-v9 validation remained valid. Config and credentials were preserved.
+
+   Continuity rejection checkpoint (2026-10-21): host-v8 adds required
+   compare-and-invalidate session stores and shared typed error selectors.
+   Configured HTTP rejection uses request scope and cannot become auth recovery,
+   quota suppression, fallback or replay. Acknowledged worker tombstones survive
+   restart; CAS preserves newer success. The public daemon Responses vertical
+   now injects source-backed parent-not-found JSON and verifies sanitized 409,
+   no implicit retry, and durable reset. Automatic full-history reconstruction,
+   provider-specific in-stream rejection and broader SG1 evidence remain open.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

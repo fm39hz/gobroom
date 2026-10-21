@@ -386,6 +386,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			sessionKey := requestSessionKey(req)
 			var sessionState SessionState
+			sessionStateLoaded := false
 			sessionStateChanged := false
 			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
 				sessionStore := k.SessionStores[candidate.SessionStoreRef]
@@ -397,6 +398,10 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					return ErrSessionStateUnavailable
 				}
 				if found {
+					if saved.StoreVersion == 0 {
+						return ErrSessionStateUnavailable
+					}
+					sessionStateLoaded = true
 					sessionState = saved
 					candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
 					if candidateRequest.Continuity.PreviousResponse == "" {
@@ -598,6 +603,36 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				outcome.Class = class
 				if outcome.Effect == "" {
 					outcome.Effect = inferUpstreamEffect(response.Status, outcome.Cause)
+				}
+				if outcome.ContinuityRecovery != "" && outcome.ContinuityRecovery != ContinuityRecoveryNone {
+					_ = response.Body.Close()
+					if body, ok := upstream.Body.(io.Closer); ok {
+						_ = body.Close()
+					}
+					// A reset is not auth recovery, a quota signal, or a replay grant.
+					if outcome.ContinuityRecovery != ContinuityRecoveryInvalidate || outcome.Cause != CauseContinuityInvalid || outcome.Effect != EffectRejected || outcome.Scope != ScopeRequest || class != ErrorTerminal || outcome.Retry != RetryNever || outcome.Recovery.Effective() != CredentialRecoveryNone || !outcome.RetryAt.IsZero() || len(outcome.Limits) != 0 || response.Status < 400 || response.Status >= 500 {
+						releaseCandidate()
+						return ErrContinuityRecoveryInvalid
+					}
+					// An explicit different parent must not invalidate an unrelated
+					// cached conversation under the same client-supplied session ID.
+					if sessionStateLoaded && !emptySessionState(sessionState) && (sessionState.ResponseID == "" || sessionState.ResponseID == candidateRequest.Continuity.PreviousResponse) {
+						if _, err := k.SessionStores[candidate.SessionStoreRef].Invalidate(attemptCtx, candidate, sessionKey, sessionState); err != nil {
+							releaseCandidate()
+							if attemptCtx.Err() != nil {
+								return attemptCtx.Err()
+							}
+							return ErrSessionStateUnavailable
+						}
+					}
+					outcome.Message = ErrContinuityRestartRequired.Error()
+					if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+						observer.ObserveOutcome(candidate, outcome)
+					}
+					releaseCandidate()
+					// Without a proved full transcript, stripping the parent and
+					// replaying would silently change caller intent. No fallback.
+					return ErrContinuityRestartRequired
 				}
 				if idempotencyKey != "" && replay != nil && !idempotencyRetried && idempotency.permitsReplay(firstDispatch, time.Now()) && outcome.Effect == EffectUnknown && outcome.Retry == RetryAfter {
 					if body, ok := upstream.Body.(io.Closer); ok {

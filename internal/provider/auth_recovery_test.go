@@ -18,7 +18,7 @@ func TestHTTPJSONAuthRecoveryDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("403 outcome=%#v", forbidden)
 	}
 
-	custom := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{{
+	custom := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONErrorSignal{{
 		HTTPStatuses: []int{498}, Codes: []string{"token_expired"}, Fields: []HTTPJSONFieldMatch{{Path: "/error/token_state", Equals: []string{"expired"}}},
 	}}}}
 	body := []byte(`{"error":{"code":"TOKEN_EXPIRED","token_state":"expired"}}`)
@@ -35,7 +35,7 @@ func TestHTTPJSONAuthRecoveryDefaultsAndOverrides(t *testing.T) {
 }
 
 func TestHTTPJSONAuthRecoveryIgnoresSuccessfulResponses(t *testing.T) {
-	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{{Codes: []string{"token_expired"}}}}}
+	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONErrorSignal{{Codes: []string{"token_expired"}}}}}
 	outcome := classifier.ClassifyOutcome(http.StatusOK, nil, []byte(`{"error":{"code":"token_expired"}}`))
 	if outcome.Cause != kernel.CauseSuccess || outcome.Recovery != kernel.CredentialRecoveryNone || outcome.Effect != kernel.EffectAccepted {
 		t.Fatalf("success misclassified for auth recovery: %+v", outcome)
@@ -45,7 +45,7 @@ func TestHTTPJSONAuthRecoveryIgnoresSuccessfulResponses(t *testing.T) {
 func TestHTTPJSONAuthRecoveryQuotaAndPermissionPrecedence(t *testing.T) {
 	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{
 		QuotaHTTPStatuses: []int{498}, QuotaCodes: []string{"quota_exceeded"},
-		AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{{HTTPStatuses: []int{498}, Codes: []string{"quota_exceeded"}}},
+		AuthRecoverySignals: []HTTPJSONErrorSignal{{HTTPStatuses: []int{498}, Codes: []string{"quota_exceeded"}}},
 	}}
 	outcome := classifier.ClassifyOutcome(498, nil, []byte(`{"error":{"code":"quota_exceeded"}}`))
 	if outcome.Cause != kernel.CauseQuotaExhausted || outcome.Recovery != kernel.CredentialRecoveryNone || outcome.Class != kernel.ErrorCooldown {
@@ -62,7 +62,7 @@ func TestHTTPJSONAuthRecoveryQuotaAndPermissionPrecedence(t *testing.T) {
 }
 
 func TestHTTPJSONAuthRecoveryMatchingAndCloneIsolation(t *testing.T) {
-	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{{
+	classifier := HTTPJSONErrorClassifier{Options: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONErrorSignal{{
 		HTTPStatuses: []int{498}, Codes: []string{"token_expired", "expired"}, Types: []string{"auth_error"},
 		Statuses: []string{"invalid_token"}, Fields: []HTTPJSONFieldMatch{
 			{Path: "/error/state", Equals: []string{"expired", "stale"}},
@@ -78,7 +78,7 @@ func TestHTTPJSONAuthRecoveryMatchingAndCloneIsolation(t *testing.T) {
 		t.Fatalf("field group mismatch should reject signal: %#v", got)
 	}
 
-	options := ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{{
+	options := ErrorClassifierOptions{HTTPJSON: &HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONErrorSignal{{
 		HTTPStatuses: []int{498}, Codes: []string{"token_expired"}, Fields: []HTTPJSONFieldMatch{{Path: "/error/state", Equals: []string{"expired"}}},
 	}}}}
 	boundValue, err := (HTTPJSONErrorClassifier{}).WithOptions(options)
@@ -95,11 +95,11 @@ func TestHTTPJSONAuthRecoveryMatchingAndCloneIsolation(t *testing.T) {
 }
 
 func TestHTTPJSONAuthRecoveryRejectsInvalidOptions(t *testing.T) {
-	emptySignals := []HTTPJSONAuthRecoverySignal{}
+	emptySignals := []HTTPJSONErrorSignal{}
 	if err := (HTTPJSONErrorClassifierOptions{AuthRecoverySignals: emptySignals}).Validate(); err == nil {
 		t.Fatal("explicitly empty auth recovery declaration was accepted")
 	}
-	invalid := []HTTPJSONAuthRecoverySignal{
+	invalid := []HTTPJSONErrorSignal{
 		{},
 		{HTTPStatuses: []int{}, Codes: []string{"token_expired"}},
 		{HTTPStatuses: []int{399}},
@@ -109,7 +109,7 @@ func TestHTTPJSONAuthRecoveryRejectsInvalidOptions(t *testing.T) {
 		{Fields: []HTTPJSONFieldMatch{{Path: "/error/code", Equals: []string{}, Contains: []string{"expired"}}}},
 	}
 	for index, signal := range invalid {
-		if err := (HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{signal}}).Validate(); err == nil {
+		if err := (HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONErrorSignal{signal}}).Validate(); err == nil {
 			t.Errorf("invalid auth recovery signal %d was accepted: %#v", index, signal)
 		}
 	}
@@ -117,7 +117,7 @@ func TestHTTPJSONAuthRecoveryRejectsInvalidOptions(t *testing.T) {
 	for index := range tooManyCodes {
 		tooManyCodes[index] = "code"
 	}
-	if err := (HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONAuthRecoverySignal{{Codes: tooManyCodes}}}).Validate(); err == nil {
+	if err := (HTTPJSONErrorClassifierOptions{AuthRecoverySignals: []HTTPJSONErrorSignal{{Codes: tooManyCodes}}}).Validate(); err == nil {
 		t.Fatal("auth recovery selector accepted more than 64 values")
 	}
 }

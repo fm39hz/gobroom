@@ -30,7 +30,7 @@ func TestExternalPrincipalRenewalPreservesOperationalHealthAndQuota(t *testing.T
 		binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
 			QuotaHTTPStatuses: []int{http.StatusForbidden}, QuotaCodes: []string{"quota_exceeded"},
 			QuotaWindowName: "account", WindowNamePath: "/error/window", WindowRemainingPath: "/error/remaining",
-			AuthRecoverySignals: []provider.HTTPJSONAuthRecoverySignal{{HTTPStatuses: []int{http.StatusUnauthorized}, Codes: []string{"credential_expired"}}},
+			AuthRecoverySignals: []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{http.StatusUnauthorized}, Codes: []string{"credential_expired"}}},
 		}}
 		definition.Operations[operation] = binding
 	}

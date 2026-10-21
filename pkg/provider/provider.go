@@ -170,21 +170,29 @@ type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
 type ErrorClassifierOptions = core.ErrorClassifierOptions
 type HTTPJSONErrorClassifierOptions = core.HTTPJSONErrorClassifierOptions
-type HTTPJSONAuthRecoverySignal = core.HTTPJSONAuthRecoverySignal
+type HTTPJSONErrorSignal = core.HTTPJSONErrorSignal
 type HTTPJSONFieldMatch = core.HTTPJSONFieldMatch
 type CredentialRecovery = kernel.CredentialRecovery
+type ContinuityRecovery = kernel.ContinuityRecovery
 
 const (
-	CredentialRecoveryNone    = kernel.CredentialRecoveryNone
-	CredentialRecoveryRefresh = kernel.CredentialRecoveryRefresh
+	CredentialRecoveryNone       = kernel.CredentialRecoveryNone
+	CredentialRecoveryRefresh    = kernel.CredentialRecoveryRefresh
+	ContinuityRecoveryNone       = kernel.ContinuityRecoveryNone
+	ContinuityRecoveryInvalidate = kernel.ContinuityRecoveryInvalidate
+	CauseContinuityInvalid       = kernel.CauseContinuityInvalid
 )
 
 type HTTPHeaderLimitSignal = core.HTTPHeaderLimitSignal
 type OutcomeScope = kernel.OutcomeScope
 
 const (
-	ScopeOperation  = kernel.ScopeOperation
-	ScopeConnection = kernel.ScopeConnection
+	ScopeRequest         = kernel.ScopeRequest
+	ScopeRoute           = kernel.ScopeRoute
+	ScopeRouteConnection = kernel.ScopeRouteConnection
+	ScopeProvider        = kernel.ScopeProvider
+	ScopeOperation       = kernel.ScopeOperation
+	ScopeConnection      = kernel.ScopeConnection
 )
 
 func QuotaFailureCode(err error) string { return core.QuotaFailureCode(err) }
@@ -265,6 +273,32 @@ func WrapResponseFailure(origin ResponseFailureOrigin, err error) error {
 type StreamHooks = kernel.StreamHooks
 type ErrorClass = kernel.ErrorClass
 type ClassifiedOutcome = kernel.ClassifiedOutcome
+type OutcomeClassifier = kernel.OutcomeClassifier
+type OutcomeCause = kernel.OutcomeCause
+type UpstreamEffect = kernel.UpstreamEffect
+type RetryAction = kernel.RetryAction
+type EvidenceSource = kernel.EvidenceSource
+
+const (
+	ErrorTerminal          = kernel.ErrorTerminal
+	ErrorRetryable         = kernel.ErrorRetryable
+	ErrorCooldown          = kernel.ErrorCooldown
+	ErrorAuth              = kernel.ErrorAuth
+	ErrorCapability        = kernel.ErrorCapability
+	EffectUnknown          = kernel.EffectUnknown
+	EffectNotDispatched    = kernel.EffectNotDispatched
+	EffectRejected         = kernel.EffectRejected
+	EffectAccepted         = kernel.EffectAccepted
+	RetryNow               = kernel.RetryNow
+	RetryAfter             = kernel.RetryAfter
+	RetryNever             = kernel.RetryNever
+	RetryUnknown           = kernel.RetryUnknown
+	EvidenceResponseHeader = kernel.EvidenceResponseHeader
+	EvidenceSuccessBody    = kernel.EvidenceSuccessBody
+	EvidenceErrorBody      = kernel.EvidenceErrorBody
+	EvidenceInferred       = kernel.EvidenceInferred
+)
+
 type EndpointOptions = kernel.EndpointOptions
 type Protocol = kernel.Protocol
 type CapabilityProfile = kernel.CapabilityProfile

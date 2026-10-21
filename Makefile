@@ -37,6 +37,7 @@ test: test-external-provider-module ## unit and integration tests, including the
 	go test ./...
 
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
+	go test ./internal/kernel ./internal/provider ./internal/runtime/sessionstore ./internal/api -run 'Continuity|Invalidate|SessionStoreVersion' -count=1
 	go test ./internal/daemon -run '^(TestCallbackIngress|TestProxiedHTTPS)' -count=1
 	go test ./internal/daemon -run '^(TestAuthorizationSetup|TestAuthorizationComposition)' -count=1
 	go test ./internal/tui -run '^(TestSetup|TestTUISetup|TestAuthCompletion|TestWipeSetup)' -count=1

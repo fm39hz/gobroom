@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -27,6 +28,7 @@ type MemorySessionStore struct {
 	mu      sync.Mutex
 	entries map[SessionStoreKey]SessionState
 	TTL     time.Duration
+	version uint64
 }
 
 func NewMemorySessionStore() *MemorySessionStore {
@@ -73,9 +75,32 @@ func (s *MemorySessionStore) Save(ctx context.Context, route Route, sessionID st
 		state.ExpiresAt = cacheExpiry
 	}
 	s.mu.Lock()
+	s.version++
+	state.StoreVersion = s.version
 	s.entries[key] = cloneSessionState(state)
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *MemorySessionStore) Invalidate(ctx context.Context, route Route, sessionID string, expected SessionState) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	key, err := SessionStoreKeyFor(route, sessionID)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	current, found := s.entries[key]
+	if !found || !reflect.DeepEqual(current, expected) {
+		return false, nil
+	}
+	delete(s.entries, key)
+	return true, nil
 }
 
 // ValidateSessionState applies the common size and proof contract used by all

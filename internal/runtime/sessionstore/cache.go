@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,12 @@ type entry struct {
 	updatedAt time.Time
 }
 
+type write struct {
+	record    store.ProviderSession
+	done      chan error
+	completed func(error)
+}
+
 // Cache provides synchronous in-memory session reads/writes and bounded
 // asynchronous persistence. SQLite is only touched during preload and from
 // the worker, never while the data plane is choosing or preparing a route.
@@ -36,10 +43,11 @@ type Cache struct {
 	repository Repository
 	mu         sync.Mutex
 	entries    map[key]entry
-	writes     chan store.ProviderSession
+	writes     chan write
 	ttl        time.Duration
 	maxEntries int
 	dropped    atomic.Uint64
+	version    uint64 // protected by mu; preload runs before publication
 }
 
 func New(repository Repository) (*Cache, error) {
@@ -49,7 +57,7 @@ func New(repository Repository) (*Cache, error) {
 	if _, err := repository.PruneExpiredProviderSessions(time.Now()); err != nil {
 		return nil, fmt.Errorf("prune expired provider sessions: %w", err)
 	}
-	c := &Cache{repository: repository, entries: map[key]entry{}, writes: make(chan store.ProviderSession, 1024), ttl: 24 * time.Hour, maxEntries: 16384}
+	c := &Cache{repository: repository, entries: map[key]entry{}, writes: make(chan write, 1024), ttl: 24 * time.Hour, maxEntries: 16384}
 	rows, err := repository.ProviderSessions()
 	if err != nil {
 		return nil, fmt.Errorf("load provider sessions: %w", err)
@@ -62,9 +70,14 @@ func New(repository Repository) (*Cache, error) {
 		if _, err := kernel.DecodeSessionStoreNamespace(row.Namespace); err != nil {
 			continue
 		}
+		if row.State.ResponseID == "" && len(row.State.ProviderData) == 0 && len(row.State.Signatures) == 0 {
+			continue
+		}
 		if !row.State.ExpiresAt.IsZero() && !row.State.ExpiresAt.After(now) {
 			continue
 		}
+		c.version++
+		row.State.StoreVersion = c.version
 		c.entries[key{connectionID: row.ConnectionID, namespace: row.Namespace, sessionID: row.SessionKey}] = entry{state: clone(row.State), updatedAt: now}
 	}
 	return c, nil
@@ -108,18 +121,75 @@ func (c *Cache) Save(ctx context.Context, route kernel.Route, sessionID string, 
 	}
 	state = clone(state)
 	c.mu.Lock()
+	c.version++
+	state.StoreVersion = c.version
 	if _, exists := c.entries[k]; !exists && len(c.entries) >= c.maxEntries {
 		c.evictLocked(now)
 	}
 	c.entries[k] = entry{state: state, updatedAt: now}
-	c.mu.Unlock()
 	item := store.ProviderSession{ConnectionID: k.connectionID, Namespace: k.namespace, SessionKey: k.sessionID, State: state, ExpiresAt: state.ExpiresAt.UTC().Format(time.RFC3339Nano), LastUsedAt: now.UTC().Format(time.RFC3339Nano)}
 	select {
-	case c.writes <- item:
+	case c.writes <- write{record: item}:
 	default:
 		c.dropped.Add(1)
 	}
+	c.mu.Unlock()
 	return nil
+}
+
+// Invalidate removes a session only when its current value still matches expected,
+// and waits until the tombstone has been persisted before acknowledging success.
+func (c *Cache) Invalidate(ctx context.Context, route kernel.Route, sessionID string, expected kernel.SessionState) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	k, err := makeKey(route, sessionID)
+	if err != nil {
+		return false, err
+	}
+	now := time.Now()
+	tombstone := kernel.SessionState{ExpiresAt: now.Add(c.ttl)}
+	record := store.ProviderSession{ConnectionID: k.connectionID, Namespace: k.namespace, SessionKey: k.sessionID, State: tombstone, ExpiresAt: tombstone.ExpiresAt.UTC().Format(time.RFC3339Nano), LastUsedAt: now.UTC().Format(time.RFC3339Nano)}
+	done := make(chan error, 1)
+	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return false, err
+	}
+	current, ok := c.entries[k]
+	if !ok || !reflect.DeepEqual(current.state, expected) {
+		c.mu.Unlock()
+		return false, nil
+	}
+	c.version++
+	tombstone.StoreVersion = c.version
+	record.State = tombstone
+	marker := entry{state: tombstone, updatedAt: now}
+	completed := func(err error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if latest, exists := c.entries[k]; exists && reflect.DeepEqual(latest, marker) {
+			if err != nil {
+				c.entries[k] = current
+			} else {
+				delete(c.entries, k)
+			}
+		}
+	}
+	select {
+	case c.writes <- write{record: record, done: done, completed: completed}:
+		c.entries[k] = marker
+	default:
+		c.mu.Unlock()
+		return false, fmt.Errorf("session write queue is full")
+	}
+	c.mu.Unlock()
+	select {
+	case err := <-done:
+		return err == nil, err
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
 }
 
 func (c *Cache) Run(ctx context.Context) {
@@ -129,14 +199,23 @@ func (c *Cache) Run(ctx context.Context) {
 			for {
 				select {
 				case item := <-c.writes:
-					_ = c.repository.SaveProviderSession(item)
+					item.ack(c.repository.SaveProviderSession(item.record))
 				default:
 					return
 				}
 			}
 		case item := <-c.writes:
-			_ = c.repository.SaveProviderSession(item)
+			item.ack(c.repository.SaveProviderSession(item.record))
 		}
+	}
+}
+
+func (item write) ack(err error) {
+	if item.completed != nil {
+		item.completed(err)
+	}
+	if item.done != nil {
+		item.done <- err
 	}
 }
 

@@ -268,21 +268,22 @@ const (
 type OutcomeCause string
 
 const (
-	CauseSuccess        OutcomeCause = "success"
-	CauseRequestInvalid OutcomeCause = "request_invalid"
-	CauseCapability     OutcomeCause = "capability_mismatch"
-	CauseModelNotFound  OutcomeCause = "model_not_found"
-	CauseAuth           OutcomeCause = "auth"
-	CausePermission     OutcomeCause = "permission"
-	CauseQuotaExhausted OutcomeCause = "quota_exhausted"
-	CauseRateLimited    OutcomeCause = "rate_limited"
-	CauseCapacity       OutcomeCause = "capacity"
-	CauseOverloaded     OutcomeCause = "overloaded"
-	CauseTimeout        OutcomeCause = "timeout"
-	CauseNetwork        OutcomeCause = "network"
-	CauseProtocol       OutcomeCause = "protocol"
-	CauseStreamFailure  OutcomeCause = "stream_failure"
-	CauseUnknown        OutcomeCause = "unknown"
+	CauseSuccess           OutcomeCause = "success"
+	CauseRequestInvalid    OutcomeCause = "request_invalid"
+	CauseContinuityInvalid OutcomeCause = "continuity_invalid"
+	CauseCapability        OutcomeCause = "capability_mismatch"
+	CauseModelNotFound     OutcomeCause = "model_not_found"
+	CauseAuth              OutcomeCause = "auth"
+	CausePermission        OutcomeCause = "permission"
+	CauseQuotaExhausted    OutcomeCause = "quota_exhausted"
+	CauseRateLimited       OutcomeCause = "rate_limited"
+	CauseCapacity          OutcomeCause = "capacity"
+	CauseOverloaded        OutcomeCause = "overloaded"
+	CauseTimeout           OutcomeCause = "timeout"
+	CauseNetwork           OutcomeCause = "network"
+	CauseProtocol          OutcomeCause = "protocol"
+	CauseStreamFailure     OutcomeCause = "stream_failure"
+	CauseUnknown           OutcomeCause = "unknown"
 )
 
 type OutcomeScope string
@@ -357,19 +358,29 @@ type LimitWindow struct {
 }
 
 type ClassifiedOutcome struct {
-	Class      ErrorClass
-	Cause      OutcomeCause
-	Effect     UpstreamEffect
-	Scope      OutcomeScope
-	Retry      RetryAction
-	Recovery   CredentialRecovery
-	RetryAt    time.Time
-	Confidence float64
-	Evidence   []EvidenceSource
-	Limits     []LimitWindow
-	StatusCode int
-	Message    string
+	Class              ErrorClass
+	Cause              OutcomeCause
+	Effect             UpstreamEffect
+	Scope              OutcomeScope
+	Retry              RetryAction
+	Recovery           CredentialRecovery
+	ContinuityRecovery ContinuityRecovery
+	RetryAt            time.Time
+	Confidence         float64
+	Evidence           []EvidenceSource
+	Limits             []LimitWindow
+	StatusCode         int
+	Message            string
 }
+
+// ContinuityRecovery invalidates rejected provider state; it never grants a
+// request replay or permission to discard caller history or signed content.
+type ContinuityRecovery string
+
+const (
+	ContinuityRecoveryNone       ContinuityRecovery = "none"
+	ContinuityRecoveryInvalidate ContinuityRecovery = "invalidate"
+)
 
 type ReplaySuppressedError struct {
 	Operation normalize.Operation
@@ -611,6 +622,10 @@ type SessionState struct {
 	ProviderData json.RawMessage  `json:"providerData,omitempty"`
 	Signatures   []SignatureProof `json:"signatures,omitempty"`
 	ExpiresAt    time.Time        `json:"-"`
+	// StoreVersion is assigned by the store on every Save and preload, even
+	// when provider contents are unchanged. It is local to that store lifetime,
+	// never provider wire data, and must be returned unchanged to Invalidate.
+	StoreVersion uint64 `json:"-"`
 }
 
 // SessionStore contains opaque continuation state. Implementations must key
@@ -622,15 +637,22 @@ type SessionStore interface {
 	ID() string
 	Load(context.Context, Route, string) (SessionState, bool, error)
 	Save(context.Context, Route, string, SessionState) error
+	// Invalidate clears only the state observed by the failed attempt. A newer
+	// concurrent success must survive. True means a reset was durably accepted;
+	// ephemeral stores acknowledge the in-memory reset instead.
+	// Matching includes the loaded StoreVersion, not content equality alone.
+	Invalidate(context.Context, Route, string, SessionState) (bool, error)
 }
 
 var (
-	ErrModelNotPublished       = errors.New("model is not published")
-	ErrNoRoute                 = errors.New("no usable route")
-	ErrOperationRequired       = errors.New("semantic operation is required")
-	ErrSessionStateUnavailable = errors.New("provider session state unavailable")
-	ErrSignatureIssuerMissing  = errors.New("signed response event has no provider issuer")
-	ErrSignatureIssuerMismatch = errors.New("signed response event issuer does not match selected provider")
-	ErrSignatureProofLimit     = errors.New("provider session signature proof limit exceeded")
-	ErrSnapshotInvalid         = errors.New("invalid route snapshot")
+	ErrModelNotPublished         = errors.New("model is not published")
+	ErrNoRoute                   = errors.New("no usable route")
+	ErrOperationRequired         = errors.New("semantic operation is required")
+	ErrSessionStateUnavailable   = errors.New("provider session state unavailable")
+	ErrContinuityRestartRequired = errors.New("provider continuation is no longer valid; resend the complete conversation without rejected continuation state")
+	ErrContinuityRecoveryInvalid = errors.New("invalid provider continuation recovery evidence")
+	ErrSignatureIssuerMissing    = errors.New("signed response event has no provider issuer")
+	ErrSignatureIssuerMismatch   = errors.New("signed response event issuer does not match selected provider")
+	ErrSignatureProofLimit       = errors.New("provider session signature proof limit exceeded")
+	ErrSnapshotInvalid           = errors.New("invalid route snapshot")
 )

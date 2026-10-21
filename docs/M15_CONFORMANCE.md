@@ -481,6 +481,22 @@ gates even after semantic closure passes.
 
 ### Renewal/principal continuity evidence
 
+Classified continuity rejection (2026-10-21, host contract v8):
+`TestHTTPJSONContinuityResetForcesInvalidationOutcome` and
+`TestHTTPJSONContinuityResetCloneAndSchema` prove bounded structured matching,
+shared immutable options and registered schema/factory admission.
+`TestBuiltinResponsesDeclaresStructuredContinuationReset` proves the built-in
+operation declares parent-not-found behavior. Kernel invalidation tests cover
+single dispatch/no fallback, malformed evidence, unrelated explicit parents and
+CAS protection for newer success. Cache tests cover ordered durable tombstones,
+queue saturation, cancelled waits and persistence failure.
+`TestContinuityRestartErrorIsSafeAndDoesNotOverwriteCommittedResponse` checks
+sanitized 409 projection and committed-output protection. The independent
+`TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint` adds a real HTTP
+409 parent-not-found rejection and restart to its existing scope vertical.
+This proves HTTP rejection invalidation, not automatic full-history replay or
+provider-specific streaming-error support; SG1/M15 remains open.
+
 Provider continuation scope (2026-10-21, host contract v7):
 `TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint` wraps the
 registered Responses decoder using only the public catalog API, then drives

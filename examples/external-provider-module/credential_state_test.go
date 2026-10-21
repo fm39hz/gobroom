@@ -131,7 +131,7 @@ func opaqueStateRecovery498Manifest(t *testing.T) provider.ProviderDefinition {
 	for operation, binding := range definition.Operations {
 		binding.ErrorClassifier = provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}
 		binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
-			AuthRecoverySignals: []provider.HTTPJSONAuthRecoverySignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}},
+			AuthRecoverySignals: []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}},
 		}}
 		definition.Operations[operation] = binding
 	}

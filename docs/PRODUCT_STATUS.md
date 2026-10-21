@@ -27,6 +27,27 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Structured continuity rejection can now invalidate only the state observed by
+its failed attempt, preserving concurrent newer success. It has request scope
+and cannot trigger auth refresh, quota suppression, model fallback or blind
+replay. The API returns a sanitized 409 requesting complete input. Cache reset
+uses acknowledged tombstones on the existing ordered worker; SQLite never runs
+under the cache lock. Saturation/persistence failure is not reported as success.
+Shared typed selectors and schema binding configure provider-specific signals;
+the built-in Responses operation declares parent-not-found behavior. Host-v8
+requires the new store contract rather than adapting old modules.
+
+The independent module/daemon vertical verifies HTTP 409, no implicit retry,
+private-reference redaction and durable reset across restart. Automatic complete
+history reconstruction, in-stream provider errors, broader harness/provider
+acceptance and measured latency/RSS remain open. Root regression, vet and three
+focused kernel/provider/cache/API race runs passed, including identical-state
+resaves protected by store versions. Full conformance, including the independent
+module suite and the newly added invalidation group, passed. Installed acceptance
+follows installation. This checkpoint does not close C2/SG1/M15.
+
+Previous integrated milestone:
+
 Provider continuation now uses stable principal and configured-endpoint scope
 in addition to exact provider/operation refs, upstream model, connection and
 client session. Refresh preserves that scope; account or endpoint replacement

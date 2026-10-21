@@ -247,19 +247,24 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 	options.QuotaStatuses = cloneStrings(options.QuotaStatuses)
 	options.QuotaHTTPStatuses = append([]int(nil), options.QuotaHTTPStatuses...)
 	options.QuotaMessageTokens = cloneStrings(options.QuotaMessageTokens)
-	options.AuthRecoverySignals = append([]HTTPJSONAuthRecoverySignal(nil), options.AuthRecoverySignals...)
-	for index := range options.AuthRecoverySignals {
-		signal := &options.AuthRecoverySignals[index]
-		signal.HTTPStatuses = append([]int(nil), signal.HTTPStatuses...)
-		signal.Codes = cloneStrings(signal.Codes)
-		signal.Types = cloneStrings(signal.Types)
-		signal.Statuses = cloneStrings(signal.Statuses)
-		signal.Fields = append([]HTTPJSONFieldMatch(nil), signal.Fields...)
-		for fieldIndex := range signal.Fields {
-			signal.Fields[fieldIndex].Equals = cloneStrings(signal.Fields[fieldIndex].Equals)
-			signal.Fields[fieldIndex].Contains = cloneStrings(signal.Fields[fieldIndex].Contains)
+	cloneSignals := func(source []HTTPJSONErrorSignal) []HTTPJSONErrorSignal {
+		result := append([]HTTPJSONErrorSignal(nil), source...)
+		for index := range result {
+			signal := &result[index]
+			signal.HTTPStatuses = append([]int(nil), signal.HTTPStatuses...)
+			signal.Codes = cloneStrings(signal.Codes)
+			signal.Types = cloneStrings(signal.Types)
+			signal.Statuses = cloneStrings(signal.Statuses)
+			signal.Fields = append([]HTTPJSONFieldMatch(nil), signal.Fields...)
+			for fieldIndex := range signal.Fields {
+				signal.Fields[fieldIndex].Equals = cloneStrings(signal.Fields[fieldIndex].Equals)
+				signal.Fields[fieldIndex].Contains = cloneStrings(signal.Fields[fieldIndex].Contains)
+			}
 		}
+		return result
 	}
+	options.AuthRecoverySignals = cloneSignals(options.AuthRecoverySignals)
+	options.ContinuityResetSignals = cloneSignals(options.ContinuityResetSignals)
 	options.LimitHeaders = append([]HTTPHeaderLimitSignal(nil), options.LimitHeaders...)
 	for index := range options.LimitHeaders {
 		options.LimitHeaders[index].ExhaustedStatusValues = cloneStrings(options.LimitHeaders[index].ExhaustedStatusValues)
@@ -286,6 +291,8 @@ func (c HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorC
 
 func (c HTTPJSONErrorClassifier) classifyWithEvidence(status int, body []byte, evidence httpErrorEvidence) kernel.ErrorClass {
 	switch {
+	case c.matchContinuityResetSignal(status, body, evidence):
+		return kernel.ErrorTerminal
 	case evidence.QuotaExhausted && isQuotaHTTPStatus(status, c.Options):
 		return kernel.ErrorCooldown
 	case c.authRecoveryConfigured() && c.matchAuthRecoverySignal(status, body, evidence):
@@ -306,13 +313,14 @@ func (c HTTPJSONErrorClassifier) authRecoveryConfigured() bool {
 }
 
 func (c HTTPJSONErrorClassifier) matchAuthRecoverySignal(status int, body []byte, evidence httpErrorEvidence) bool {
+	return c.Options != nil && matchHTTPJSONErrorSignal(c.Options.AuthRecoverySignals, status, body, evidence)
+}
+
+func matchHTTPJSONErrorSignal(signals []HTTPJSONErrorSignal, status int, body []byte, evidence httpErrorEvidence) bool {
 	if status < 400 {
 		return false
 	}
-	if c.Options == nil {
-		return false
-	}
-	for _, signal := range c.Options.AuthRecoverySignals {
+	for _, signal := range signals {
 		if len(signal.HTTPStatuses) > 0 && !slices.Contains(signal.HTTPStatuses, status) {
 			continue
 		}
@@ -338,6 +346,11 @@ func (c HTTPJSONErrorClassifier) matchAuthRecoverySignal(status int, body []byte
 		}
 	}
 	return false
+}
+
+func (c HTTPJSONErrorClassifier) matchContinuityResetSignal(status int, body []byte, evidence httpErrorEvidence) bool {
+	return status >= 400 && status < 500 && status != 401 && status != 403 && status != 408 && status != 429 &&
+		c.Options != nil && matchHTTPJSONErrorSignal(c.Options.ContinuityResetSignals, status, body, evidence)
 }
 
 func isQuotaHTTPStatus(status int, options *HTTPJSONErrorClassifierOptions) bool {
@@ -457,6 +470,7 @@ func parseHeaderReset(value string, now time.Time) time.Time {
 func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header, body []byte) kernel.ClassifiedOutcome {
 	message := strings.TrimSpace(string(body))
 	errorEvidence := decodeHTTPErrorEvidence(body, c.Options)
+	continuityResetMatched := c.matchContinuityResetSignal(status, body, errorEvidence)
 	scope := kernel.ScopeRoute
 	if c.Options != nil && c.Options.DefaultScope != "" {
 		scope = c.Options.DefaultScope
@@ -599,6 +613,17 @@ func (c HTTPJSONErrorClassifier) ClassifyOutcome(status int, headers http.Header
 			}
 		}
 		outcome.Limits = append(outcome.Limits, kernel.LimitWindow{Name: name, Kind: kind, Limit: errorEvidence.Limit, Used: errorEvidence.Used, Remaining: remaining, ResetAt: optionalTime(reset), Source: kernel.EvidenceErrorBody})
+	}
+	if continuityResetMatched {
+		outcome.Class = kernel.ErrorTerminal
+		outcome.Cause = kernel.CauseContinuityInvalid
+		outcome.Scope = kernel.ScopeRequest
+		outcome.Retry = kernel.RetryNever
+		outcome.RetryAt = time.Time{}
+		outcome.Recovery = kernel.CredentialRecoveryNone
+		outcome.Effect = kernel.EffectRejected
+		outcome.ContinuityRecovery = kernel.ContinuityRecoveryInvalidate
+		outcome.Limits = nil
 	}
 	return outcome
 }

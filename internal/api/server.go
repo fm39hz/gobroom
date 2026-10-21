@@ -659,6 +659,10 @@ func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, reque
 	if s.executor != nil {
 		tracked := &trackingWriter{ResponseWriter: w}
 		if err := s.executor(r.Context(), request, tracked); err != nil && !tracked.committed {
+			if errors.Is(err, kernel.ErrContinuityRestartRequired) {
+				writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]string{"code": "continuity_restart_required", "message": kernel.ErrContinuityRestartRequired.Error(), "model": requestModel}})
+				return
+			}
 			status := http.StatusBadGateway
 			var operationInput *operations.InputError
 			if errors.As(err, &operationInput) {

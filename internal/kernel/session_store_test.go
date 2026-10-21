@@ -21,6 +21,9 @@ func (failingSessionStore) Load(context.Context, Route, string) (SessionState, b
 	return SessionState{}, false, errors.New("private storage path detail")
 }
 func (failingSessionStore) Save(context.Context, Route, string, SessionState) error { return nil }
+func (failingSessionStore) Invalidate(context.Context, Route, string, SessionState) (bool, error) {
+	return false, errors.New("private invalidation storage detail")
+}
 
 type continuitySessionAdapter struct {
 	plannedPreviousResponse string

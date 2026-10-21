@@ -57,6 +57,31 @@ Relevant contract types are in
 }
 ```
 
+An inference operation using the shared `http-json` error classifier can declare
+continuity invalidation independently of auth and quota handling:
+
+```json
+{
+  "errorClassifierOptions": {
+    "httpJson": {
+      "continuityResetSignals": [{
+        "httpStatuses": [400, 409],
+        "codes": ["previous_response_not_found"]
+      }]
+    }
+  }
+}
+```
+
+This is an operation-binding fragment, not a complete manifest. The built-in
+Responses definition declares this pattern. A provider with different JSON can
+select `codePath` or bounded JSON Pointer field matchers. Status-only matching,
+auth/rate-limit/timeouts and server errors cannot invalidate continuity. A match
+clears only the failed attempt's still-current session state and returns a
+sanitized 409 requiring full input; it does not grant a retry or strip caller
+history. Runtime modules use the same typed `HTTPJSONErrorSignal` for auth and
+continuity declarations under host contract v8.
+
 The daemon loads user definitions from `$XDG_CONFIG_HOME/gobroom/providers`
 (normally `~/.config/gobroom/providers`) by default. The directory is created
 on daemon startup; `gobroomd --provider-manifests DIR` selects an alternate
