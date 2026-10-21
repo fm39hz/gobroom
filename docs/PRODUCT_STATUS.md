@@ -74,10 +74,14 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
-Installed baseline before this slice: `cbbf00d`, control=serving=495 and valid
-bundle v9. Current source has passed full root/external regression, vet and
-conformance plus focused repeated race tests. Installed acceptance for the new
-usage fault/status/budget contract is the next handoff gate.
+Installed checkpoint `463e47d`, with selected fallback proof `f8f5f09`: full
+root/external regression, vet, conformance and focused repeated race tests passed.
+After `make install-all`, three installed-CLI race runs covered write-failure
+status, shutdown retention and config rejection during SSE. The installed daemon
+rejects a negative drain budget before creating state. Main control=serving=496,
+status=ok with zero persistence faults; secret-free bundle v9 validation passed.
+The short JSON/SSE `make perf` smoke passed without establishing RSS/tail targets.
+Real configuration and credentials were preserved; acceptance used fake upstreams.
 
 ## Next core work
 

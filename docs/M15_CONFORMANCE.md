@@ -706,6 +706,16 @@ branch failure isolation, selected dispatch identity and persisted-plan usage
 summary. Existing routing logic satisfied this proof without a kernel change.
 This closes that concrete C2 accounting case, not every provider semantic mapping.
 
+Installed checkpoint `463e47d` / fallback proof `f8f5f09`: full root/external
+regression, vet, conformance and three focused race runs passed. The final
+fallback fixture also passed three race runs in both rejection phases. After
+`make install-all`, three installed-CLI race runs covered actual write-failure
+status, shutdown retention and config rejection while SSE remained open.
+The installed daemon rejected a negative budget before state initialization;
+main control=serving=496, status=ok and bundle-v9 validation were healthy.
+The short performance smoke passed; no new resource-target or live-provider
+acceptance is inferred. Session-save overflow/failure and full C1–C6 audit remain.
+
 ### SG6 finite boundary evidence
 
 The local production built-ins/manifests currently contain no scoped-key replay

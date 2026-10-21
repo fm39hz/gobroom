@@ -366,6 +366,13 @@ concurrency, migration and recovery tests.
 
 ## Local performance baseline
 
+Context-aware persistence spot check (`463e47d`, Linux/amd64, CPU=1,
+`make perf BENCHTIME=200ms BENCHCPU=1`): response/completion validation passed
+for serial/parallel direct/proxy JSON/SSE. Serial proxy allocated 98,859 B/op,
+1,254 allocs/op for JSON and 136,386 B/op, 1,785 allocs/op for SSE. This short
+combined-process fixture is not an isolated-daemon RSS or tail-latency result,
+nor a controlled speed comparison against the historical profile below.
+
 Run `make perf BENCHTIME=1s BENCHCPU=1,4`. This uses Go's benchmark runner,
 `ReportAllocs` and `RunParallel`, with a fake local upstream and fresh temporary
 daemon DB/socket. It checks JSON and SSE response content/completion and drains
