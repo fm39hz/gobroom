@@ -38,10 +38,18 @@ The independent module daemon vertical compares descriptor identity between
 HTTP 409 and committed SSE. HTTP/renderer/core fixtures cover custom metadata,
 private wrapper filtering, bounds and no postcommit overwrite. Full root
 regression/vet, three focused race runs and conformance (including the complete
-independent module suite) passed. Installed acceptance follows installation.
+independent module suite) passed.
 Replay proof still needs the finite
 cancellation/dispatch/shutdown cases listed in M15; provider/harness breadth,
 catalog UX and measured latency/RSS remain open. This does not close M15.
+
+Installed checkpoint `25184ac`: `make install-all` completed and restarted the
+user service. The independent scope vertical passed three further race runs
+with the installed CLI, comparing the typed descriptor in HTTP 409 and committed
+SSE alongside status, account update, failed usage and durable reset/restart.
+Main daemon status was `ok`, control=serving=487; export → validate returned
+valid bundle v9. Real config/credentials were preserved; no live provider call
+or new dependency was needed.
 
 Previous integrated milestone:
 

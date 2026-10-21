@@ -494,7 +494,12 @@ not evidence of automatic harness request reconstruction.
 
 Verification: full root regression/vet, three focused core/API/renderer race
 runs and full conformance passed, including the separate-module HTTP/SSE
-descriptor comparison. Installed acceptance follows installation.
+descriptor comparison. Installed `25184ac` passed three additional independent
+scope race runs with `GOBROOM_TEST_CLI=/absolute/path/to/gobroom` after
+`make install-all`. CLI status/account update remained usable while HTTP/SSE
+checks preserved the same typed descriptor, failed usage and reset through
+restart. The main daemon was `ok`, control=serving=487; bundle-v9 validation
+passed. No real provider was contacted.
 
 ### SG6 finite follow-up audit
 

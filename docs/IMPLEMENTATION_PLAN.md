@@ -299,6 +299,11 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    Root regression/vet, three focused core/API/renderer race runs and full
    conformance passed. SG6 follow-up is now a finite boundary/drain checklist in
    M15, not a demand for a universal provider matrix.
+   Installed `25184ac` passed three additional independent-module race runs
+   using the real CLI, including HTTP/SSE code/type/message identity. Main
+   control=serving=487 and bundle-v9 validation remained valid; real config and
+   credentials were preserved. Next: scoped-key cancellation/dispatch/drain
+   proofs from the finite SG6 checklist.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable
