@@ -283,6 +283,10 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    codes and stronger provider terminal-effect evidence separately from HTTP
    acceptance: this slice never turns a 2xx error into a replay grant and is not
    proof of automatic harness recovery.
+   Installed `43c3d24` passed three further independent-module race runs with
+   real CLI status/account update, committed error projection and durable failed
+   usage/reset across restart. Main control=serving=486 and bundle-v9 validation
+   remained valid; no live provider or real credential mutation was needed.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

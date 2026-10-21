@@ -40,9 +40,17 @@ Root regression/vet and three focused kernel/provider/decoder/renderer race runs
 passed. The independent module daemon vertical also passed pre/post-commit
 errors, partial text, no replay, durable reset and failed usage checks.
 Full conformance, including the new response-failure group and complete external
-module suite, passed. Installed acceptance follows installation. Provider/harness
+module suite, passed. Provider/harness
 breadth, automatic full-history reconstruction and measured latency/RSS remain
 open; this does not close C2/SG1/M15.
+
+Installed checkpoint `43c3d24`: `make install-all` completed and restarted the
+user service. Three additional independent-module race runs passed with the
+installed CLI, including status during the scope workflow, pre/post-commit
+accepted-response errors, preserved partial text, no fake completion/replay,
+durable invalidation and failed usage through restart. Main daemon status was
+`ok`, control=serving=486; config export → validate returned valid bundle v9.
+Real configuration/credentials were preserved and no live provider was called.
 
 Previous integrated milestone:
 

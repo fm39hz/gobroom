@@ -494,8 +494,15 @@ escaped JSON, no premature commit and no success after failure. The independent
 scope vertical adds errors before and after partial SSE text, no implicit replay,
 private-message redaction, store-version reset across restart and durable failed
 usage. Root regression/vet, three focused race runs and full conformance passed.
-Installed acceptance follows installation; this is not full SG1/M15
+This is not full SG1/M15
 closure or broad live-provider/harness evidence.
+
+Installed acceptance (`43c3d24`): after `make install-all`, the independent
+scope vertical passed three further `-race` runs with
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom`. It exercised installed CLI status
+and fixture-account replacement alongside the HTTP pre/post-commit error,
+failed-usage and durable-reset workflow. The main daemon stayed `ok`,
+control=serving=486, and bundle-v9 validation passed. No real provider was called.
 
 Classified continuity rejection (2026-10-21, host contract v8):
 `TestHTTPJSONContinuityResetForcesInvalidationOutcome` and
