@@ -527,8 +527,11 @@ dispatches and now suppresses the second. Core cases use the standard
 `testing/synctest`, context and channels. Root regression/vet, three kernel replay
 race runs, three independent-module shutdown race runs and full conformance
 passed. The strengthened fixture also binds the actual old data port after Stop;
-installed CLI acceptance follows installation. The daemon fixture
-proves graceful drain, not an in-process sandbox for arbitrary extension code.
+installed `3b7b34d` then passed three further independent-module race runs with
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom`, exercising real status/shutdown
+commands during held replay preparation. The main daemon was `ok`,
+control=serving=488, and bundle-v9 validation passed. The daemon fixture proves
+graceful drain, not an in-process sandbox for arbitrary extension code.
 
 ### Renewal/principal continuity evidence
 

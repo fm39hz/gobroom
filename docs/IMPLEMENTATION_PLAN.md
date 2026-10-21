@@ -607,7 +607,10 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    this closes the finite generic SG6 boundary checklist, not real provider
    retention guarantees or all of M15.
    Full conformance passed; the shutdown fixture also proves the actual old
-   data listener can be rebound after cleanup. Installed acceptance follows.
+   data listener can be rebound after cleanup. Installed `3b7b34d` passed three
+   further module race runs using real CLI status/shutdown during held replay.
+   Main control=serving=488 and bundle-v9 validation stayed valid; no real config
+   or credential mutation was needed.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and
    versioned JSON/multipart ingress, loads its manifest, builds an assigned

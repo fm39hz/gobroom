@@ -38,10 +38,18 @@ work before cleanup completes and permits reopening the same DB/socket.
 
 Root regression/vet, three core replay race runs and three independent-module
 shutdown race runs passed, including rebinding the actual old data port.
-Full conformance passed; installed acceptance follows installation. Current
+Full conformance passed. Current
 production built-ins claim no keyed-idempotency guarantee;
 future opt-ins need provider evidence. Provider/harness breadth, catalog UX and
 measured latency/RSS remain open; generic SG6 evidence does not close M15.
+
+Installed checkpoint `3b7b34d`: `make install-all` completed and restarted the
+user service. Three further independent-module race runs passed with the
+installed CLI executing status and shutdown while replay preparation was held.
+Shutdown acknowledged, cancelled and drained that work; late success did not
+redispatch. The actual data port was rebound and the DB/IPC reopened. Main
+daemon status was `ok`, control=serving=488; export → validate returned valid
+bundle v9. Real config/credentials were preserved; no live provider was called.
 
 Previous integrated milestone:
 
