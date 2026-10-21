@@ -65,7 +65,7 @@ func TestPreparedUsageStatementsPreserveAtomicRollbackAndLifecycle(t *testing.T)
 		t.Fatal(err)
 	}
 	event := kernel.UsageEvent{At: time.Now(), Status: "ok", InputTokens: 7, OutputTokens: 2}
-	if err := s.SaveUsageEvent(event); err == nil {
+	if err := s.SaveUsageEvent(context.Background(), event); err == nil {
 		t.Fatal("failed daily write was accepted")
 	}
 	var count int
@@ -75,7 +75,7 @@ func TestPreparedUsageStatementsPreserveAtomicRollbackAndLifecycle(t *testing.T)
 	if _, err := s.DB.Exec(`DROP TRIGGER reject_daily`); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveUsageEvent(event); err != nil {
+	if err := s.SaveUsageEvent(context.Background(), event); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DB.QueryRow(`SELECT count(*) FROM usage_events`).Scan(&count); err != nil || count != 1 {
@@ -84,7 +84,7 @@ func TestPreparedUsageStatementsPreserveAtomicRollbackAndLifecycle(t *testing.T)
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveUsageEvent(event); err == nil {
+	if err := s.SaveUsageEvent(context.Background(), event); err == nil {
 		t.Fatal("store accepted a write after Close")
 	}
 	if err := s.Close(); err != nil {

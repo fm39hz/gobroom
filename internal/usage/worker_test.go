@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ type recordingRepository struct {
 	release <-chan struct{}
 }
 
-func (r *recordingRepository) SaveUsageEvent(event kernel.UsageEvent) error {
+func (r *recordingRepository) SaveUsageEvent(_ context.Context, event kernel.UsageEvent) error {
 	if r.enter != nil {
 		r.enter <- event
 		<-r.release
@@ -42,7 +43,8 @@ func TestWorkerDrainsAcceptedEventsInOrderAfterClose(t *testing.T) {
 	saved := make(chan kernel.UsageEvent, len(want))
 	done := make(chan struct{})
 	go func() {
-		(Worker{Store: &recordingRepository{saved: saved}, Events: events}).Run()
+		worker := &Worker{Store: &recordingRepository{saved: saved}, Events: events}
+		_ = worker.Run(context.Background())
 		close(done)
 	}()
 
@@ -74,7 +76,8 @@ func TestWorkerWaitsForInFlightSaveBeforeReturning(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
-		(Worker{Store: &recordingRepository{enter: entered, release: release}, Events: events}).Run()
+		worker := &Worker{Store: &recordingRepository{enter: entered, release: release}, Events: events}
+		_ = worker.Run(context.Background())
 		close(done)
 	}()
 

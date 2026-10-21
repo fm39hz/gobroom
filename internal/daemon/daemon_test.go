@@ -1481,7 +1481,7 @@ func TestDaemonStopCancelsActiveHTTPRequestBeforeDraining(t *testing.T) {
 		response.Body.Close()
 		t.Fatalf("stream did not start: line=%q err=%v", line, err)
 	}
-	d := &Daemon{http: server, runCtx: runCtx, runCancel: cancelRun, stop: func() { close(cleanupDone) }}
+	d := &Daemon{http: server, runCtx: runCtx, runCancel: cancelRun, stop: func(context.Context) error { close(cleanupDone); return nil }}
 	stopDone := make(chan error, 1)
 	go func() { stopDone <- d.Stop(context.Background()) }()
 	select {

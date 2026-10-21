@@ -1247,9 +1247,12 @@ func scanCredential(row *sql.Row) (Credential, bool) {
 	return c, true
 }
 
-func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
+func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dateKey := event.At.UTC().Format("2006-01-02")
-	tx, err := s.DB.Begin()
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -1262,10 +1265,10 @@ func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
 	if err != nil {
 		return fmt.Errorf("encode usage compatibility plan: %w", err)
 	}
-	if _, err = tx.Stmt(s.runtime.usageEvent).Exec(event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
+	if _, err = tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
 		return err
 	}
-	if _, err = tx.Stmt(s.runtime.usageDaily).Exec(dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
+	if _, err = tx.StmtContext(ctx, s.runtime.usageDaily).ExecContext(ctx, dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
 		return err
 	}
 	return tx.Commit()

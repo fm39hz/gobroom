@@ -23,27 +23,29 @@ import (
 	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
 	"github.com/fm39hz/gobroom/internal/store"
+	"github.com/fm39hz/gobroom/internal/usage"
 	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
-	store            *store.Store
-	artifactStore    *artifacts.Store
-	control          *controlplane.Manager
-	controlErr       error
-	started          time.Time
-	executor         func(context.Context, normalize.Request, http.ResponseWriter) error
-	reloadHook       func(kernel.Snapshot) (kernel.Snapshot, error)
-	reloadMu         sync.Mutex
-	hasReloadHook    atomic.Bool
-	servingSnapshot  atomic.Pointer[kernel.Snapshot]
-	lastReload       atomic.Pointer[ReloadResult]
-	dataPlaneToken   string
-	ingress          map[string]OperationIngress
-	providerCatalog  []provider.DefinitionMetadata
-	extensionCatalog extensions.CatalogView
-	operations       *operations.Snapshot
-	accessLogger     func(AccessLogRecord)
+	store                    *store.Store
+	artifactStore            *artifacts.Store
+	control                  *controlplane.Manager
+	controlErr               error
+	started                  time.Time
+	executor                 func(context.Context, normalize.Request, http.ResponseWriter) error
+	reloadHook               func(kernel.Snapshot) (kernel.Snapshot, error)
+	reloadMu                 sync.Mutex
+	hasReloadHook            atomic.Bool
+	servingSnapshot          atomic.Pointer[kernel.Snapshot]
+	lastReload               atomic.Pointer[ReloadResult]
+	dataPlaneToken           string
+	ingress                  map[string]OperationIngress
+	providerCatalog          []provider.DefinitionMetadata
+	extensionCatalog         extensions.CatalogView
+	operations               *operations.Snapshot
+	accessLogger             func(AccessLogRecord)
+	usagePersistenceObserver func() usage.Status
 }
 
 func (s *Server) SetArtifactStore(bodyStore *artifacts.Store) {
@@ -193,6 +195,15 @@ func (s *Server) SetAccessLogger(logger func(AccessLogRecord)) {
 	}
 }
 
+// SetUsagePersistenceObserver installs the usage persistence status snapshot
+// source during server initialization, before the server begins handling
+// requests.
+func (s *Server) SetUsagePersistenceObserver(observer func() usage.Status) {
+	if s != nil {
+		s.usagePersistenceObserver = observer
+	}
+}
+
 // SetProviderDefinitionCatalog installs the secret-free setup metadata shared
 // by HTTP and IPC control clients.
 func (s *Server) SetProviderDefinitionCatalog(catalog []provider.DefinitionMetadata) {
@@ -241,6 +252,13 @@ func (s *Server) Status() map[string]any {
 		status = "degraded"
 	}
 	result := map[string]any{"name": "gobroomd", "status": status, "controlSnapshotVersion": controlVersion, "servingSnapshotVersion": servingVersion}
+	if s.usagePersistenceObserver != nil {
+		usageStatus := s.usagePersistenceObserver()
+		result["usagePersistence"] = usageStatus
+		if usageStatus.Failed > 0 || usageStatus.Abandoned > 0 || usageStatus.QueueDropped > 0 {
+			result["status"] = "degraded"
+		}
+	}
 	if last := s.lastReload.Load(); last != nil {
 		result["lastReload"] = *last
 		if last.FailureStage != "" {

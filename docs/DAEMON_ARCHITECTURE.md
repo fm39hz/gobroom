@@ -127,8 +127,11 @@ without changing the public provider API or making the TUI a daemon dependency.
 - Cancel in-flight upstream requests on shutdown.
 - After execution producers stop, close the usage stream and join its worker
   before closing the repository. Daemon cancellation is not a usage drain.
-  A whole-drain deadline and durability/reporting for failed storage writes
-  remain explicit acceptance work; queue capacity alone does not prove them.
+  Usage storage now receives context and a configurable cooperative drain
+  budget, with failed/abandoned/admission-drop counters shared by IPC/HTTP
+  status and a retained Stop/Wait error. Whole-daemon deadlines and durable
+  retry after failed writes remain acceptance work; counters alone do not
+  provide crash durability or sandbox an uncooperative backend.
 - Preserve the last valid snapshot if a reload fails.
 - Do not print credentials in status, logs or normal control responses.
 - Keep IPC available when the optional HTTP control API is disabled.

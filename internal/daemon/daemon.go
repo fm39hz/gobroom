@@ -45,6 +45,7 @@ type Config struct {
 	HTTPToken                 string
 	ProviderManifestDir       string
 	QuotaPolling              bool
+	UsageDrainTimeout         time.Duration
 	ArtifactStoreDir          string
 	ArtifactStoreMaxBytes     int64
 	ArtifactStoreMaxBodyBytes int64
@@ -78,6 +79,7 @@ type Daemon struct {
 	providerAuthModes    map[extensions.Ref]string
 	providerAuthFlowIDs  map[extensions.Ref]map[string]string
 	sessionCache         *sessionruntime.Cache
+	usageWorker          *usageworker.Worker
 	policy               *runtimehealth.PolicyGate
 	quotaPersistence     *runtimehealth.QuotaSnapshotQueue
 	transformBindingsMu  sync.Mutex
@@ -98,7 +100,7 @@ type Daemon struct {
 	activationDone       chan struct{}
 	logMu                sync.RWMutex
 	logs                 []LogRecord
-	stop                 func()
+	stop                 func(context.Context) error
 	stopErr              error
 }
 
@@ -175,6 +177,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	defer d.mu.Unlock()
 	if d.stop != nil {
 		return fmt.Errorf("daemon is already started")
+	}
+	if d.config.UsageDrainTimeout < 0 {
+		return fmt.Errorf("usage drain timeout must not be negative")
 	}
 	callbackIngress, err := callbackIngressConfig(d.config.CallbackIngress)
 	if err != nil {
@@ -487,10 +492,20 @@ func (d *Daemon) Start(ctx context.Context) error {
 	})
 	d.activationWake, d.activationDone = make(chan struct{}, 1), make(chan struct{})
 	go d.runCredentialActivations(ctx)
-	usageDone := make(chan struct{})
+	usageCtx, cancelUsage := context.WithCancelCause(context.Background())
+	usageDone := make(chan error, 1)
+	engine := d.kernel
+	worker := &usageworker.Worker{Store: s, Events: engine.Events, OnFailure: func() {
+		d.appendLog("error", "usage persistence incomplete; inspect storage and persistence counters")
+	}}
+	d.usageWorker = worker
+	d.server.SetUsagePersistenceObserver(func() usageworker.Status {
+		status := worker.Snapshot()
+		status.QueueDropped = engine.DroppedUsage()
+		return status
+	})
 	go func() {
-		defer close(usageDone)
-		(usageworker.Worker{Store: s, Events: d.kernel.Events}).Run()
+		usageDone <- worker.Run(usageCtx)
 	}()
 	sessionDone := make(chan struct{})
 	go func() {
@@ -498,7 +513,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.sessionCache.Run(ctx)
 	}()
 
-	d.stop = func() {
+	d.stop = func(stopCtx context.Context) error {
 		cancel()
 		d.cancelAuthorizationSessions()
 		d.authWG.Wait()
@@ -507,7 +522,14 @@ func (d *Daemon) Start(ctx context.Context) error {
 		if d.kernel != nil {
 			d.kernel.Close()
 		}
-		<-usageDone
+		usageErr := drainUsage(stopCtx, d.config.UsageDrainTimeout, cancelUsage, usageDone)
+		status := worker.Snapshot()
+		if usageErr != nil {
+			d.appendLog("error", fmt.Sprintf("usage drain incomplete: persisted=%d failed=%d abandoned=%d", status.Persisted, status.Failed, status.Abandoned))
+		}
+		if dropped := engine.DroppedUsage(); dropped > 0 {
+			d.appendLog("warn", fmt.Sprintf("usage admission dropped %d events before shutdown", dropped))
+		}
 		<-spoolReplayDone
 		healthQueue.Close()
 		<-sessionDone
@@ -521,6 +543,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.artifactStore = nil
 		}
 		_ = d.store.Close()
+		return usageErr
 	}
 
 	d.ipc = NewIPCServer(d.config.IPCPath, d.handleIPC)
@@ -531,14 +554,14 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		d.stop()
+		cleanupErr := d.stop(context.Background())
 		d.stop = nil
-		return err
+		return errors.Join(err, cleanupErr)
 	}
 	if err := d.ipc.startReserved(ctx, ipcReservation); err != nil {
-		d.stop()
+		cleanupErr := d.stop(context.Background())
 		d.stop = nil
-		return err
+		return errors.Join(err, cleanupErr)
 	}
 	d.ipcLease = ipcReservation
 
@@ -878,7 +901,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.ipc != nil {
 		ipcErr = d.ipc.Close()
 	}
-	d.stop()
+	cleanupErr := d.stop(ctx)
 	if d.ipcLease != nil {
 		ipcErr = errors.Join(ipcErr, d.ipcLease.close())
 	}
@@ -895,8 +918,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.authorizationMu.Lock()
 	d.authorizations = nil
 	d.authorizationMu.Unlock()
-	d.stopErr = ipcErr
-	return ipcErr
+	d.stopErr = errors.Join(ipcErr, cleanupErr)
+	return d.stopErr
 }
 
 func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse {
@@ -1986,7 +2009,7 @@ func DefaultConfig() (Config, error) {
 	if runtimeDir == "" {
 		runtimeDir = filepath.Join(os.TempDir(), "gobroom")
 	}
-	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), RuntimeSpoolPath: filepath.Join(configDir, "gobroom", "runtime-spool.json"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: defaultHTTPAddr, HTTPControl: false, HTTPControlAddr: defaultHTTPControlAddr, ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts")}, nil
+	return Config{DBPath: filepath.Join(configDir, "gobroom", "gobroom.db"), RuntimeSpoolPath: filepath.Join(configDir, "gobroom", "runtime-spool.json"), IPCPath: filepath.Join(runtimeDir, "gobroom.sock"), HTTPEnabled: true, HTTPAddr: defaultHTTPAddr, HTTPControl: false, HTTPControlAddr: defaultHTTPControlAddr, ProviderManifestDir: filepath.Join(configDir, "gobroom", "providers"), ArtifactStoreDir: filepath.Join(cacheDir, "gobroom", "artifacts"), UsageDrainTimeout: defaultUsageDrainTimeout}, nil
 }
 
 func (d *Daemon) UptimeHint() time.Duration { return 0 }

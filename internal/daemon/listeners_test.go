@@ -166,10 +166,10 @@ func TestDaemonRetainsIPCOwnershipUntilCleanupCompletes(t *testing.T) {
 		_ = owner.Stop(context.Background())
 	}()
 	cleanup := owner.stop
-	owner.stop = func() {
+	owner.stop = func(ctx context.Context) error {
 		close(cleanupEntered)
 		<-allowCleanup
-		cleanup()
+		return cleanup(ctx)
 	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- owner.Stop(context.Background()) }()

@@ -12,19 +12,34 @@ CLIProxyAPI is useful as a source of provider edge-case knowledge and operationa
 fixtures. It is not a suitable runtime dependency for Gobroom. Its provider
 executors and protocol translators are intentionally coupled to CLIProxyAPI's
 auth records, model registry, HTTP clients, logging, plugin runtime and
-configuration. Several `sdk/...` packages also import the module's `internal/...`
-packages, which Go forbids Gobroom from importing as a separate module. Its
-module declares Go 1.26.0; importing the whole module would also make Gobroom
-inherit an unrelated application dependency graph and toolchain floor.
+configuration. Gobroom cannot directly import that module's `internal/...`
+packages. Public `sdk/...` packages are not forbidden merely because they
+transitively import their own internal packages: Go checks the immediate
+importer. Each public SDK candidate must instead be judged on its actual
+contracts and dependency graph. The module's Go 1.26 floor is below Gobroom's
+own toolchain and is not a reason to reject reuse.
 
-No CLIProxyAPI module dependency or copied implementation is warranted by this
-review. Keep the Gobroom canonical IR, extension contracts and runtime
+No audited runtime component has justified a direct CLIProxyAPI dependency in
+this checkout. This is not a blanket exclusion of independently reusable SDK
+helpers. Keep the Gobroom canonical IR, extension contracts and runtime
 composition. Reuse the upstream source as a design/test corpus for concrete
 provider quirks, and port only a narrowly scoped algorithm when a Gobroom
 contract has a demonstrated gap. Any such port must preserve the upstream MIT
 notice and have an independent Gobroom fixture.
 
 ## Implementation map
+
+Usage dispatcher follow-up: `sdk/cliproxy/usage/manager.go` is a public package,
+but `NewManager(buffer)` does not enforce that buffer as a capacity; `Publish`
+appends to a slice, plugin callbacks return no persistence result, and `Stop`
+signals closure without a caller-visible join result. It also owns CLIProxyAPI
+records/logging conventions. Gobroom needs bounded admission, context-aware
+atomic writes, a joined cooperative drain and redacted failure counters. Those
+contracts use the existing Go channel, `database/sql` transaction, context timer
+and atomic-counter primitives; no plugin dispatcher is copied or imported.
+The selected driver already implements context interruption; no custom SQL
+retry or interruption loop is introduced. Driver/backend cooperation remains
+a requirement, not a hard real-time promise.
 
 Session preload lesson: `internal/cache/bounded_lru.go` bounds process-local
 entries using the standard list package, and

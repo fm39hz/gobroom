@@ -14,6 +14,10 @@ type Daemon = core.Daemon
 type IPCRequest = core.IPCRequest
 type IPCResponse = core.IPCResponse
 type ListenerAddresses = core.ListenerAddresses
+type UsagePersistenceStatus = core.UsagePersistenceStatus
+
+var ErrUsagePersistenceIncomplete = core.ErrUsagePersistenceIncomplete
+
 type AuthorizationCallbackIngressConfig = core.AuthorizationCallbackIngressConfig
 type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec

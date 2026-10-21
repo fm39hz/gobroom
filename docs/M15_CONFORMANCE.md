@@ -665,6 +665,47 @@ bundle-v9 validation were healthy. This verifies the stated finite SG7
 configuration/isolation boundaries, not whole-drain deadlines, storage-failure
 durability, every backend or full M15 closure.
 
+### Usage persistence fault and cooperative drain boundary
+
+The daemon's persistence context is independent of request cancellation. After
+execution producers close, `--usage-drain-timeout` (default five seconds) or
+caller cancellation reaches context-aware atomic event/daily writes. The owner
+still joins the worker before closing the repository; it does not detach a
+possibly active writer. Errors/counters are safe operational evidence, never
+provider health failures or instructions to retry upstream work.
+
+`TestWorkerContinuesAfterPersistenceFailureWithoutLeakingError` proves later
+writes continue, failures remain visible, notification occurs once, and private
+repository errors do not escape. `TestWorkerDeadlineAbandonsUnwrittenEventsAndReturnsDeadline`
+counts a canceled in-flight write and queued unacknowledged work.
+`TestDrainUsage*` uses virtual time to prove budget/caller cancellation and join;
+`TestUsageDrainTimeoutRejectsNegativeBeforeStateInitialization` checks startup.
+`TestSaveUsageEventCanceledBeforeAdmissionDoesNotWrite` and prepared statement
+rollback tests preserve context rejection and event/daily atomicity.
+
+`TestDaemonUsageWriteFailureIsVisibleWithoutFailingInference` injects an actual
+SQLite write failure. Two real upstream inferences still succeed with no extra
+dispatch; IPC and HTTP status show sticky, typed counters, logs exclude the
+private error, recovery permits a new persisted row, and Stop/repeated Stop
+retain the redacted incomplete-persistence error. `GOBROOM_TEST_CLI` drives the
+status projection using the installed client. `TestKernelUsageOverflowIsCountedSeparatelyFromClose`
+separates admission loss from ordinary post-close rejection.
+
+These cases do not establish a hard wall-clock deadline for uncooperative
+backends, whole-daemon shutdown, automatic retry or durable spool recovery.
+Counters report acknowledgement outcomes, not a billing or power-loss guarantee.
+Ordinary session-save overflow/error visibility remains a separate open contract.
+
+### Selected transform accounting through fallback
+
+`TestFallbackCompatibilityPlanAndUsageContainOnlySelectedTransforms` covers both
+compatibility exclusion and actual confirmed upstream rejection before selecting
+the next route. It checks candidate-local inputs, invocation/model/attempt/
+provider/connection step order exactly once, skipped scope exclusion, rejected
+branch failure isolation, selected dispatch identity and persisted-plan usage
+summary. Existing routing logic satisfied this proof without a kernel change.
+This closes that concrete C2 accounting case, not every provider semantic mapping.
+
 ### SG6 finite boundary evidence
 
 The local production built-ins/manifests currently contain no scoped-key replay

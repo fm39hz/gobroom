@@ -48,3 +48,22 @@ func TestKernelUsageCloseSerializesConcurrentProducers(t *testing.T) {
 		}
 	}
 }
+
+func TestKernelUsageOverflowIsCountedSeparatelyFromClose(t *testing.T) {
+	engine := &Kernel{Events: make(chan UsageEvent, 1)}
+	if !engine.EmitUsage(UsageEvent{}) {
+		t.Fatal("first event rejected")
+	}
+	for range 2 {
+		if engine.EmitUsage(UsageEvent{}) {
+			t.Fatal("full queue accepted another event")
+		}
+	}
+	if engine.DroppedUsage() != 2 {
+		t.Fatalf("overflow count=%d", engine.DroppedUsage())
+	}
+	engine.Close()
+	if engine.EmitUsage(UsageEvent{}) || engine.DroppedUsage() != 2 {
+		t.Fatal("normal post-close rejection changed overflow evidence")
+	}
+}

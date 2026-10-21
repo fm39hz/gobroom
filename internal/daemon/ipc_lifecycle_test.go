@@ -224,7 +224,7 @@ func TestDaemonStopDrainsIPCBeforeClosingStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	cleanupDone := make(chan struct{})
-	service := &Daemon{ipc: server, runCtx: ctx, runCancel: cancel, stop: func() { _ = state.Close(); close(cleanupDone) }}
+	service := &Daemon{ipc: server, runCtx: ctx, runCancel: cancel, stop: func(context.Context) error { err := state.Close(); close(cleanupDone); return err }}
 	defer func() { releaseOnce.Do(func() { close(release) }); _ = service.Stop(context.Background()) }()
 	clientDone := make(chan error, 1)
 	go func() {

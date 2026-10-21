@@ -232,6 +232,27 @@ This changes client visibility, not stored provider usage or billed accounting.
 
 ## Service and logs
 
+Usage persistence runs independently of requests and provider health. Status
+over IPC and HTTP includes `usagePersistence` counters: `received`, `persisted`,
+`failed`, `abandoned`, and `queueDropped`. These are process-lifetime counters,
+sampled independently while running. Failed/unacknowledged writes or admission
+drops keep status degraded; a later success does not acknowledge earlier work.
+No raw database error, request payload or credential is exposed in that view.
+
+`gobroomd --usage-drain-timeout 5s` controls the cooperative usage-writer budget
+after execution producers close. Zero selects the default five seconds;
+negative values fail before startup. Caller cancellation also reaches the
+writer. Storage receives context through its existing atomic event/daily
+transaction. The owner joins the writer before closing SQLite, reports failed/
+abandoned counts to the journal and returns an incomplete-persistence error.
+The IPC shutdown command acknowledges scheduling, not successful later drain;
+the daemon's exit/Stop/Wait result and journal carry that result.
+
+This is not a hard wall-clock limit on uncooperative storage or the whole daemon:
+other owned workers have separate lifecycles, and driver/filesystem calls must
+cooperate with context cancellation. Failed writes and queue overflow are
+observable, not automatically retried or durably spooled by this change.
+
 The user service writes operational messages to stdout/stderr, so a service
 manager can route them to journald:
 

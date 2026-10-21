@@ -36,6 +36,7 @@ func main() {
 	httpToken := flag.String("http-token", "", "optional bearer token for HTTP data plane")
 	providerManifestDir := flag.String("provider-manifests", defaults.ProviderManifestDir, "directory containing provider definition JSON files")
 	quotaPolling := flag.Bool("quota-poll", false, "opt in to periodic provider quota polling")
+	usageDrainTimeout := flag.Duration("usage-drain-timeout", defaults.UsageDrainTimeout, "cooperative usage persistence drain budget (0 uses default)")
 	artifactStoreDir := flag.String("artifact-store", defaults.ArtifactStoreDir, "parent directory for bounded, temporary artifact body spools")
 	artifactStoreMaxBytes := flag.Int64("artifact-store-max-bytes", 256<<20, "maximum total bytes held by the artifact body store")
 	artifactStoreMaxBodyBytes := flag.Int64("artifact-store-max-body-bytes", 64<<20, "maximum bytes in one artifact body")
@@ -57,6 +58,7 @@ func main() {
 	config.HTTPToken = *httpToken
 	config.ProviderManifestDir = *providerManifestDir
 	config.QuotaPolling = *quotaPolling
+	config.UsageDrainTimeout = *usageDrainTimeout
 	config.ArtifactStoreDir = *artifactStoreDir
 	config.ArtifactStoreMaxBytes = *artifactStoreMaxBytes
 	config.ArtifactStoreMaxBodyBytes = *artifactStoreMaxBodyBytes

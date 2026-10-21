@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/artifacts"
@@ -38,6 +39,7 @@ type Kernel struct {
 	RefreshCredentialLease CredentialLeaseRefresher
 	usageMu                sync.RWMutex
 	closed                 bool
+	usageDropped           atomic.Uint64
 }
 
 type FeedbackGate interface {
@@ -112,9 +114,12 @@ func (k *Kernel) EmitUsage(event UsageEvent) bool {
 	case k.Events <- event:
 		return true
 	default:
+		k.usageDropped.Add(1)
 		return false
 	}
 }
+
+func (k *Kernel) DroppedUsage() uint64 { return k.usageDropped.Load() }
 
 func (k *Kernel) Close() {
 	k.usageMu.Lock()
