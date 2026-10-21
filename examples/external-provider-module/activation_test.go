@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,7 +103,12 @@ func TestExternalCredentialRefreshActivationRetryAndRestartRecovery(t *testing.T
 			_ = rpc("physical_models.upsert", map[string]any{"name": "activation-physical", "identity": map[string]any{"canonicalName": "gpt-activation"}, "sources": []map[string]any{{"routeId": "activation-route", "fidelity": "exact"}}, "enabled": true})
 			_ = rpc("combo_models.upsert", map[string]any{"name": "activation-role", "members": []map[string]any{{"kind": "physical", "id": "activation-physical"}}, "discoverable": true, "enabled": true})
 
-			db, err := sql.Open("sqlite", config.DBPath)
+			// The fault injector shares the live daemon's WAL database. Apply a
+			// bounded busy timeout on every fixture connection, just like the
+			// production store, rather than racing background persistence DDL.
+			dsn := url.URL{Scheme: "file", Path: config.DBPath}
+			dsn.RawQuery = url.Values{"_pragma": []string{"busy_timeout(5000)"}}.Encode()
+			db, err := sql.Open("sqlite", dsn.String())
 			if err != nil {
 				t.Fatal(err)
 			}
