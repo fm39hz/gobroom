@@ -413,6 +413,7 @@ const (
 type ArtifactFacts = normalize.ArtifactFacts
 type FeatureRequirement = normalize.FeatureRequirement
 type Message = normalize.Message
+type ContentPart = normalize.ContentPart
 type Tool = normalize.Tool
 type ToolCall = normalize.ToolCall
 type PromptPlan = normalize.PromptPlan

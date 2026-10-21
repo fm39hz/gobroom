@@ -223,6 +223,24 @@ warms a persistent connection, consumes a keyed empty POST, then loses its
 response. The shared transport returns the ambiguous error without opening a
 second connection or issuing a second request outside kernel replay policy.
 
+## Public transform binding lifecycle evidence
+
+`TestExternalAudioRequestTransformBindingLifecycle` and
+`TestExternalContentTransformBindingLifecycle` compile in a separate module
+using only public provider/daemon APIs. The SDK exports the existing transform
+contracts directly; no second transform framework or kernel execution path is
+introduced. CLI binding commands use Cobra and standard typed JSON decoding,
+with the existing daemon IPC validation and persistence path.
+
+Audio evidence covers inactive registration, schema-invalid option rejection
+without persistence, daemon/model ordering, option updates and restart,
+post-transform operation schema rejection before upstream, disable and delete.
+Content evidence covers canonical message append exactly once, option update,
+protected opaque provenance rejection before upstream, restart and removal.
+`GOBROOM_TEST_CLI` exercises installed binding CRUD in the content fixture.
+This closes the selected configured-input/content lifecycle gap, not all SG5
+effect permutations, artifact ownership changes or the full cancellation matrix.
+
 ## Full semantic closure gate
 
 Recovery-trigger evidence: `TestCredentialRecoveryRequiresAuthClassificationAndRoutePolicy`

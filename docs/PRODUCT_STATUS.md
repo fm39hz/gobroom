@@ -27,6 +27,17 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Public transform configuration now reaches the same daemon path from an
+independent module and the CLI. The SDK exports existing request/response
+contracts, and `transforms list/upsert/delete` manages typed persisted bindings.
+Separate-module fake-provider fixtures cover canonical content and operation
+input, scoped ordering/options, protected provenance, validation before dispatch,
+restart, disable and deletion. This is selected SG5 lifecycle evidence, not
+complete transform-effect or live-harness acceptance. No kernel execution path,
+dependency or module-host version changed.
+
+Previous integrated milestone:
+
 A reproducible `make perf` baseline now exercises direct/proxy JSON/SSE, serial
 and parallel, with fresh fake-provider daemon state. Profiling identified SQL
 preparation and allocation costs. Fixed standard SQL statements retain fresh

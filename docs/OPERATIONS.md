@@ -180,6 +180,42 @@ response metadata, not provider response bodies. Probes do not update model
 catalog, passive health, quota or usage; they can still incur provider cost
 or create upstream resources. Cancellation cannot undo an upstream mutation.
 
+## Transform bindings
+
+Transforms are registered implementations, not scripts or arbitrary JSON
+patches. Inspect the extension catalog for exact refs and option schemas, then
+manage persisted bindings over the normal daemon IPC socket:
+
+```sh
+gobroom extensions catalog
+gobroom transforms list
+gobroom transforms upsert --file binding.json
+gobroom transforms upsert --file - < binding.json
+gobroom transforms delete --id my-binding
+```
+
+For a registered request transform, a binding has this shape (replace the
+example ref and options with those declared by its module):
+
+```json
+{
+  "id": "my-binding",
+  "transformRef": {"kind": "request_transform", "id": "example.transform", "contractVersion": 1},
+  "enabled": true,
+  "scope": {"kind": "model", "id": "middle"},
+  "order": 0,
+  "failureMode": "fail_closed",
+  "options": {}
+}
+```
+
+The CLI accepts one typed JSON object, rejects unknown fields and input over
+1 MiB, and preserves option numbers through IPC. The daemon remains authoritative
+for catalog/schema/scope validation and activation. Registration alone does not
+enable a transform; bindings survive restart. Canonical content and operation
+inputs may change only under declared effects; artifact ownership, opaque
+provenance and daemon-owned facts remain protected.
+
 ## Service and logs
 
 The user service writes operational messages to stdout/stderr, so a service

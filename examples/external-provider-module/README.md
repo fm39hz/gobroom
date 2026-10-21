@@ -15,6 +15,14 @@ directive lets this checkout compile the example before GoBroom has a published
 module version; downstream modules should depend on the released GoBroom module
 version instead.
 
+The transform lifecycle fixtures register request transforms through the same
+public SDK. They exercise canonical message content and typed audio-operation
+payloads, scoped binding order/options, rejected updates, protected provenance,
+post-transform operation validation, persistence, disable and deletion. With
+`GOBROOM_TEST_CLI` set, the content fixture uses installed `transforms list`,
+`upsert --file` and `delete` commands. All upstreams and databases are temporary.
+These fixtures do not demonstrate arbitrary artifact mutation or every effect.
+
 Run from this directory with `GOWORK=off go test ./...`. The tests compile the
 module as an independent importer, bind the manifest, verify the custom quota
 source through the registry, then start the public daemon API with the module

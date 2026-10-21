@@ -60,6 +60,7 @@ func newRootCommand(defaultIPC string, runTUI tuiRunner) *cobra.Command {
 	root.AddCommand(resolve)
 	root.AddCommand(resourceCommands()...)
 	root.AddCommand(extensionCommands())
+	root.AddCommand(transformCommands())
 	root.AddCommand(healthCommand(), quotaCommand(), persistenceCommand(), usageCommand(), usageSummaryCommand(), usagePruneCommand(), logsCommand(), routeExplainCommand(), compatibilityCommand(), configExportCommand(), configValidateCommand(), configDiffCommand(), configApplyCommand())
 	return root
 }
