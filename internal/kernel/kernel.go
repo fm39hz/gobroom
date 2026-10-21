@@ -386,6 +386,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			sessionKey := requestSessionKey(req)
 			var sessionState SessionState
+			var loadedSessionState SessionState
 			sessionStateLoaded := false
 			sessionStateChanged := false
 			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
@@ -402,6 +403,10 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						return ErrSessionStateUnavailable
 					}
 					sessionStateLoaded = true
+					// Updates replace private slices or append proofs without
+					// mutating the prefix; retain the loaded snapshot without a
+					// second provider-data copy on every successful call.
+					loadedSessionState = saved
 					sessionState = saved
 					candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
 					if candidateRequest.Continuity.PreviousResponse == "" {
@@ -610,20 +615,15 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						_ = body.Close()
 					}
 					// A reset is not auth recovery, a quota signal, or a replay grant.
-					if outcome.ContinuityRecovery != ContinuityRecoveryInvalidate || outcome.Cause != CauseContinuityInvalid || outcome.Effect != EffectRejected || outcome.Scope != ScopeRequest || class != ErrorTerminal || outcome.Retry != RetryNever || outcome.Recovery.Effective() != CredentialRecoveryNone || !outcome.RetryAt.IsZero() || len(outcome.Limits) != 0 || response.Status < 400 || response.Status >= 500 {
+					if !validContinuityRecovery(outcome, EffectRejected) || response.Status < 400 || response.Status >= 500 {
 						releaseCandidate()
 						return ErrContinuityRecoveryInvalid
 					}
 					// An explicit different parent must not invalidate an unrelated
 					// cached conversation under the same client-supplied session ID.
-					if sessionStateLoaded && !emptySessionState(sessionState) && (sessionState.ResponseID == "" || sessionState.ResponseID == candidateRequest.Continuity.PreviousResponse) {
-						if _, err := k.SessionStores[candidate.SessionStoreRef].Invalidate(attemptCtx, candidate, sessionKey, sessionState); err != nil {
-							releaseCandidate()
-							if attemptCtx.Err() != nil {
-								return attemptCtx.Err()
-							}
-							return ErrSessionStateUnavailable
-						}
+					if err := k.invalidateLoadedContinuity(attemptCtx, candidate, candidateRequest, sessionKey, loadedSessionState, sessionStateLoaded); err != nil {
+						releaseCandidate()
+						return err
 					}
 					outcome.Message = ErrContinuityRestartRequired.Error()
 					if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
@@ -813,6 +813,41 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 			}
 			var terminalFailure error
+			var providerFailureOutcome *ClassifiedOutcome
+			normalizeProviderFailure := func(evidence *ProviderResponseError) error {
+				if err := attemptCtx.Err(); err != nil {
+					return WrapResponseFailure(ResponseFailureUnknown, err)
+				}
+				var classifier ResponseOutcomeClassifier
+				if selected, configured := k.ErrorClassifiers[candidate.ErrorClassifierRef]; configured {
+					classifier, _ = selected.(ResponseOutcomeClassifier)
+				} else {
+					classifier, _ = adapter.(ResponseOutcomeClassifier)
+				}
+				if classifier == nil {
+					return evidence
+				}
+				outcome := classifier.ClassifyResponseError(evidence.Data())
+				// A successful HTTP response remains accepted even if a later
+				// terminal event rejects continuity. Never synthesize a status.
+				if outcome.Effect != EffectAccepted || outcome.StatusCode != 0 || outcome.Recovery.Effective() != CredentialRecoveryNone {
+					return WrapResponseFailure(ResponseFailureUnknown, ErrContinuityRecoveryInvalid)
+				}
+				if outcome.ContinuityRecovery != "" && outcome.ContinuityRecovery != ContinuityRecoveryNone {
+					if !validContinuityRecovery(outcome, EffectAccepted) {
+						return WrapResponseFailure(ResponseFailureUnknown, ErrContinuityRecoveryInvalid)
+					}
+					if err := k.invalidateLoadedContinuity(attemptCtx, candidate, candidateRequest, sessionKey, loadedSessionState, sessionStateLoaded); err != nil {
+						return WrapResponseFailure(ResponseFailureUnknown, err)
+					}
+					outcome.Message = ErrContinuityRestartRequired.Error()
+					providerFailureOutcome = &outcome
+					return ErrContinuityRestartRequired
+				}
+				outcome.Message = evidence.Error()
+				providerFailureOutcome = &outcome
+				return evidence
+			}
 			reportFailure := func(err error) {
 				if err == nil || terminalFailure != nil {
 					return
@@ -822,6 +857,12 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					emitEvent(ResponseEvent{At: time.Now(), Kind: EventResponseError, Error: err.Error()})
 				}
 				if providerResponseFailure(ctx, err) {
+					if providerFailureOutcome != nil {
+						if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
+							observer.ObserveOutcome(candidate, *providerFailureOutcome)
+						}
+						return
+					}
 					cause := CauseStreamFailure
 					if errors.Is(context.Cause(ctx), ErrOperationDeadline) {
 						cause = CauseTimeout
@@ -911,7 +952,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if emitEvent != nil && event.Kind != EventResponseComplete && event.Kind != EventResponseError {
 					emitEvent(event)
 				}
-			}, OnSessionState: func(state SessionState) {
+			}, NormalizeProviderFailure: normalizeProviderFailure, OnSessionState: func(state SessionState) {
 				if ValidateSessionState(state) != nil {
 					return
 				}

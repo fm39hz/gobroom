@@ -94,9 +94,26 @@ type openAIResponsesSession struct {
 	toolIndexesByCallID map[string]int
 	outputItemsByID     map[string]*responsesOutputItem
 	nextToolIndex       int
+	responseError       string
+	responseErrored     bool
+	errorSent           bool
 }
 
 func (s *openAIResponsesSession) Emit(_ context.Context, event kernel.ResponseEvent) error {
+	if event.Kind == kernel.EventResponseError {
+		if !s.responseErrored {
+			s.responseError = event.Error
+			s.responseErrored = true
+		}
+		if s.streaming && s.committed && !s.errorSent {
+			s.errorSent = true
+			return writeProtocolError(s.writer, normalize.FormatOpenAIResponses, s.responseError)
+		}
+		return nil
+	}
+	if s.responseErrored {
+		return nil
+	}
 	if s.passthrough {
 		if event.Kind != kernel.EventRawFrame || event.WireFormat != normalize.FormatOpenAIResponses {
 			return nil
@@ -168,8 +185,6 @@ func (s *openAIResponsesSession) Emit(_ context.Context, event kernel.ResponseEv
 		}
 	case kernel.EventResponseComplete:
 		s.completed = true
-	case kernel.EventResponseError:
-		return fmt.Errorf("upstream response error: %s", event.Error)
 	case kernel.EventThinkingSignature:
 		return fmt.Errorf("OpenAI Responses renderer cannot represent an opaque thinking signature")
 	case kernel.EventArtifact:
@@ -181,6 +196,9 @@ func (s *openAIResponsesSession) Emit(_ context.Context, event kernel.ResponseEv
 func (s *openAIResponsesSession) Finish(_ context.Context, decodeErr error) error {
 	if decodeErr != nil {
 		return decodeErr
+	}
+	if s.responseErrored {
+		return fmt.Errorf("upstream response error: %s", s.responseError)
 	}
 	if s.passthrough {
 		return nil

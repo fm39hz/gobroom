@@ -126,8 +126,9 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	binding.ResponseDecoder = provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: sessionScopeDecoderID, ContractVersion: 1}
 	binding.ErrorClassifier = provider.PrimitiveRef{Kind: provider.PrimitiveErrorClassifier, ID: "http-json", ContractVersion: 1}
 	binding.ErrorClassifierOptions = provider.ErrorClassifierOptions{HTTPJSON: &provider.HTTPJSONErrorClassifierOptions{
-		AuthRecoverySignals:    []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}},
-		ContinuityResetSignals: []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{400, 409}, Codes: []string{"previous_response_not_found"}}},
+		AuthRecoverySignals:            []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{498}, Codes: []string{"credential_expired"}}},
+		ContinuityResetSignals:         []provider.HTTPJSONErrorSignal{{HTTPStatuses: []int{400, 409}, Codes: []string{"previous_response_not_found"}}},
+		ResponseContinuityResetSignals: []provider.HTTPJSONErrorSignal{{Codes: []string{"previous_response_not_found"}}},
 	}}
 	definition.Operations[provider.OperationResponses] = binding
 	manifest, err := provider.EncodeManifest(definition)
@@ -147,6 +148,7 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	var expireNext atomic.Bool
 	var expireContinuation, resetContinuation, failContinuation atomic.Bool
 	var missingParent atomic.Bool
+	var acceptedFailure atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {
 			t.Errorf("upstream path=%q; want /v1/responses", r.URL.Path)
@@ -161,6 +163,20 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 		}
 		body.Token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		requests <- body
+		if mode := acceptedFailure.Swap(0); mode != 0 {
+			w.Header().Set("Content-Type", "text/event-stream")
+			if mode == 2 {
+				_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_partial\",\"delta\":\"partial-text\"}\n\n")
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				_, _ = io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"previous_response_not_found\",\"message\":\"private-stream-marker\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":2}}}\n\n")
+			} else {
+				_, _ = io.WriteString(w, "data: {\"type\":\"error\",\"code\":\"previous_response_not_found\",\"message\":\"private-stream-marker\"}\n\n")
+			}
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
 		if missingParent.Swap(false) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusConflict)
@@ -225,10 +241,19 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	_ = rpc("physical_models.upsert", map[string]any{"name": "scope-response-physical", "identity": map[string]any{"canonicalName": "gpt-test"}, "sources": []map[string]any{{"routeId": "scope-response-route", "fidelity": "exact"}}, "enabled": true})
 	_ = rpc("combo_models.upsert", map[string]any{"name": "scope-response-role", "members": []map[string]any{{"kind": "physical", "id": "scope-response-physical"}}, "discoverable": true, "enabled": true})
 	var errorBody []byte
+	var responseBody []byte
+	var clientStreaming bool
 	request := func() int {
 		t.Helper()
-		body := `{"model":"scope-response-role","input":"continue"}`
-		req, err := http.NewRequest(http.MethodPost, "http://"+service.Addresses().HTTP+"/v1/responses", strings.NewReader(body))
+		body, err := json.Marshal(struct {
+			Model  string `json:"model"`
+			Input  string `json:"input"`
+			Stream bool   `json:"stream"`
+		}{Model: "scope-response-role", Input: "continue", Stream: clientStreaming})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, err := http.NewRequest(http.MethodPost, "http://"+service.Addresses().HTTP+"/v1/responses", strings.NewReader(string(body)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,10 +265,9 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 		}
 		defer resp.Body.Close()
 		errorBody = nil
+		responseBody, _ = io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		if resp.StatusCode >= 400 {
-			errorBody, _ = io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		} else {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			errorBody = responseBody
 		}
 		return resp.StatusCode
 	}
@@ -269,6 +293,57 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	}
 	assertPrevious("")
 	assertPrevious("respA")
+	for _, mode := range []int32{1, 2} {
+		clientStreaming = true
+		acceptedFailure.Store(mode)
+		status := request()
+		if mode == 1 && status != http.StatusConflict || mode == 2 && status != http.StatusOK {
+			t.Fatalf("accepted failure mode=%d status=%d body=%s", mode, status, responseBody)
+		}
+		if strings.Contains(string(responseBody), "private-stream-marker") || strings.Contains(string(responseBody), "[DONE]") || strings.Contains(string(responseBody), "response.completed") {
+			t.Fatalf("error leaked or falsely completed: %s", responseBody)
+		}
+		if mode == 2 && (!strings.Contains(string(responseBody), "partial-text") || !strings.Contains(string(responseBody), "resend the complete conversation")) {
+			t.Fatalf("committed stream lost text or error projection: %s", responseBody)
+		}
+		if got := readRequest(); got.PreviousID != "respA" {
+			t.Fatalf("accepted failure parent=%q", got.PreviousID)
+		}
+		select {
+		case extra := <-requests:
+			t.Fatalf("accepted error replayed: %#v", extra)
+		default:
+		}
+		if cli := os.Getenv("GOBROOM_TEST_CLI"); cli != "" {
+			runDeviceRaceCLI(t, cli, config.IPCPath, "status")
+		}
+		if err := service.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		service = daemon.NewWithProviderModules(config, opaqueStateModule{}, sessionScopeModule{})
+		if err := service.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		clientStreaming = false
+		assertPrevious("")
+		assertPrevious("respA")
+	}
+	var usages []struct {
+		Status                    string
+		InputTokens, OutputTokens int64
+	}
+	if err := json.Unmarshal(rpc("usage.list", map[string]any{"limit": 100}), &usages); err != nil {
+		t.Fatal(err)
+	}
+	foundFailedUsage := false
+	for _, usage := range usages {
+		if usage.Status == "error" && usage.InputTokens == 3 && usage.OutputTokens == 2 {
+			foundFailedUsage = true
+		}
+	}
+	if !foundFailedUsage {
+		t.Fatalf("partial failed provider usage was not retained: %#v", usages)
+	}
 	missingParent.Store(true)
 	if status := request(); status != http.StatusConflict {
 		t.Fatalf("continuation failure status=%d body=%s", status, errorBody)

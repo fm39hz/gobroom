@@ -265,6 +265,7 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 	}
 	options.AuthRecoverySignals = cloneSignals(options.AuthRecoverySignals)
 	options.ContinuityResetSignals = cloneSignals(options.ContinuityResetSignals)
+	options.ResponseContinuityResetSignals = cloneSignals(options.ResponseContinuityResetSignals)
 	options.LimitHeaders = append([]HTTPHeaderLimitSignal(nil), options.LimitHeaders...)
 	for index := range options.LimitHeaders {
 		options.LimitHeaders[index].ExhaustedStatusValues = cloneStrings(options.LimitHeaders[index].ExhaustedStatusValues)
@@ -287,6 +288,39 @@ func cloneHTTPJSONErrorClassifierOptions(options HTTPJSONErrorClassifierOptions)
 func (c HTTPJSONErrorClassifier) Classify(status int, body []byte) kernel.ErrorClass {
 	evidence := decodeHTTPErrorEvidence(body, c.Options)
 	return c.classifyWithEvidence(status, body, evidence)
+}
+
+// ClassifyResponseError recognizes provider-declared continuation failures in
+// successful response streams. It deliberately has no HTTP status input.
+func (c HTTPJSONErrorClassifier) ClassifyResponseError(body []byte) kernel.ClassifiedOutcome {
+	outcome := kernel.ClassifiedOutcome{Class: kernel.ErrorCooldown, Cause: kernel.CauseStreamFailure, Effect: kernel.EffectAccepted, Scope: kernel.ScopeOperation, Retry: kernel.RetryAfter, Recovery: kernel.CredentialRecoveryNone, ContinuityRecovery: kernel.ContinuityRecoveryNone, StatusCode: 0, Evidence: []kernel.EvidenceSource{kernel.EvidenceErrorBody}, Message: "provider reported a terminal response error"}
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	var errorObject map[string]json.RawMessage
+	canonicalError := json.Unmarshal(body, &envelope) == nil && len(envelope.Error) > 0 && json.Unmarshal(envelope.Error, &errorObject) == nil && errorObject != nil
+	if c.Options != nil && canonicalError && matchHTTPJSONResponseSignal(c.Options.ResponseContinuityResetSignals, body, decodeHTTPErrorEvidence(body, c.Options)) {
+		outcome.Class = kernel.ErrorTerminal
+		outcome.Cause = kernel.CauseContinuityInvalid
+		outcome.Effect = kernel.EffectAccepted
+		outcome.Scope = kernel.ScopeRequest
+		outcome.Retry = kernel.RetryNever
+		outcome.Recovery = kernel.CredentialRecoveryNone
+		outcome.ContinuityRecovery = kernel.ContinuityRecoveryInvalidate
+	}
+	return outcome
+}
+
+func matchHTTPJSONResponseSignal(signals []HTTPJSONErrorSignal, body []byte, evidence httpErrorEvidence) bool {
+	for _, signal := range signals {
+		if signal.HTTPStatuses != nil || len(signal.Codes)+len(signal.Types)+len(signal.Statuses)+len(signal.Fields) == 0 {
+			continue
+		}
+		if matchHTTPJSONErrorBody(signal, body, evidence) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c HTTPJSONErrorClassifier) classifyWithEvidence(status int, body []byte, evidence httpErrorEvidence) kernel.ErrorClass {
@@ -324,28 +358,30 @@ func matchHTTPJSONErrorSignal(signals []HTTPJSONErrorSignal, status int, body []
 		if len(signal.HTTPStatuses) > 0 && !slices.Contains(signal.HTTPStatuses, status) {
 			continue
 		}
-		if len(signal.Codes) > 0 && !matchesAny(evidence.Code, signal.Codes) {
-			continue
-		}
-		if len(signal.Types) > 0 && !matchesAny(evidence.Type, signal.Types) {
-			continue
-		}
-		if len(signal.Statuses) > 0 && !matchesAny(evidence.Status, signal.Statuses) {
-			continue
-		}
-		fieldsMatch := true
-		for _, field := range signal.Fields {
-			value := pointerText(body, field.Path)
-			if !matchesAny(value, field.Equals) && !matchesAnyContains(value, field.Contains) {
-				fieldsMatch = false
-				break
-			}
-		}
-		if fieldsMatch {
+		if matchHTTPJSONErrorBody(signal, body, evidence) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchHTTPJSONErrorBody(signal HTTPJSONErrorSignal, body []byte, evidence httpErrorEvidence) bool {
+	if len(signal.Codes) > 0 && !matchesAny(evidence.Code, signal.Codes) {
+		return false
+	}
+	if len(signal.Types) > 0 && !matchesAny(evidence.Type, signal.Types) {
+		return false
+	}
+	if len(signal.Statuses) > 0 && !matchesAny(evidence.Status, signal.Statuses) {
+		return false
+	}
+	for _, field := range signal.Fields {
+		value := pointerText(body, field.Path)
+		if !matchesAny(value, field.Equals) && !matchesAnyContains(value, field.Contains) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c HTTPJSONErrorClassifier) matchContinuityResetSignal(status int, body []byte, evidence httpErrorEvidence) bool {

@@ -481,6 +481,22 @@ gates even after semantic closure passes.
 
 ### Renewal/principal continuity evidence
 
+Accepted-response failure (2026-10-21, host contract v9):
+`TestNewProviderResponseErrorCopiesAndBoundsData` and its rejection cases guard
+the immutable private envelope. Compositor fixtures prove decoder-hook isolation,
+single normalization, failed-update suppression, local-error spoof prevention,
+cancellation and event bounds. `TestHTTPJSONResponseContinuityClassification`
+and schema/clone/adapter tests prove response signals are independent of HTTP
+statuses and preserve accepted effects. Decoder tests intercept explicit errors
+before raw payload disclosure, reject incomplete completion, preserve healthy
+bytes and retain usage. Renderer terminal-error fixtures check single projection,
+escaped JSON, no premature commit and no success after failure. The independent
+scope vertical adds errors before and after partial SSE text, no implicit replay,
+private-message redaction, store-version reset across restart and durable failed
+usage. Root regression/vet, three focused race runs and full conformance passed.
+Installed acceptance follows installation; this is not full SG1/M15
+closure or broad live-provider/harness evidence.
+
 Classified continuity rejection (2026-10-21, host contract v8):
 `TestHTTPJSONContinuityResetForcesInvalidationOutcome` and
 `TestHTTPJSONContinuityResetCloneAndSchema` prove bounded structured matching,

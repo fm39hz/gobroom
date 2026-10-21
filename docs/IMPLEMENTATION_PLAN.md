@@ -267,6 +267,22 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    including store-version protection for identical resaves. Installed
    `039e971` passed three independent-module race runs with real CLI status and
    account update; main control=serving=485 and bundle-v9 validation stayed valid.
+
+   Accepted-response checkpoint (2026-10-21): host-v9 carries bounded private
+   decoder errors to an operation-selected response classifier without fake
+   HTTP statuses. Response reset signals are separate from HTTP 4xx rules and
+   retain accepted effects/no replay. The compositor strips its host hook from
+   decoder hooks and rejects local-error spoofing. OpenAI error envelopes are
+   intercepted before raw data passthrough; committed protocol renderers emit
+   one terminal error, while incomplete/failed responses cannot complete via
+   `[DONE]`. The independent daemon vertical checks pre/post-commit failures,
+   retained failed usage and durable reset after a new stream response ID.
+   Root regression/vet and three focused race runs passed. Broader provider
+   envelopes, full-history reconstruction and whole-product gates remain open.
+   Full conformance also passed. Before closing SG1/SG6, audit typed client-error
+   codes and stronger provider terminal-effect evidence separately from HTTP
+   acceptance: this slice never turns a 2xx error into a replay grant and is not
+   proof of automatic harness recovery.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

@@ -141,6 +141,19 @@ the reference executor/cache or copying its status/string heuristics. The kernel
 requires typed confirmed-rejection evidence and returns a sanitized restart
 error rather than dropping history or treating a 409 as provider overload.
 
+Accepted-response failure follow-up: `codex_executor_terminal.go` extracts
+`error` or `response.error` from SSE `error`/`response.failed` events, while
+`codex_executor_stream.go` can release output before a later terminal failure.
+The adjacent response translator also produces `response.failed` with an error
+object and failed status. Gobroom uses those envelopes as fixtures, not the
+executor's inferred HTTP-like statuses: an accepted response keeps its accepted
+effect. Decoders create bounded private error evidence through standard
+JSON/RawMessage binding; the selected manifest classifier and existing CAS
+worker decide invalidation. Committed client streams use the existing protocol
+renderers to emit a terminal error without a success sentinel. No reference
+stream executor, parser or cache is imported; healthy native frames keep their
+bytes and the ordinary path adds no second JSON decode per event.
+
 Provider-state lesson: `sdk/cliproxy/auth/types.go` keeps arbitrary mutable
 account metadata (tokens/cookies/provider fields), rather than assuming all
 refresh results are a bearer token. Gobroom solves that preservation problem

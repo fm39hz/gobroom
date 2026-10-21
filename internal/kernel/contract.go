@@ -473,6 +473,12 @@ type OutcomeClassifier interface {
 	ClassifyOutcome(status int, headers http.Header, body []byte) ClassifiedOutcome
 }
 
+// ResponseOutcomeClassifier classifies canonical private error evidence from an
+// accepted response. It must not invent an HTTP rejection or grant replay.
+type ResponseOutcomeClassifier interface {
+	ClassifyResponseError(body []byte) ClassifiedOutcome
+}
+
 type Credential struct {
 	Generation   string `json:"-"`
 	ConnectionID string
@@ -530,20 +536,23 @@ type ScopedCredentialLeaseResolver func(context.Context, Route, CredentialLeaseS
 type CredentialLeaseRefresher func(context.Context, Route, *CredentialLease) (*CredentialLease, error)
 
 type StreamHooks struct {
-	OnFirstByte       func(time.Time)
-	OnEvent           func(ResponseEvent)
-	ValidateEvent     func(context.Context, ResponseEvent) error
-	OnComplete        func(UsageEvent)
-	OnProviderUsage   func(UsageEvent)
-	OnError           func(error)
-	OnSessionState    func(SessionState)
-	TransformResponse func(context.Context, ResponseEvent) (ResponseEvent, error)
-	ArtifactAccess    *artifacts.Access
-	Streaming         bool
-	Model             string
-	ProviderIssuer    extensions.Ref
-	MaxEventBytes     int64
-	MaxOutputBytes    int64
+	OnFirstByte     func(time.Time)
+	OnEvent         func(ResponseEvent)
+	ValidateEvent   func(context.Context, ResponseEvent) error
+	OnComplete      func(UsageEvent)
+	OnProviderUsage func(UsageEvent)
+	OnError         func(error)
+	OnSessionState  func(SessionState)
+	// Only the compositor calls this after a decoder has failed. It is removed
+	// from the hooks supplied to that decoder and cannot erase its failure.
+	NormalizeProviderFailure func(*ProviderResponseError) error
+	TransformResponse        func(context.Context, ResponseEvent) (ResponseEvent, error)
+	ArtifactAccess           *artifacts.Access
+	Streaming                bool
+	Model                    string
+	ProviderIssuer           extensions.Ref
+	MaxEventBytes            int64
+	MaxOutputBytes           int64
 }
 
 type ResponseEventKind string

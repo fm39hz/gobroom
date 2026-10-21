@@ -206,17 +206,23 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 			}
 			rawLine := append([]byte(nil), scanner.Bytes()...)
 			line := strings.TrimRight(string(rawLine), "\r\n")
-			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: rawLine}); err != nil {
-				return err
-			}
 			if !strings.HasPrefix(line, "data:") {
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: rawLine}); err != nil {
+					return err
+				}
 				continue
 			}
 			data := strings.TrimSpace(strings.TrimPrefix(strings.TrimSuffix(line, "\n"), "data:"))
 			if data == "" {
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: rawLine}); err != nil {
+					return err
+				}
 				continue
 			}
 			if data == "[DONE]" {
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: rawLine}); err != nil {
+					return err
+				}
 				completed = true
 				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventResponseComplete}); err != nil {
 					return err
@@ -230,6 +236,25 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
 				return fmt.Errorf("decode upstream SSE JSON: %w", err)
+			}
+			if errPayload, candidate := openAIErrorPayload(payload, []byte(data), true); candidate {
+				if event, ok := openAIUsageFromPayload(payload); ok && hooks.OnProviderUsage != nil {
+					hooks.OnProviderUsage(event)
+				}
+				evidence, err := kernel.NewProviderResponseError(errPayload)
+				if err != nil {
+					return err
+				}
+				return evidence
+			}
+			if stringValue(payload["type"]) == "response.incomplete" {
+				if event, exists := openAIUsageFromPayload(payload); exists && hooks.OnProviderUsage != nil {
+					hooks.OnProviderUsage(event)
+				}
+				return fmt.Errorf("OpenAI Responses SSE response was incomplete")
+			}
+			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: wireFormat, Raw: rawLine}); err != nil {
+				return err
 			}
 			var events []kernel.ResponseEvent
 			if err := emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) }); err != nil {
@@ -267,6 +292,19 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return fmt.Errorf("decode upstream JSON: %w", err)
 	}
+	if errPayload, candidate := openAIErrorPayload(payload, data, false); candidate {
+		if event, ok := openAIUsageFromPayload(payload); ok && hooks.OnProviderUsage != nil {
+			hooks.OnProviderUsage(event)
+		}
+		evidence, err := kernel.NewProviderResponseError(errPayload)
+		if err != nil {
+			return err
+		}
+		return evidence
+	}
+	if stringValue(payload["status"]) == "incomplete" {
+		return fmt.Errorf("OpenAI Responses JSON has non-completed status %q", "incomplete")
+	}
 	var events []kernel.ResponseEvent
 	if err := emitOpenAIEvent(payload, func(event kernel.ResponseEvent) { events = append(events, event) }); err != nil {
 		return fmt.Errorf("decode OpenAI response: %w", err)
@@ -298,6 +336,80 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 		hooks.OnComplete(usage)
 	}
 	return nil
+}
+
+// openAIErrorPayload returns a canonical provider error envelope only for explicit error/status signals.
+func openAIErrorPayload(payload map[string]any, data []byte, sse bool) ([]byte, bool) {
+	typ := stringValue(payload["type"])
+	status := stringValue(payload["status"])
+	rootError := payload["error"] != nil
+	response, _ := payload["response"].(map[string]any)
+	nestedError := response["error"] != nil
+	candidate := rootError || nestedError || typ == "error" || typ == "response.failed" || (!sse && status == "failed")
+	if !candidate {
+		return nil, false
+	}
+	var envelope struct {
+		Error    *json.RawMessage `json:"error"`
+		Response struct {
+			Error *json.RawMessage `json:"error"`
+		} `json:"response"`
+	}
+	if len(data) > kernel.MaxProviderResponseErrorBytes || json.Unmarshal(data, &envelope) != nil {
+		return []byte(`{"error":{}}`), true
+	}
+	detail := json.RawMessage(`{}`)
+	if envelope.Response.Error != nil {
+		detail = *envelope.Response.Error
+	} else if envelope.Error != nil {
+		detail = *envelope.Error
+	} else if typ == "error" {
+		detail = data
+	}
+	canonical, err := json.Marshal(struct {
+		Error json.RawMessage `json:"error"`
+	}{Error: detail})
+	if err != nil {
+		return []byte(`{"error":{}}`), true
+	}
+	return canonical, true
+}
+
+func openAIUsageFromPayload(payload map[string]any) (kernel.UsageEvent, bool) {
+	if event, found := openAIUsageFromMap(payload["usage"]); found {
+		return event, true
+	}
+	if response, ok := payload["response"].(map[string]any); ok {
+		if event, found := openAIUsageFromMap(response["usage"]); found {
+			return event, true
+		}
+		if providerError, ok := response["error"].(map[string]any); ok {
+			if event, found := openAIUsageFromMap(providerError["usage"]); found {
+				return event, true
+			}
+		}
+	}
+	if providerError, ok := payload["error"].(map[string]any); ok {
+		if event, found := openAIUsageFromMap(providerError["usage"]); found {
+			return event, true
+		}
+	}
+	return kernel.UsageEvent{}, false
+}
+
+func openAIUsageFromMap(raw any) (kernel.UsageEvent, bool) {
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return kernel.UsageEvent{}, false
+	}
+	in, out := fields["input_tokens"], fields["output_tokens"]
+	if in == nil {
+		in = fields["prompt_tokens"]
+	}
+	if out == nil {
+		out = fields["completion_tokens"]
+	}
+	return kernel.UsageEvent{InputTokens: int64(numberValue(in)), OutputTokens: int64(numberValue(out))}, in != nil || out != nil
 }
 
 func splitSSELines(data []byte, atEOF bool) (int, []byte, error) {

@@ -326,10 +326,36 @@ failed invocation returns `ErrContinuityRestartRequired`; uncommitted HTTP
 projects a sanitized 409 with code `continuity_restart_required`, asking the
 caller to resend the complete conversation without rejected state. It cannot
 fall back, refresh credentials or replay through an idempotency grant. Committed
-responses are never rewritten. Automatic full-history reconstruction and
-provider-specific in-stream rejection remain separate gates; no header or
-message-count heuristic grants them. Module host contract v8 requires the
-compare-and-invalidate semantics; no old-host adapter is retained.
+responses are never rewritten. Automatic full-history reconstruction remains
+separate; no header or message-count heuristic grants it.
+
+Accepted JSON/SSE response failures use bounded immutable
+`ProviderResponseError` evidence, constructed as canonical `{error:{...}}`
+through the public provider API. Its `Error()` text never includes private
+provider fields; `Data()` returns a defensive copy for the selected classifier.
+The compositor accepts this evidence only from decoder failure, removes the
+host normalization hook before calling that decoder, enforces event bounds,
+and discards the failed attempt's staged state. Transform, renderer and client
+errors cannot acquire provider provenance through this channel; normalization
+cannot turn a failure into success.
+
+`ResponseOutcomeClassifier.ClassifyResponseError` has no HTTP status input.
+`responseContinuityResetSignals` reuse structured body selectors but forbid
+HTTP status selectors. A match retains `EffectAccepted` and `StatusCode=0`,
+with request scope, no credential recovery and no replay. HTTP 4xx selectors
+remain independent. Invalidation compares the original loaded store version,
+not a response ID or proof appended during the failed stream. Known provider
+usage is retained as failed usage, without publishing successful completion.
+
+The OpenAI decoder recognizes explicit `error`, `response.failed` and failed
+JSON bodies before exposing their raw error data; incomplete responses cannot
+become successful because `[DONE]` follows. Healthy raw frames stay unchanged.
+An uncommitted client response can become a sanitized 409. Committed streaming
+responses keep their status and prior content and receive one format-specific
+terminal error, never a synthetic success or replay. Provider-specific envelope
+coverage and broad harness acceptance remain implementation gates. Module host
+contract v9 requires this private failure boundary and compare-and-invalidate
+semantics; no old-host adapter is retained.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

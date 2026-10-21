@@ -168,6 +168,8 @@ type QuotaScope = core.QuotaScope
 type ScopedQuotaSource = core.ScopedQuotaSource
 type QuotaSourceFactory = core.QuotaSourceFactory
 type ErrorClassifier = core.ErrorClassifier
+type ResponseOutcomeClassifier = kernel.ResponseOutcomeClassifier
+type ProviderResponseError = kernel.ProviderResponseError
 type ErrorClassifierOptions = core.ErrorClassifierOptions
 type HTTPJSONErrorClassifierOptions = core.HTTPJSONErrorClassifierOptions
 type HTTPJSONErrorSignal = core.HTTPJSONErrorSignal
@@ -196,6 +198,9 @@ const (
 )
 
 func QuotaFailureCode(err error) string { return core.QuotaFailureCode(err) }
+func NewProviderResponseError(data []byte) (*ProviderResponseError, error) {
+	return kernel.NewProviderResponseError(data)
+}
 
 type Ref = extensions.Ref
 type ExtensionFactory = extensions.Factory

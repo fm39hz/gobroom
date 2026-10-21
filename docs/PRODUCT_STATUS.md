@@ -27,6 +27,25 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Accepted-response failures now use bounded private decoder evidence and a
+response classifier separate from HTTP rejection. Accepted upstream effects do
+not become replay grants. OpenAI error payloads are intercepted before raw data
+passthrough, failed/incomplete streams never become success through `[DONE]`,
+and known usage survives as failed usage. If client output has committed, its
+status/content remain and one protocol error is emitted; otherwise a continuity
+failure can become a sanitized 409. Invalidation uses the original loaded state,
+not IDs or proofs from the failed stream. Host-v9 requires this boundary.
+
+Root regression/vet and three focused kernel/provider/decoder/renderer race runs
+passed. The independent module daemon vertical also passed pre/post-commit
+errors, partial text, no replay, durable reset and failed usage checks.
+Full conformance, including the new response-failure group and complete external
+module suite, passed. Installed acceptance follows installation. Provider/harness
+breadth, automatic full-history reconstruction and measured latency/RSS remain
+open; this does not close C2/SG1/M15.
+
+Previous integrated milestone:
+
 Structured continuity rejection can now invalidate only the state observed by
 its failed attempt, preserving concurrent newer success. It has request scope
 and cannot trigger auth refresh, quota suppression, model fallback or blind

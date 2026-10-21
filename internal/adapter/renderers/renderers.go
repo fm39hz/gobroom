@@ -72,9 +72,26 @@ type openAIChatSession struct {
 	usage               *kernel.UsageEvent
 	finish              string
 	finishSent          bool
+	responseError       string
+	responseErrored     bool
+	errorSent           bool
 }
 
 func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) error {
+	if event.Kind == kernel.EventResponseError {
+		if !s.responseErrored {
+			s.responseError = event.Error
+			s.responseErrored = true
+		}
+		if s.streaming && s.committed && !s.errorSent {
+			s.errorSent = true
+			return writeOpenAIError(s.writer, s.responseError)
+		}
+		return nil
+	}
+	if s.responseErrored {
+		return nil
+	}
 	if s.passthrough {
 		if event.Kind != kernel.EventRawFrame || event.WireFormat != normalize.FormatOpenAIChat {
 			return nil
@@ -171,6 +188,9 @@ func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) 
 func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 	if decodeErr != nil {
 		return decodeErr
+	}
+	if s.responseErrored {
+		return fmt.Errorf("upstream response error: %s", s.responseError)
 	}
 	if s.passthrough {
 		return nil
@@ -332,7 +352,7 @@ func (r WirePassthrough) Begin(_ context.Context, options kernel.ResponseRenderC
 		return nil, fmt.Errorf("wire passthrough %q requires matching provider and client formats", r.Format)
 	}
 	copyHeaders(writer.Header(), options.Headers, false)
-	return &wireSession{writer: writer, status: options.Status, format: r.Format}, nil
+	return &wireSession{writer: writer, status: options.Status, format: r.Format, streaming: options.Streaming}, nil
 }
 
 func openAIChatEvents() map[kernel.ResponseEventKind]bool {
@@ -394,13 +414,31 @@ func containsEvent(events []kernel.ResponseEventKind, wanted kernel.ResponseEven
 }
 
 type wireSession struct {
-	writer    http.ResponseWriter
-	status    int
-	committed bool
-	format    normalize.Format
+	writer          http.ResponseWriter
+	status          int
+	committed       bool
+	format          normalize.Format
+	streaming       bool
+	responseError   string
+	responseErrored bool
+	errorSent       bool
 }
 
 func (s *wireSession) Emit(_ context.Context, event kernel.ResponseEvent) error {
+	if event.Kind == kernel.EventResponseError {
+		if !s.responseErrored {
+			s.responseError = event.Error
+			s.responseErrored = true
+		}
+		if s.streaming && s.committed && !s.errorSent {
+			s.errorSent = true
+			return writeProtocolError(s.writer, s.format, s.responseError)
+		}
+		return nil
+	}
+	if s.responseErrored {
+		return nil
+	}
 	if event.Kind != kernel.EventRawFrame || event.WireFormat != s.format {
 		return nil
 	}
@@ -418,11 +456,55 @@ func (s *wireSession) Finish(_ context.Context, err error) error {
 	if err != nil {
 		return err
 	}
+	if s.responseErrored {
+		return fmt.Errorf("upstream response error: %s", s.responseError)
+	}
 	if !s.committed {
 		s.writer.WriteHeader(s.status)
 		s.committed = true
 	}
 	return nil
+}
+
+func writeOpenAIError(writer io.Writer, message string) error {
+	data, err := json.Marshal(map[string]any{"error": map[string]any{"message": message, "type": "upstream_error"}})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(writer, "data: %s\n\n", data)
+	if flusher, ok := writer.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return err
+}
+
+func writeProtocolError(writer io.Writer, format normalize.Format, message string) error {
+	switch format {
+	case normalize.FormatOpenAIChat:
+		return writeOpenAIError(writer, message)
+	case normalize.FormatOpenAIResponses:
+		data, err := json.Marshal(map[string]any{"type": "response.failed", "response": map[string]any{"status": "failed", "error": map[string]any{"code": "upstream_error", "message": message}}})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(writer, "event: response.failed\ndata: %s\n\n", data)
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return err
+	case normalize.FormatAnthropic:
+		data, err := json.Marshal(map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": message}})
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(writer, "event: error\ndata: %s\n\n", data)
+		if flusher, ok := writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		return err
+	default:
+		return nil
+	}
 }
 
 func copyHeaders(dst, src http.Header, openAI bool) {

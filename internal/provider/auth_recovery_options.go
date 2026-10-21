@@ -29,6 +29,21 @@ func validateHTTPContinuityResetSignals(signals []HTTPJSONErrorSignal) error {
 	return nil
 }
 
+func validateHTTPResponseContinuityResetSignals(signals []HTTPJSONErrorSignal) error {
+	if err := validateHTTPJSONErrorSignals("response continuity reset", signals); err != nil {
+		return err
+	}
+	for index, signal := range signals {
+		if len(signal.HTTPStatuses) != 0 {
+			return fmt.Errorf("response continuity reset signal %d must not declare HTTP statuses", index)
+		}
+		if len(signal.Codes)+len(signal.Types)+len(signal.Statuses)+len(signal.Fields) == 0 {
+			return fmt.Errorf("response continuity reset signal %d requires structured body evidence", index)
+		}
+	}
+	return nil
+}
+
 func validateHTTPJSONErrorSignals(label string, signals []HTTPJSONErrorSignal) error {
 	if signals == nil {
 		return nil

@@ -74,33 +74,34 @@ type ErrorClassifierOptions struct {
 }
 
 type HTTPJSONErrorClassifierOptions struct {
-	DefaultScope           kernel.OutcomeScope     `json:"defaultScope,omitempty"`
-	AuthScope              kernel.OutcomeScope     `json:"authScope,omitempty"`
-	QuotaScope             kernel.OutcomeScope     `json:"quotaScope,omitempty"`
-	RateLimitScope         kernel.OutcomeScope     `json:"rateLimitScope,omitempty"`
-	CapacityScope          kernel.OutcomeScope     `json:"capacityScope,omitempty"`
-	CodePath               string                  `json:"codePath,omitempty"`
-	TypePath               string                  `json:"typePath,omitempty"`
-	StatusPath             string                  `json:"statusPath,omitempty"`
-	MessagePath            string                  `json:"messagePath,omitempty"`
-	ResetAtPath            string                  `json:"resetAtPath,omitempty"`
-	RetryAfterPath         string                  `json:"retryAfterPath,omitempty"`
-	RetryDelayPath         string                  `json:"retryDelayPath,omitempty"`
-	WindowNamePath         string                  `json:"windowNamePath,omitempty"`
-	WindowLimitPath        string                  `json:"windowLimitPath,omitempty"`
-	WindowUsedPath         string                  `json:"windowUsedPath,omitempty"`
-	WindowRemainingPath    string                  `json:"windowRemainingPath,omitempty"`
-	QuotaWindowName        string                  `json:"quotaWindowName,omitempty"`
-	QuotaWindowKind        string                  `json:"quotaWindowKind,omitempty"`
-	QuotaCodes             []string                `json:"quotaCodes,omitempty"`
-	QuotaTypes             []string                `json:"quotaTypes,omitempty"`
-	QuotaStatuses          []string                `json:"quotaStatuses,omitempty"`
-	QuotaHTTPStatuses      []int                   `json:"quotaHTTPStatuses,omitempty"`
-	QuotaMessageTokens     []string                `json:"quotaMessageTokens,omitempty"`
-	ScopeSignals           []HTTPJSONScopeSignal   `json:"scopeSignals,omitempty"`
-	LimitHeaders           []HTTPHeaderLimitSignal `json:"limitHeaders,omitempty"`
-	AuthRecoverySignals    []HTTPJSONErrorSignal   `json:"authRecoverySignals,omitempty"`
-	ContinuityResetSignals []HTTPJSONErrorSignal   `json:"continuityResetSignals,omitempty"`
+	DefaultScope                   kernel.OutcomeScope     `json:"defaultScope,omitempty"`
+	AuthScope                      kernel.OutcomeScope     `json:"authScope,omitempty"`
+	QuotaScope                     kernel.OutcomeScope     `json:"quotaScope,omitempty"`
+	RateLimitScope                 kernel.OutcomeScope     `json:"rateLimitScope,omitempty"`
+	CapacityScope                  kernel.OutcomeScope     `json:"capacityScope,omitempty"`
+	CodePath                       string                  `json:"codePath,omitempty"`
+	TypePath                       string                  `json:"typePath,omitempty"`
+	StatusPath                     string                  `json:"statusPath,omitempty"`
+	MessagePath                    string                  `json:"messagePath,omitempty"`
+	ResetAtPath                    string                  `json:"resetAtPath,omitempty"`
+	RetryAfterPath                 string                  `json:"retryAfterPath,omitempty"`
+	RetryDelayPath                 string                  `json:"retryDelayPath,omitempty"`
+	WindowNamePath                 string                  `json:"windowNamePath,omitempty"`
+	WindowLimitPath                string                  `json:"windowLimitPath,omitempty"`
+	WindowUsedPath                 string                  `json:"windowUsedPath,omitempty"`
+	WindowRemainingPath            string                  `json:"windowRemainingPath,omitempty"`
+	QuotaWindowName                string                  `json:"quotaWindowName,omitempty"`
+	QuotaWindowKind                string                  `json:"quotaWindowKind,omitempty"`
+	QuotaCodes                     []string                `json:"quotaCodes,omitempty"`
+	QuotaTypes                     []string                `json:"quotaTypes,omitempty"`
+	QuotaStatuses                  []string                `json:"quotaStatuses,omitempty"`
+	QuotaHTTPStatuses              []int                   `json:"quotaHTTPStatuses,omitempty"`
+	QuotaMessageTokens             []string                `json:"quotaMessageTokens,omitempty"`
+	ScopeSignals                   []HTTPJSONScopeSignal   `json:"scopeSignals,omitempty"`
+	LimitHeaders                   []HTTPHeaderLimitSignal `json:"limitHeaders,omitempty"`
+	AuthRecoverySignals            []HTTPJSONErrorSignal   `json:"authRecoverySignals,omitempty"`
+	ContinuityResetSignals         []HTTPJSONErrorSignal   `json:"continuityResetSignals,omitempty"`
+	ResponseContinuityResetSignals []HTTPJSONErrorSignal   `json:"responseContinuityResetSignals,omitempty"`
 }
 
 // HTTPJSONErrorSignal declares structured evidence. Selectors are conjunctive;
@@ -152,7 +153,7 @@ func (o ErrorClassifierOptions) Empty() bool {
 }
 
 func (o HTTPJSONErrorClassifierOptions) Empty() bool {
-	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0 && len(o.ScopeSignals) == 0 && len(o.LimitHeaders) == 0 && len(o.AuthRecoverySignals) == 0 && len(o.ContinuityResetSignals) == 0
+	return o.DefaultScope == "" && o.AuthScope == "" && o.QuotaScope == "" && o.RateLimitScope == "" && o.CapacityScope == "" && o.CodePath == "" && o.TypePath == "" && o.StatusPath == "" && o.MessagePath == "" && o.ResetAtPath == "" && o.RetryAfterPath == "" && o.RetryDelayPath == "" && o.WindowNamePath == "" && o.WindowLimitPath == "" && o.WindowUsedPath == "" && o.WindowRemainingPath == "" && o.QuotaWindowName == "" && o.QuotaWindowKind == "" && len(o.QuotaCodes) == 0 && len(o.QuotaTypes) == 0 && len(o.QuotaStatuses) == 0 && len(o.QuotaHTTPStatuses) == 0 && len(o.QuotaMessageTokens) == 0 && len(o.ScopeSignals) == 0 && len(o.LimitHeaders) == 0 && len(o.AuthRecoverySignals) == 0 && len(o.ContinuityResetSignals) == 0 && len(o.ResponseContinuityResetSignals) == 0
 }
 
 func (o HTTPJSONErrorClassifierOptions) Validate() error {
@@ -160,6 +161,9 @@ func (o HTTPJSONErrorClassifierOptions) Validate() error {
 		return err
 	}
 	if err := validateHTTPContinuityResetSignals(o.ContinuityResetSignals); err != nil {
+		return err
+	}
+	if err := validateHTTPResponseContinuityResetSignals(o.ResponseContinuityResetSignals); err != nil {
 		return err
 	}
 	for name, scope := range map[string]kernel.OutcomeScope{
@@ -709,7 +713,7 @@ type RuntimeModule interface {
 	Register(*RuntimeRegistry) error
 }
 
-const RuntimeModuleHostContractVersion uint64 = 8
+const RuntimeModuleHostContractVersion uint64 = 9
 
 type RuntimeModuleFunc struct {
 	Name                string
@@ -1722,10 +1726,18 @@ func (r *RuntimeRegistry) ErrorClassifiersForBindings(bindings map[string]Runtim
 
 func adaptErrorClassifier(classifier ErrorClassifier) kernel.ErrorClassifier {
 	adapter := classifierAdapter{classifier}
-	if rich, ok := classifier.(kernel.OutcomeClassifier); ok {
+	rich, hasOutcome := classifier.(kernel.OutcomeClassifier)
+	response, hasResponse := classifier.(kernel.ResponseOutcomeClassifier)
+	switch {
+	case hasOutcome && hasResponse:
+		return combinedOutcomeClassifierAdapter{classifierAdapter: adapter, outcomeClassifier: rich, responseOutcomeClassifier: response}
+	case hasOutcome:
 		return outcomeClassifierAdapter{classifierAdapter: adapter, outcomeClassifier: rich}
+	case hasResponse:
+		return responseOutcomeClassifierAdapter{classifierAdapter: adapter, responseOutcomeClassifier: response}
+	default:
+		return adapter
 	}
-	return adapter
 }
 
 func (r *RuntimeRegistry) QuotaSources() map[extensions.Ref]QuotaSource {
@@ -1767,6 +1779,28 @@ type outcomeClassifierAdapter struct {
 
 func (c outcomeClassifierAdapter) ClassifyOutcome(status int, headers http.Header, body []byte) kernel.ClassifiedOutcome {
 	return c.outcomeClassifier.ClassifyOutcome(status, headers, body)
+}
+
+type responseOutcomeClassifierAdapter struct {
+	classifierAdapter
+	responseOutcomeClassifier kernel.ResponseOutcomeClassifier
+}
+
+func (c responseOutcomeClassifierAdapter) ClassifyResponseError(body []byte) kernel.ClassifiedOutcome {
+	return c.responseOutcomeClassifier.ClassifyResponseError(body)
+}
+
+type combinedOutcomeClassifierAdapter struct {
+	classifierAdapter
+	outcomeClassifier         kernel.OutcomeClassifier
+	responseOutcomeClassifier kernel.ResponseOutcomeClassifier
+}
+
+func (c combinedOutcomeClassifierAdapter) ClassifyOutcome(status int, headers http.Header, body []byte) kernel.ClassifiedOutcome {
+	return c.outcomeClassifier.ClassifyOutcome(status, headers, body)
+}
+func (c combinedOutcomeClassifierAdapter) ClassifyResponseError(body []byte) kernel.ClassifiedOutcome {
+	return c.responseOutcomeClassifier.ClassifyResponseError(body)
 }
 
 func NewPrimitiveRegistry() *PrimitiveRegistry {

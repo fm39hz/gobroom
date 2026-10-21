@@ -204,6 +204,12 @@ func httpJSONErrorOptionsSchema() (json.RawMessage, error) {
       "statuses":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},
       "fields":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","required":["path"],"properties":{"path":{"type":"string","pattern":"^/([^~]|~[01])*$"},"equals":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},"contains":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}}},"anyOf":[{"required":["equals"]},{"required":["contains"]}],"additionalProperties":false}}
     },"anyOf":[{"required":["codes"]},{"required":["types"]},{"required":["statuses"]},{"required":["fields"]}],"additionalProperties":false}},
+    "responseContinuityResetSignals":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{
+      "codes":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},
+      "types":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},
+      "statuses":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},
+      "fields":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","required":["path"],"properties":{"path":{"type":"string","pattern":"^/([^~]|~[01])*$"},"equals":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}},"contains":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"string","minLength":1}}},"anyOf":[{"required":["equals"]},{"required":["contains"]}],"additionalProperties":false}}
+    },"anyOf":[{"required":["codes"]},{"required":["types"]},{"required":["statuses"]},{"required":["fields"]}],"additionalProperties":false}},
     "limitHeaders":{"type":"array","items":{"type":"object","required":["name"],"anyOf":[
       {"required":["limitHeader"]},{"required":["usedHeader"]},{"required":["remainingHeader"]},{"required":["exhaustedStatusHeader"]},{"required":["resetHeader"]}
     ],"dependentRequired":{"exhaustedStatusHeader":["exhaustedStatusValues"],"exhaustedStatusValues":["exhaustedStatusHeader"]},"properties":{

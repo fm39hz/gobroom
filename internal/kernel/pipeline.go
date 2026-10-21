@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -313,6 +314,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	decodeHooks := hooks
 	decodeHooks.OnEvent = nil
 	decodeHooks.OnError = nil
+	decodeHooks.NormalizeProviderFailure = nil
 	decodeHooks.TransformResponse = nil
 	firstByte := false
 	signalFirstByte := func(at time.Time) {
@@ -429,6 +431,16 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	}
 	if sessionErr := privateSession.finish(hooks.OnSessionState, decodeErr == nil); decodeErr == nil && sessionErr != nil {
 		decodeErr = sessionErr
+	}
+	if decodeErr != nil && emitFailure == nil && ctx.Err() == nil && hooks.NormalizeProviderFailure != nil && (responseFailureOrigin(decodeErr) == ResponseFailureUnknown || responseFailureOrigin(decodeErr) == ResponseFailureProvider) {
+		var evidence *ProviderResponseError
+		if errors.As(decodeErr, &evidence) {
+			if !validProviderResponseError(evidence.data) || hooks.MaxEventBytes > 0 && int64(len(evidence.data)) > hooks.MaxEventBytes {
+				decodeErr = fmt.Errorf("provider response error evidence exceeds its contract")
+			} else if normalized := hooks.NormalizeProviderFailure(evidence); normalized != nil {
+				decodeErr = normalized
+			}
+		}
 	}
 	if decodeErr != nil {
 		decodeErr = WrapResponseFailure(ResponseFailureProvider, decodeErr)

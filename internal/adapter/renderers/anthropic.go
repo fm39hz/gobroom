@@ -82,24 +82,41 @@ type anthropicBlock struct {
 }
 
 type anthropicSession struct {
-	writer         http.ResponseWriter
-	status         int
-	model          string
-	messageID      string
-	streaming      bool
-	passthrough    bool
-	renderThinking bool
-	committed      bool
-	started        bool
-	finished       bool
-	stopReason     string
-	usage          kernel.UsageEvent
-	blocksByKey    map[string]*anthropicBlock
-	toolBlocksByID map[string]*anthropicBlock
-	blockOrder     []*anthropicBlock
+	writer          http.ResponseWriter
+	status          int
+	model           string
+	messageID       string
+	streaming       bool
+	passthrough     bool
+	renderThinking  bool
+	committed       bool
+	started         bool
+	finished        bool
+	stopReason      string
+	usage           kernel.UsageEvent
+	blocksByKey     map[string]*anthropicBlock
+	toolBlocksByID  map[string]*anthropicBlock
+	blockOrder      []*anthropicBlock
+	responseError   string
+	responseErrored bool
+	errorSent       bool
 }
 
 func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) error {
+	if event.Kind == kernel.EventResponseError {
+		if !s.responseErrored {
+			s.responseError = event.Error
+			s.responseErrored = true
+		}
+		if s.streaming && s.committed && !s.errorSent {
+			s.errorSent = true
+			return writeProtocolError(s.writer, normalize.FormatAnthropic, s.responseError)
+		}
+		return nil
+	}
+	if s.responseErrored {
+		return nil
+	}
 	if s.passthrough {
 		if event.Kind != kernel.EventRawFrame || event.WireFormat != normalize.FormatAnthropic {
 			return nil
@@ -243,8 +260,6 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 				s.stopReason = "end_turn"
 			}
 		}
-	case kernel.EventResponseError:
-		return fmt.Errorf("upstream response error: %s", event.Error)
 	}
 	return nil
 }
@@ -252,6 +267,9 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 func (s *anthropicSession) Finish(_ context.Context, decodeErr error) error {
 	if decodeErr != nil {
 		return decodeErr
+	}
+	if s.responseErrored {
+		return fmt.Errorf("upstream response error: %s", s.responseError)
 	}
 	if s.passthrough {
 		return nil
