@@ -265,13 +265,26 @@ func cloneResponseTransformSteps(steps []ResponseTransformPlanStep) []ResponseTr
 // ComposeCompatibilityPlan combines stage reports in execution order. A
 // missing report for a required facet is unknown and therefore rejected.
 func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPolicy) CompatibilityPlan {
-	byFacet := make(map[string][]FacetMapping)
+	totalMappings, totalLosses := 0, 0
+	for _, report := range reports {
+		totalMappings += len(report)
+		for _, mapping := range report {
+			totalLosses += len(mapping.Losses)
+		}
+	}
+	byFacet := make(map[string][]FacetMapping, totalMappings)
+	facetPathCapacity := make(map[string]int, totalMappings)
+	facetLossCapacity := make(map[string]int, totalMappings)
 	for _, report := range reports {
 		for _, mapping := range report {
 			if mapping.Facet == "" || !validFacetDisposition(mapping.Disposition) {
 				return unsupportedPlan("compatibility stage returned an invalid facet mapping")
 			}
-			byFacet[mapping.Facet] = append(byFacet[mapping.Facet], cloneFacetMapping(mapping))
+			// Keep stage reports read-only references while composing. The
+			// combined mapping takes ownership of paths and loss records below.
+			byFacet[mapping.Facet] = append(byFacet[mapping.Facet], mapping)
+			facetPathCapacity[mapping.Facet] += len(mapping.Paths)
+			facetLossCapacity[mapping.Facet] += len(mapping.Losses)
 		}
 	}
 
@@ -295,12 +308,24 @@ func ComposeCompatibilityPlan(reports [][]FacetMapping, policy CompatibilityPoli
 	ceilingAllowed := stringSet(policy.LossCeiling.Allow)
 	ceilingDenied := stringSet(policy.LossCeiling.Deny)
 	plan := CompatibilityPlan{Supported: true, Fidelity: FidelityNative}
+	if len(all) > 0 {
+		plan.Mappings = make([]FacetMapping, 0, len(all))
+	}
+	if totalLosses > 0 {
+		plan.Losses = make([]LossRecord, 0, totalLosses)
+	}
 	for _, facet := range facets {
 		stages := byFacet[facet]
 		if len(stages) == 0 {
 			stages = []FacetMapping{{Facet: facet, Disposition: FacetUnknown, Reason: "no extension declared support for this required facet"}}
 		}
 		combined := FacetMapping{Facet: facet, Disposition: FacetPreserved}
+		if capacity := facetPathCapacity[facet]; capacity > 0 {
+			combined.Paths = make([]string, 0, capacity)
+		}
+		if capacity := facetLossCapacity[facet]; capacity > 0 {
+			combined.Losses = make([]LossRecord, 0, capacity)
+		}
 		for _, stage := range stages {
 			combined.Paths = appendUnique(combined.Paths, stage.Paths...)
 			for _, loss := range stage.Losses {
@@ -644,14 +669,32 @@ func stringSet(values []string) map[string]bool {
 }
 
 func appendUnique(target []string, values ...string) []string {
-	seen := make(map[string]bool, len(target)+len(values))
-	for _, value := range target {
-		seen[value] = true
+	if len(target)+len(values) > 16 {
+		seen := make(map[string]bool, len(target)+len(values))
+		for _, value := range target {
+			seen[value] = true
+		}
+		for _, value := range values {
+			if value != "" && !seen[value] {
+				target = append(target, value)
+				seen[value] = true
+			}
+		}
+		return target
 	}
 	for _, value := range values {
-		if value != "" && !seen[value] {
+		if value == "" {
+			continue
+		}
+		found := false
+		for _, existing := range target {
+			if existing == value {
+				found = true
+				break
+			}
+		}
+		if !found {
 			target = append(target, value)
-			seen[value] = true
 		}
 	}
 	return target

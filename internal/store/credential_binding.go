@@ -21,7 +21,7 @@ func (b CredentialBinding) OperationalGeneration() string {
 // ConnectionCredentialBinding reads the current enabled binding for a
 // connection without selecting its secret.
 func (s *Store) ConnectionCredentialBinding(ctx context.Context, id string) (CredentialBinding, error) {
-	return readCredentialBinding(ctx, s.DB, id)
+	return scanCredentialBinding(s.runtime.credentialBinding.QueryRowContext(ctx, id))
 }
 
 type credentialBindingReader interface {
@@ -29,13 +29,12 @@ type credentialBindingReader interface {
 }
 
 func readCredentialBinding(ctx context.Context, reader credentialBindingReader, id string) (CredentialBinding, error) {
+	return scanCredentialBinding(reader.QueryRowContext(ctx, credentialBindingSQL, id))
+}
+
+func scanCredentialBinding(row *sql.Row) (CredentialBinding, error) {
 	var binding CredentialBinding
-	err := reader.QueryRowContext(ctx, `SELECT c.id,c.credential_type,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version
-FROM connections c
-JOIN connection_credential_revisions r ON r.connection_id=c.id
-JOIN connection_principals cp ON cp.connection_id=c.id
-JOIN provider_nodes p ON p.id=c.provider_node_id
-WHERE c.id=? AND c.enabled=1`, id).Scan(
+	err := row.Scan(
 		&binding.ID, &binding.Type, &binding.Revision, &binding.PrincipalGeneration,
 		&binding.Owner.ProviderNodeID, &binding.Owner.Definition.ID, &binding.Owner.Definition.ContractVersion,
 	)

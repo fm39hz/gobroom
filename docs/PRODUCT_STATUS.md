@@ -27,6 +27,23 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+A reproducible `make perf` baseline now exercises direct/proxy JSON/SSE, serial
+and parallel, with fresh fake-provider daemon state. Profiling identified SQL
+preparation and allocation costs. Fixed standard SQL statements retain fresh
+credential validation and atomic usage writes; health traversal uses allocation-
+free standard iterators; compatibility composition owns its output without
+redundant intermediate copies. No schema, loss, issuer or credential fence is
+skipped. Fixture allocated bytes fell about 12% JSON / 9% SSE; timing remains too
+noisy for a speedup claim. See [measurement scope](OPERATIONS.md#local-performance-baseline).
+
+This does not prove isolated RSS or tail latency and does not close M15.
+Full root regression/vet, three full store/runtime/kernel race runs and complete
+conformance passed. Installed acceptance follows installation. The auth evidence note
+was also reconciled with existing public-module/installed activation recovery,
+rather than creating a duplicate SG2 blocker.
+
+Previous integrated milestone:
+
 Anthropic and Gemini JSON/SSE decoders now use the same bounded private error
 and selected classifier contracts as OpenAI, with no kernel/dependency/host
 change. Explicit errors stop before raw error data or false success; known usage

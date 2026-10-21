@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -21,7 +22,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB      *sql.DB
+	runtime runtimeStatements
+}
 
 func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -34,6 +38,10 @@ func Open(path string) (*Store, error) {
 	s := &Store{DB: db}
 	if err := s.Migrate(); err != nil {
 		db.Close()
+		return nil, err
+	}
+	if err := s.prepareRuntimeStatements(); err != nil {
+		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
@@ -56,7 +64,7 @@ func withConnectionPragmas(path string) string {
 	return dsn + separator + "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=busy_timeout(5000)&_txlock=immediate"
 }
 
-func (s *Store) Close() error { return s.DB.Close() }
+func (s *Store) Close() error { return errors.Join(s.runtime.close(), s.DB.Close()) }
 
 func (s *Store) Migrate() error {
 	_, err := s.DB.Exec(`
@@ -1226,7 +1234,7 @@ func (s *Store) ConnectionCredential(nodeID string) (Credential, bool) {
 }
 
 func (s *Store) ConnectionCredentialByID(id string) (Credential, bool) {
-	row := s.DB.QueryRow(`SELECT c.id,c.credential_type,c.secret_ref,r.revision,cp.revision,p.id,p.definition_id,p.definition_contract_version FROM connections c JOIN connection_credential_revisions r ON r.connection_id=c.id JOIN connection_principals cp ON cp.connection_id=c.id JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, id)
+	row := s.runtime.credentialByID.QueryRow(id)
 	return scanCredential(row)
 }
 
@@ -1254,10 +1262,10 @@ func (s *Store) SaveUsageEvent(event kernel.UsageEvent) error {
 	if err != nil {
 		return fmt.Errorf("encode usage compatibility plan: %w", err)
 	}
-	if _, err = tx.Exec(`INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,latency_ms,input_tokens,output_tokens,estimated_cost,request_class,session_id,ttft_ms,output_tokens_per_second,compatibility_fidelity,compatibility_losses_json,compatibility_plan_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
+	if _, err = tx.Stmt(s.runtime.usageEvent).Exec(event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`INSERT INTO usage_daily(date_key,requests,prompt_tokens,completion_tokens,estimated_cost,updated_at) VALUES(?,1,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(date_key) DO UPDATE SET requests=requests+1,prompt_tokens=prompt_tokens+excluded.prompt_tokens,completion_tokens=completion_tokens+excluded.completion_tokens,estimated_cost=estimated_cost+excluded.estimated_cost,updated_at=CURRENT_TIMESTAMP`, dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
+	if _, err = tx.Stmt(s.runtime.usageDaily).Exec(dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
 		return err
 	}
 	return tx.Commit()

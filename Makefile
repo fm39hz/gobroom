@@ -4,8 +4,10 @@ VERSION  := $(shell git describe --tags --long --dirty --match 'v*' 2>/dev/null 
 LDFLAGS  := -s -w $(if $(VERSION),-X main.version=$(VERSION))
 REMOTE   := origin
 BRANCH   := master
+BENCHTIME ?= 1s
+BENCHCPU  ?= 1,4
 
-.PHONY: help build build-daemon build-all run run-daemon tui test test-conformance test-conformance-transform-boundaries test-external-provider-module test-model-workflow test-v race bench fmt vet install install-all clean reload status
+.PHONY: help build build-daemon build-all run run-daemon tui test test-conformance test-conformance-transform-boundaries test-external-provider-module test-model-workflow test-v race bench perf fmt vet install install-all clean reload status
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -42,6 +44,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/kernel ./internal/api ./internal/adapter/renderers -run 'ClientFailure|TypedClient|ContinuityFailure' -count=1
 	go test ./internal/kernel -run '^TestReplayWithKey' -count=1
 	go test ./internal/adapter/anthropic ./internal/adapter/gemini -run 'TerminalError|JSONTerminal' -count=1
+	go test ./internal/store ./internal/runtime ./internal/kernel -run 'PreparedRuntime|PreparedUsage|HealthKeys|OwnsNestedLossEvidence' -count=1
 	go test ./internal/daemon -run '^(TestCallbackIngress|TestProxiedHTTPS)' -count=1
 	go test ./internal/daemon -run '^(TestAuthorizationSetup|TestAuthorizationComposition)' -count=1
 	go test ./internal/tui -run '^(TestSetup|TestTUISetup|TestAuthCompletion|TestWipeSetup)' -count=1
@@ -175,6 +178,9 @@ race: ## race detector
 
 bench: ## benchmarks
 	go test ./... -bench=. -benchmem -run=^$$
+
+perf: ## local direct/proxy JSON/SSE baseline (BENCHTIME=1s BENCHCPU=1,4)
+	cd examples/external-provider-module && GOWORK=off go test -run '^$$' -bench '^BenchmarkOpenAIChatProxy$$' -benchmem -benchtime=$(BENCHTIME) -cpu=$(BENCHCPU) ./...
 
 fmt: ## gofmt all Go files
 	gofmt -w $$(find . -name '*.go' -not -path './tools/*')

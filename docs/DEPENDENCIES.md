@@ -47,6 +47,12 @@ dependency is needed for configured token-expiry envelopes.
 
 ## Adopt
 
+Performance baseline/optimizations reuse the standard Go benchmark runner,
+`runtime/pprof`, `iter.Seq` and `database/sql.Stmt`. Fixed statements cache SQL
+plans per physical connection, not credentials or authority results; live
+validation still queries the database. No load-generator, cache framework or
+profiling-service dependency is introduced.
+
 | Area | Library/tool | Version checked | Decision | Why |
 |---|---|---:|---|---|
 | SQLite driver | `modernc.org/sqlite` | `v1.59.0` | adopt | pure Go SQLite, no CGO requirement; replaces the current ad-hoc fallback risk |

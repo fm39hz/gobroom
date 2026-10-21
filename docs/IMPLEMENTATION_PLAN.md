@@ -655,6 +655,21 @@ update those milestones only against their own exit criteria. Secondary
 operation fixtures prove architecture without committing to ship every media
 product feature. No legacy compatibility path is retained during these changes.
 
+## Measured performance checkpoint
+
+`make perf` now runs the standard Go benchmark fixture against direct and daemon
+JSON/SSE endpoints, serially and with `RunParallel`. The 2026-10-21 CPU/heap
+profile identified SQLite prepare/parser work and allocations in health-key
+traversal and compatibility composition. Fixed `database/sql.Stmt` instances,
+standard `iter.Seq` traversal and owned planner preallocation reduce measured
+fixture allocated bytes about 12% JSON / 9% SSE without caching credentials or
+skipping schema, loss-policy or generation validation. Scope, numbers and
+rerun/profile commands live in [Operations](OPERATIONS.md#local-performance-baseline).
+
+This is an initial baseline, not the near-zero resource acceptance gate. Isolated
+idle/loaded RSS, sustained/streaming tail latency, larger catalogs and longer
+load/reload/cancellation tests remain required before a product-level claim.
+
 ## Architectural invariants
 
 1. **No SQLite on the request hot path for static route configuration.** Build

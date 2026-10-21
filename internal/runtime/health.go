@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"iter"
 	"sort"
 	"sync"
 	"time"
@@ -272,7 +273,7 @@ func (g *HealthGate) Usable(route kernel.Route, now time.Time) bool {
 			return false
 		}
 	}
-	for _, key := range healthKeys(route) {
+	for key := range healthKeys(route) {
 		state := g.scoped[key]
 		if state.Invalid || state.CooldownUntil.After(now) {
 			return false
@@ -293,7 +294,7 @@ func (g *HealthGate) Acquire(route kernel.Route, now time.Time) bool {
 		return false
 	}
 	acquired := make([]breakerKey, 0, 2)
-	for _, key := range healthKeys(route) {
+	for key := range healthKeys(route) {
 		state := g.scoped[key]
 		if state.Invalid || state.CooldownUntil.After(now) {
 			for _, acquiredKey := range acquired {
@@ -321,7 +322,7 @@ func (g *HealthGate) Release(route kernel.Route) {
 	if !g.generationCurrentLocked(route, kernel.ScopeRoute) {
 		return
 	}
-	for _, key := range healthKeys(route) {
+	for key := range healthKeys(route) {
 		delete(g.trials, key)
 	}
 }
@@ -411,7 +412,7 @@ func (g *HealthGate) ObserveOutcome(route kernel.Route, outcome kernel.Classifie
 	observer := g.observe
 	var recovered []HealthObservation
 	if outcome.Cause == kernel.CauseSuccess {
-		for _, trial := range healthKeys(route) {
+		for trial := range healthKeys(route) {
 			if trial == key || trial.lane != lane || !g.trials[trial] {
 				continue
 			}
@@ -519,7 +520,7 @@ func (g *HealthGate) resetScopeLane(route kernel.Route, scope kernel.OutcomeScop
 func (g *HealthGate) routeProjectionLocked(route kernel.Route) (RouteHealth, bool) {
 	var latest RouteHealth
 	blocked := false
-	for _, key := range healthKeys(route) {
+	for key := range healthKeys(route) {
 		if key.lane != HealthOperational {
 			continue
 		}
@@ -542,7 +543,7 @@ func (g *HealthGate) routeProjectionLocked(route kernel.Route) (RouteHealth, boo
 func (g *HealthGate) latestOperationalStateLocked(route kernel.Route) (RouteHealth, bool) {
 	var latest RouteHealth
 	found := false
-	for _, key := range healthKeys(route) {
+	for key := range healthKeys(route) {
 		if key.lane != HealthOperational {
 			continue
 		}
@@ -636,7 +637,7 @@ func (g *HealthGate) MarkSuccess(route kernel.Route) {
 	state.LastSuccess = now
 	g.scoped[key] = state
 	g.routes[route.ID] = state
-	for _, key := range healthKeys(route) {
+	for key := range healthKeys(route) {
 		delete(g.trials, key)
 	}
 	g.mu.Unlock()
@@ -838,18 +839,27 @@ func (g *HealthGate) laneGenerationCurrentLocked(route kernel.Route, scope kerne
 	return exists && current == laneGeneration(route, scope, lane)
 }
 
-func healthKeys(route kernel.Route) []breakerKey {
-	keys := []breakerKey{scopeKey(route), outcomeLaneKey(route, kernel.ScopeRoute, HealthAuthentication)}
-	if route.SessionOperationRef.ID != "" {
-		keys = append(keys, outcomeScopeKey(route, kernel.ScopeOperation), outcomeLaneKey(route, kernel.ScopeOperation, HealthAuthentication))
+func healthKeys(route kernel.Route) iter.Seq[breakerKey] {
+	return func(yield func(breakerKey) bool) {
+		if !yield(scopeKey(route)) || !yield(outcomeLaneKey(route, kernel.ScopeRoute, HealthAuthentication)) {
+			return
+		}
+		if route.SessionOperationRef.ID != "" {
+			if !yield(outcomeScopeKey(route, kernel.ScopeOperation)) || !yield(outcomeLaneKey(route, kernel.ScopeOperation, HealthAuthentication)) {
+				return
+			}
+		}
+		if route.CredentialID != "" {
+			if !yield(outcomeScopeKey(route, kernel.ScopeRouteConnection)) || !yield(outcomeScopeKey(route, kernel.ScopeConnection)) || !yield(outcomeLaneKey(route, kernel.ScopeRouteConnection, HealthAuthentication)) || !yield(outcomeLaneKey(route, kernel.ScopeConnection, HealthAuthentication)) {
+				return
+			}
+		}
+		if route.NodeID != "" {
+			if !yield(outcomeScopeKey(route, kernel.ScopeProvider)) || !yield(outcomeLaneKey(route, kernel.ScopeProvider, HealthAuthentication)) {
+				return
+			}
+		}
 	}
-	if route.CredentialID != "" {
-		keys = append(keys, outcomeScopeKey(route, kernel.ScopeRouteConnection), outcomeScopeKey(route, kernel.ScopeConnection), outcomeLaneKey(route, kernel.ScopeRouteConnection, HealthAuthentication), outcomeLaneKey(route, kernel.ScopeConnection, HealthAuthentication))
-	}
-	if route.NodeID != "" {
-		keys = append(keys, outcomeScopeKey(route, kernel.ScopeProvider), outcomeLaneKey(route, kernel.ScopeProvider, HealthAuthentication))
-	}
-	return keys
 }
 
 func healthKeyAppliesToRoute(key breakerKey, route kernel.Route) bool {

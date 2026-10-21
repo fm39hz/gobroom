@@ -292,3 +292,50 @@ Required proxy properties:
 An alternate storage backend is not currently claimed. SQLite remains the
 only tested repository implementation until a named backend has transaction,
 concurrency, migration and recovery tests.
+
+## Local performance baseline
+
+Run `make perf BENCHTIME=1s BENCHCPU=1,4`. This uses Go's benchmark runner,
+`ReportAllocs` and `RunParallel`, with a fake local upstream and fresh temporary
+daemon DB/socket. It checks JSON and SSE response content/completion and drains
+bodies. Setup is outside the child benchmark timer. Access-log output is
+discarded for the benchmark; internal logs, health and usage persistence remain
+active. No real provider or installed-service configuration is used.
+
+This is a combined-process baseline: generator, fake upstream and daemon all
+contribute to ns/op and allocated bytes. Parallel ns/op describes throughput,
+not per-request tail latency. It does not measure isolated daemon RSS, provider
+network latency, TTFT distribution or long-lived memory growth.
+
+An initial 2026-10-21 run on Linux/amd64, i7-6820HQ, `-benchtime=300ms -cpu=1,4`
+identified SQLite preparation, compatibility planning and health-key traversal
+as costs. After fixed `database/sql` prepared statements, planner allocation
+reduction and standard `iter.Seq` traversal, CPU1 measurements were:
+
+| Fixture | Before µs/op | After µs/op | Before B/op | After B/op |
+|---|---:|---:|---:|---:|
+| JSON direct | 74 | 100 | 8,379 | 8,379 |
+| JSON proxy | 936 | 1,041 | 112,355 | 98,372 |
+| SSE direct | 81 | 193 | 10,307 | 10,307 |
+| SSE proxy | 1,140 | 996 | 149,773 | 135,566 |
+
+Allocated bytes fell about 12% for JSON and 9% for SSE in this fixture;
+allocations/request fell 1,277→1,242 and 1,806→1,770 respectively. Direct timing
+also varied substantially, so these short runs do not establish a latency
+speedup. Health-key traversal separately measured 0 B/op and 0 allocs/op.
+
+For a CPU/heap profile, run from `examples/external-provider-module`:
+
+```sh
+go test -run '^$' -bench '^BenchmarkOpenAIChatProxy/JSON/Proxy$' \
+  -benchmem -benchtime=2s -cpu=1 -cpuprofile=/tmp/gobroom-proxy.cpu \
+  -memprofile=/tmp/gobroom-proxy.mem -o /tmp/gobroom-proxy-profile.test .
+go tool pprof -top /tmp/gobroom-proxy-profile.test /tmp/gobroom-proxy.cpu
+go tool pprof -top -alloc_space /tmp/gobroom-proxy-profile.test /tmp/gobroom-proxy.mem
+```
+
+Profiles contain only fixture data, but heap profiles include startup and
+calibration allocations too. Keep workload, build, CPU setting and logging
+policy fixed when comparing. Do not call the product “nearly invisible” from
+these numbers: isolated idle/loaded RSS, tail latency and longer load tests remain
+separate acceptance work.

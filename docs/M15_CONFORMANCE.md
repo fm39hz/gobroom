@@ -39,9 +39,11 @@ after replacement/mode/disable/removal. `TestCredentialRevisionRejectsStaleCompa
 uses durable revisions to reject A → B → A, same-secret resaves, disable/enable
 and same-ID recreation; revision rotation/persistence and canceled SQL CAS have
 separate tests. This strengthens SG2's setup/refresh generation contract, not
-live OAuth-provider coverage. Post-commit reload/health reconciliation failures
-still need explicit operational acceptance; a durable credential is not rolled
-back by that failure.
+live OAuth-provider coverage. Post-commit reset/publication/version failures now
+have the root and public-module acceptance described below, including installed
+retry/restart recovery in `TestExternalCredentialRefreshActivationRetryAndRestartRecovery`.
+A durable credential is not rolled back by a later reconciliation failure; this
+evidence does not establish universal auth/provider coverage.
 
 `TestOAuthAuthRefreshesAgainstTokenEndpoint` covers explicit refresh when the
 rejected access token is expired, still within its recorded lifetime, or has no
@@ -478,6 +480,21 @@ coverage than its assertions provide.
 See the [implementation roadmap](IMPLEMENTATION_PLAN.md) for ordered slices.
 Vendor completeness and measured resource/latency performance remain separate
 gates even after semantic closure passes.
+
+### Performance-preserving correctness evidence
+
+`TestPreparedRuntimeStatementsKeepLiveCredentialAuthority` proves prepared SQL
+still observes replacement/disable and caller cancellation. The companion usage
+test keeps event/daily aggregation atomic on trigger failure, works with one
+pooled connection and rejects writes after Close. Health-key fixtures retain
+all scope/lane combinations, order and early stop; their standard benchmark
+reports zero allocations. `TestComposeCompatibilityPlanOwnsNestedLossEvidence`
+mutates input/output nested losses to prove preallocation/read-only intermediate
+views do not alias the owned plan. The independent benchmark fixture validates
+JSON/SSE content/completion and bounded concurrency through the public daemon.
+Root regression/vet and three full store/runtime/kernel race runs passed.
+Full conformance passed; installed acceptance follows installation. These are correctness
+and fixture measurements, not isolated RSS or latency acceptance.
 
 ### Non-OpenAI terminal-envelope evidence
 
