@@ -604,6 +604,14 @@ Request and response module fixtures exercise the standard daemon execution
 path, not an alternate transform test engine. Passing this checklist establishes
 the stated generic SG5 boundaries, not live-provider or full M15 parity.
 
+Verified checkpoint `5aab43c`: full regression/vet/conformance, updated focused
+boundary target, three full kernel/normalizer/renderer race runs and three
+external request/content/response lifecycle race runs passed. After
+`make install-all`, those external fixtures passed three further race runs
+with installed CLI CRUD. Main control=serving=493; bundle-v9 validation passed.
+This closes the finite generic SG5 checklist above. Other semantic gates and
+the full C1–C6/M15 completion audit remain independent.
+
 ### SG6 finite boundary evidence
 
 The local production built-ins/manifests currently contain no scoped-key replay

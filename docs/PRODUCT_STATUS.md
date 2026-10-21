@@ -36,6 +36,16 @@ renderer without provider-name checks. Existing SDK event contracts are
 exported directly. SG5 acceptance is now a finite core checklist; broad live
 provider/harness coverage and full M15 remain separate gates.
 
+Installed checkpoint `5aab43c`: full regression/vet/conformance and the updated
+focused boundary target passed. Three full kernel/normalizer/renderer race
+runs and three external-module transform lifecycle race runs passed. After
+`make install-all`, all three external lifecycle fixtures passed three more
+race runs using installed CLI binding CRUD. Main daemon was `ok`,
+control=serving=493; secret-free bundle v9 export/validation passed. The stated
+finite SG5 core checklist is verified; no new dependencies or live-provider
+calls were needed, and real config/credentials were preserved. SG1–SG4/SG7,
+full C1–C6/M15 audit and product resource-target acceptance remain open.
+
 Previous integrated milestone:
 
 Public transform configuration now reaches the same daemon path from an

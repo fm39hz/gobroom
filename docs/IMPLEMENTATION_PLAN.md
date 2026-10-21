@@ -673,6 +673,15 @@ existing clone helpers; they do not introduce a second transform engine,
 provider-specific kernel branches, new dependencies or a compatibility path.
 Full C1–C6/M15 acceptance and the product-level performance gate remain separate.
 
+Verified `5aab43c`: full regression/vet/conformance, focused boundary target and
+three full kernel/normalizer/renderer race runs passed. Three external transform
+lifecycle race runs passed before install and three more after
+`make install-all` with installed CLI CRUD. Main control=serving=493 and valid
+bundle v9. The finite generic SG5 checklist is verified; continue with explicit
+remaining SG1–SG4/SG7 requirements and the C1–C6 audit, rather than reopening
+an undefined transform matrix. Live-provider feature breadth and isolated
+RSS/tail-latency acceptance are not inferred from these deterministic fixtures.
+
 ## Measured performance checkpoint
 
 `make perf` now runs the standard Go benchmark fixture against direct and daemon
