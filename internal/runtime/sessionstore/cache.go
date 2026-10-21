@@ -13,6 +13,9 @@ import (
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
+// Repository owns persisted principal/endpoint authority validation. Cache
+// independently enforces state validity, TTL, entry bounds and copy ownership;
+// it does not rely on a backend's row ordering or limit for those invariants.
 type Repository interface {
 	ProviderSessions() ([]store.ProviderSession, error)
 	SaveProviderSession(store.ProviderSession) error
@@ -62,24 +65,7 @@ func New(repository Repository) (*Cache, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load provider sessions: %w", err)
 	}
-	now := time.Now()
-	for _, row := range rows {
-		if row.ConnectionID == "" || row.Namespace == "" || row.SessionKey == "" {
-			continue
-		}
-		if _, err := kernel.DecodeSessionStoreNamespace(row.Namespace); err != nil {
-			continue
-		}
-		if row.State.ResponseID == "" && len(row.State.ProviderData) == 0 && len(row.State.Signatures) == 0 {
-			continue
-		}
-		if !row.State.ExpiresAt.IsZero() && !row.State.ExpiresAt.After(now) {
-			continue
-		}
-		c.version++
-		row.State.StoreVersion = c.version
-		c.entries[key{connectionID: row.ConnectionID, namespace: row.Namespace, sessionID: row.SessionKey}] = entry{state: clone(row.State), updatedAt: now}
-	}
+	c.preload(rows, time.Now())
 	return c, nil
 }
 

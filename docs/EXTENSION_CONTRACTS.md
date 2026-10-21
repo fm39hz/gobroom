@@ -297,6 +297,14 @@ updates cannot publish usable continuation. Nonempty fields merge; a completely
 empty state explicitly clears all prior response IDs, opaque data and proofs.
 `ExpiresAt` limits provider continuity and is capped by the store TTL. The
 kernel persists only successful attempts after response rendering completes.
+Durable preload applies the same state validation and TTL ceiling, anchored to
+persisted `LastUsedAt`, not daemon restart time. Missing/invalid or future
+timestamps and missing/expired expiry produce unknown state. Earlier provider
+expiry is retained. The cache independently retains at most 16,384 newest
+unique scoped entries and clones selected payloads, even when an alternate
+repository supplies unordered or excessive rows. Repository implementations
+still own current principal/endpoint authority checks; cache validation does
+not replace that database fence.
 Classified HTTP rejection can invalidate continuity through
 `ClassifiedOutcome.ContinuityRecovery = invalidate`. The normalized contract is
 terminal, confirmed rejection, request scope, no credential recovery, no quota

@@ -26,6 +26,16 @@ notice and have an independent Gobroom fixture.
 
 ## Implementation map
 
+Session preload lesson: `internal/cache/bounded_lru.go` bounds process-local
+entries using the standard list package, and
+`internal/cache/antigravity_interactions_session.go` checks continuation expiry
+on read. They are internal, process-local caches, not a durable repository API
+to import. Gobroom uses its existing scoped session store and Go's
+`container/heap` for a bounded newest-entry preload selection. State validation,
+persisted-time TTL and copy ownership remain backend-independent; repository
+authority validation remains separate. No LRU or provider-specific cache is
+copied, and a restart cannot grant a fresh TTL to old persisted continuity.
+
 Streaming usage lesson: `internal/runtime/executor/openai_compat_executor.go`
 requests a final usage chunk for upstream accounting. The adjacent
 `../9router/open-sse/executors/iflow.js` also injects `include_usage`, while its
