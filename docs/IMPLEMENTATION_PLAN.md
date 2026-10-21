@@ -565,8 +565,8 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    fixture now executes both JSON and bounded multipart non-chat operations
    through module-owned ingress, assigned model, Physical/Combo graph, shared
    multipart provider codec, decoder and client renderer. Remaining: real
-   provider idempotency guarantees and broader
-   commit/cancellation/replay stress cases.
+   provider idempotency guarantees on future production opt-ins; the generic
+   commit/cancellation boundaries now have finite SG6 evidence.
    Scoped retry now requires a prepared replay factory instead of rerunning
    the semantic codec. The byte helper freezes encoded payload/headers and
    renews authorization through an independent body reader. Multipart retains
@@ -596,6 +596,18 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    different account can still be selected. Shared account/provider evidence
    remains broad. Comparable workload statistics and affinity are partitioned
    by operation/version, and CLI/TUI project the operation-level state.
+   SG6 final-dispatch/drain checkpoint (2026-10-21): cancellation inside final
+   live authority validation stops both initial and replay dispatch. Retention
+   is now checked after that potentially blocking validation; a virtual-time
+   regression reproduced duplicate dispatch before the fix. Accepted pre/post-
+   client-commit cancellation tests prove no retry/fallback, cleanup and failed
+   usage. An independent daemon module proves Stop cancels and drains a replay
+   factory that returns success late, never redispatches, and releases resources
+   for reopening. Root regression/vet and repeated core/module races passed;
+   this closes the finite generic SG6 boundary checklist, not real provider
+   retention guarantees or all of M15.
+   Full conformance passed; the shutdown fixture also proves the actual old
+   data listener can be rebound after cleanup. Installed acceptance follows.
 6. **C6 — integrated extension proof (in progress):** a separate Go module
    compiles against public provider/daemon APIs, adds an audio task/codec and
    versioned JSON/multipart ingress, loads its manifest, builds an assigned

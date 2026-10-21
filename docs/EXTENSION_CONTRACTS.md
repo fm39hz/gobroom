@@ -1152,14 +1152,26 @@ potentially duplicate upstream job.
 
 The replay window starts immediately before the first upstream dispatch, not
 at ingress or credential acquisition, and never resets on a retry. It is
-checked when choosing retry and again after request preparation/credential
-refresh before redispatch. At the retention boundary an ambiguous effect is
+checked when choosing retry and again after request preparation, credential
+refresh and final live lease validation before redispatch. Live validation may
+block; it must not reuse a retention decision made before that wait. At the
+retention boundary an ambiguous effect is
 reported without issuing another request or crossing providers. Cancellation
 is also checked after preparation, even if a codec returns success after
 ignoring its cancelled context. This is an invocation-local retry guarantee,
 not a durable cache of client keys across separate calls or daemon restarts.
 Reusing a client key after upstream retention expires is not protected by it.
 Do not activate this binding based merely on observing an accepted header.
+
+Cancellation during final authority validation is checked locally again before
+dispatch, even if the validator returns success late. After an accepted response,
+cancellation cannot start replay or cross issuers, before or after client commit;
+known usage remains failed/cancelled rather than successful. Graceful daemon
+shutdown cancels in-flight replay preparation and waits for it to drain before
+publishing completed cleanup. A late successful factory must not redispatch.
+Shutdown command acknowledgement is not cleanup completion: use Wait/Stop for
+the drain result. These are graceful ownership guarantees, not a sandbox for
+indefinitely uncooperative in-process extension code.
 For example, [Stripe's contract](https://docs.stripe.com/api/idempotent_requests)
 explicitly permits pruning keys after its documented minimum; this motivates
 an explicit bound, not a retention assumption for an AI provider.

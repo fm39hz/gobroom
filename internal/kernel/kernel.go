@@ -552,11 +552,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if dispatchErr == nil && idempotencyRetried && (upstream.Method != preparedMethod || upstream.URL != preparedURL || upstream.Headers.Get("Content-Type") != preparedMediaType) {
 				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("prepared replay changed its action or media framing")}
 			}
-			if dispatchErr == nil && idempotencyRetried && !idempotency.permitsReplay(firstDispatch, time.Now()) {
-				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("provider idempotency retention window expired before replay dispatch")}
-			}
 			if dispatchErr == nil {
 				dispatchErr = selectedLease.ValidateForDispatch(attemptCtx, CredentialLeaseScopeForRoute(candidate))
+			}
+			// Live authority validation can block. Check retention after it,
+			// immediately before dispatch, not against a stale pre-check time.
+			if dispatchErr == nil && idempotencyRetried && !idempotency.permitsReplay(firstDispatch, time.Now()) {
+				dispatchErr = &ReplaySuppressedError{Operation: requirements.Operation, Safety: string(replaySafety), Effect: EffectUnknown, Cause: fmt.Errorf("provider idempotency retention window expired before replay dispatch")}
 			}
 			if dispatchErr != nil {
 				if body, ok := upstream.Body.(io.Closer); ok {

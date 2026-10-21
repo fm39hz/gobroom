@@ -27,6 +27,24 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+The finite SG6 dispatch/cancellation/drain checklist is now exercised. Tests
+cover final live authority validation, accepted response before client commit,
+already committed output and daemon shutdown during frozen replay preparation.
+The retention test found a real gap: time could expire during live validation
+after the old retention check. Checking after validation now prevents the second
+dispatch. Cancellation never becomes a replay grant or successful usage; known
+provider usage is retained as cancelled. Shutdown drains late-returning replay
+work before cleanup completes and permits reopening the same DB/socket.
+
+Root regression/vet, three core replay race runs and three independent-module
+shutdown race runs passed, including rebinding the actual old data port.
+Full conformance passed; installed acceptance follows installation. Current
+production built-ins claim no keyed-idempotency guarantee;
+future opt-ins need provider evidence. Provider/harness breadth, catalog UX and
+measured latency/RSS remain open; generic SG6 evidence does not close M15.
+
+Previous integrated milestone:
+
 Client-visible error identity is now a bounded typed code/type/message value,
 separate from private provider evidence and replay policy. It survives standard
 Go error wrapping, HTTP executor projection and native/semantic streaming
