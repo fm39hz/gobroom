@@ -612,6 +612,35 @@ with installed CLI CRUD. Main control=serving=493; bundle-v9 validation passed.
 This closes the finite generic SG5 checklist above. Other semantic gates and
 the full C1–C6/M15 completion audit remain independent.
 
+### SG7 finite configuration and isolation checklist
+
+| Boundary | Executable evidence |
+|---|---|
+| Exact dependency and option validation | Catalog exact-ref/schema/factory, reachable-module build/host and closure tests; `TestConfigApplyRejectionsPreserveServingAndInflightRequests` adds actual IPC apply rejection for a missing module build, wrong host, unavailable transform version and schema-invalid transform options. |
+| Validation rejection is non-mutating | That daemon fixture compares independently exported persisted config and both control/serving versions after every rejection, while a real upstream SSE request remains open. The held request completes and new inference still uses the prior route. A subsequent valid update publishes normally. `GOBROOM_TEST_CLI` selects installed config export/apply. |
+| Accepted publication pins old requests | `TestSnapshotReloadDoesNotBlockStreamsAndPinsActiveRequests` retains old snapshots for both held requests while new requests use the replacement. Manager reload receipt tests distinguish load failure, successful publication and post-publication version persistence failure. |
+| Runtime privacy and portability | `TestConfigBundleExcludesLiveRuntimeState` seeds a valid, scoped provider session with opaque data/signature proof plus health/auth/quota/usage evidence. Typed config entities survive export/import, private source markers and runtime fields do not, and fresh target runtime tables remain empty. Interactive setup coordinator state is not an input to `ExportBundle`; this fixture does not pretend auth-health rows are interactive sessions. |
+| CLI JSON fidelity | `TestConfigCommandsPreserveLargeNumbers` checks validate/diff/apply keep exact option numbers and uint64-sized contract values through Unix IPC; malformed, null, array, trailing and oversized inputs are rejected before IPC. With `GOBROOM_TEST_CLI`, numeric round-trip uses the installed binary. |
+| Restart does not renew session authority | `TestCachePreload*` independently validates state, count, newest unique-key selection, earlier provider expiry and persisted-time TTL. Standard `testing/synctest` advances two hours without wall-clock waits and proves repeated preload cannot resurrect expired continuity. SQLite remains responsible for current principal/endpoint checks; this does not claim another database is shipped. |
+
+Validation rejection is distinct from a post-commit activation/publication
+failure. The latter follows the existing reload/activation receipt contract;
+these tests do not claim an impossible rollback of an already published
+snapshot or a multi-writer transaction across storage and active requests.
+Module algorithms, remote backends and full C1–C6 completion remain separate
+from these finite generic configuration boundaries.
+
+Shutdown retention evidence: `TestWorkerDrainsAcceptedEventsInOrderAfterClose`
+and `TestWorkerWaitsForInFlightSaveBeforeReturning` prove channel close/drain
+ownership. `TestDaemonStopDrainsAcceptedUsageBeforeClosingStore` accepts 128
+failed-usage events, stops the daemon and reopens SQLite to verify every row and
+its counters in order. The installed CLI switch uses actual shutdown/Wait.
+The existing public-module continuation fixture previously lost failed usage
+intermittently during restart because worker cancellation preceded drain and
+the daemon never joined it. The worker now consumes until producer close and
+the daemon waits before closing storage. This is not a durable usage spool,
+whole-drain deadline, or proof against storage write failure.
+
 ### SG6 finite boundary evidence
 
 The local production built-ins/manifests currently contain no scoped-key replay

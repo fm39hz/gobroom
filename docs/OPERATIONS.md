@@ -14,6 +14,14 @@ clients over the Unix IPC socket.
 | user service | `gobroomd.service` |
 
 The daemon flags are authoritative when a deployment needs different paths.
+Config stdin commands (`config-validate`, `config-diff`, `config-apply`) accept
+exactly one non-null JSON object, preserve numeric values without float64
+rounding, and cap raw input at 32 MiB. IPC independently caps the entire encoded
+envelope, so a near-limit document may exceed that transport limit after framing.
+Validation remains daemon-owned; invalid refs/options do not change stored or
+serving configuration. Post-commit activation failures follow their explicit
+receipts rather than pretending storage was rolled back.
+
 Route selection reads immutable snapshots. Credential issuance and the final
 dispatch revision fence read current SQLite state; the latter selects binding
 metadata without selecting secret material.

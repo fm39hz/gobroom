@@ -81,7 +81,6 @@ type Daemon struct {
 	policy               *runtimehealth.PolicyGate
 	quotaPersistence     *runtimehealth.QuotaSnapshotQueue
 	transformBindingsMu  sync.Mutex
-	usageCancel          context.CancelFunc
 	mu                   sync.Mutex
 	authorizationMu      sync.Mutex
 	authorizations       *authorizationSessions
@@ -488,9 +487,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	})
 	d.activationWake, d.activationDone = make(chan struct{}, 1), make(chan struct{})
 	go d.runCredentialActivations(ctx)
-	usageCtx, usageCancel := context.WithCancel(ctx)
-	d.usageCancel = usageCancel
-	go (usageworker.Worker{Store: s, Events: d.kernel.Events}).Run(usageCtx)
+	usageDone := make(chan struct{})
+	go func() {
+		defer close(usageDone)
+		(usageworker.Worker{Store: s, Events: d.kernel.Events}).Run()
+	}()
 	sessionDone := make(chan struct{})
 	go func() {
 		defer close(sessionDone)
@@ -503,12 +504,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 		d.authWG.Wait()
 		<-d.activationDone
 		d.closeAuthorizationCallbacks()
-		if d.usageCancel != nil {
-			d.usageCancel()
-		}
 		if d.kernel != nil {
 			d.kernel.Close()
 		}
+		<-usageDone
 		<-spoolReplayDone
 		healthQueue.Close()
 		<-sessionDone

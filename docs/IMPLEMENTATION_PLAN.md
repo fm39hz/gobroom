@@ -655,6 +655,29 @@ update those milestones only against their own exit criteria. Secondary
 operation fixtures prove architecture without committing to ship every media
 product feature. No legacy compatibility path is retained during these changes.
 
+## Configuration isolation and restart checkpoint
+
+The SG7 finite checklist now joins catalog/schema validation, config apply,
+persisted export, control/serving versions and active inference. Supported
+invalid dependency/ref/options cases reject before mutation; accepted reload
+pinning remains a separate verified boundary. A real-store privacy fixture
+preserves configuration while excluding valid live continuity/signature state
+and operational health/auth/quota/usage on fresh import.
+
+CLI validate/diff/apply now preserve exact numbers and enforce one bounded JSON
+object. Durable preload uses the standard heap, validates the selected state,
+keeps newest unique scoped rows, and caps provider expiry at persisted last-use
+plus TTL. The existing public-module expiry/reset fixture is reused rather
+than treating generic expiry as a new missing mechanism.
+
+Regression found and fixed a separate lifecycle defect: usage cancellation
+could discard buffered accepted events and race repository close. The daemon
+now closes the producer and joins the worker. Unit blocking-save and real
+128-row shutdown/reopen fixtures cover drain ownership. Still open operational
+work: whole-drain deadline under blocked storage and durable/reported handling
+of failed writes or admission overflow. Do not infer those guarantees from
+successful SQLite drain. Other semantic gates and C1–C6/M15 audit remain open.
+
 ## Transform ownership and lifecycle checkpoint
 
 The public SDK and CLI now expose the existing transform contracts and typed

@@ -40,6 +40,10 @@ test: test-external-provider-module ## unit and integration tests, including the
 
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./cmd/gobroom -run '^TestTransform' -count=1
+	go test ./cmd/gobroom -run '^Test(ConfigCommands|DecodeConfigInput)' -count=1
+	go test ./internal/runtime/sessionstore -run '^TestCachePreload' -count=1
+	go test ./internal/controlplane ./internal/daemon -run '^Test(ConfigBundleExcludes|ConfigApplyRejections)' -count=1
+	go test ./internal/usage ./internal/daemon -run '^Test(Worker|DaemonStopDrainsAcceptedUsage)' -count=1
 	go test ./internal/kernel ./internal/provider ./internal/runtime/sessionstore ./internal/api -run 'Continuity|Invalidate|SessionStoreVersion' -count=1
 	go test ./internal/kernel ./internal/provider ./internal/adapter/openai ./internal/adapter/renderers -run 'ProviderResponse|ResponseContinuity|TerminalError|ProviderErrors|HealthySSE|FailedJSON|Normalize' -count=1
 	go test ./internal/kernel ./internal/api ./internal/adapter/renderers -run 'ClientFailure|TypedClient|ContinuityFailure' -count=1

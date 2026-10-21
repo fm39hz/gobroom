@@ -27,6 +27,23 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Configuration isolation now has a joined control/serving fixture: invalid
+module/host/ref/options leave persisted config and both snapshot versions
+unchanged while an SSE request remains open; valid configuration remains usable
+after rejection. A populated store exports/imports only configuration, not
+live continuity/signature, health, auth, quota or usage state. CLI config stdin
+keeps exact JSON numbers. Session preload independently bounds newest scoped
+entries and anchors TTL to persisted last-use rather than restart.
+
+Full regression also exposed actual usage loss at daemon shutdown: cancellation
+stopped the worker before its buffered events were drained, and storage closed
+without joining it. Producer close now owns drain completion; a real daemon
+fixture verifies 128 accepted rows after SQLite reopen. This does not establish
+durability after failed writes, a whole-drain deadline, alternate database
+support or full M15 completion.
+
+Previous integrated milestone:
+
 Transform ownership guards now retain original artifact refs, deep-copy nested
 usage evidence, and protect operation ID/version together. A separate-module
 response fixture configures real JSON/SSE projection across updates/restart/
