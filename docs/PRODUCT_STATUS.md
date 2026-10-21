@@ -46,8 +46,16 @@ error recovery, provider-specific mappings, harness breadth and measured
 latency/RSS remain open. The single configured data-plane bearer is not a
 multi-tenant identity boundary. Full root regression, `go vet`, architecture
 conformance (including the full independent-module suite), and three focused
-kernel/cache/SQLite race runs passed. Installed acceptance follows installation;
-C2/SG1/M15 is not declared complete.
+kernel/cache/SQLite race runs passed. C2/SG1/M15 is not declared complete.
+
+Installed checkpoint `8165145`: `make install-all` completed and restarted the
+user service. The independent continuity vertical passed three additional race
+runs with `GOBROOM_TEST_CLI=/home/fm39hz/go/bin/gobroom`, using the installed
+`connections update` to replace the fixture account and observing isolation at
+the upstream endpoint. Main daemon status was `ok`, control=serving=484;
+config export → validate returned valid bundle v9. Real provider credentials
+and configuration were preserved. Unsupported disposable session cache rows
+are dropped rather than converted; no real-provider request was needed.
 
 Previous integrated milestone:
 

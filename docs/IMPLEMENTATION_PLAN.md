@@ -251,6 +251,9 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    endpoint replacement, and durable restart with three race runs. Real-provider
    expiry/reset mappings and classified continuity-error recovery remain
    implementation gates; this checkpoint does not close C2/SG1/M15.
+   Installed `8165145` passed three further independent-module race runs with
+   the real CLI account-update command; main daemon control=serving=484 and
+   bundle-v9 validation remained valid. Config and credentials were preserved.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

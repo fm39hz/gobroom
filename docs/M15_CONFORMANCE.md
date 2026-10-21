@@ -494,6 +494,12 @@ generic end-to-end expiry/reset extension seam, not the provider-specific SG1
 mapping/recovery cases listed above. Fixture headers are not a newly claimed
 OpenAI wire contract. The external vertical passed three race runs.
 
+Installed acceptance (`8165145`): after `make install-all`, execute
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom GOWORK=off go test -race ./... -run '^TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint$' -count=3`
+in `examples/external-provider-module`. This passed all three runs, including
+account replacement through the installed client; main daemon status and
+bundle-v9 validation remained healthy. No live provider was contacted.
+
 `TestExternalPrincipalRenewalPreservesOperationalHealthAndQuota` exercises an
 opaque custom credential through real HTTP rejection, refresh, activation and
 restart, retaining independent rate cooldown and exhausted quota without reset.
