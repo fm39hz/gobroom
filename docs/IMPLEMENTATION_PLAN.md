@@ -666,6 +666,12 @@ fixture allocated bytes about 12% JSON / 9% SSE without caching credentials or
 skipping schema, loss-policy or generation validation. Scope, numbers and
 rerun/profile commands live in [Operations](OPERATIONS.md#local-performance-baseline).
 
+Root regression/vet, three full store/runtime/kernel race runs and full
+conformance passed. Installed `2438b7d` passed three further module race runs
+with CLI status and activation retry/restart; main control=serving=491 and
+bundle-v9 validation remained valid. Real configuration and credentials were
+preserved; `make perf` was verified against fixture-only upstreams.
+
 This is an initial baseline, not the near-zero resource acceptance gate. Isolated
 idle/loaded RSS, sustained/streaming tail latency, larger catalogs and longer
 load/reload/cancellation tests remain required before a product-level claim.

@@ -493,8 +493,11 @@ mutates input/output nested losses to prove preallocation/read-only intermediate
 views do not alias the owned plan. The independent benchmark fixture validates
 JSON/SSE content/completion and bounded concurrency through the public daemon.
 Root regression/vet and three full store/runtime/kernel race runs passed.
-Full conformance passed; installed acceptance follows installation. These are correctness
-and fixture measurements, not isolated RSS or latency acceptance.
+Full conformance passed. Installed `2438b7d` then passed three independent-module
+race runs with the real CLI for the benchmark fixture and activation retry/
+restart vertical; main status was `ok`, control=serving=491, and bundle-v9
+validation passed. `make perf` was exercised too. These are correctness and
+fixture measurements, not isolated RSS or latency acceptance.
 
 ### Non-OpenAI terminal-envelope evidence
 

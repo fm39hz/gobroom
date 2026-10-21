@@ -38,9 +38,17 @@ noisy for a speedup claim. See [measurement scope](OPERATIONS.md#local-performan
 
 This does not prove isolated RSS or tail latency and does not close M15.
 Full root regression/vet, three full store/runtime/kernel race runs and complete
-conformance passed. Installed acceptance follows installation. The auth evidence note
+conformance passed. The auth evidence note
 was also reconciled with existing public-module/installed activation recovery,
 rather than creating a duplicate SG2 blocker.
+
+Installed checkpoint `2438b7d`: `make install-all` completed and restarted the
+user service. Three independent-module race runs with the installed CLI passed
+the benchmark JSON/SSE/concurrency fixture and credential activation retry/
+restart recovery. Main daemon status was `ok`, control=serving=491; export →
+validate returned valid bundle v9. `make perf BENCHTIME=200ms BENCHCPU=1` passed
+with response/completion validation. Real config/credentials were preserved and
+no live provider was called. Resource-target acceptance remains open.
 
 Previous integrated milestone:
 
