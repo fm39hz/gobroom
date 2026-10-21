@@ -114,6 +114,18 @@ Unlike a cancellation-detached persistence policy, Gobroom rejects late success
 before its commit boundary when the request or daemon context is canceled.
 Post-commit reconciliation errors remain observable and do not roll back tokens.
 
+Continuity isolation follow-up: Codex's
+`internal/runtime/executor/codex_executor_reasoning.go` keys replay by model and
+session. `claude_thinking_replay.go` additionally scopes its model-family key by
+auth identity (with endpoint/key fallbacks), while `xai_reasoning_replay.go`
+adds downstream caller identity to client-controlled session keys. These are
+different authority boundaries, not a cache implementation to copy. Gobroom
+reuses its exact refs, durable principal generation, existing decoder hook,
+standard JSON binding and SQLite transactions to isolate continuation by
+account, configured endpoint, operation and upstream model. No extra cache,
+codec or provider-specific session framework is imported. Its single-bearer
+data plane is not yet a multi-tenant caller identity system.
+
 Provider-state lesson: `sdk/cliproxy/auth/types.go` keeps arbitrary mutable
 account metadata (tokens/cookies/provider fields), rather than assuming all
 refresh results are a bearer token. Gobroom solves that preservation problem

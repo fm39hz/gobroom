@@ -308,7 +308,7 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if _, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('node-a','A','http://a','openai_chat','a'); INSERT INTO connections(id,provider_node_id,name,credential_type) VALUES('conn-a','node-a','A','api_key')`); err != nil {
+	if _, err := s.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix,definition_id) VALUES('node-a','A','http://a','openai_chat','a','openai'); INSERT INTO connections(id,provider_node_id,name,credential_type) VALUES('conn-a','node-a','A','api_key')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SaveConnectionRuntime(ConnectionRuntime{ConnectionID: "conn-a", Status: "cooldown", BackoffLevel: 2, LastError: "429"}); err != nil {
@@ -389,7 +389,13 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 	if err := s.SaveProviderExtension(ProviderExtension{ConnectionID: "conn-a", Namespace: "test", Data: map[string]any{"project": "p"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveProviderSession(ProviderSession{ConnectionID: "conn-a", Namespace: "gemini", SessionKey: "session-a", State: kernel.SessionState{ResponseID: "resp-a", ProviderData: json.RawMessage(`{"signature":"opaque"}`), ExpiresAt: time.Now().Add(time.Hour).UTC()}}); err != nil {
+	sessionRoute := providerSessionRoute(t, s, "conn-a")
+	sessionRoute.BaseURL = "http://a"
+	namespace, err := kernel.EncodeSessionStoreNamespace(sessionRoute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveProviderSession(ProviderSession{ConnectionID: "conn-a", Namespace: namespace, SessionKey: "session-a", State: kernel.SessionState{ResponseID: "resp-a", ProviderData: json.RawMessage(`{"signature":"opaque"}`), ExpiresAt: time.Now().Add(time.Hour).UTC()}}); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err := s.ProviderSessions()

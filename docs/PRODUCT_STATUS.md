@@ -1,6 +1,6 @@
 # Product progress
 
-Snapshot: 2026-10-20. This is a use-case-level review, not a completion
+Snapshot: 2026-10-21. This is a use-case-level review, not a completion
 percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
@@ -26,6 +26,30 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+Provider continuation now uses stable principal and configured-endpoint scope
+in addition to exact provider/operation refs, upstream model, connection and
+client session. Refresh preserves that scope; account or endpoint replacement
+does not inherit response IDs or private proofs. Decoder updates use the
+existing hook with private staging, explicit empty-state reset and provider
+expiry capped by the cache TTL. SQLite rejects stale queued writes in its write
+transaction and discards unsupported cache rows on preload; user configuration
+and credentials are preserved. Host contract v7 requires the new semantics.
+
+`TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint` exercises the
+public module/daemon API and Responses endpoint through decode failure,
+expiry/reset, auth recovery, principal/endpoint replacement and durable restart.
+It passed three race runs. These expiry/reset signals belong to a fixture
+decoder wrapping the registered Responses codec: they prove the extension seam,
+not undocumented real-provider wire behavior. Classified upstream continuity
+error recovery, provider-specific mappings, harness breadth and measured
+latency/RSS remain open. The single configured data-plane bearer is not a
+multi-tenant identity boundary. Full root regression, `go vet`, architecture
+conformance (including the full independent-module suite), and three focused
+kernel/cache/SQLite race runs passed. Installed acceptance follows installation;
+C2/SG1/M15 is not declared complete.
+
+Previous integrated milestone:
 
 Auth callbacks can now use an explicitly configured public HTTPS origin through
 a private loopback receiver and an external local TLS proxy. It is off by

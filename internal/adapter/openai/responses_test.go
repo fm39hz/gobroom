@@ -345,7 +345,7 @@ func TestKernelRestoresResponsesContinuityFromClientSession(t *testing.T) {
 		PublicModels: []kernel.PublicModel{{Name: "junior", TargetRef: "physical"}},
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
-			ID: "route", Enabled: true, DefinitionID: "openai", DefinitionRef: providerDefinitionRef, SessionOperationRef: chatOperationRef, CredentialID: "account", Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "},
+			ID: "route", Enabled: true, DefinitionID: "openai", DefinitionRef: providerDefinitionRef, SessionOperationRef: chatOperationRef, CredentialID: "account", HealthGeneration: kernel.RouteHealthGeneration{Connection: "principal-A"}, Protocol: kernel.ProtocolOpenAIResponses, CredentialPresentation: kernel.CredentialPresentation{Header: "Authorization", Prefix: "Bearer "},
 			BaseURL: "https://provider.test/v1", ExternalModel: "responses-model",
 			OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {
 				ContractVersion: 1, AdapterIDs: []string{"openai-responses"}, SessionStoreRef: sessionStoreRef,

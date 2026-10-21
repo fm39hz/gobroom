@@ -271,6 +271,20 @@ type CapabilityProfile = kernel.CapabilityProfile
 type TokenLimits = kernel.TokenLimits
 type SessionStore = kernel.SessionStore
 type SessionStoreKey = kernel.SessionStoreKey
+type SessionStoreNamespace = kernel.SessionStoreNamespace
+
+const SessionStoreNamespaceVersion = kernel.SessionStoreNamespaceVersion
+
+func SessionStoreNamespaceFor(route Route) (SessionStoreNamespace, error) {
+	return kernel.SessionStoreNamespaceFor(route)
+}
+func EncodeSessionStoreNamespace(route Route) (string, error) {
+	return kernel.EncodeSessionStoreNamespace(route)
+}
+func DecodeSessionStoreNamespace(raw string) (SessionStoreNamespace, error) {
+	return kernel.DecodeSessionStoreNamespace(raw)
+}
+
 type SessionState = kernel.SessionState
 type SignatureProof = kernel.SignatureProof
 

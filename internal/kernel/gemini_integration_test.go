@@ -97,6 +97,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 		kernel.CapabilityTools: {State: kernel.SupportNative},
 	}
 	route := kernel.Route{ID: "gemini:gemini-3-flash", NodeID: "gemini-node", DefinitionID: "gemini", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1}, SessionOperationRef: extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}, Protocol: kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, OperationBindings: map[normalize.Operation]kernel.RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{binding.AdapterID}, SessionStoreRef: binding.SessionStoreRef}}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection", Profile: profile, Enabled: true}
+	route.HealthGeneration.Connection = "principal-gemini"
 	snapshot, err := kernel.BuildSnapshot(kernel.SnapshotInput{
 		PublicModels: []kernel.PublicModel{{Name: "assistant-role", TargetRef: "assistant-role"}},
 		Routes:       []kernel.Route{route},
@@ -300,8 +301,9 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 		Nodes:        []kernel.ModelNode{{ID: "physical", Kind: kernel.ModelPhysical, Strategy: kernel.StrategyFallback, Members: []kernel.MemberRef{{Kind: kernel.MemberRoute, ID: "gemini-route", Fidelity: kernel.FidelityExact}}}},
 		Routes: []kernel.Route{{
 			ID: "gemini-route", NodeID: "gemini-node", DefinitionID: "gemini",
-			DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1},
-			Protocol:      kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection",
+			HealthGeneration: kernel.RouteHealthGeneration{Connection: "principal-gemini"},
+			DefinitionRef:    extensions.Ref{Kind: "provider-definition", ID: "gemini", ContractVersion: 1},
+			Protocol:         kernel.ProtocolGemini, CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}, BaseURL: upstream.URL + "/v1beta", ExternalModel: "gemini-3-flash", CredentialID: "gemini-connection",
 			Profile: kernel.CapabilityProfile{
 				kernel.CapabilityTools:  {State: kernel.SupportNative},
 				kernel.CapabilityVision: {State: kernel.SupportNative},

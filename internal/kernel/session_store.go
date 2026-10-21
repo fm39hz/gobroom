@@ -17,6 +17,8 @@ type SessionStoreKey struct {
 	OperationRef          string
 	PhysicalModelID       string
 	ClientSessionID       string
+	PrincipalGeneration   string
+	Endpoint              string
 }
 
 // MemorySessionStore is the default ephemeral implementation. Daemons can
@@ -97,8 +99,8 @@ func ValidateSessionState(state SessionState) error {
 }
 
 func SessionStoreKeyFor(route Route, sessionID string) (SessionStoreKey, error) {
-	if route.CredentialID == "" || route.ExternalModel == "" || sessionID == "" {
-		return SessionStoreKey{}, fmt.Errorf("connection, physical source model and session IDs are required")
+	if route.CredentialID == "" || route.ExternalModel == "" || sessionID == "" || route.HealthGeneration.Connection == "" {
+		return SessionStoreKey{}, fmt.Errorf("connection, principal generation, physical source model and session IDs are required")
 	}
 	if err := route.DefinitionRef.Validate(); err != nil {
 		return SessionStoreKey{}, fmt.Errorf("provider session requires an exact provider definition reference: %w", err)
@@ -109,7 +111,7 @@ func SessionStoreKeyFor(route Route, sessionID string) (SessionStoreKey, error) 
 	if err := route.SessionOperationRef.Validate(); err != nil || route.SessionOperationRef.Kind != "operation" {
 		return SessionStoreKey{}, fmt.Errorf("provider session requires an exact operation reference")
 	}
-	return SessionStoreKey{ConnectionID: route.CredentialID, ProviderDefinitionRef: route.DefinitionRef.Key(), OperationRef: route.SessionOperationRef.Key(), PhysicalModelID: route.ExternalModel, ClientSessionID: sessionID}, nil
+	return SessionStoreKey{ConnectionID: route.CredentialID, ProviderDefinitionRef: route.DefinitionRef.Key(), OperationRef: route.SessionOperationRef.Key(), PhysicalModelID: route.ExternalModel, ClientSessionID: sessionID, PrincipalGeneration: route.HealthGeneration.Connection, Endpoint: route.BaseURL}, nil
 }
 
 func cloneSessionState(state SessionState) SessionState {

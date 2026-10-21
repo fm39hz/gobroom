@@ -615,7 +615,9 @@ type SessionState struct {
 
 // SessionStore contains opaque continuation state. Implementations must key
 // entries with SessionStoreKeyFor so state cannot cross connection, exact
-// provider-definition, exact operation, physical-model or client-session scope.
+// provider-definition, exact operation, principal, endpoint realm,
+// physical-model or client-session scope. Credential renewal is not a new
+// principal and must not change this scope.
 type SessionStore interface {
 	ID() string
 	Load(context.Context, Route, string) (SessionState, bool, error)

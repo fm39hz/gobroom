@@ -11,17 +11,36 @@ import (
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
+type cacheFixtureRepository struct{ rows []store.ProviderSession }
+
+func (r *cacheFixtureRepository) ProviderSessions() ([]store.ProviderSession, error) {
+	return r.rows, nil
+}
+func (*cacheFixtureRepository) SaveProviderSession(store.ProviderSession) error       { return nil }
+func (*cacheFixtureRepository) PruneExpiredProviderSessions(time.Time) (int64, error) { return 0, nil }
+
+func TestCacheDropsUnsupportedNamespaceFromRepository(t *testing.T) {
+	repository := &cacheFixtureRepository{rows: []store.ProviderSession{{ConnectionID: "account", Namespace: `{"definitionId":"legacy"}`, SessionKey: "session", State: kernel.SessionState{ResponseID: "legacy"}}}}
+	cache, err := New(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cache.entries) != 0 {
+		t.Fatalf("unsupported namespace was preloaded: %#v", cache.entries)
+	}
+}
+
 func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 	db, err := store.Open(t.TempDir() + "/sessions.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix) VALUES('node','Provider','https://provider.test','openai_responses','provider'); INSERT INTO connections(id,provider_node_id,name,credential_type) VALUES('account','node','Account','api_key')`); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO provider_nodes(id,name,base_url,protocol,prefix,definition_id,definition_contract_version) VALUES('node','Provider','https://provider.test','openai_responses','provider','openai-compatible-responses',1); INSERT INTO connections(id,provider_node_id,name,credential_type) VALUES('account','node','Account','api_key')`); err != nil {
 		t.Fatal(err)
 	}
 	legacyExpiry := time.Now().Add(time.Hour).UTC()
-	if err := db.SaveProviderSession(store.ProviderSession{ConnectionID: "account", Namespace: `{"definitionId":"openai-compatible-responses","modelId":"gpt-model"}`, SessionKey: "legacy-session", State: kernel.SessionState{ResponseID: "legacy-response", ExpiresAt: legacyExpiry}}); err != nil {
+	if _, err := db.DB.Exec(`INSERT INTO provider_sessions(connection_id,namespace,session_key,state_json,expires_at) VALUES(?,?,?,?,?)`, "account", `{"definitionId":"openai-compatible-responses","modelId":"gpt-model"}`, "legacy-session", `{"responseId":"legacy-response"}`, legacyExpiry.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	cache, err := New(db)
@@ -38,7 +57,11 @@ func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 		defer close(done)
 		cache.Run(ctx)
 	}()
-	route := kernel.Route{DefinitionID: "openai-compatible-responses", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "openai-compatible-responses", ContractVersion: 1}, SessionOperationRef: extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}, ExternalModel: "gpt-model", CredentialID: "account"}
+	credential, ok := db.ConnectionCredentialByID("account")
+	if !ok {
+		t.Fatal("connection credential unavailable")
+	}
+	route := kernel.Route{DefinitionID: "openai-compatible-responses", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "openai-compatible-responses", ContractVersion: 1}, SessionOperationRef: extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}, ExternalModel: "gpt-model", CredentialID: "account", BaseURL: "https://provider.test", HealthGeneration: kernel.RouteHealthGeneration{Connection: credential.OperationalGeneration()}}
 	providerExpiry := time.Now().Add(time.Hour).UTC()
 	proofRequest := normalize.Request{Prompt: normalize.PromptPlan{Layers: []normalize.PromptLayer{{Origin: normalize.PromptHarness, Text: "system"}}}, Messages: []normalize.Message{{Role: "user", Content: "turn"}}, Tools: []normalize.Tool{{Type: "function", Name: "lookup"}}}
 	proofContext, err := kernel.SignatureContextDigest(proofRequest, len(proofRequest.Messages))
@@ -82,7 +105,7 @@ func TestCachePersistsSessionStateOffTheReadPath(t *testing.T) {
 	for _, row := range rows {
 		persistedExpiries[row.State.ResponseID] = row.State.ExpiresAt
 	}
-	if err != nil || len(rows) != 4 || !persistedExpiries["resp_1"].Equal(providerExpiry) || !persistedExpiries["resp_2"].Equal(bounded.ExpiresAt) || !persistedExpiries["legacy-response"].Equal(legacyExpiry) {
+	if err != nil || len(rows) != 3 || !persistedExpiries["resp_1"].Equal(providerExpiry) || !persistedExpiries["resp_2"].Equal(bounded.ExpiresAt) {
 		t.Fatalf("persisted=%#v err=%v", rows, err)
 	}
 	reloaded, err := New(db)

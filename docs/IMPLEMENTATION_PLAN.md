@@ -240,6 +240,17 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    compatibility planner without strategy-state mutation, credential lookup
    or upstream dispatch; CLI accepts a JSON file or stdin. Remaining: close
    the full SG1/SG4 matrices and transform fallback accounting.
+
+   Continuity scope checkpoint (2026-10-21): host-v7 session stores include
+   stable principal and configured endpoint alongside the exact provider and
+   operation refs, upstream model and client session. Existing decoder hooks
+   stage private updates, propagate expiry and explicit reset, and reject failed
+   decoder state. Transactional SQLite writes fence replaced authorities;
+   unsupported cache namespaces are discarded, not adapted. The independent
+   module Responses fixture covers failure/expiry/reset, renewal, account and
+   endpoint replacement, and durable restart with three race runs. Real-provider
+   expiry/reset mappings and classified continuity-error recovery remain
+   implementation gates; this checkpoint does not close C2/SG1/M15.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

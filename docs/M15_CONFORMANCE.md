@@ -481,6 +481,19 @@ gates even after semantic closure passes.
 
 ### Renewal/principal continuity evidence
 
+Provider continuation scope (2026-10-21, host contract v7):
+`TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint` wraps the
+registered Responses decoder using only the public catalog API, then drives
+real ingress, credential recovery and durable restart. It proves failed-decode
+rollback, expiry, explicit empty reset, renewal retention and principal/endpoint
+isolation. `TestProviderSessionScopeAndAuthority` rejects queued stale-principal
+writes while permitting renewal; stale endpoint and unsupported namespaces are
+purged by separate store tests. Namespace and private collector tests cover
+strict JSON binding, copying, cancellation and late callbacks. This closes the
+generic end-to-end expiry/reset extension seam, not the provider-specific SG1
+mapping/recovery cases listed above. Fixture headers are not a newly claimed
+OpenAI wire contract. The external vertical passed three race runs.
+
 `TestExternalPrincipalRenewalPreservesOperationalHealthAndQuota` exercises an
 opaque custom credential through real HTTP rejection, refresh, activation and
 restart, retaining independent rate cooldown and exhausted quota without reset.

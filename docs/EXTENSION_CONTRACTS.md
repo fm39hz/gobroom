@@ -273,9 +273,34 @@ operation contract versions are part of that isolation boundary.
 
 Session-store implementations must derive their namespace with
 `provider.SessionStoreKeyFor` (or the kernel equivalent). The exact isolation
-key includes connection ID, provider-definition ref/version, operation
-ref/version, physical upstream model and client session ID. A store must not
-broaden that scope to a shared tool-call ID or client session alone.
+key includes connection ID, stable principal generation, provider-definition
+ref/version, operation ref/version, physical upstream model, configured endpoint
+and client session ID. Renewal changes credential material, not principal
+identity; replacing an account must not inherit its predecessor's response IDs,
+provider data or signature proofs. An empty endpoint denotes the selected exact
+definition's default endpoint, not a wildcard matching configured endpoints.
+A store must not broaden this scope to a shared tool-call ID or client session
+alone. The current data plane has one configured bearer/security domain, not a
+multi-tenant identity system. Independently authenticated consumers will need
+caller-scoped conversation ownership before sharing a session store.
+
+Durable implementations use the typed `provider.SessionStoreNamespace` codec,
+not a delimiter-built key. SQLite verifies the live principal, definition and
+configured endpoint within the write transaction, so queued writes from a
+replaced account cannot recreate usable continuity. Preload discards unsupported
+or stale namespaces instead of adapting pre-release state. Credentials and
+provider/model/Combo configuration are not part of this disposable cache.
+
+Decoders publish private state using the existing `StreamHooks.OnSessionState`.
+Updates are staged until decoding succeeds; invalid, failed or late decoder
+updates cannot publish usable continuation. Nonempty fields merge; a completely
+empty state explicitly clears all prior response IDs, opaque data and proofs.
+`ExpiresAt` limits provider continuity and is capped by the store TTL. The
+kernel persists only successful attempts after response rendering completes.
+This does not authorize retrying an expired upstream response reference or
+replaying a committed stream: classified continuity-error recovery remains a
+separate policy/implementation gate. Module host contract v7 requires these
+scope/reset semantics; no old-host adapter is retained.
 Renderers declare support for the operation's possible event families,
 including errors and completion. Unexpected required events are protocol
 errors, never silently dropped. Non-stream aggregation consumes this same

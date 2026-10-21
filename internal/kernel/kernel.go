@@ -386,6 +386,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			sessionKey := requestSessionKey(req)
 			var sessionState SessionState
+			sessionStateChanged := false
 			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
 				sessionStore := k.SessionStores[candidate.SessionStoreRef]
 				if sessionStore == nil {
@@ -809,7 +810,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				compatibilitySummary := SummarizeCompatibilityPlan(compatibilityPlan)
 				event.CompatibilityPlan = &compatibilitySummary
 				releaseCandidate()
-				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0 || len(sessionState.Signatures) > 0) {
+				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionStateChanged || sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0 || len(sessionState.Signatures) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
 						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
 					}
@@ -876,14 +877,14 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					emitEvent(event)
 				}
 			}, OnSessionState: func(state SessionState) {
-				if state.ResponseID != "" {
-					sessionState.ResponseID = state.ResponseID
+				if ValidateSessionState(state) != nil {
+					return
 				}
-				if len(state.ProviderData) > 0 {
-					sessionState.ProviderData = append([]byte(nil), state.ProviderData...)
-				}
-				if !state.ExpiresAt.IsZero() {
-					sessionState.ExpiresAt = state.ExpiresAt
+				sessionStateChanged = true
+				if emptySessionState(state) {
+					sessionState = SessionState{}
+				} else {
+					mergeSessionState(&sessionState, state)
 				}
 			}, OnFirstByte: func(at time.Time) {
 				firstByteAt = at

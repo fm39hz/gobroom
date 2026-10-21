@@ -335,6 +335,8 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		}
 	}
 	decodeHooks.OnProviderUsage = hooks.OnProviderUsage
+	privateSession := &sessionUpdates{ctx: ctx}
+	decodeHooks.OnSessionState = privateSession.capture
 	providerComplete := false
 	firstEvent := false
 	responseOutputStarted := responseWriterOutputStarted(writer)
@@ -424,6 +426,9 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	}
 	if decodeErr == nil && !providerComplete {
 		decodeErr = io.ErrUnexpectedEOF
+	}
+	if sessionErr := privateSession.finish(hooks.OnSessionState, decodeErr == nil); decodeErr == nil && sessionErr != nil {
+		decodeErr = sessionErr
 	}
 	if decodeErr != nil {
 		decodeErr = WrapResponseFailure(ResponseFailureProvider, decodeErr)

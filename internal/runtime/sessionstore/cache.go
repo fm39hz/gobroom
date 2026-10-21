@@ -24,12 +24,6 @@ type key struct {
 	sessionID    string
 }
 
-type sessionNamespace struct {
-	DefinitionRef string `json:"definitionRef"`
-	OperationRef  string `json:"operationRef"`
-	ModelID       string `json:"modelId"`
-}
-
 type entry struct {
 	state     kernel.SessionState
 	updatedAt time.Time
@@ -65,8 +59,7 @@ func New(repository Repository) (*Cache, error) {
 		if row.ConnectionID == "" || row.Namespace == "" || row.SessionKey == "" {
 			continue
 		}
-		var namespace sessionNamespace
-		if err := json.Unmarshal([]byte(row.Namespace), &namespace); err != nil || namespace.DefinitionRef == "" || namespace.OperationRef == "" || namespace.ModelID == "" {
+		if _, err := kernel.DecodeSessionStoreNamespace(row.Namespace); err != nil {
 			continue
 		}
 		if !row.State.ExpiresAt.IsZero() && !row.State.ExpiresAt.After(now) {
@@ -174,11 +167,11 @@ func makeKey(route kernel.Route, sessionID string) (key, error) {
 	if err != nil {
 		return key{}, err
 	}
-	namespace, err := json.Marshal(sessionNamespace{DefinitionRef: storeKey.ProviderDefinitionRef, OperationRef: storeKey.OperationRef, ModelID: storeKey.PhysicalModelID})
+	namespace, err := kernel.EncodeSessionStoreNamespace(route)
 	if err != nil {
 		return key{}, fmt.Errorf("encode provider session namespace: %w", err)
 	}
-	return key{connectionID: storeKey.ConnectionID, namespace: string(namespace), sessionID: storeKey.ClientSessionID}, nil
+	return key{connectionID: storeKey.ConnectionID, namespace: namespace, sessionID: storeKey.ClientSessionID}, nil
 }
 
 func clone(state kernel.SessionState) kernel.SessionState {

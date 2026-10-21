@@ -61,6 +61,7 @@ func TestKernelLoadsAndSavesProviderSessionContinuity(t *testing.T) {
 	providerRef := extensions.Ref{Kind: "provider-definition", ID: "responses-provider", ContractVersion: 1}
 	chatOperationRef := extensions.Ref{Kind: "operation", ID: string(normalize.OperationChatGenerate), ContractVersion: 1}
 	route := Route{ID: "route", NodeID: "provider", DefinitionID: "responses-provider", DefinitionRef: providerRef, SessionOperationRef: chatOperationRef, ExternalModel: "upstream-model", CredentialID: "account", OperationBindings: map[normalize.Operation]RouteOperationBinding{normalize.OperationChatGenerate: {ContractVersion: 1, AdapterIDs: []string{"continuity-session"}, SessionStoreRef: sessionStoreRef}}, Protocol: ProtocolOpenAIChat, Enabled: true}
+	route.HealthGeneration.Connection = "principal-A"
 	snapshot, err := BuildSnapshot(SnapshotInput{
 		PublicModels: []PublicModel{{Name: "model", TargetRef: "model"}},
 		Nodes:        []ModelNode{{ID: "model", Kind: ModelPhysical, Members: []MemberRef{{Kind: MemberRoute, ID: "route", Fidelity: FidelityExact}}}},
@@ -142,6 +143,7 @@ func TestKernelFailsClosedWhenSessionStateCannotBeLoaded(t *testing.T) {
 
 func TestMemorySessionStoreExpiresStateAndCopiesOpaqueData(t *testing.T) {
 	route := Route{DefinitionID: "provider", DefinitionRef: extensions.Ref{Kind: "provider-definition", ID: "provider", ContractVersion: 1}, SessionOperationRef: extensions.Ref{Kind: "operation", ID: "chat.generate", ContractVersion: 1}, ExternalModel: "model", CredentialID: "account"}
+	route.HealthGeneration.Connection = "principal-A"
 	store := NewMemorySessionStore()
 	providerExpiry := time.Now().Add(12 * time.Hour)
 	data := json.RawMessage(`{"opaque":"value"}`)

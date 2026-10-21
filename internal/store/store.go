@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -1005,18 +1006,45 @@ func (s *Store) SaveProviderExtension(item ProviderExtension) error {
 }
 
 func (s *Store) SaveProviderSession(item ProviderSession) error {
+	if item.ConnectionID == "" || item.SessionKey == "" {
+		return fmt.Errorf("provider session connection and session key are required")
+	}
+	if err := kernel.ValidateSessionState(item.State); err != nil {
+		return err
+	}
+	namespace, err := kernel.DecodeSessionStoreNamespace(item.Namespace)
+	if err != nil {
+		return fmt.Errorf("invalid provider session namespace")
+	}
+	if item.State.ExpiresAt.IsZero() || !item.State.ExpiresAt.After(time.Now()) {
+		return fmt.Errorf("provider session expiry must be in the future")
+	}
+	item.ExpiresAt = item.State.ExpiresAt.UTC().Format(time.RFC3339Nano)
+	ctx := context.Background()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	binding, err := readCredentialBinding(ctx, tx, item.ConnectionID)
+	if err != nil || namespace.PrincipalGeneration != binding.OperationalGeneration() || namespace.DefinitionRef != binding.Owner.Definition {
+		return fmt.Errorf("provider session authority is stale")
+	}
+	var endpoint string
+	if err := tx.QueryRowContext(ctx, `SELECT p.base_url FROM connections c JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, item.ConnectionID).Scan(&endpoint); err != nil || endpoint != namespace.Endpoint {
+		return fmt.Errorf("provider session authority is stale")
+	}
 	state, err := json.Marshal(item.State)
 	if err != nil {
 		return err
 	}
-	if item.ExpiresAt == "" && !item.State.ExpiresAt.IsZero() {
-		item.ExpiresAt = item.State.ExpiresAt.UTC().Format(time.RFC3339Nano)
-	}
 	if item.LastUsedAt == "" {
 		item.LastUsedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	_, err = s.DB.Exec(`INSERT INTO provider_sessions(connection_id,namespace,session_key,state_json,expires_at,last_used_at,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,namespace,session_key) DO UPDATE SET state_json=excluded.state_json,expires_at=excluded.expires_at,last_used_at=excluded.last_used_at,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Namespace, item.SessionKey, string(state), nullable(item.ExpiresAt), nullable(item.LastUsedAt))
-	return err
+	if _, err := tx.ExecContext(ctx, `INSERT INTO provider_sessions(connection_id,namespace,session_key,state_json,expires_at,last_used_at,updated_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(connection_id,namespace,session_key) DO UPDATE SET state_json=excluded.state_json,expires_at=excluded.expires_at,last_used_at=excluded.last_used_at,updated_at=CURRENT_TIMESTAMP`, item.ConnectionID, item.Namespace, item.SessionKey, string(state), item.ExpiresAt, nullable(item.LastUsedAt)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ProviderSessions() ([]ProviderSession, error) {
@@ -1027,24 +1055,54 @@ func (s *Store) ProviderSessions() ([]ProviderSession, error) {
 	}
 	defer rows.Close()
 	var sessions []ProviderSession
+	type rowKey struct{ connection, namespace, session string }
+	var invalid []rowKey
 	for rows.Next() {
 		var item ProviderSession
 		var state string
 		if err := rows.Scan(&item.ConnectionID, &item.Namespace, &item.SessionKey, &state, &item.ExpiresAt, &item.LastUsedAt); err != nil {
 			return nil, err
 		}
-		if err := decodeSessionState(state, &item.State); err != nil {
-			return nil, fmt.Errorf("provider session %q/%q state: %w", item.Namespace, item.SessionKey, err)
+		_, namespaceErr := kernel.DecodeSessionStoreNamespace(item.Namespace)
+		stateErr := decodeSessionState(state, &item.State)
+		if stateErr == nil {
+			stateErr = kernel.ValidateSessionState(item.State)
 		}
 		if item.ExpiresAt != "" {
 			item.State.ExpiresAt, err = time.Parse(time.RFC3339Nano, item.ExpiresAt)
-			if err != nil {
-				return nil, fmt.Errorf("provider session %q/%q expiry: %w", item.Namespace, item.SessionKey, err)
-			}
+		}
+		if namespaceErr != nil || stateErr != nil || err != nil || item.State.ExpiresAt.IsZero() || !item.State.ExpiresAt.After(time.Now()) {
+			invalid = append(invalid, rowKey{item.ConnectionID, item.Namespace, item.SessionKey})
+			continue
 		}
 		sessions = append(sessions, item)
 	}
-	return sessions, rows.Err()
+	rowsErr := rows.Err()
+	closeErr := rows.Close()
+	if rowsErr != nil {
+		return nil, rowsErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	valid := sessions[:0]
+	for _, item := range sessions {
+		namespace, _ := kernel.DecodeSessionStoreNamespace(item.Namespace)
+		binding, bindingErr := readCredentialBinding(context.Background(), s.DB, item.ConnectionID)
+		var endpoint string
+		endpointErr := s.DB.QueryRow(`SELECT p.base_url FROM connections c JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, item.ConnectionID).Scan(&endpoint)
+		if bindingErr != nil || endpointErr != nil || namespace.PrincipalGeneration != binding.OperationalGeneration() || namespace.DefinitionRef != binding.Owner.Definition || namespace.Endpoint != endpoint {
+			invalid = append(invalid, rowKey{item.ConnectionID, item.Namespace, item.SessionKey})
+			continue
+		}
+		valid = append(valid, item)
+	}
+	for _, stale := range invalid {
+		if _, err := s.DB.Exec(`DELETE FROM provider_sessions WHERE connection_id=? AND namespace=? AND session_key=?`, stale.connection, stale.namespace, stale.session); err != nil {
+			return nil, err
+		}
+	}
+	return valid, nil
 }
 
 func decodeSessionState(raw string, target *kernel.SessionState) error {
