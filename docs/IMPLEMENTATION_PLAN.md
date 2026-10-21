@@ -238,8 +238,13 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    sample including exact non-chat operation refs and payloads, then evaluates
    every enabled model-path candidate through the same
    compatibility planner without strategy-state mutation, credential lookup
-   or upstream dispatch; CLI accepts a JSON file or stdin. Remaining: close
-   the full SG1/SG4 matrices and transform fallback accounting.
+   or upstream dispatch; CLI accepts a JSON file or stdin. Selected fallback
+   transform accounting is now covered by
+   `TestFallbackCompatibilityPlanAndUsageContainOnlySelectedTransforms`: exact
+   selected-scope steps appear once, skipped/rejected scopes do not leak into
+   the plan or usage, and attempt-local payloads remain independent. Remaining
+   SG1/SG4 acceptance must be audited as concrete contract cases, not an
+   unspecified universal provider matrix.
 
    Continuity scope checkpoint (2026-10-21): host-v7 session stores include
    stable principal and configured endpoint alongside the exact provider and
