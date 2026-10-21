@@ -263,6 +263,10 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    now injects source-backed parent-not-found JSON and verifies sanitized 409,
    no implicit retry, and durable reset. Automatic full-history reconstruction,
    provider-specific in-stream rejection and broader SG1 evidence remain open.
+   Root regression/vet, three focused race runs and full conformance passed,
+   including store-version protection for identical resaves. Installed
+   `039e971` passed three independent-module race runs with real CLI status and
+   account update; main control=serving=485 and bundle-v9 validation stayed valid.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

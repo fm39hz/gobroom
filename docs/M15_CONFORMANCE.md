@@ -497,6 +497,15 @@ sanitized 409 projection and committed-output protection. The independent
 This proves HTTP rejection invalidation, not automatic full-history replay or
 provider-specific streaming-error support; SG1/M15 remains open.
 
+Verification: full root regression/vet, three focused kernel/provider/cache/API
+race runs and the full conformance target passed. Installed acceptance
+`039e971` ran the independent scope vertical three more times with `-race` and
+`GOBROOM_TEST_CLI=/absolute/path/to/gobroom`, including CLI status after the
+409 and subsequent fixture-account replacement. Main daemon status remained
+`ok` and bundle-v9 validation passed. The cache/kernel fixtures also cover a
+newer save with identical data, using private store versions rather than value
+equality alone. This remains deterministic local-provider evidence.
+
 Provider continuation scope (2026-10-21, host contract v7):
 `TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint` wraps the
 registered Responses decoder using only the public catalog API, then drives

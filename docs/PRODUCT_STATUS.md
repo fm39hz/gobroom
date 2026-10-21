@@ -43,8 +43,17 @@ history reconstruction, in-stream provider errors, broader harness/provider
 acceptance and measured latency/RSS remain open. Root regression, vet and three
 focused kernel/provider/cache/API race runs passed, including identical-state
 resaves protected by store versions. Full conformance, including the independent
-module suite and the newly added invalidation group, passed. Installed acceptance
-follows installation. This checkpoint does not close C2/SG1/M15.
+module suite and the newly added invalidation group, passed. This checkpoint
+does not close C2/SG1/M15.
+
+Installed checkpoint `039e971`: `make install-all` completed and restarted the
+user service. Three independent-module race runs passed with
+`GOBROOM_TEST_CLI=/home/fm39hz/go/bin/gobroom`, including CLI status following
+the normalized rejection and later fixture-account replacement. HTTP checks
+proved no implicit retry, private-reference redaction and durable reset through
+restart. Main daemon status was `ok`, control=serving=485; config export →
+validate returned valid bundle v9. No real provider was contacted and real
+configuration/credentials were preserved.
 
 Previous integrated milestone:
 
