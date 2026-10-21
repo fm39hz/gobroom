@@ -641,6 +641,13 @@ the daemon never joined it. The worker now consumes until producer close and
 the daemon waits before closing storage. This is not a durable usage spool,
 whole-drain deadline, or proof against storage write failure.
 
+`TestKernelUsageCloseSerializesConcurrentProducers` additionally races producers
+with close, compares accepted/drained counts and rejects post-close admission.
+Installed CLI shutdown race testing exposed that an atomic closed flag alone
+did not synchronize channel send with close. A standard `sync.RWMutex` now
+protects that short non-blocking admission/close boundary; it does not hold a
+lock across persistence or network work.
+
 ### SG6 finite boundary evidence
 
 The local production built-ins/manifests currently contain no scoped-key replay

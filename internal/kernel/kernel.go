@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/artifacts"
@@ -37,7 +36,8 @@ type Kernel struct {
 	Events                 chan UsageEvent
 	AcquireCredential      CredentialLeaseResolver
 	RefreshCredentialLease CredentialLeaseRefresher
-	closed                 atomic.Bool
+	usageMu                sync.RWMutex
+	closed                 bool
 }
 
 type FeedbackGate interface {
@@ -103,7 +103,9 @@ func (k *Kernel) Select(name string, now time.Time) (Route, error) {
 func (k *Kernel) PublishSnapshot(snapshot Snapshot) error { return k.Snapshots.Publish(snapshot) }
 
 func (k *Kernel) EmitUsage(event UsageEvent) bool {
-	if k.closed.Load() {
+	k.usageMu.RLock()
+	defer k.usageMu.RUnlock()
+	if k.closed {
 		return false
 	}
 	select {
@@ -115,7 +117,10 @@ func (k *Kernel) EmitUsage(event UsageEvent) bool {
 }
 
 func (k *Kernel) Close() {
-	if k.closed.CompareAndSwap(false, true) {
+	k.usageMu.Lock()
+	defer k.usageMu.Unlock()
+	if !k.closed {
+		k.closed = true
 		close(k.Events)
 	}
 }
