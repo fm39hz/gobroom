@@ -305,6 +305,12 @@ unique scoped entries and clones selected payloads, even when an alternate
 repository supplies unordered or excessive rows. Repository implementations
 still own current principal/endpoint authority checks; cache validation does
 not replace that database fence.
+An already-expired provider update is represented as an empty, future-expiring
+clear marker in the same ordered writer, not as an invalid expired database
+row. Clear markers are never returned as usable continuity. Otherwise a rejected
+expired write could leave an older valid parent to reappear after graceful
+restart. This follows ordinary asynchronous session persistence; it does not
+add a crash-durability or failed-write guarantee to successful response updates.
 Classified HTTP rejection can invalidate continuity through
 `ClassifiedOutcome.ContinuityRecovery = invalidate`. The normalized contract is
 terminal, confirmed rejection, request scope, no credential recovery, no quota

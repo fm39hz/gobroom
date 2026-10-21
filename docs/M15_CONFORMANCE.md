@@ -630,6 +630,14 @@ snapshot or a multi-writer transaction across storage and active requests.
 Module algorithms, remote backends and full C1–C6 completion remain separate
 from these finite generic configuration boundaries.
 
+Expiry regression: `TestCachePreloadDoesNotResurrectProviderExpiredUpdate`
+failed with an old unexpired parent after the repository rejected its expired
+replacement. The cache now writes a typed clear marker and returns markers as
+unknown. The existing independent-module session-scope fixture now restarts
+immediately after provider expiry and verifies the next actual upstream call
+has no parent. This is graceful-restart evidence after ordered persistence,
+not crash durability or a new provider-specific core branch.
+
 Shutdown retention evidence: `TestWorkerDrainsAcceptedEventsInOrderAfterClose`
 and `TestWorkerWaitsForInFlightSaveBeforeReturning` prove channel close/drain
 ownership. `TestDaemonStopDrainsAcceptedUsageBeforeClosingStore` accepts 128

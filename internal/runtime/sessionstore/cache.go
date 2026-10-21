@@ -86,6 +86,11 @@ func (c *Cache) Load(ctx context.Context, route kernel.Route, sessionID string) 
 		delete(c.entries, k)
 		return kernel.SessionState{}, false, nil
 	}
+	if ok && item.state.ResponseID == "" && len(item.state.ProviderData) == 0 && len(item.state.Signatures) == 0 {
+		// Keep an in-flight invalidation marker for its persistence callback,
+		// but never expose a clear marker as usable provider continuity.
+		return kernel.SessionState{}, false, nil
+	}
 	return clone(item.state), ok, nil
 }
 
@@ -102,6 +107,12 @@ func (c *Cache) Save(ctx context.Context, route kernel.Route, sessionID string, 
 	}
 	now := time.Now()
 	cacheExpiry := now.Add(c.ttl)
+	if !state.ExpiresAt.IsZero() && !state.ExpiresAt.After(now) {
+		// Persist a valid clear marker through the same ordered writer. An
+		// expired row would be rejected by the repository, leaving an older,
+		// still-unexpired parent on disk to resurrect at the next startup.
+		state = kernel.SessionState{ExpiresAt: cacheExpiry}
+	}
 	if state.ExpiresAt.IsZero() || state.ExpiresAt.After(cacheExpiry) {
 		state.ExpiresAt = cacheExpiry
 	}

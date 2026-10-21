@@ -153,3 +153,44 @@ func TestCachePreloadSelectsNewestUniqueKeys(t *testing.T) {
 		}
 	}
 }
+
+type expiryCheckingRepository struct{ cacheFixtureRepository }
+
+func (r *expiryCheckingRepository) SaveProviderSession(row store.ProviderSession) error {
+	// Match SQLite's persisted-state admission: past expiry cannot replace an
+	// existing row. Cache must persist a valid clear marker instead.
+	if !row.State.ExpiresAt.After(time.Now()) {
+		return fmt.Errorf("provider session expiry must be in the future")
+	}
+	return r.cacheFixtureRepository.SaveProviderSession(row)
+}
+
+func TestCachePreloadDoesNotResurrectProviderExpiredUpdate(t *testing.T) {
+	route := invalidationRoute()
+	namespace, err := kernel.EncodeSessionStoreNamespace(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	repository := &expiryCheckingRepository{cacheFixtureRepository{rows: []store.ProviderSession{{ConnectionID: route.CredentialID, Namespace: namespace, SessionKey: "session", LastUsedAt: now.Format(time.RFC3339Nano), State: kernel.SessionState{ResponseID: "old-parent", ExpiresAt: now.Add(time.Hour)}}}}}
+	cache, err := New(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Save(context.Background(), route, "session", kernel.SessionState{ResponseID: "expired-parent", ExpiresAt: now.Add(-time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	if state, found, err := cache.Load(context.Background(), route, "session"); err != nil || found {
+		t.Fatalf("expired update still usable: %#v found=%v err=%v", state, found, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cache.Run(ctx) // Deterministically drain the owned write queue before restart.
+	restarted, err := New(repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, found, err := restarted.Load(context.Background(), route, "session"); err != nil || found {
+		t.Fatalf("restart resurrected old continuity: %#v found=%v err=%v", state, found, err)
+	}
+}

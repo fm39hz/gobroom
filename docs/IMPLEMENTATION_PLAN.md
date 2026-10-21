@@ -678,6 +678,14 @@ work: whole-drain deadline under blocked storage and durable/reported handling
 of failed writes or admission overflow. Do not infer those guarantees from
 successful SQLite drain. Other semantic gates and C1–C6/M15 audit remain open.
 
+Further verification found two concrete boundary defects: usage send/close
+required a shared `sync.RWMutex`, not just an atomic closed flag; an expired
+provider session update needed a valid queued clear marker, otherwise SQLite's
+rejection preserved an older unexpired parent for restart. The cache regression
+reproduced that resurrection before the fix; the public module fixture now
+restarts at the expiry boundary. The activation fault injector also configures
+SQLite's bounded busy timeout instead of racing live persistence with DDL.
+
 ## Transform ownership and lifecycle checkpoint
 
 The public SDK and CLI now expose the existing transform contracts and typed

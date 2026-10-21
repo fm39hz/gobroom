@@ -421,6 +421,15 @@ func TestExternalResponsesSessionScopeFollowsPrincipalAndEndpoint(t *testing.T) 
 	assertPrevious("respA")
 	expireContinuation.Store(true)
 	assertPrevious("respA")
+	// Expiry must clear durable continuation too. Rejecting an expired write
+	// while keeping an older unexpired row would revive respA on restart.
+	if err := service.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	service = daemon.NewWithProviderModules(config, opaqueStateModule{}, sessionScopeModule{})
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	assertPrevious("")
 	resetContinuation.Store(true)
 	assertPrevious("respA")
