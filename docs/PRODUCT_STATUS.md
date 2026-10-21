@@ -38,9 +38,17 @@ committed Chat errors, checks matching typed client identity, partial text,
 private-message redaction, no replay, follow-up success and failed usage across
 restart. Its continuity reason is test-only, not a production status heuristic.
 Root regression/vet, three decoder race runs and full conformance (including
-the complete independent module suite) passed. Installed acceptance follows.
+the complete independent module suite) passed.
 Broader provider/harness coverage, catalog UX and
 latency/RSS measurements remain open; this checkpoint does not close M15.
+
+Installed checkpoint `bd007fa`: `make install-all` completed and restarted the
+user service. Three additional independent-module race runs passed with the
+installed CLI for both Anthropic and Gemini, covering matching HTTP/SSE errors,
+partial text, redaction, no replay, follow-up success and failed usage through
+restart. Main daemon status was `ok`, control=serving=489; export → validate
+returned valid bundle v9. Real config/credentials were preserved; no live
+provider call was made. The implementation changed no kernel or host contract.
 
 Previous integrated milestone:
 

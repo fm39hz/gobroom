@@ -312,8 +312,11 @@ and static-link resolution contract are in place; C2–C6 remain in progress.
    drives both built-in codec families through configured test-only classifier
    reasons, HTTP 409/committed Chat errors, follow-up success and failed usage
    after restart. No kernel, host contract or dependency changed. Root
-   regression/vet, three decoder race runs and full conformance passed; remaining SG1 breadth and
-   whole-product gates stay open.
+   regression/vet, three decoder race runs and full conformance passed; remaining
+   SG1 breadth and whole-product gates stay open. Installed `bd007fa` passed
+   three further module race runs with the real CLI for both protocols. Main
+   control=serving=489 and bundle-v9 validation stayed valid; real configuration
+   and credentials were preserved.
 3. **C3 — transform plan compilation (in progress):** transform modules and
    enabled bindings are distinct. Exact module refs, binding scope/order/options
    envelopes and enable state persist through the typed DB bundle and immutable

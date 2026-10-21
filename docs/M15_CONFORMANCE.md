@@ -497,7 +497,12 @@ The reason selectors in the integration fixture are explicitly synthetic:
 `FAILED_PRECONDITION` and `invalid_request_error` alone are not builtin
 continuity-reset rules. Local source provides the wire envelopes, not a real
 provider continuity guarantee. Root regression/vet, three decoder race runs and
-full conformance passed; installed acceptance follows installation. This closes
+full conformance passed. Installed `bd007fa` then passed three additional module
+race runs with `GOBROOM_TEST_CLI=/absolute/path/to/gobroom` after
+`make install-all`. Both protocol verticals retained typed error identity,
+follow-up availability and failed usage through restart. Main status was `ok`,
+control=serving=489, and bundle-v9 validation passed. No real provider was called.
+This closes
 the missing non-OpenAI terminal-evidence seam, not all SG1/harness/provider cases.
 
 ### Typed client-failure evidence
