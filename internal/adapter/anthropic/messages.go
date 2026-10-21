@@ -340,6 +340,7 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 		scanner.Split(splitAnthropicSSELines)
 		var usage kernel.UsageEvent
 		started := false
+		completed := false
 		toolIndex := -1
 		for scanner.Scan() {
 			if err := ctx.Err(); err != nil {
@@ -347,19 +348,30 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 			}
 			rawLine := append([]byte(nil), scanner.Bytes()...)
 			line := strings.TrimRight(string(rawLine), "\r\n")
-			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
-				return err
-			}
 			if !strings.HasPrefix(line, "data:") {
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
+					return err
+				}
 				continue
 			}
 			data := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "data:"), "\n"))
 			if data == "" || data == "[DONE]" {
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
+					return err
+				}
 				continue
 			}
 			var event map[string]any
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				return fmt.Errorf("decode Anthropic SSE event: %w", err)
+			}
+			if stringValue(event["type"]) == "error" || event["error"] != nil {
+				if err := reportAnthropicProviderError([]byte(data), usage, hooks); err != nil {
+					return err
+				}
+			}
+			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
+				return err
 			}
 			if !started {
 				started = true
@@ -369,17 +381,27 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 			}
 			updatedUsage, updatedToolIndex, err := emitAnthropicEvents(event, usage, toolIndex, emit)
 			usage, toolIndex = updatedUsage, updatedToolIndex
+			if hooks.OnProviderUsage != nil {
+				hooks.OnProviderUsage(usage)
+			}
 			if err != nil {
 				return err
 			}
 			if stringValue(event["type"]) == "message_stop" {
-				usage.Status = "ok"
-				if hooks.OnComplete != nil {
-					hooks.OnComplete(usage)
-				}
+				completed = true
 			}
 		}
-		return scanner.Err()
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		if !completed {
+			return io.ErrUnexpectedEOF
+		}
+		usage.Status = "ok"
+		if hooks.OnComplete != nil {
+			hooks.OnComplete(usage)
+		}
+		return nil
 	}
 	data, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -389,21 +411,60 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return fmt.Errorf("decode Anthropic response: %w", err)
 	}
+	if stringValue(payload["type"]) == "error" || payload["error"] != nil {
+		return reportAnthropicProviderError(data, kernel.UsageEvent{}, hooks)
+	}
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
 	}
 	if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: append([]byte(nil), data...)}); err != nil {
 		return err
 	}
-	usage, _, err := emitAnthropicEvents(payload, kernel.UsageEvent{}, -1, emit)
+	completed := false
+	usage, _, err := emitAnthropicEvents(payload, kernel.UsageEvent{}, -1, func(event kernel.ResponseEvent) error {
+		if event.Kind == kernel.EventResponseComplete {
+			completed = true
+		}
+		return emit(event)
+	})
+	if hooks.OnProviderUsage != nil {
+		hooks.OnProviderUsage(usage)
+	}
 	if err != nil {
 		return err
+	}
+	if !completed {
+		return io.ErrUnexpectedEOF
 	}
 	usage.Status = "ok"
 	if hooks.OnComplete != nil {
 		hooks.OnComplete(usage)
 	}
 	return nil
+}
+
+func reportAnthropicProviderError(data []byte, usage kernel.UsageEvent, hooks kernel.StreamHooks) error {
+	if hooks.OnProviderUsage != nil {
+		hooks.OnProviderUsage(usage)
+	}
+	if len(data) > kernel.MaxProviderResponseErrorBytes {
+		return fmt.Errorf("Anthropic terminal error exceeds its evidence bound")
+	}
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return fmt.Errorf("invalid Anthropic terminal error event")
+	}
+	evidenceData, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("invalid Anthropic terminal error envelope")
+	}
+	evidence, err := kernel.NewProviderResponseError(evidenceData)
+	if err != nil {
+		return err
+	}
+	return evidence
 }
 
 func splitAnthropicSSELines(data []byte, atEOF bool) (int, []byte, error) {

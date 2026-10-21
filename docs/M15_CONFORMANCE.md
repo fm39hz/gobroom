@@ -479,6 +479,27 @@ See the [implementation roadmap](IMPLEMENTATION_PLAN.md) for ordered slices.
 Vendor completeness and measured resource/latency performance remain separate
 gates even after semantic closure passes.
 
+### Non-OpenAI terminal-envelope evidence
+
+`TestAnthropicTerminalErrorEvidence` and
+`TestAnthropicJSONTerminalErrorAndStreamCompletion` intercept error objects
+before raw data passthrough, retain usage and reject incomplete streams or a
+later message stop. `TestGeminiTerminalErrorsStopJSONAndSSE` checks errors before
+candidates, numeric codes/details, retained usage across content frames and no
+completion after error; the healthy case stays explicit.
+`TestNonOpenAIProviderFailuresReachConfiguredClassifier` uses public daemon and
+provider APIs with both built-in codec families, not a new kernel branch. It
+proves configured classification into matching HTTP/SSE client failure values,
+preserved partial text, no raw private-message disclosure, no implicit retry,
+follow-up availability and durable failed usage after restart.
+
+The reason selectors in the integration fixture are explicitly synthetic:
+`FAILED_PRECONDITION` and `invalid_request_error` alone are not builtin
+continuity-reset rules. Local source provides the wire envelopes, not a real
+provider continuity guarantee. Root regression/vet, three decoder race runs and
+full conformance passed; installed acceptance follows installation. This closes
+the missing non-OpenAI terminal-evidence seam, not all SG1/harness/provider cases.
+
 ### Typed client-failure evidence
 
 Typed client failures (2026-10-21, host contract v10):

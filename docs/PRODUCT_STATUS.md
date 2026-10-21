@@ -27,6 +27,23 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
+Anthropic and Gemini JSON/SSE decoders now use the same bounded private error
+and selected classifier contracts as OpenAI, with no kernel/dependency/host
+change. Explicit errors stop before raw error data or false success; known usage
+survives failure. Anthropic requires terminal completion; Gemini no longer skips
+error-only chunks or erases earlier usage on chunks without metadata.
+
+The public daemon fixture drives both codec families through HTTP 409 and
+committed Chat errors, checks matching typed client identity, partial text,
+private-message redaction, no replay, follow-up success and failed usage across
+restart. Its continuity reason is test-only, not a production status heuristic.
+Root regression/vet, three decoder race runs and full conformance (including
+the complete independent module suite) passed. Installed acceptance follows.
+Broader provider/harness coverage, catalog UX and
+latency/RSS measurements remain open; this checkpoint does not close M15.
+
+Previous integrated milestone:
+
 The finite SG6 dispatch/cancellation/drain checklist is now exercised. Tests
 cover final live authority validation, accepted response before client commit,
 already committed output and daemon shutdown during frozen replay preparation.

@@ -41,6 +41,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./internal/kernel ./internal/provider ./internal/adapter/openai ./internal/adapter/renderers -run 'ProviderResponse|ResponseContinuity|TerminalError|ProviderErrors|HealthySSE|FailedJSON|Normalize' -count=1
 	go test ./internal/kernel ./internal/api ./internal/adapter/renderers -run 'ClientFailure|TypedClient|ContinuityFailure' -count=1
 	go test ./internal/kernel -run '^TestReplayWithKey' -count=1
+	go test ./internal/adapter/anthropic ./internal/adapter/gemini -run 'TerminalError|JSONTerminal' -count=1
 	go test ./internal/daemon -run '^(TestCallbackIngress|TestProxiedHTTPS)' -count=1
 	go test ./internal/daemon -run '^(TestAuthorizationSetup|TestAuthorizationComposition)' -count=1
 	go test ./internal/tui -run '^(TestSetup|TestTUISetup|TestAuthCompletion|TestWipeSetup)' -count=1

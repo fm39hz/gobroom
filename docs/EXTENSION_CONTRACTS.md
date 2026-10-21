@@ -350,6 +350,15 @@ usage is retained as failed usage, without publishing successful completion.
 The OpenAI decoder recognizes explicit `error`, `response.failed` and failed
 JSON bodies before exposing their raw error data; incomplete responses cannot
 become successful because `[DONE]` follows. Healthy raw frames stay unchanged.
+Anthropic `error` envelopes and Gemini/Google `error` objects now use the same
+private evidence boundary in JSON and SSE. Anthropic requires `message_stop`
+for stream completion and intercepts errors before raw error data passthrough.
+Gemini checks errors before candidates, preserving numeric codes/details and
+accumulated usage across frames without usage. Known usage is observed
+independently of success. Both stop at explicit failure; a later stop/`[DONE]`
+cannot reverse it. These are decoder implementations through existing contracts,
+not kernel branches or a new host version. Broad status/type names alone do not
+establish a continuity fault: recovery requires configured classifier evidence.
 An uncommitted client response can become a sanitized 409. Committed streaming
 responses keep their status and prior content and receive one format-specific
 terminal error, never a synthetic success or replay. Provider-specific envelope

@@ -86,6 +86,7 @@ type geminiGenerateContentResponse struct {
 	Candidates     []geminiCandidate     `json:"candidates"`
 	UsageMetadata  *geminiUsageMetadata  `json:"usageMetadata,omitempty"`
 	PromptFeedback *geminiPromptFeedback `json:"promptFeedback,omitempty"`
+	Error          *json.RawMessage      `json:"error,omitempty"`
 }
 
 type geminiCandidate struct {

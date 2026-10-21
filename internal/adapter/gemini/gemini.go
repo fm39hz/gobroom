@@ -421,6 +421,19 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
 				return fmt.Errorf("decode Gemini SSE event: %w", err)
 			}
+			if payload.UsageMetadata != nil {
+				usage := geminiUsage(payload.UsageMetadata)
+				totalUsage.InputTokens = usage.InputTokens
+				if usage.OutputTokens > 0 {
+					totalUsage.OutputTokens = usage.OutputTokens
+				}
+				if hooks.OnProviderUsage != nil {
+					hooks.OnProviderUsage(totalUsage)
+				}
+			}
+			if failure := geminiResponseFailure(payload.Error, totalUsage, hooks); failure != nil {
+				return failure
+			}
 			if !started {
 				started = true
 				if hooks.OnFirstByte != nil {
@@ -430,11 +443,7 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 			if len(payload.Candidates) == 0 {
 				continue
 			}
-			_, events, usage := openAIResponse(payload, hooks.ProviderIssuer)
-			totalUsage.InputTokens = usage.InputTokens
-			if usage.OutputTokens > 0 {
-				totalUsage.OutputTokens = usage.OutputTokens
-			}
+			_, events, _ := openAIResponse(payload, hooks.ProviderIssuer)
 			for _, event := range events {
 				if err := emit(event); err != nil {
 					return err
@@ -467,6 +476,15 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fmt.Errorf("decode Gemini response: %w", err)
 		}
+		if payload.UsageMetadata != nil {
+			totalUsage = geminiUsage(payload.UsageMetadata)
+			if hooks.OnProviderUsage != nil {
+				hooks.OnProviderUsage(totalUsage)
+			}
+		}
+		if failure := geminiResponseFailure(payload.Error, totalUsage, hooks); failure != nil {
+			return failure
+		}
 		if len(payload.Candidates) == 0 {
 			return fmt.Errorf("Gemini response contains no candidates")
 		}
@@ -493,6 +511,29 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 		hooks.OnComplete(totalUsage)
 	}
 	return nil
+}
+
+func geminiResponseFailure(providerError *json.RawMessage, usage kernel.UsageEvent, hooks kernel.StreamHooks) error {
+	if providerError == nil {
+		return nil
+	}
+	if hooks.OnProviderUsage != nil {
+		hooks.OnProviderUsage(usage)
+	}
+	if len(*providerError) > kernel.MaxProviderResponseErrorBytes {
+		return fmt.Errorf("Gemini response error exceeds its evidence bound")
+	}
+	canonical, err := json.Marshal(struct {
+		Error json.RawMessage `json:"error"`
+	}{Error: *providerError})
+	if err != nil {
+		return fmt.Errorf("encode Gemini response error: %w", err)
+	}
+	evidence, err := kernel.NewProviderResponseError(canonical)
+	if err != nil {
+		return fmt.Errorf("invalid Gemini response error: %w", err)
+	}
+	return evidence
 }
 
 // Prepare translates the normalized OpenAI Chat contract into Gemini's

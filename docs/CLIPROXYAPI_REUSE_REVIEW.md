@@ -320,6 +320,19 @@ problems above.
 
 ## Consequence for the roadmap
 
+Non-OpenAI terminal-envelope follow-up: Claude executor fixtures use
+`{type:"error",error:{type:"overloaded_error",...}}` and reject it rather than
+accepting a later stream stop. The Gemini executor separates HTTP status failures
+before translation; the adjacent Gemini translator returns early without a
+candidate. Google-family error fixtures in
+`antigravity_executor_transport_test.go` and `antigravity_executor_credits_test.go`
+carry numeric `error.code`, `status` and typed `details` arrays. These establish
+envelope shapes, not permission to treat every invalid-request/precondition
+failure as continuity loss. Gobroom uses standard JSON/RawMessage binding and
+its existing private-error/classifier boundary. The integration fixture uses an
+explicit test-only reason selector, with no builtin status heuristic or kernel
+change. No provider decoder, executor or parser dependency was copied/imported.
+
 This review does not create a new M15 dependency or an excuse to pause its
 closure. It sharpens C1/C2/C3 boundaries: extension dependencies must resolve
 through Gobroom's own exact-ref catalog; compatibility plans must describe the
