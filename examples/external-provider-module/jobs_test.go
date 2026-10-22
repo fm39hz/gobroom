@@ -52,6 +52,11 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	var mu sync.Mutex
 	jobs := map[string]*upstreamJob{}
 	keys := map[string]string{}
+	upstreamIDsByPrompt := map[string]string{}
+	correlationsByPrompt := map[string]string{
+		"finish a fixture":       "concurrent-caller-a",
+		"finish another fixture": "concurrent-caller-b",
+	}
 	createCallsByAccount := map[string]int{}
 	creates, createCalls, cancelCalls, statusCalls, wrongAccount := 0, 0, 0, 0, 0
 	rejectCreates := false
@@ -92,6 +97,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 				creates++
 				id = fmt.Sprintf("job-%d", creates)
 				keys[key] = id
+				upstreamIDsByPrompt[input.Prompt] = id
 				jobs[id] = &upstreamJob{state: jobResult{ID: id, Status: "pending"}, account: account}
 				conn, _, err := w.(http.Hijacker).Hijack()
 				if err != nil {
@@ -101,6 +107,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 				_ = conn.Close() // The upstream effect survives loss of its response.
 				return
 			}
+			w.Header().Set(jobCorrelationHeader, correlationsByPrompt[input.Prompt])
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(jobs[id].state)
 			return
@@ -435,37 +442,53 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if !cancelFound {
 		t.Fatalf("cancel operation health disappeared after status reconciliation: %#v", states)
 	}
+	type concurrentCreateRequest struct {
+		key         string
+		preferred   string
+		prompt      string
+		correlation string
+		payload     json.RawMessage
+	}
 	type concurrentCreate struct {
-		status int
-		result jobEnvelope
-		body   []byte
+		request concurrentCreateRequest
+		status  int
+		result  jobEnvelope
+		body    []byte
 	}
 	concurrentCreates := make(chan concurrentCreate, 2)
 	var createWait sync.WaitGroup
-	for _, request := range []struct {
-		key       string
-		preferred string
-		payload   json.RawMessage
-	}{
-		{key: "completion-case", preferred: accountA, payload: json.RawMessage(`{"prompt":"finish a fixture"}`)},
-		{key: "completion-case-concurrent", preferred: accountB, payload: json.RawMessage(`{"prompt":"finish another fixture"}`)},
+	for _, request := range []concurrentCreateRequest{
+		{key: "completion-case", preferred: accountA, prompt: "finish a fixture", correlation: "concurrent-caller-a", payload: json.RawMessage(`{"prompt":"finish a fixture"}`)},
+		{key: "completion-case-concurrent", preferred: accountB, prompt: "finish another fixture", correlation: "concurrent-caller-b", payload: json.RawMessage(`{"prompt":"finish another fixture"}`)},
 	} {
 		request := request
 		createWait.Add(1)
 		go func() {
 			defer createWait.Done()
 			status, result, body := call("create", request.preferred, request.key, request.payload, nil)
-			concurrentCreates <- concurrentCreate{status: status, result: result, body: body}
+			concurrentCreates <- concurrentCreate{request: request, status: status, result: result, body: body}
 		}()
 	}
 	createWait.Wait()
 	close(concurrentCreates)
 	var second, otherConcurrent jobEnvelope
 	for createdResult := range concurrentCreates {
-		if createdResult.status >= 300 || len(createdResult.result.Artifacts) != 1 || createdResult.result.Result.ID == created.Result.ID {
-			t.Fatalf("independent concurrent job create=%d %s", createdResult.status, createdResult.body)
+		request := createdResult.request
+		mu.Lock()
+		expectedID := upstreamIDsByPrompt[request.prompt]
+		mu.Unlock()
+		expected := jobResult{ID: expectedID, Status: "pending"}
+		if expectedID == "" || createdResult.status >= 300 || len(createdResult.result.Artifacts) != 1 || createdResult.result.Result != expected {
+			t.Fatalf("caller %q result=%#v want upstream result=%#v status=%d body=%s", request.correlation, createdResult.result.Result, expected, createdResult.status, createdResult.body)
 		}
-		switch createdResult.result.Artifacts[0].Owner.ConnectionID {
+		returnedHandle := createdResult.result.Artifacts[0]
+		var handleValue jobHandle
+		if err := json.Unmarshal(returnedHandle.Value, &handleValue); err != nil || handleValue.ID != expectedID || returnedHandle.Owner.ConnectionID != request.preferred {
+			t.Fatalf("caller %q handle id=%q owner=%q want upstream id=%q account=%q: %v", request.correlation, handleValue.ID, returnedHandle.Owner.ConnectionID, expectedID, request.preferred, err)
+		}
+		events := observer.takeCorrelated(jobObservationKey{action: "create", correlation: request.correlation})
+		assertCorrelatedJobCreateEvents(t, events, expected, request.preferred)
+		switch request.preferred {
 		case accountA:
 			if second.Result.ID != "" {
 				t.Fatalf("more than one concurrent handle belongs to account A: %#v", createdResult.result.Artifacts[0].Owner)
@@ -483,7 +506,6 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if second.Result.ID == otherConcurrent.Result.ID || second.Result.ID == "" || otherConcurrent.Result.ID == "" {
 		t.Fatalf("concurrent creates did not receive distinct upstream IDs: %#v %#v", second.Result, otherConcurrent.Result)
 	}
-	assertConcurrentJobResultEvents(t, observer.take("create"), second.Result, otherConcurrent.Result)
 	for _, expected := range []string{"running", "completed"} {
 		status, result, body := call("status", "", "", json.RawMessage(`{}`), second.Artifacts)
 		if status >= 300 || result.Result.Status != expected || result.Result.ID != second.Result.ID {

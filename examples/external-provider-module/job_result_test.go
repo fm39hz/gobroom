@@ -17,14 +17,21 @@ var jobClientEnvelopeSchemaRef = provider.Ref{Kind: provider.SchemaKind, ID: job
 
 type jobEventObserver struct {
 	mu     sync.Mutex
-	events map[string][]provider.ResponseEvent
+	events map[jobObservationKey][]provider.ResponseEvent
 }
+
+type jobObservationKey struct {
+	action      string
+	correlation string
+}
+
+const jobCorrelationHeader = "X-Fixture-Job-Correlation"
 
 func newJobEventObserver() *jobEventObserver {
-	return &jobEventObserver{events: make(map[string][]provider.ResponseEvent)}
+	return &jobEventObserver{events: make(map[jobObservationKey][]provider.ResponseEvent)}
 }
 
-func (o *jobEventObserver) record(action string, event provider.ResponseEvent) {
+func (o *jobEventObserver) record(key jobObservationKey, event provider.ResponseEvent) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	event.Raw = append([]byte(nil), event.Raw...)
@@ -33,14 +40,18 @@ func (o *jobEventObserver) record(action string, event provider.ResponseEvent) {
 	for index := range event.Artifacts {
 		event.Artifacts[index] = event.Artifacts[index].Clone()
 	}
-	o.events[action] = append(o.events[action], event)
+	o.events[key] = append(o.events[key], event)
 }
 
 func (o *jobEventObserver) take(action string) []provider.ResponseEvent {
+	return o.takeCorrelated(jobObservationKey{action: action})
+}
+
+func (o *jobEventObserver) takeCorrelated(key jobObservationKey) []provider.ResponseEvent {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	events := o.events[action]
-	delete(o.events, action)
+	events := o.events[key]
+	delete(o.events, key)
 	return events
 }
 
@@ -56,8 +67,9 @@ type jobObservedDecoder struct {
 func (d jobObservedDecoder) ID() string { return jobObservedDecoderID(d.action) }
 
 func (d jobObservedDecoder) Decode(ctx context.Context, response provider.UpstreamResponse, emit func(provider.ResponseEvent) error, hooks provider.StreamHooks) error {
+	key := jobObservationKey{action: d.action, correlation: response.Headers.Get(jobCorrelationHeader)}
 	return d.jobResponseDecoder.Decode(ctx, response, func(event provider.ResponseEvent) error {
-		d.observer.record(d.action, event)
+		d.observer.record(key, event)
 		return emit(event)
 	}, hooks)
 }
@@ -155,53 +167,40 @@ func assertJobResultEvents(t *testing.T, events []provider.ResponseEvent, expect
 			}
 		}
 	}
-	if textEvents != 0 || resultArtifacts != 1 || got != expected || (handleArtifacts == 1) != wantHandle {
+	wantHandleArtifacts := 0
+	if wantHandle {
+		wantHandleArtifacts = 1
+	}
+	if textEvents != 0 || resultArtifacts != 1 || got != expected || handleArtifacts != wantHandleArtifacts {
 		t.Fatalf("result did not traverse typed artifact path: text=%d resultArtifacts=%d result=%#v handleArtifacts=%d events=%#v", textEvents, resultArtifacts, got, handleArtifacts, events)
 	}
 }
 
-func assertConcurrentJobResultEvents(t *testing.T, events []provider.ResponseEvent, expected ...jobResult) {
+func assertCorrelatedJobCreateEvents(t *testing.T, events []provider.ResponseEvent, expected jobResult, expectedAccount string) {
 	t.Helper()
-	want := make(map[string]jobResult, len(expected))
-	for _, result := range expected {
-		want[result.ID] = result
-	}
-	got := make(map[string]jobResult, len(expected))
-	handles := make(map[string]bool, len(expected))
-	textEvents, completeEvents := 0, 0
+	assertJobResultEvents(t, events, expected, true)
+	completeEvents := 0
 	for _, event := range events {
-		switch event.Kind {
-		case provider.EventTextDelta:
-			textEvents++
-		case provider.EventResponseComplete:
+		if event.Kind == provider.EventResponseComplete {
 			completeEvents++
-		case provider.EventArtifact:
-			for _, artifact := range event.Artifacts {
-				switch {
-				case artifact.TypeRef == jobResultArtifact && artifact.Role == "result":
-					var result jobResult
-					if err := decodeJobResult(artifact.Value, &result); err != nil {
-						t.Fatalf("decode concurrent result artifact: %v", err)
-					}
-					if artifact.ReplayScope != provider.ArtifactReplayRequest || want[result.ID] != result {
-						t.Fatalf("concurrent result was mis-scoped or crossed invocations: %#v", artifact)
-					}
-					if _, duplicate := got[result.ID]; duplicate {
-						t.Fatalf("duplicate concurrent result for upstream id %q", result.ID)
-					}
-					got[result.ID] = result
-				case artifact.TypeRef == jobArtifact && artifact.Role == "job":
-					var handle jobHandle
-					if err := json.Unmarshal(artifact.Value, &handle); err != nil || handle.ID == "" || want[handle.ID].ID != handle.ID || handles[handle.ID] {
-						t.Fatalf("invalid or duplicate concurrent handle %#v: %v", artifact, err)
-					}
-					handles[handle.ID] = true
+		}
+		if event.Kind != provider.EventArtifact {
+			continue
+		}
+		for _, artifact := range event.Artifacts {
+			if artifact.Owner.ConnectionID != expectedAccount {
+				t.Fatalf("correlated artifact crossed caller accounts: got %q want %q", artifact.Owner.ConnectionID, expectedAccount)
+			}
+			if artifact.TypeRef == jobArtifact && artifact.Role == "job" {
+				var handle jobHandle
+				if err := json.Unmarshal(artifact.Value, &handle); err != nil || handle.ID != expected.ID {
+					t.Fatalf("correlated handle id=%q want upstream id=%q: %v", handle.ID, expected.ID, err)
 				}
 			}
 		}
 	}
-	if textEvents != 0 || len(got) != len(want) || len(handles) != len(want) || completeEvents != len(want) {
-		t.Fatalf("concurrent result artifacts lost invocation scope: text=%d results=%v handles=%v completes=%d want=%v", textEvents, got, handles, completeEvents, want)
+	if completeEvents != 1 {
+		t.Fatalf("correlated caller received %d completion events, want 1", completeEvents)
 	}
 }
 
