@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing Go 1.27, `encoding/json`, `database/sql`, contexts/channels, `github.com/santhosh-tekuri/jsonschema/v6 v6.0.3`, `modernc.org/sqlite v1.59.0`, Cobra and the existing Charm TUI. No new dependency is required by this plan; existing versions are repository pins, not a claim about latest upstream releases.
 
-**Spec:** [Approved hybrid usage design](../specs/2026-10-22-usage-contract-design.md). Written-spec approval: user, 2026-10-22. This implementation plan still awaits review.
+**Spec:** [Approved hybrid usage design](../specs/2026-10-22-usage-contract-design.md). Spec and implementation plan approved by the user on 2026-10-22; execution started. Only verified checkboxes are complete.
 
 ## Global Constraints
 

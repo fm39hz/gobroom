@@ -36,7 +36,8 @@ in conversation; its
 [written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
 is approved; the [implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
 and [typed-jobs proof plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
-await plan review. The contract change has not been implemented or declared closed.
+are approved for execution. Test-first work has started; the accounting path
+has not been implemented or declared closed.
 
 ### Source follow-up — typed results and usage models
 

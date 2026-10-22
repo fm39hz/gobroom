@@ -40,7 +40,8 @@ reopened. The hybrid usage direction is approved; the
 [written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
 is approved and not implemented. The [usage implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
 and [independent typed-jobs plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
-await plan review. Typed common semantics, bounded registered
+are approved for execution; catalog and typed-jobs test-first work has started,
+without claiming the new accounting path is implemented. Typed common semantics, bounded registered
 details and optional raw retention stay distinct. Unfamiliar details do not
 automatically become aggregate, pricing or routing inputs.
 
@@ -107,9 +108,9 @@ preserved, and tests used fake upstreams. The audit gaps above remain open.
 
 ## Next core work
 
-1. Review the implementation plans for the approved hybrid usage specification,
-   before changing public contracts or claiming provider catch-up needs no shared
-   contract change. Keep normalized measures distinct from raw usage, including
+1. Execute the approved hybrid usage and independent typed-jobs plans without
+   claiming provider catch-up needs no shared contract change until their
+   acceptance passes. Keep normalized measures distinct from raw usage, including
    unit/subset, unknown-vs-zero and snapshot/delta semantics.
 2. Prove the module-only artifact/renderer path for typed job results, replacing
    the example's text tunnel before assuming a new kernel payload arm is needed.

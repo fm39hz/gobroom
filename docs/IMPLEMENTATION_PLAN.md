@@ -181,7 +181,7 @@ necessary for every typed result. C2–C6 remain in progress.
 The hybrid usage direction was approved on 2026-10-22. Its
 [written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
 is approved; its [implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
-awaits review. It covers common typed accounting, bounded schema-bound details
+is approved for execution. It covers common typed accounting, bounded schema-bound details
 and separate opt-in raw retention. Descriptor registration
 does not automatically grant aggregation, pricing or routing semantics. The
 module-only typed-result proof remains separate.

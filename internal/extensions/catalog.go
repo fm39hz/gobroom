@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	SchemaKind            = "schema"
-	ClientIngressKind     = "client-ingress"
-	schemaHost            = "schemas.gobroom.invalid"
-	draft2020             = "https://json-schema.org/draft/2020-12/schema"
-	DependencyLockVersion = 2
+	SchemaKind             = "schema"
+	ClientIngressKind      = "client-ingress"
+	schemaHost             = "schemas.gobroom.invalid"
+	draft2020              = "https://json-schema.org/draft/2020-12/schema"
+	DependencyLockVersion  = 2
+	maxSchemaDocumentBytes = 1 << 20
 )
 
 // ModuleRef pins a statically linked implementation module and the host
@@ -137,6 +138,7 @@ type Descriptor struct {
 	FailureModes          []string                     `json:"failureModes,omitempty"`
 	ResourceBounds        ResourceBounds               `json:"resourceBounds"`
 	ArtifactPolicy        *ArtifactPolicy              `json:"artifactPolicy,omitempty"`
+	UsagePolicy           *UsagePolicy                 `json:"usagePolicy,omitempty"`
 	SetupView             json.RawMessage              `json:"setupView,omitempty"`
 }
 
@@ -275,6 +277,9 @@ func (c *Catalog) RegisterSchema(ref Ref, document json.RawMessage) error {
 	if ref.Kind != SchemaKind {
 		return fmt.Errorf("schema resource %q must use kind %q", ref.Key(), SchemaKind)
 	}
+	if len(document) > maxSchemaDocumentBytes {
+		return fmt.Errorf("schema document exceeds the catalog byte limit")
+	}
 	canonical, parsed, err := canonicalJSON(document)
 	if err != nil {
 		return fmt.Errorf("schema %q: %w", ref.Key(), err)
@@ -307,7 +312,10 @@ func (c *Catalog) RegisterSchema(ref Ref, document json.RawMessage) error {
 }
 
 func (c *Catalog) Register(descriptor Descriptor, factory Factory) error {
-	if factory == nil {
+	if descriptor.Ref.Kind == UsageKind && factory != nil {
+		return fmt.Errorf("usage descriptors cannot have implementation factories")
+	}
+	if descriptor.Ref.Kind != UsageKind && factory == nil {
 		return fmt.Errorf("extension factory is required")
 	}
 	if c == nil {
@@ -371,6 +379,9 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	}
 	if strings.TrimSpace(descriptor.ImplementationVersion) == "" || strings.TrimSpace(descriptor.DisplayName) == "" || strings.TrimSpace(descriptor.Description) == "" {
 		return Descriptor{}, fmt.Errorf("extension %q requires implementation version and display metadata", descriptor.Ref.Key())
+	}
+	if err := prepareUsagePolicy(&descriptor); err != nil {
+		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
 	}
 	if err := validateBounds(descriptor); err != nil {
 		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
@@ -481,6 +492,9 @@ func (c *Catalog) putFactory(ref Ref, factory Factory, replace bool) error {
 	if !ok {
 		return fmt.Errorf("extension descriptor %q is not registered", ref.Key())
 	}
+	if ref.Kind == UsageKind {
+		return fmt.Errorf("usage descriptors cannot have implementation factories")
+	}
 	if item.factory != nil && !replace {
 		return fmt.Errorf("extension factory %q is already registered", ref.Key())
 	}
@@ -500,7 +514,7 @@ func (c *Catalog) Freeze() (*Snapshot, error) {
 	if c.frozen {
 		return c.snapshot, nil
 	}
-	compiled, err := c.compileSchemas()
+	compiled, schemaDependencies, err := c.compileSchemas()
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +522,7 @@ func (c *Catalog) Freeze() (*Snapshot, error) {
 		return nil, err
 	}
 	for ref, item := range c.registrations {
-		if item.factory == nil {
+		if item.factory == nil && ref.Kind != UsageKind {
 			return nil, fmt.Errorf("extension %q has no registered implementation factory", ref.Key())
 		}
 	}
@@ -522,15 +536,19 @@ func (c *Catalog) Freeze() (*Snapshot, error) {
 		schemas[ref] = schema
 	}
 	c.frozen = true
-	c.snapshot = &Snapshot{registrations: entries, schemas: schemas, compiled: compiled, fingerprint: c.fingerprint()}
+	c.snapshot = &Snapshot{
+		registrations: entries, schemas: schemas, compiled: compiled,
+		schemaDependencies: schemaDependencies, fingerprint: c.fingerprint(),
+	}
 	return c.snapshot, nil
 }
 
 type Snapshot struct {
-	registrations map[Ref]registration
-	schemas       map[Ref]Schema
-	compiled      map[Ref]*jsonschema.Schema
-	fingerprint   string
+	registrations      map[Ref]registration
+	schemas            map[Ref]Schema
+	compiled           map[Ref]*jsonschema.Schema
+	schemaDependencies map[Ref][]Ref
+	fingerprint        string
 }
 
 func (s *Snapshot) View() CatalogView {
@@ -585,6 +603,11 @@ func (s *Snapshot) LockDependencies(roots []Ref) (DependencyLock, error) {
 		}
 		schemasSeen[ref] = true
 		lock.Schemas = append(lock.Schemas, SchemaPin{Ref: ref, SHA256: schema.Digest})
+		for _, dependency := range s.schemaDependencies[ref] {
+			if err := addSchema(dependency); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	addRef = func(ref Ref) error {
@@ -738,6 +761,9 @@ func (s *Snapshot) Bind(ref Ref, options json.RawMessage) (Descriptor, any, erro
 	if !ok {
 		return Descriptor{}, nil, fmt.Errorf("extension %q is not registered", ref.Key())
 	}
+	if item.factory == nil {
+		return Descriptor{}, nil, fmt.Errorf("extension %q has no executable implementation", ref.Key())
+	}
 	if err := s.ValidateOptions(ref, options); err != nil {
 		return Descriptor{}, nil, err
 	}
@@ -765,6 +791,9 @@ func (s *Snapshot) Implementation(ref Ref) (Descriptor, any, error) {
 	item, ok := s.registrations[ref]
 	if !ok {
 		return Descriptor{}, nil, fmt.Errorf("extension %q is not registered", ref.Key())
+	}
+	if item.factory == nil {
+		return Descriptor{}, nil, fmt.Errorf("extension %q has no executable implementation", ref.Key())
 	}
 	implementation, err := item.factory(json.RawMessage(`{}`))
 	if err != nil {
@@ -1032,49 +1061,75 @@ func (c *Catalog) validateGraph(compiled map[Ref]*jsonschema.Schema) error {
 	return nil
 }
 
-func (c *Catalog) compileSchemas() (map[Ref]*jsonschema.Schema, error) {
+func (c *Catalog) compileSchemas() (map[Ref]*jsonschema.Schema, map[Ref][]Ref, error) {
 	refs := make([]Ref, 0, len(c.schemas))
 	for ref := range c.schemas {
 		refs = append(refs, ref)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Key() < refs[j].Key() })
-	compiler := jsonschema.NewCompiler()
-	compiler.DefaultDraft(jsonschema.Draft2020)
-	compiler.AssertFormat()
 	resources := map[string]any{}
+	refsByURI := map[string]Ref{}
 	for _, ref := range refs {
 		resource, err := jsonschema.UnmarshalJSON(bytes.NewReader(c.schemas[ref].Document))
 		if err != nil {
-			return nil, fmt.Errorf("decode schema %q: %w", ref.Key(), err)
+			return nil, nil, fmt.Errorf("decode schema %q: %w", ref.Key(), err)
 		}
 		location := schemaURI(ref)
-		if err := compiler.AddResource(location, resource); err != nil {
-			return nil, fmt.Errorf("register schema %q: %w", ref.Key(), err)
-		}
 		resources[location] = resource
+		refsByURI[location] = ref
 	}
-	compiler.UseLoader(jsonschema.SchemeURLLoader{"https": localSchemaLoader{resources: resources}})
 	compiled := make(map[Ref]*jsonschema.Schema, len(refs))
+	dependencies := make(map[Ref][]Ref, len(refs))
 	for _, ref := range refs {
-		schema, err := compiler.Compile(schemaURI(ref))
+		location := schemaURI(ref)
+		compiler := jsonschema.NewCompiler()
+		compiler.DefaultDraft(jsonschema.Draft2020)
+		compiler.AssertFormat()
+		if err := compiler.AddResource(location, resources[location]); err != nil {
+			return nil, nil, fmt.Errorf("register schema %q: %w", ref.Key(), err)
+		}
+		loader := localSchemaLoader{
+			resources: resources, refsByURI: refsByURI,
+			loaded: make(map[Ref]struct{}),
+		}
+		compiler.UseLoader(loader)
+		schema, err := compiler.Compile(location)
 		if err != nil {
-			return nil, fmt.Errorf("compile schema %q: %w", ref.Key(), err)
+			return nil, nil, fmt.Errorf("compile schema %q: %w", ref.Key(), err)
 		}
 		compiled[ref] = schema
+		for dependency := range loader.loaded {
+			if dependency != ref {
+				dependencies[ref] = append(dependencies[ref], dependency)
+			}
+		}
+		sort.Slice(dependencies[ref], func(i, j int) bool {
+			return dependencies[ref][i].Key() < dependencies[ref][j].Key()
+		})
 	}
-	return compiled, nil
+	return compiled, dependencies, nil
 }
 
-type localSchemaLoader struct{ resources map[string]any }
+type localSchemaLoader struct {
+	resources map[string]any
+	refsByURI map[string]Ref
+	loaded    map[Ref]struct{}
+}
 
 func (l localSchemaLoader) Load(rawURL string) (any, error) {
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Scheme != "https" || u.Host != schemaHost || u.User != nil {
+	if err != nil || u.Scheme != "https" || u.Host != schemaHost || u.User != nil || u.RawQuery != "" {
 		return nil, fmt.Errorf("remote or untrusted schema reference %q is disabled", rawURL)
 	}
-	resource, ok := l.resources[u.String()]
+	u.Fragment = ""
+	u.RawFragment = ""
+	resourceURI := u.String()
+	resource, ok := l.resources[resourceURI]
 	if !ok {
 		return nil, fmt.Errorf("schema resource %q is not registered", rawURL)
+	}
+	if ref, ok := l.refsByURI[resourceURI]; ok {
+		l.loaded[ref] = struct{}{}
 	}
 	return resource, nil
 }
@@ -1183,6 +1238,10 @@ func cloneDescriptor(descriptor Descriptor) Descriptor {
 	if descriptor.ArtifactPolicy != nil {
 		policy := cloneArtifactPolicy(*descriptor.ArtifactPolicy)
 		descriptor.ArtifactPolicy = &policy
+	}
+	if descriptor.UsagePolicy != nil {
+		policy := *descriptor.UsagePolicy
+		descriptor.UsagePolicy = &policy
 	}
 	return descriptor
 }

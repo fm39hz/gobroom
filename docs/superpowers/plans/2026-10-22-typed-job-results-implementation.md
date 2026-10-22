@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing public `pkg/provider`/`pkg/daemon`, JSON Schema catalog, `encoding/json`, fake HTTP upstream and standard Go tests. No new dependency.
 
-**Spec:** [Approved usage design, typed-results section](../specs/2026-10-22-usage-contract-design.md#typed-results-separate-proof-not-a-kernel-redesign). This independent plan awaits review with the [usage plan](2026-10-22-hybrid-usage-implementation.md).
+**Spec:** [Approved usage design, typed-results section](../specs/2026-10-22-usage-contract-design.md#typed-results-separate-proof-not-a-kernel-redesign). The user approved execution with the [usage plan](2026-10-22-hybrid-usage-implementation.md) on 2026-10-22.
 
 ## Global Constraints
 

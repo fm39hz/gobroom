@@ -216,6 +216,16 @@ type ArtifactInterpreterBinding = extensions.ArtifactInterpreterBinding
 type ArtifactReplayScope = extensions.ArtifactReplayScope
 type ArtifactSensitivity = extensions.ArtifactSensitivity
 type ArtifactPolicy = extensions.ArtifactPolicy
+type UsageValue = extensions.UsageValue
+type UsagePolicy = extensions.UsagePolicy
+type UsageDisclosure = extensions.UsageDisclosure
+type UsageDescriptorSnapshot = extensions.UsageDescriptorSnapshot
+
+const (
+	UsageKind              = extensions.UsageKind
+	UsagePrivate           = extensions.UsagePrivate
+	UsageManagementVisible = extensions.UsageManagementVisible
+)
 
 type Endpoint = kernel.Endpoint
 type Transport = kernel.Transport
