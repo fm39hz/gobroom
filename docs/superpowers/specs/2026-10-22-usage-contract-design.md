@@ -1,7 +1,9 @@
 # Hybrid usage accounting contract
 
-Status: direction approved in conversation on 2026-10-22; written specification
-awaiting review. Not implemented. Supplements
+Status: direction and written specification approved by the user on 2026-10-22.
+Not implemented. The [usage implementation plan](../plans/2026-10-22-hybrid-usage-implementation.md)
+and [independent typed-jobs plan](../plans/2026-10-22-typed-job-results-implementation.md)
+await implementation-plan review. Supplements
 [semantic extension contracts](../../EXTENSION_CONTRACTS.md).
 
 ## Purpose and success

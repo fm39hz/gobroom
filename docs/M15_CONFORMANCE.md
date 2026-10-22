@@ -26,7 +26,7 @@ criterion; passing existing conformance simulations does not remove them.
 | Existing artifact extension arm | `extensions.Snapshot.validateArtifact` validates inline values against exact registered schemas and enforces owner/recipient/expiry policy; response scopes live in `internal/artifacts/response.go`. | Reuse this legitimate primitive. Do not infer that every custom event requires a new kernel enum merely because common fields are fixed: event kinds are string-backed and registered artifacts are supported. |
 | Auth/replay | Public-module setup/resource/owner/activation fixtures and job/replay-shutdown fixtures exist. | No missing generic replay mechanism was established in this audit. Remaining proof must be a finite clause-to-test map, not a requirement for one giant universal matrix. |
 
-Recommended usage direction for review: retain efficient common typed values
+Approved usage direction: retain efficient common typed values
 and add catalog/schema-bound usage extensions. For results, first prove the
 existing registered-artifact/renderer path without a text tunnel; do not add a
 second payload system or change the projector interface merely because the
@@ -34,8 +34,9 @@ example currently uses text. A projector's logical result schema and the client
 wire envelope are distinct contracts. The hybrid usage direction is now approved
 in conversation; its
 [written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
-awaits review before implementation planning. The contract change has not been
-implemented or declared closed.
+is approved; the [implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
+and [typed-jobs proof plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
+await plan review. The contract change has not been implemented or declared closed.
 
 ### Source follow-up — typed results and usage models
 
@@ -60,7 +61,7 @@ Any approved usage extension must address per-response snapshot/delta handling,
 cross-invocation aggregation, units, overlapping/subset token counts, optional
 values, original-provider versus client-transformed data, and public projection
 versus internal context. Existing catalog/schema validation should be reused;
-the source comparison does not authorize new public contract code before review.
+the source comparison alone does not authorize implementation before plan review.
 
 Session admission regression: `TestCacheSaveReportsOverflowWithoutDiscardingLiveState`
 failed before the bounded fix because full queues returned nil. Save now preserves
