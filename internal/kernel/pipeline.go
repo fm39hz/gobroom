@@ -449,6 +449,10 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 			if emitFailure != nil {
 				return emitFailure
 			}
+			if err := ctx.Err(); err != nil {
+				emitFailure = WrapResponseFailure(ResponseFailureProvider, err)
+				return emitFailure
+			}
 			if event.Usage != nil {
 				usage := admitUsage(*event.Usage)
 				event.Usage = &usage

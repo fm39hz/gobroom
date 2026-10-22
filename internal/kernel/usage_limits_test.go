@@ -97,6 +97,21 @@ func TestAttemptUsageCompletionDoesNotInventClientPayloadFields(t *testing.T) {
 	}
 }
 
+func TestAttemptUsageStagedTerminalHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var emitErr error
+	decoder := pipelineFailureDecoder{decode: func(_ context.Context, emit func(ResponseEvent) error, _ StreamHooks) error {
+		cancel()
+		emitErr = emit(ResponseEvent{Kind: EventResponseComplete})
+		return emitErr
+	}}
+	err := runProviderResponseErrorPipeline(ctx, decoder, pipelineFailureRenderer{}, StreamHooks{})
+	if !errors.Is(emitErr, context.Canceled) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("terminal callback ignored cancellation: emit=%v pipeline=%v", emitErr, err)
+	}
+}
+
 func TestAttemptUsageBoundsIncludeSerializedEnvelopeAndRejectInvalidSiblings(t *testing.T) {
 	ref := extensions.Ref{Kind: extensions.UsageKind, ID: "fixture.units", ContractVersion: 1}
 	k := &Kernel{UsageCatalog: fixtureUsageCatalog(t, `{"type":"integer"}`, ref)}
