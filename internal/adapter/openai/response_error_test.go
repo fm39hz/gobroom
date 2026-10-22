@@ -124,6 +124,86 @@ func TestOpenAIUsageJSONPresenceAndZero(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesSSEUsageMergesPartialSnapshots(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"usage\":{\"input_tokens\":100}}\n\n" +
+		"data: {\"type\":\"response.output_item.done\",\"usage\":{\"input_tokens\":0}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_partial\",\"status\":\"completed\",\"usage\":{\"output_tokens\":4}}}\n\n"
+	var final kernel.UsageEvent
+	err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, normalize.FormatOpenAIResponses, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
+		OnComplete: func(usage kernel.UsageEvent) { final = usage },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.InputTokens == nil || *final.InputTokens != 0 || final.OutputTokens == nil || *final.OutputTokens != 4 {
+		t.Fatalf("partial snapshots lost input or known-zero correction: %+v", final)
+	}
+}
+
+func TestOpenAIUsageOfficialDetailPaths(t *testing.T) {
+	for _, protocol := range []struct {
+		name, inputDetails, outputDetails string
+		format                            normalize.Format
+	}{
+		{name: "Chat", inputDetails: "prompt_tokens_details", outputDetails: "completion_tokens_details", format: normalize.FormatOpenAIChat},
+		{name: "Responses", inputDetails: "input_tokens_details", outputDetails: "output_tokens_details", format: normalize.FormatOpenAIResponses},
+	} {
+		for _, tc := range []struct {
+			name, writeField, reasoningField, extra string
+			wantWrite, wantReasoning                *int64
+		}{
+			{name: "known", writeField: `,"cache_write_tokens":2`, reasoningField: `"reasoning_tokens":4`, wantWrite: new(int64(2)), wantReasoning: new(int64(4))},
+			{name: "known zero", writeField: `,"cache_write_tokens":0`, reasoningField: `"reasoning_tokens":0`, wantWrite: new(int64(0)), wantReasoning: new(int64(0))},
+			{name: "missing", reasoningField: `"reasoning_tokens":4`, wantReasoning: new(int64(4))},
+			{name: "null", writeField: `,"cache_write_tokens":null`, reasoningField: `"reasoning_tokens":null`},
+			{name: "unrelated alias ignored", reasoningField: `"reasoning_tokens":4`, extra: `,"cache_creation_input_tokens":9`, wantReasoning: new(int64(4))},
+		} {
+			for _, streaming := range []bool{false, true} {
+				transport := "JSON"
+				if streaming {
+					transport = "SSE"
+				}
+				t.Run(protocol.name+"/"+tc.name+"/"+transport, func(t *testing.T) {
+					usage := `{"` + protocol.inputDetails + `":{"cached_tokens":3` + tc.writeField + `},"` + protocol.outputDetails + `":{` + tc.reasoningField + `}` + tc.extra + `}`
+					body := `{"id":"resp_details","object":"response","status":"completed","output":[],"usage":` + usage + `}`
+					if protocol.format == normalize.FormatOpenAIChat {
+						body = `{"id":"chatcmpl_details","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":` + usage + `}`
+					}
+					contentType := "application/json"
+					if streaming {
+						contentType = "text/event-stream"
+						body = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_details\",\"status\":\"completed\",\"usage\":" + usage + "}}\n\n"
+						if protocol.format == normalize.FormatOpenAIChat {
+							body = "data: {\"id\":\"chatcmpl_details\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":" + usage + "}\n\ndata: [DONE]\n\n"
+						}
+					}
+					var got kernel.UsageEvent
+					completed := false
+					err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+						Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{contentType}}, Body: io.NopCloser(strings.NewReader(body)),
+					}, protocol.format, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
+						OnComplete: func(usage kernel.UsageEvent) {
+							got = usage
+							completed = true
+						},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !completed || got.CachedReadTokens == nil || *got.CachedReadTokens != 3 || !sameOptionalInt(got.CachedWriteTokens, tc.wantWrite) || !sameOptionalInt(got.ReasoningTokens, tc.wantReasoning) {
+						t.Fatalf("official usage details lost presence or values: %+v", got)
+					}
+					if got.InputTokens != nil || got.OutputTokens != nil || len(got.AccountingIssues) != 0 {
+						t.Fatalf("detail-only usage fabricated base counts or issues: %+v", got)
+					}
+				})
+			}
+		}
+	}
+}
+
 func sameOptionalInt(got, want *int64) bool {
 	if got == nil || want == nil {
 		return got == nil && want == nil

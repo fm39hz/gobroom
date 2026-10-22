@@ -272,7 +272,7 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 					completed = true
 				}
 				if event.Usage != nil {
-					usage = *event.Usage
+					usage = kernel.MergeProviderUsage(usage, *event.Usage)
 				}
 				if err := emit(event); err != nil {
 					return err
@@ -335,7 +335,7 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 			completed = true
 		}
 		if event.Usage != nil {
-			usage = *event.Usage
+			usage = kernel.MergeProviderUsage(usage, *event.Usage)
 		}
 		if err := emit(event); err != nil {
 			return err
@@ -464,7 +464,8 @@ func openAIUsageFromMap(raw any) (kernel.UsageEvent, bool, error) {
 	}{
 		{inputRaw, &event.InputTokens}, {outputRaw, &event.OutputTokens},
 		{detailCounter("input_tokens_details", "cached_tokens"), &event.CachedReadTokens}, {detailCounter("prompt_tokens_details", "cached_tokens"), &event.CachedReadTokens},
-		{usage["cache_creation_input_tokens"], &event.CachedWriteTokens}, {detailCounter("output_tokens_details", "reasoning_tokens"), &event.ReasoningTokens},
+		{detailCounter("input_tokens_details", "cache_write_tokens"), &event.CachedWriteTokens}, {detailCounter("prompt_tokens_details", "cache_write_tokens"), &event.CachedWriteTokens},
+		{detailCounter("output_tokens_details", "reasoning_tokens"), &event.ReasoningTokens}, {detailCounter("completion_tokens_details", "reasoning_tokens"), &event.ReasoningTokens},
 	} {
 		if len(item.raw) == 0 || bytes.Equal(item.raw, []byte("null")) {
 			continue

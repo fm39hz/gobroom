@@ -31,10 +31,10 @@ func TestNonOpenAIProviderFailuresReachConfiguredClassifier(t *testing.T) {
 	}{
 		{
 			name: "anthropic", definition: "anthropic-messages", protocol: "anthropic", basePath: "/v1", reasonPath: "/error/details/reason",
-			healthy:   `{"type":"message","id":"msg_ok","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}`,
+			healthy:   `{"type":"message","id":"msg_ok","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}`,
 			errorJSON: `{"type":"error","error":{"type":"invalid_request_error","message":"private-provider-marker","details":{"reason":"fixture_continuity_reset"}}}`,
 			partial: []string{
-				`{"type":"message_start","message":{"id":"msg_partial","type":"message","role":"assistant","content":[],"usage":{"input_tokens":7,"output_tokens":0}}}`,
+				`{"type":"message_start","message":{"id":"msg_partial","type":"message","role":"assistant","content":[],"usage":{"input_tokens":7,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`,
 				`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
 				`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial-text"}}`,
 				`{"type":"message_delta","delta":{},"usage":{"output_tokens":2}}`,
@@ -42,9 +42,9 @@ func TestNonOpenAIProviderFailuresReachConfiguredClassifier(t *testing.T) {
 		},
 		{
 			name: "gemini", definition: "gemini", protocol: "gemini", basePath: "/v1beta", reasonPath: "/error/details/0/reason",
-			healthy:   `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}}`,
+			healthy:   `{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"thoughtsTokenCount":0}}`,
 			errorJSON: `{"error":{"code":400,"status":"FAILED_PRECONDITION","message":"private-provider-marker","details":[{"reason":"fixture_continuity_reset"}]}}`,
-			partial:   []string{`{"candidates":[{"content":{"parts":[{"text":"partial-text"}]}}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":2}}`},
+			partial:   []string{`{"candidates":[{"content":{"parts":[{"text":"partial-text"}]}}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":2,"thoughtsTokenCount":0}}`},
 		},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -212,14 +212,14 @@ func TestNonOpenAIProviderFailuresReachConfiguredClassifier(t *testing.T) {
 			}
 			var usages []struct {
 				Status                    string
-				InputTokens, OutputTokens int64
+				InputTokens, OutputTokens *int64
 			}
 			if err := json.Unmarshal(rpc("usage.list", map[string]any{"limit": 100}), &usages); err != nil {
 				t.Fatal(err)
 			}
 			found := false
 			for _, usage := range usages {
-				if usage.Status == "error" && usage.InputTokens == 7 && usage.OutputTokens == 2 {
+				if usage.Status == "error" && usage.InputTokens != nil && *usage.InputTokens == 7 && usage.OutputTokens != nil && *usage.OutputTokens == 2 {
 					found = true
 				}
 			}

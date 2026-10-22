@@ -13,6 +13,7 @@ const (
 	defaultUsageMaxExtensionByte = 65536
 	maxAccountingIssues          = 32
 	accountingIssueOverflowCode  = "overflow"
+	invalidCommonUsageCode       = "invalid_usage_counter"
 )
 
 // UsageLimits bounds extension usage accepted by a host.
@@ -83,6 +84,42 @@ func (event UsageEvent) BoundedIssues() []UsageIssue {
 	return coalesceUsageIssues(event.AccountingIssues)
 }
 
+// SanitizeCommon returns an owned snapshot with invalid optional metrics
+// replaced by unknown values and a constant accounting issue. Valid siblings
+// and explicit zero values are retained; the caller's snapshot is untouched.
+func (event UsageEvent) SanitizeCommon() UsageEvent {
+	event = event.Clone()
+	invalid := false
+	for _, counter := range []**int64{
+		&event.InputTokens, &event.OutputTokens, &event.CachedReadTokens,
+		&event.CachedWriteTokens, &event.ReasoningTokens,
+	} {
+		if invalidCommonCounter(*counter) {
+			*counter = nil
+			invalid = true
+		}
+	}
+	for _, measure := range []**float64{&event.EstimatedCost, &event.OutputTokensPerSecond} {
+		if invalidCommonMeasure(*measure) {
+			*measure = nil
+			invalid = true
+		}
+	}
+	if invalid {
+		event.AccountingIssues = append(event.AccountingIssues, UsageIssue{Code: invalidCommonUsageCode})
+	}
+	event.AccountingIssues = coalesceUsageIssues(event.AccountingIssues)
+	return event
+}
+
+func invalidCommonCounter(value *int64) bool {
+	return value != nil && *value < 0
+}
+
+func invalidCommonMeasure(value *float64) bool {
+	return value != nil && (math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0)
+}
+
 // ValidateCommon validates values with common semantics. Missing values are
 // unknown and valid; present counters and costs must be nonnegative, and
 // floating point measurements must be finite.
@@ -97,7 +134,7 @@ func (event UsageEvent) ValidateCommon() error {
 		{"cached write tokens", event.CachedWriteTokens},
 		{"reasoning tokens", event.ReasoningTokens},
 	} {
-		if counter.value != nil && *counter.value < 0 {
+		if invalidCommonCounter(counter.value) {
 			return fmt.Errorf("%s must be nonnegative", counter.name)
 		}
 	}
@@ -108,7 +145,7 @@ func (event UsageEvent) ValidateCommon() error {
 		{"estimated cost", event.EstimatedCost},
 		{"output tokens per second", event.OutputTokensPerSecond},
 	} {
-		if measure.value != nil && (math.IsNaN(*measure.value) || math.IsInf(*measure.value, 0) || *measure.value < 0) {
+		if invalidCommonMeasure(measure.value) {
 			return fmt.Errorf("%s must be finite and nonnegative", measure.name)
 		}
 	}

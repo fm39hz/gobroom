@@ -79,7 +79,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w,
 			"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Here is the result.\"}]}}]}\n\n"+
-				"data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"id\":\"next-call\",\"name\":\"lookup\",\"args\":{\"id\":7}},\"thoughtSignature\":\"next-sig\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":6}}\n\n")
+				"data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"id\":\"next-call\",\"name\":\"lookup\",\"args\":{\"id\":7}},\"thoughtSignature\":\"next-sig\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":6,\"thoughtsTokenCount\":0}}\n\n")
 	}))
 	upstream.Listener = listener
 	upstream.Start()
@@ -282,7 +282,7 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 			t.Errorf("Responses function result history mapping=%#v", contents[2])
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"Found it."},{"functionCall":{"name":"lookup","args":{"found":true}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":14,"candidatesTokenCount":4}}`)
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"Found it."},{"functionCall":{"name":"lookup","args":{"found":true}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":14,"candidatesTokenCount":4,"thoughtsTokenCount":0}}`)
 	}))
 	upstream.Listener = listener
 	upstream.Start()
@@ -343,12 +343,18 @@ func TestGeminiRuntimeBindingMapsOpenAIResponsesThroughGeminiAndBack(t *testing.
 		Object string           `json:"object"`
 		Status string           `json:"status"`
 		Output []map[string]any `json:"output"`
-		Usage  map[string]int64 `json:"usage"`
+		Usage  struct {
+			InputTokens   int64 `json:"input_tokens"`
+			OutputTokens  int64 `json:"output_tokens"`
+			OutputDetails struct {
+				ReasoningTokens *int64 `json:"reasoning_tokens"`
+			} `json:"output_tokens_details"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode OpenAI Responses projection %q: %v", writer.Body.String(), err)
 	}
-	if upstreamCalls.Load() != 1 || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 || result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["name"] != "lookup" || result.Usage["input_tokens"] != 14 || result.Usage["output_tokens"] != 4 {
+	if upstreamCalls.Load() != 1 || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 || result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["name"] != "lookup" || result.Usage.InputTokens != 14 || result.Usage.OutputTokens != 4 || result.Usage.OutputDetails.ReasoningTokens == nil || *result.Usage.OutputDetails.ReasoningTokens != 0 {
 		t.Fatalf("Gemini→Responses result=%#v upstream calls=%d", result, upstreamCalls.Load())
 	}
 	for _, unsupported := range []string{
@@ -454,7 +460,7 @@ func TestGeminiRuntimeBindingTranslatesNonStreamingTextCompletion(t *testing.T) 
 			t.Errorf("non-stream target=%s?%s", r.URL.Path, r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"plain response"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}`)
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"plain response"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3,"thoughtsTokenCount":0}}`)
 	}))
 	upstream.Listener = listener
 	upstream.Start()

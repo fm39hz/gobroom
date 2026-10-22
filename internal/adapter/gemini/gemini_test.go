@@ -315,7 +315,7 @@ func TestGeminiToolThoughtSignatureSurvivesOpenAIHistoryNormalization(t *testing
 }
 
 func TestTranslateGeminiJSONToOpenAIChat(t *testing.T) {
-	body := `{"candidates":[{"content":{"parts":[{"text":"hello"},{"functionCall":{"name":"lookup","args":{"id":7},"id":"call-7"},"thoughtSignature":"sig"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2}}`
+	body := `{"candidates":[{"content":{"parts":[{"text":"hello"},{"functionCall":{"name":"lookup","args":{"id":7},"id":"call-7"},"thoughtSignature":"sig"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2,"thoughtsTokenCount":0}}`
 	recorder := httptest.NewRecorder()
 	var events []kernel.ResponseEvent
 	var completed kernel.UsageEvent
@@ -345,7 +345,7 @@ func TestTranslateGeminiJSONToOpenAIChat(t *testing.T) {
 }
 
 func TestTranslateGeminiSSEEmitsIncrementalOpenAIChunks(t *testing.T) {
-	body := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"one\"}]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" two\"}]},\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":5}}\n\n"
+	body := "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"one\"}]}}]}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\" two\"}]},\"finishReason\":\"MAX_TOKENS\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":5,\"thoughtsTokenCount\":0}}\n\n"
 	recorder := httptest.NewRecorder()
 	var completed kernel.UsageEvent
 	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, recorder, normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnComplete: func(event kernel.UsageEvent) { completed = event }})
@@ -402,7 +402,7 @@ func TestGeminiUsagePreservesMissingFieldsAndExplicitZero(t *testing.T) {
 
 func TestGeminiUsageFractionalCountIsUnknownWithIssue(t *testing.T) {
 	var metadata geminiUsageMetadata
-	if err := json.Unmarshal([]byte(`{"promptTokenCount":1.5,"candidatesTokenCount":7}`), &metadata); err != nil {
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":1.5,"candidatesTokenCount":7,"thoughtsTokenCount":0}`), &metadata); err != nil {
 		t.Fatal(err)
 	}
 	usage := geminiUsage(&metadata)
@@ -412,7 +412,7 @@ func TestGeminiUsageFractionalCountIsUnknownWithIssue(t *testing.T) {
 }
 
 func TestGeminiSSEUsageMergesPartialSnapshotsAndKnownZero(t *testing.T) {
-	body := "data: {\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":2}}\n\n" +
+	body := "data: {\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":2,\"thoughtsTokenCount\":0}}\n\n" +
 		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":0}}\n\n"
 	var completed kernel.UsageEvent
 	err := (Gemini{}).DecodeResponse(context.Background(), kernel.UpstreamResponse{
@@ -423,6 +423,92 @@ func TestGeminiSSEUsageMergesPartialSnapshotsAndKnownZero(t *testing.T) {
 	}
 	if !geminiCountIs(completed.InputTokens, 8) || !geminiCountIs(completed.OutputTokens, 0) {
 		t.Fatalf("merged SSE usage=%#v", completed)
+	}
+}
+
+func TestGeminiSSEClientAndProviderReceiveSameMergedUsageSnapshots(t *testing.T) {
+	body := "data: {\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":2,\"thoughtsTokenCount\":0}}\n\n" +
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":5}}\n\n"
+	var providerSnapshots, clientSnapshots []kernel.UsageEvent
+	var completed kernel.UsageEvent
+	err := (Gemini{}).DecodeResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, func(event kernel.ResponseEvent) error {
+		if event.Kind == kernel.EventUsage && event.Usage != nil {
+			clientSnapshots = append(clientSnapshots, event.Usage.Clone())
+		}
+		return nil
+	}, kernel.StreamHooks{
+		OnProviderUsage: func(event kernel.UsageEvent) { providerSnapshots = append(providerSnapshots, event.Clone()) },
+		OnComplete:      func(event kernel.UsageEvent) { completed = event },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providerSnapshots) != 2 || len(clientSnapshots) != 2 {
+		t.Fatalf("usage-only and candidate frames must both emit client/provider snapshots: client=%#v provider=%#v", clientSnapshots, providerSnapshots)
+	}
+	for index := range providerSnapshots {
+		if !geminiCountIs(providerSnapshots[index].InputTokens, 8) || !geminiCountIs(clientSnapshots[index].InputTokens, 8) ||
+			!geminiCountIs(providerSnapshots[index].OutputTokens, []int64{2, 5}[index]) || !geminiCountIs(clientSnapshots[index].OutputTokens, []int64{2, 5}[index]) {
+			t.Fatalf("client/provider usage snapshot %d diverged: client=%#v provider=%#v", index, clientSnapshots[index], providerSnapshots[index])
+		}
+	}
+	if !geminiCountIs(completed.InputTokens, 8) || !geminiCountIs(completed.OutputTokens, 5) {
+		t.Fatalf("completion usage=%#v", completed)
+	}
+}
+
+func TestGeminiUsageIncludesReportedThoughtsInCanonicalOutput(t *testing.T) {
+	var metadata geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":11,"candidatesTokenCount":6,"totalTokenCount":20,"cachedContentTokenCount":4,"thoughtsTokenCount":3}`), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	usage := geminiUsage(&metadata)
+	if !geminiCountIs(usage.InputTokens, 11) || !geminiCountIs(usage.OutputTokens, 9) ||
+		!geminiCountIs(usage.CachedReadTokens, 4) || !geminiCountIs(usage.ReasoningTokens, 3) {
+		t.Fatalf("Gemini canonical usage must include reported thoughts in output while cache remains an input subset: %#v", usage)
+	}
+
+	// With no thought count, a matching reported total proves there are no
+	// additional output components beyond candidatesTokenCount.
+	var provenOutput geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":11,"candidatesTokenCount":6,"totalTokenCount":17}`), &provenOutput); err != nil {
+		t.Fatal(err)
+	}
+	usage = geminiUsage(&provenOutput)
+	if !geminiCountIs(usage.OutputTokens, 6) || usage.ReasoningTokens != nil {
+		t.Fatalf("matching total should prove candidate-only output without inventing reasoning usage: %#v", usage)
+	}
+	var ambiguousTotal geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":11,"candidatesTokenCount":6,"totalTokenCount":20}`), &ambiguousTotal); err != nil {
+		t.Fatal(err)
+	}
+	usage = geminiUsage(&ambiguousTotal)
+	if usage.OutputTokens != nil || !geminiCountIs(ambiguousTotal.CandidatesTokenCount, 6) {
+		t.Fatalf("mismatched aggregate total must remain unproven while retaining candidates: %#v / %#v", usage, ambiguousTotal)
+	}
+
+	// An explicitly reported zero is known and supports candidate-only output,
+	// even when no total was included.
+	var knownNonThinking geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":11,"candidatesTokenCount":6,"thoughtsTokenCount":0}`), &knownNonThinking); err != nil {
+		t.Fatal(err)
+	}
+	usage = geminiUsage(&knownNonThinking)
+	if !geminiCountIs(usage.OutputTokens, 6) || !geminiCountIs(usage.ReasoningTokens, 0) {
+		t.Fatalf("explicit zero thoughts should preserve known candidate output: %#v", usage)
+	}
+
+	// Without thoughts or a total that accounts for all output components,
+	// preserve the known candidate field but leave canonical output unknown.
+	var partial geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":11,"candidatesTokenCount":6,"cachedContentTokenCount":4}`), &partial); err != nil {
+		t.Fatal(err)
+	}
+	usage = geminiUsage(&partial)
+	if !geminiCountIs(usage.InputTokens, 11) || usage.OutputTokens != nil || usage.ReasoningTokens != nil || !geminiCountIs(usage.CachedReadTokens, 4) || !geminiCountIs(partial.CandidatesTokenCount, 6) {
+		t.Fatalf("unproven Gemini output must remain unknown while valid fields survive: %#v", usage)
 	}
 }
 

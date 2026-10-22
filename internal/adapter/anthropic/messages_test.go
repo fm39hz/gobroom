@@ -72,7 +72,7 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	if !strings.Contains(output, "tool_calls") || !strings.Contains(output, "done") || !strings.Contains(output, "tool_calls") {
 		t.Fatalf("output=%s", output)
 	}
-	if !anthropicCountIs(usage.InputTokens, 12) || !anthropicCountIs(usage.OutputTokens, 4) {
+	if usage.InputTokens != nil || !anthropicCountIs(usage.OutputTokens, 4) {
 		t.Fatalf("usage=%#v", usage)
 	}
 	seenText, seenTool, seenUsage, seenStart, seenEnd := false, false, false, false, false
@@ -236,7 +236,7 @@ func TestKernelAppliesOnlyApprovedAnthropicReasoningBudgetLossToWire(t *testing.
 }
 
 func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) {
-	responseBody := `{"id":"msg_responses_crosswire","type":"message","role":"assistant","model":"claude-physical","content":[{"type":"text","text":"I found it."},{"type":"tool_use","id":"call_anthropic","name":"lookup","input":{"found":true}}],"stop_reason":"tool_use","usage":{"input_tokens":9,"output_tokens":4}}`
+	responseBody := `{"id":"msg_responses_crosswire","type":"message","role":"assistant","model":"claude-physical","content":[{"type":"text","text":"I found it."},{"type":"tool_use","id":"call_anthropic","name":"lookup","input":{"found":true}}],"stop_reason":"tool_use","usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}`
 	var dispatches atomic.Int32
 	composed := NewAdapter().(kernel.ComposedAdapter)
 	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: anthropicRoundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -312,7 +312,18 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 		Object string           `json:"object"`
 		Status string           `json:"status"`
 		Output []map[string]any `json:"output"`
-		Usage  map[string]int64 `json:"usage"`
+		Usage  *struct {
+			InputTokens        *int64 `json:"input_tokens"`
+			OutputTokens       *int64 `json:"output_tokens"`
+			TotalTokens        *int64 `json:"total_tokens"`
+			InputTokensDetails *struct {
+				CachedTokens     *int64 `json:"cached_tokens"`
+				CacheWriteTokens *int64 `json:"cache_write_tokens"`
+			} `json:"input_tokens_details"`
+			OutputTokensDetails *struct {
+				ReasoningTokens *int64 `json:"reasoning_tokens"`
+			} `json:"output_tokens_details"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(writer.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode Responses projection %q: %v", writer.Body.String(), err)
@@ -320,8 +331,11 @@ func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) 
 	if dispatches.Load() != 1 || !strings.HasPrefix(result.ID, "resp_gobroom_") || result.Object != "response" || result.Status != "completed" || len(result.Output) != 2 {
 		t.Fatalf("Anthropic→Responses result=%#v dispatches=%d", result, dispatches.Load())
 	}
-	if result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["call_id"] != "call_anthropic" || result.Usage["input_tokens"] != 9 || result.Usage["output_tokens"] != 4 {
+	if result.Output[0]["type"] != "message" || result.Output[1]["type"] != "function_call" || result.Output[1]["call_id"] != "call_anthropic" || result.Usage == nil || !anthropicCountIs(result.Usage.InputTokens, 9) || !anthropicCountIs(result.Usage.OutputTokens, 4) {
 		t.Fatalf("Anthropic semantic output/usage=%#v usage=%#v", result.Output, result.Usage)
+	}
+	if result.Usage.InputTokensDetails == nil || !anthropicCountIs(result.Usage.InputTokensDetails.CachedTokens, 0) || !anthropicCountIs(result.Usage.InputTokensDetails.CacheWriteTokens, 0) {
+		t.Fatalf("Anthropic projected usage lost reported cache zeros: %#v", result.Usage)
 	}
 	continuity, err := normalize.JSON("/v1/responses", http.Header{}, []byte(`{"model":"junior","previous_response_id":"resp_previous","input":"continue"}`))
 	if err != nil {
@@ -359,7 +373,7 @@ func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {
 	if recorder.Body.String() != body {
 		t.Fatalf("Anthropic passthrough body changed: %s", recorder.Body.String())
 	}
-	if usage.Status != "ok" || !anthropicCountIs(usage.InputTokens, 10370) || !anthropicCountIs(usage.OutputTokens, 4) {
+	if usage.Status != "ok" || usage.InputTokens != nil || !anthropicCountIs(usage.OutputTokens, 4) {
 		t.Fatalf("usage=%#v", usage)
 	}
 }
@@ -381,7 +395,7 @@ func TestAnthropicPassthroughStreamReportsUsageWithoutChangingEvents(t *testing.
 	if recorder.Body.String() != body {
 		t.Fatalf("Anthropic SSE passthrough body changed: %s", recorder.Body.String())
 	}
-	if usage.Status != "ok" || !anthropicCountIs(usage.InputTokens, 21) || !anthropicCountIs(usage.OutputTokens, 7) {
+	if usage.Status != "ok" || usage.InputTokens != nil || !anthropicCountIs(usage.OutputTokens, 7) {
 		t.Fatalf("usage=%#v", usage)
 	}
 }
@@ -391,14 +405,44 @@ func anthropicCountIs(value *int64, want int64) bool {
 }
 
 func TestAnthropicUsageFramePreservesMissingFieldsAndExplicitZero(t *testing.T) {
-	usage := kernel.UsageEvent{InputTokens: new(int64(9)), OutputTokens: new(int64(4))}
+	state := anthropicUsageState{InputTokens: new(int64(7)), OutputTokens: new(int64(4)), CachedReadTokens: new(int64(1)), CachedWriteTokens: new(int64(2))}
 	frame, err := decodeAnthropicUsageFrame([]byte(`{"usage":{"input_tokens":0}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	usage = mergeAnthropicUsage(usage, frame.EventUsage)
-	if !anthropicCountIs(usage.InputTokens, 0) || !anthropicCountIs(usage.OutputTokens, 4) {
+	usage := state.apply(frame.EventUsage).snapshot()
+	if !anthropicCountIs(usage.InputTokens, 3) || !anthropicCountIs(usage.OutputTokens, 4) {
 		t.Fatalf("partial usage update=%#v", usage)
+	}
+}
+
+func TestAnthropicCacheInputTotalIncludesReadAndCreationOnce(t *testing.T) {
+	body := `{"id":"msg_cache","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"cache_read_input_tokens":8,"cache_creation_input_tokens":4,"output_tokens":1}}`
+	var completed kernel.UsageEvent
+	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, httptest.NewRecorder(), normalize.FormatOpenAIChat, kernel.StreamHooks{OnComplete: func(event kernel.UsageEvent) { completed = event }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !anthropicCountIs(completed.InputTokens, 14) || !anthropicCountIs(completed.CachedReadTokens, 8) || !anthropicCountIs(completed.CachedWriteTokens, 4) {
+		t.Fatalf("Anthropic input must include uncached, cache-read and cache-creation tokens exactly once: %#v", completed)
+	}
+}
+
+func TestAnthropicSSEPartialUsageSnapshotsRetainCacheComponents(t *testing.T) {
+	body := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2,\"cache_read_input_tokens\":8}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"cache_creation_input_tokens\":4,\"output_tokens\":1}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	var completed kernel.UsageEvent
+	err := NewAdapter().RenderResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, httptest.NewRecorder(), normalize.FormatOpenAIChat, kernel.StreamHooks{Streaming: true, OnComplete: func(event kernel.UsageEvent) { completed = event }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !anthropicCountIs(completed.InputTokens, 14) || !anthropicCountIs(completed.CachedReadTokens, 8) || !anthropicCountIs(completed.CachedWriteTokens, 4) {
+		t.Fatalf("partial Anthropic frames must produce one coherent total snapshot: %#v", completed)
 	}
 }
 
@@ -407,7 +451,7 @@ func TestAnthropicUsageInvalidCountIsUnknownWithIssue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	usage := mergeAnthropicUsage(kernel.UsageEvent{}, frame.EventUsage)
+	usage := (anthropicUsageState{}).apply(frame.EventUsage).snapshot()
 	if usage.InputTokens != nil || !anthropicCountIs(usage.OutputTokens, 7) || len(usage.AccountingIssues) != 1 || usage.AccountingIssues[0].Code != "invalid_usage_counter" {
 		t.Fatalf("fractional count must be unknown with an issue, preserving valid siblings: %#v", usage)
 	}

@@ -22,7 +22,7 @@ func TestGeminiOptionalUsageFaultPreservesAnswerJSONAndSSE(t *testing.T) {
 			{"negative", `-3`},
 		} {
 			t.Run(wire+"/"+invalid.name, func(t *testing.T) {
-				body := `{"candidates":[{"content":{"parts":[{"text":"valid answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":` + invalid.value + `,"candidatesTokenCount":7}}`
+				body := `{"candidates":[{"content":{"parts":[{"text":"valid answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":` + invalid.value + `,"candidatesTokenCount":7,"thoughtsTokenCount":0}}`
 				contentType := "application/json"
 				if wire == "sse" {
 					contentType = "text/event-stream"

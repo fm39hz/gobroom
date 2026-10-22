@@ -333,13 +333,18 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	decoderCompleted := false
 	completionUsage := UsageEvent{}
 	decodeHooks.OnComplete = func(event UsageEvent) {
+		event = event.SanitizeCommon()
 		decoderCompleted = true
 		completionUsage = MergeProviderUsage(completionUsage, event)
 		if hooks.OnProviderUsage != nil {
 			hooks.OnProviderUsage(event.Clone())
 		}
 	}
-	decodeHooks.OnProviderUsage = hooks.OnProviderUsage
+	decodeHooks.OnProviderUsage = func(event UsageEvent) {
+		if hooks.OnProviderUsage != nil {
+			hooks.OnProviderUsage(event.SanitizeCommon())
+		}
+	}
 	privateSession := &sessionUpdates{ctx: ctx}
 	decodeHooks.OnSessionState = privateSession.capture
 	providerComplete := false
@@ -349,6 +354,10 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	clientBudget := responseEventBudget{maxEvent: hooks.MaxEventBytes, maxOutput: hooks.MaxOutputBytes}
 	var emitFailure error
 	emitOne := func(event ResponseEvent) error {
+		if event.Usage != nil {
+			usage := event.Usage.SanitizeCommon()
+			event.Usage = &usage
+		}
 		if event.Usage != nil && (event.Kind == EventUsage || event.Kind == EventResponseComplete) && hooks.OnProviderUsage != nil {
 			hooks.OnProviderUsage(event.Usage.Clone())
 		}

@@ -131,7 +131,10 @@ func (s *openAIResponsesSession) Emit(_ context.Context, event kernel.ResponseEv
 		s.responseID = event.ResponseID
 	}
 	if event.Usage != nil {
-		usage := *event.Usage
+		usage := kernel.MergeProviderUsage(kernel.UsageEvent{}, *event.Usage)
+		if s.usage != nil {
+			usage = kernel.MergeProviderUsage(*s.usage, *event.Usage)
+		}
 		s.usage = &usage
 	}
 	switch event.Kind {
@@ -177,11 +180,6 @@ func (s *openAIResponsesSession) Emit(_ context.Context, event kernel.ResponseEv
 	case kernel.EventContentBlockEnd:
 		if event.ItemID == "" {
 			s.finishReason = event.StopReason
-		}
-	case kernel.EventUsage:
-		if event.Usage != nil {
-			usage := *event.Usage
-			s.usage = &usage
 		}
 	case kernel.EventResponseComplete:
 		s.completed = true
@@ -455,8 +453,19 @@ func responsesUsage(usage *kernel.UsageEvent) map[string]any {
 	if usage.OutputTokens != nil {
 		result["output_tokens"] = *usage.OutputTokens
 	}
-	if usage.InputTokens != nil && usage.OutputTokens != nil {
+	if usage.InputTokens != nil && usage.OutputTokens != nil && *usage.InputTokens >= 0 && *usage.OutputTokens >= 0 && *usage.InputTokens <= int64(^uint64(0)>>1)-*usage.OutputTokens {
 		result["total_tokens"] = *usage.InputTokens + *usage.OutputTokens
+	}
+	if usage.CachedReadTokens != nil || usage.CachedWriteTokens != nil {
+		result["input_tokens_details"] = struct {
+			CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+			CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+		}{CachedTokens: usage.CachedReadTokens, CacheWriteTokens: usage.CachedWriteTokens}
+	}
+	if usage.ReasoningTokens != nil {
+		result["output_tokens_details"] = struct {
+			ReasoningTokens *int64 `json:"reasoning_tokens,omitempty"`
+		}{ReasoningTokens: usage.ReasoningTokens}
 	}
 	return result
 }

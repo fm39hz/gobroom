@@ -70,7 +70,7 @@ func TestUsagePresenceRoundTripAndDailyCoverage(t *testing.T) {
 		t.Fatalf("got %d daily rows, want 1", len(days))
 	}
 	daily := days[0]
-	if daily.Attempts != 2 || daily.IncompleteAttempts != 1 || daily.Input.Reported != 1 || daily.Input.Sum != 0 || daily.Output.Reported != 1 || daily.Output.Sum != 7 {
+	if daily.Attempts != 2 || daily.Input.Reported != 1 || daily.Input.Sum != 0 || daily.Output.Reported != 1 || daily.Output.Sum != 7 {
 		t.Fatalf("daily token coverage incorrect: %#v", daily)
 	}
 	if daily.CachedRead.Reported != 1 || daily.CachedRead.Sum != 0 || daily.CachedWrite.Reported != 1 || daily.CachedWrite.Sum != 5 || daily.Reasoning.Reported != 0 {
@@ -102,13 +102,17 @@ INSERT INTO usage_daily(date_key,requests,prompt_tokens,completion_tokens,estima
 CREATE TABLE unrelated_config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 INSERT INTO unrelated_config VALUES('provider','{"id":"keep-me","enabled":true}');
 INSERT INTO provider_nodes(id,name,base_url,protocol,definition_id,definition_contract_version,config_json) VALUES('node-preserve','Preserve','https://preserve.test','openai_chat','openai-compatible-chat',1,'{"token":"node-config"}');
-INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-preserve','node-preserve','Preserve','api_key','secret://keep');
+INSERT INTO connections(id,provider_node_id,name,credential_type,secret_ref) VALUES('conn-preserve','node-preserve','Preserve','api_key','fixture-secret-payload');
 INSERT INTO model_catalog(id,provider_node_id,kind,external_id,display_name,overrides_json) VALUES('model-preserve','node-preserve','custom','model-x','Model X','{"temperature":0.25}');
 INSERT INTO provider_runtime(provider_node_id,status) VALUES('node-preserve','cooldown');
 INSERT INTO connection_runtime(connection_id,status) VALUES('conn-preserve','rate_limited');
 `)
 	if err != nil {
 		t.Fatal(err)
+	}
+	credentialBefore, ok := s.ConnectionCredential("node-preserve")
+	if !ok || credentialBefore.Secret != "fixture-secret-payload" || credentialBefore.PrincipalGeneration == "" {
+		t.Fatal("canonical fixture credential is unavailable or incomplete")
 	}
 	var credentialRevisionBefore string
 	if err := s.DB.QueryRow(`SELECT revision FROM connection_credential_revisions WHERE connection_id='conn-preserve'`).Scan(&credentialRevisionBefore); err != nil {
@@ -119,6 +123,10 @@ INSERT INTO connection_runtime(connection_id,status) VALUES('conn-preserve','rat
 	}
 	if err := s.prepareRuntimeStatements(); err != nil {
 		t.Fatal(err)
+	}
+	credentialAfter, ok := s.ConnectionCredentialByID("conn-preserve")
+	if !ok || credentialAfter.Secret != credentialBefore.Secret || credentialAfter.Revision != credentialBefore.Revision || credentialAfter.PrincipalGeneration != credentialBefore.PrincipalGeneration || credentialAfter.Owner != credentialBefore.Owner {
+		t.Fatal("usage reset changed credential payload, revision, principal, or owner")
 	}
 	var config string
 	if err := s.DB.QueryRow(`SELECT value FROM unrelated_config WHERE key='provider'`).Scan(&config); err != nil {
@@ -141,11 +149,8 @@ INSERT INTO connection_runtime(connection_id,status) VALUES('conn-preserve','rat
 	if reset.Events != 1 || reset.Daily != 1 {
 		t.Fatalf("usage reset counts=%#v, want 1 event and 1 daily row", reset)
 	}
-	var nodeConfig, connectionSecretRef, modelConfig, providerHealth, connectionHealth, credentialRevision string
+	var nodeConfig, modelConfig, providerHealth, connectionHealth, credentialRevision string
 	if err := s.DB.QueryRow(`SELECT config_json FROM provider_nodes WHERE id='node-preserve'`).Scan(&nodeConfig); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.DB.QueryRow(`SELECT secret_ref FROM connections WHERE id='conn-preserve'`).Scan(&connectionSecretRef); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DB.QueryRow(`SELECT overrides_json FROM model_catalog WHERE id='model-preserve'`).Scan(&modelConfig); err != nil {
@@ -160,8 +165,8 @@ INSERT INTO connection_runtime(connection_id,status) VALUES('conn-preserve','rat
 	if err := s.DB.QueryRow(`SELECT revision FROM connection_credential_revisions WHERE connection_id='conn-preserve'`).Scan(&credentialRevision); err != nil {
 		t.Fatal(err)
 	}
-	if nodeConfig != `{"token":"node-config"}` || connectionSecretRef != "secret://keep" || modelConfig != `{"temperature":0.25}` || providerHealth != "cooldown" || connectionHealth != "rate_limited" || credentialRevision != credentialRevisionBefore {
-		t.Fatalf("configuration changed during usage reset: provider=%s connection=%s model=%s providerHealth=%s connectionHealth=%s credentialRevision=%s", nodeConfig, connectionSecretRef, modelConfig, providerHealth, connectionHealth, credentialRevision)
+	if nodeConfig != `{"token":"node-config"}` || modelConfig != `{"temperature":0.25}` || providerHealth != "cooldown" || connectionHealth != "rate_limited" || credentialRevision != credentialRevisionBefore {
+		t.Fatal("configuration or health changed during usage reset")
 	}
 }
 

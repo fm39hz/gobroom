@@ -401,6 +401,7 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 		return fmt.Errorf("Gemini response body is empty")
 	}
 	var totalUsage kernel.UsageEvent
+	var nativeUsage geminiUsageState
 	if strings.Contains(strings.ToLower(response.Headers.Get("content-type")), "text/event-stream") {
 		scanner := bufio.NewScanner(response.Body)
 		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
@@ -422,10 +423,10 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 				return fmt.Errorf("decode Gemini SSE event: %w", err)
 			}
 			if payload.UsageMetadata != nil {
-				usage := geminiUsage(payload.UsageMetadata)
-				totalUsage = kernel.MergeProviderUsage(totalUsage, usage)
+				nativeUsage = nativeUsage.merge(payload.UsageMetadata)
+				totalUsage = nativeUsage.snapshot()
 				if hooks.OnProviderUsage != nil {
-					hooks.OnProviderUsage(totalUsage)
+					hooks.OnProviderUsage(totalUsage.Clone())
 				}
 			}
 			if failure := geminiResponseFailure(payload.Error, totalUsage, hooks); failure != nil {
@@ -438,11 +439,26 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 				}
 			}
 			if len(payload.Candidates) == 0 {
+				if payload.UsageMetadata != nil {
+					usage := totalUsage.Clone()
+					if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &usage}); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			_, events, _ := openAIResponse(payload, hooks.ProviderIssuer)
 			for _, event := range events {
+				if event.Kind == kernel.EventUsage {
+					continue
+				}
 				if err := emit(event); err != nil {
+					return err
+				}
+			}
+			if payload.UsageMetadata != nil {
+				usage := totalUsage.Clone()
+				if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &usage}); err != nil {
 					return err
 				}
 			}
@@ -474,9 +490,10 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 			return fmt.Errorf("decode Gemini response: %w", err)
 		}
 		if payload.UsageMetadata != nil {
-			totalUsage = geminiUsage(payload.UsageMetadata)
+			nativeUsage = nativeUsage.merge(payload.UsageMetadata)
+			totalUsage = nativeUsage.snapshot()
 			if hooks.OnProviderUsage != nil {
-				hooks.OnProviderUsage(totalUsage)
+				hooks.OnProviderUsage(totalUsage.Clone())
 			}
 		}
 		if failure := geminiResponseFailure(payload.Error, totalUsage, hooks); failure != nil {
@@ -1100,11 +1117,71 @@ func geminiUsage(metadata *geminiUsageMetadata) kernel.UsageEvent {
 	if metadata == nil {
 		return kernel.UsageEvent{Status: "ok"}
 	}
-	return kernel.UsageEvent{
-		InputTokens: metadata.PromptTokenCount, OutputTokens: metadata.CandidatesTokenCount,
-		CachedReadTokens: metadata.CachedContentTokenCount, ReasoningTokens: metadata.ThoughtsTokenCount, Status: "ok",
-		AccountingIssues: metadata.AccountingIssues,
+	return (geminiUsageState{}).merge(metadata).snapshot()
+}
+
+// geminiUsageState retains provider-native metadata across partial SSE frames;
+// canonical output is derived from the native fields, never re-merged as if it
+// were another provider candidate count.
+type geminiUsageState struct {
+	Prompt           *int64
+	Candidates       *int64
+	Total            *int64
+	Cached           *int64
+	Thoughts         *int64
+	AccountingIssues []kernel.UsageIssue
+}
+
+func (state geminiUsageState) merge(metadata *geminiUsageMetadata) geminiUsageState {
+	if metadata == nil {
+		return state
 	}
+	if metadata.PromptTokenCount != nil {
+		state.Prompt = copyGeminiCount(metadata.PromptTokenCount)
+	}
+	if metadata.CandidatesTokenCount != nil {
+		state.Candidates = copyGeminiCount(metadata.CandidatesTokenCount)
+	}
+	if metadata.TotalTokenCount != nil {
+		state.Total = copyGeminiCount(metadata.TotalTokenCount)
+	}
+	if metadata.CachedContentTokenCount != nil {
+		state.Cached = copyGeminiCount(metadata.CachedContentTokenCount)
+	}
+	if metadata.ThoughtsTokenCount != nil {
+		state.Thoughts = copyGeminiCount(metadata.ThoughtsTokenCount)
+	}
+	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: metadata.AccountingIssues}).AccountingIssues
+	return state
+}
+
+func (state geminiUsageState) snapshot() kernel.UsageEvent {
+	var output *int64
+	if state.Candidates != nil && state.Thoughts != nil {
+		candidate, thoughts := *state.Candidates, *state.Thoughts
+		const maxInt64 = int64(^uint64(0) >> 1)
+		if candidate <= maxInt64-thoughts {
+			value := candidate + thoughts
+			output = &value
+		}
+	} else if state.Candidates != nil && state.Thoughts == nil && state.Prompt != nil && state.Total != nil {
+		prompt, candidate, total := *state.Prompt, *state.Candidates, *state.Total
+		const maxInt64 = int64(^uint64(0) >> 1)
+		if prompt <= maxInt64-candidate && prompt+candidate == total {
+			output = copyGeminiCount(state.Candidates)
+		}
+	}
+	return kernel.UsageEvent{InputTokens: copyGeminiCount(state.Prompt), OutputTokens: output,
+		CachedReadTokens: copyGeminiCount(state.Cached), ReasoningTokens: copyGeminiCount(state.Thoughts),
+		AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok"}
+}
+
+func copyGeminiCount(count *int64) *int64 {
+	if count == nil {
+		return nil
+	}
+	value := *count
+	return &value
 }
 
 func openAIFinishReason(reason string) string {

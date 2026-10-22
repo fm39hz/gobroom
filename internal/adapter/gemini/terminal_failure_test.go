@@ -17,12 +17,12 @@ func TestGeminiTerminalErrorsStopJSONAndSSE(t *testing.T) {
 	for _, tc := range []struct {
 		name, contentType, body string
 	}{
-		{"json with candidates before error", "application/json", `{"candidates":[{"content":{"parts":[{"text":"before"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4},` + errorJSON + `}`},
-		{"json error without candidates", "application/json", `{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4},` + errorJSON + `}`},
-		{"sse error before text", "text/event-stream", "data: {" + errorJSON + `,"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4}}` + "\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"after\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"},
-		{"sse error after text", "text/event-stream", "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"before\"}]}}]}\n\ndata: {" + errorJSON + `,"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4}}` + "\n\ndata: [DONE]\n\n"},
-		{"sse accumulated usage", "text/event-stream", "data: {\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":4}}\n\ndata: {" + errorJSON + "}\n\ndata: [DONE]\n\n"},
-		{"sse usage survives later content without metadata", "text/event-stream", "data: {\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":4}}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"before\"}]}}]}\n\ndata: {" + errorJSON + "}\n\ndata: [DONE]\n\n"},
+		{"json with candidates before error", "application/json", `{"candidates":[{"content":{"parts":[{"text":"before"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4,"thoughtsTokenCount":0},` + errorJSON + `}`},
+		{"json error without candidates", "application/json", `{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4,"thoughtsTokenCount":0},` + errorJSON + `}`},
+		{"sse error before text", "text/event-stream", "data: {" + errorJSON + `,"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4,"thoughtsTokenCount":0}}` + "\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"after\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"},
+		{"sse error after text", "text/event-stream", "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"before\"}]}}]}\n\ndata: {" + errorJSON + `,"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":4,"thoughtsTokenCount":0}}` + "\n\ndata: [DONE]\n\n"},
+		{"sse accumulated usage", "text/event-stream", "data: {\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":4,\"thoughtsTokenCount\":0}}\n\ndata: {" + errorJSON + "}\n\ndata: [DONE]\n\n"},
+		{"sse usage survives later content without metadata", "text/event-stream", "data: {\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":4,\"thoughtsTokenCount\":0}}\n\ndata: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"before\"}]}}]}\n\ndata: {" + errorJSON + "}\n\ndata: [DONE]\n\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var events []kernel.ResponseEvent
@@ -78,7 +78,7 @@ func TestGeminiTerminalErrorsStopJSONAndSSE(t *testing.T) {
 }
 
 func TestGeminiHealthyResponseStillCompletes(t *testing.T) {
-	body := `{"candidates":[{"content":{"parts":[{"text":"healthy"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}}`
+	body := `{"candidates":[{"content":{"parts":[{"text":"healthy"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"thoughtsTokenCount":0}}`
 	var completeCalls int
 	err := (Gemini{}).DecodeResponse(context.Background(), kernel.UpstreamResponse{
 		Status:  http.StatusOK,

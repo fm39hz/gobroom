@@ -111,7 +111,7 @@ func (k *Kernel) EmitUsage(event UsageEvent) bool {
 		return false
 	}
 	select {
-	case k.Events <- event.Clone():
+	case k.Events <- event.SanitizeCommon():
 		return true
 	default:
 		k.usageDropped.Add(1)
@@ -820,6 +820,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			var providerUsage UsageEvent
 			providerUsageKnown := false
 			recordProviderUsage := func(event UsageEvent) {
+				event = event.SanitizeCommon()
 				providerUsage = MergeProviderUsage(providerUsage, event)
 				if knownProviderUsage(event) {
 					providerUsageKnown = true
@@ -905,10 +906,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					}
 				}
 				if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
-					if enriched, enrichErr := source.EnrichUsage(ctx, candidate, response.Headers, event); enrichErr == nil {
+					if enriched, enrichErr := source.EnrichUsage(ctx, candidate, response.Headers, event.Clone()); enrichErr == nil {
 						event = enriched
 					}
 				}
+				event = event.SanitizeCommon()
 				event.Status = "ok"
 				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
 					if feedback, ok := k.Scheduler.gate.(FeedbackGate); ok {
@@ -929,6 +931,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				if event.OutputTokens != nil && event.Latency > 0 {
 					event.OutputTokensPerSecond = new(float64(*event.OutputTokens) / event.Latency.Seconds())
+				} else {
+					event.OutputTokensPerSecond = nil
 				}
 				if event.LogicalModel == "" {
 					event.LogicalModel = req.Model
@@ -1021,10 +1025,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			releaseCandidate()
 			failedUsage := providerUsage
 			if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
-				if enriched, err := source.EnrichUsage(ctx, candidate, response.Headers, failedUsage); err == nil {
+				if enriched, err := source.EnrichUsage(ctx, candidate, response.Headers, failedUsage.Clone()); err == nil {
 					failedUsage = enriched
 				}
 			}
+			failedUsage = failedUsage.SanitizeCommon()
 			if providerUsageKnown || knownProviderUsage(failedUsage) || len(failedUsage.AccountingIssues) > 0 {
 				event := failedUsage
 				event.Status = "error"

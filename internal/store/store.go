@@ -1233,6 +1233,7 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	event = event.SanitizeCommon()
 	dateKey := event.At.UTC().Format("2006-01-02")
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -1264,7 +1265,7 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 		return err
 	}
 	if _, err = tx.StmtContext(ctx, s.runtime.usageDaily).ExecContext(ctx, dateKey,
-		len(event.AccountingIssues) > 0,
+		len(event.AccountingIssues) > 0 || !event.HasReportedUsage(),
 		event.InputTokens, event.InputTokens, event.OutputTokens, event.OutputTokens,
 		event.CachedReadTokens, event.CachedReadTokens, event.CachedWriteTokens, event.CachedWriteTokens,
 		event.ReasoningTokens, event.ReasoningTokens, event.EstimatedCost, event.EstimatedCost); err != nil {

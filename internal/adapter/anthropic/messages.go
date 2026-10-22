@@ -338,7 +338,7 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 		scanner := bufio.NewScanner(response.Body)
 		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
 		scanner.Split(splitAnthropicSSELines)
-		var usage kernel.UsageEvent
+		var nativeUsage anthropicUsageState
 		started := false
 		completed := false
 		toolIndex := -1
@@ -366,7 +366,7 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 				return fmt.Errorf("decode Anthropic SSE event: %w", err)
 			}
 			if stringValue(event["type"]) == "error" || event["error"] != nil {
-				if err := reportAnthropicProviderError([]byte(data), usage, hooks); err != nil {
+				if err := reportAnthropicProviderError([]byte(data), nativeUsage.snapshot(), hooks); err != nil {
 					return err
 				}
 			}
@@ -383,10 +383,10 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 					hooks.OnFirstByte(time.Now())
 				}
 			}
-			updatedUsage, updatedToolIndex, err := emitAnthropicEvents(event, usageFrame, usage, toolIndex, emit)
-			usage, toolIndex = updatedUsage, updatedToolIndex
+			updatedUsage, updatedToolIndex, err := emitAnthropicEvents(event, usageFrame, nativeUsage, toolIndex, emit)
+			nativeUsage, toolIndex = updatedUsage, updatedToolIndex
 			if hooks.OnProviderUsage != nil {
-				hooks.OnProviderUsage(usage)
+				hooks.OnProviderUsage(nativeUsage.snapshot())
 			}
 			if err != nil {
 				return err
@@ -401,6 +401,7 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 		if !completed {
 			return io.ErrUnexpectedEOF
 		}
+		usage := nativeUsage.snapshot()
 		usage.Status = "ok"
 		if hooks.OnComplete != nil {
 			hooks.OnComplete(usage)
@@ -429,12 +430,13 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 		return err
 	}
 	completed := false
-	usage, _, err := emitAnthropicEvents(payload, usageFrame, kernel.UsageEvent{}, -1, func(event kernel.ResponseEvent) error {
+	nativeUsage, _, err := emitAnthropicEvents(payload, usageFrame, anthropicUsageState{}, -1, func(event kernel.ResponseEvent) error {
 		if event.Kind == kernel.EventResponseComplete {
 			completed = true
 		}
 		return emit(event)
 	})
+	usage := nativeUsage.snapshot()
 	if hooks.OnProviderUsage != nil {
 		hooks.OnProviderUsage(usage)
 	}
@@ -497,6 +499,63 @@ type anthropicUsageDTO struct {
 type anthropicUsageFrame struct {
 	MessageUsage *anthropicUsageDTO
 	EventUsage   *anthropicUsageDTO
+}
+
+// Keep Anthropic's disjoint wire components native while merging partial
+// snapshots. Canonical input is derived from the three known components once.
+type anthropicUsageState struct {
+	InputTokens       *int64
+	OutputTokens      *int64
+	CachedReadTokens  *int64
+	CachedWriteTokens *int64
+	ReasoningTokens   *int64
+	AccountingIssues  []kernel.UsageIssue
+}
+
+func (state anthropicUsageState) apply(update *anthropicUsageDTO) anthropicUsageState {
+	if update == nil {
+		return state
+	}
+	if update.InputTokens != nil {
+		state.InputTokens = copyAnthropicCount(update.InputTokens)
+	}
+	if update.OutputTokens != nil {
+		state.OutputTokens = copyAnthropicCount(update.OutputTokens)
+	}
+	if update.CachedReadTokens != nil {
+		state.CachedReadTokens = copyAnthropicCount(update.CachedReadTokens)
+	}
+	if update.CachedWriteTokens != nil {
+		state.CachedWriteTokens = copyAnthropicCount(update.CachedWriteTokens)
+	}
+	if update.ReasoningTokens != nil {
+		state.ReasoningTokens = copyAnthropicCount(update.ReasoningTokens)
+	}
+	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: update.AccountingIssues}).AccountingIssues
+	return state
+}
+
+func (state anthropicUsageState) snapshot() kernel.UsageEvent {
+	var input *int64
+	if state.InputTokens != nil && state.CachedReadTokens != nil && state.CachedWriteTokens != nil {
+		base, read, write := *state.InputTokens, *state.CachedReadTokens, *state.CachedWriteTokens
+		const maxInt64 = int64(^uint64(0) >> 1)
+		if base <= maxInt64-read && base+read <= maxInt64-write {
+			value := base + read + write
+			input = &value
+		}
+	}
+	return kernel.UsageEvent{InputTokens: input, OutputTokens: copyAnthropicCount(state.OutputTokens),
+		CachedReadTokens: copyAnthropicCount(state.CachedReadTokens), CachedWriteTokens: copyAnthropicCount(state.CachedWriteTokens),
+		ReasoningTokens: copyAnthropicCount(state.ReasoningTokens), AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok"}
+}
+
+func copyAnthropicCount(count *int64) *int64 {
+	if count == nil {
+		return nil
+	}
+	value := *count
+	return &value
 }
 
 // Decode semantic content without converting optional usage numbers through
@@ -564,25 +623,14 @@ func decodeAnthropicUsageFrame(data []byte) (anthropicUsageFrame, error) {
 	return frame, nil
 }
 
-func mergeAnthropicUsage(usage kernel.UsageEvent, update *anthropicUsageDTO) kernel.UsageEvent {
-	if update == nil {
-		return usage
-	}
-	return kernel.MergeProviderUsage(usage, kernel.UsageEvent{
-		InputTokens: update.InputTokens, OutputTokens: update.OutputTokens,
-		CachedReadTokens: update.CachedReadTokens, CachedWriteTokens: update.CachedWriteTokens,
-		ReasoningTokens:  update.ReasoningTokens,
-		AccountingIssues: update.AccountingIssues,
-	})
-}
-
-func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage kernel.UsageEvent, toolIndex int, emit func(kernel.ResponseEvent) error) (kernel.UsageEvent, int, error) {
+func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage anthropicUsageState, toolIndex int, emit func(kernel.ResponseEvent) error) (anthropicUsageState, int, error) {
 	now := time.Now()
-	usage = mergeAnthropicUsage(usage, frame.MessageUsage)
-	usage = mergeAnthropicUsage(usage, frame.EventUsage)
+	usage = usage.apply(frame.MessageUsage)
+	usage = usage.apply(frame.EventUsage)
+	snapshot := usage.snapshot()
 	if message, ok := event["message"].(map[string]any); ok {
 		if id := stringValue(message["id"]); id != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &snapshot}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
@@ -597,7 +645,7 @@ func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage 
 	}
 	if stringValue(event["type"]) == "" || stringValue(event["type"]) == "message" {
 		if id := stringValue(event["id"]); id != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &snapshot}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
@@ -611,10 +659,10 @@ func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage 
 		}
 		stop := stringValue(event["stop_reason"])
 		if stop != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: stop, Usage: &usage}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: stop, Usage: &snapshot}); err != nil {
 				return usage, toolIndex, err
 			}
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, Usage: &usage}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, Usage: &snapshot}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
@@ -623,7 +671,7 @@ func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage 
 	case "message_start":
 		message, _ := event["message"].(map[string]any)
 		if id := stringValue(message["id"]); id != "" {
-			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
+			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &snapshot}); err != nil {
 				return usage, toolIndex, err
 			}
 		}
@@ -661,14 +709,14 @@ func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage 
 		}
 	case "message_delta":
 		delta, _ := event["delta"].(map[string]any)
-		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &usage}); err != nil {
+		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &snapshot}); err != nil {
 			return usage, toolIndex, err
 		}
-		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: stringValue(delta["stop_reason"]), Usage: &usage}); err != nil {
+		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventContentBlockEnd, StopReason: stringValue(delta["stop_reason"]), Usage: &snapshot}); err != nil {
 			return usage, toolIndex, err
 		}
 	case "message_stop":
-		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, Usage: &usage}); err != nil {
+		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseComplete, Usage: &snapshot}); err != nil {
 			return usage, toolIndex, err
 		}
 	}

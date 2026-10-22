@@ -178,7 +178,10 @@ func (s *openAIChatSession) Emit(_ context.Context, event kernel.ResponseEvent) 
 		}
 	case kernel.EventUsage:
 		if event.Usage != nil {
-			usage := *event.Usage
+			usage := kernel.MergeProviderUsage(kernel.UsageEvent{}, *event.Usage)
+			if s.usage != nil {
+				usage = kernel.MergeProviderUsage(*s.usage, *event.Usage)
+			}
 			s.usage = &usage
 		}
 	case kernel.EventResponseComplete:
@@ -276,8 +279,19 @@ func chatUsage(usage *kernel.UsageEvent) map[string]any {
 	if usage.OutputTokens != nil {
 		result["completion_tokens"] = *usage.OutputTokens
 	}
-	if usage.InputTokens != nil && usage.OutputTokens != nil {
+	if usage.InputTokens != nil && usage.OutputTokens != nil && *usage.InputTokens >= 0 && *usage.OutputTokens >= 0 && *usage.InputTokens <= int64(^uint64(0)>>1)-*usage.OutputTokens {
 		result["total_tokens"] = *usage.InputTokens + *usage.OutputTokens
+	}
+	if usage.CachedReadTokens != nil || usage.CachedWriteTokens != nil {
+		result["prompt_tokens_details"] = struct {
+			CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+			CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+		}{CachedTokens: usage.CachedReadTokens, CacheWriteTokens: usage.CachedWriteTokens}
+	}
+	if usage.ReasoningTokens != nil {
+		result["completion_tokens_details"] = struct {
+			ReasoningTokens *int64 `json:"reasoning_tokens,omitempty"`
+		}{ReasoningTokens: usage.ReasoningTokens}
 	}
 	return result
 }
