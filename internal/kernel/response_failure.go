@@ -60,7 +60,3 @@ func providerResponseFailure(ctx context.Context, err error) bool {
 	}
 	return ctx.Err() == nil || errors.Is(context.Cause(ctx), ErrOperationDeadline)
 }
-
-func knownProviderUsage(event UsageEvent) bool {
-	return event.HasReportedUsage()
-}

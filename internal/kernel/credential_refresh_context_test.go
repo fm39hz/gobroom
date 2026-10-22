@@ -65,6 +65,17 @@ func TestUnauthorizedRefreshRetriesWhenRuntimeContextChanges(t *testing.T) {
 	if refreshCalls != 1 || first.calls != 2 || second.calls != 0 {
 		t.Fatalf("refresh calls=%d issuer A=%d issuer B=%d", refreshCalls, first.calls, second.calls)
 	}
+	firstAttempt, secondAttempt := <-k.Events, <-k.Events
+	if firstAttempt.InvocationID == "" || firstAttempt.InvocationID != secondAttempt.InvocationID ||
+		firstAttempt.AttemptID == "" || firstAttempt.AttemptID == secondAttempt.AttemptID ||
+		firstAttempt.Status != "error" || secondAttempt.Status != "ok" {
+		t.Fatalf("auth recovery did not retain two distinct dispatches: %#v / %#v", firstAttempt, secondAttempt)
+	}
+	select {
+	case duplicate := <-k.Events:
+		t.Fatalf("duplicate auth dispatch accounting: %#v", duplicate)
+	default:
+	}
 	if len(observed.replayed) != 1 {
 		t.Fatalf("replayed credentials=%#v", observed.replayed)
 	}

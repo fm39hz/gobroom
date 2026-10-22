@@ -26,6 +26,7 @@ const (
 	draft2020              = "https://json-schema.org/draft/2020-12/schema"
 	DependencyLockVersion  = 2
 	maxSchemaDocumentBytes = 1 << 20
+	maxRequiredUsageRefs   = 32
 )
 
 // ModuleRef pins a statically linked implementation module and the host
@@ -91,6 +92,13 @@ type ResourceBounds struct {
 	DeadlineMillis   int64 `json:"deadlineMillis,omitempty"`
 }
 
+// UsageRequirements declares the accounting evidence an operation requires
+// before its result can be considered complete.
+type UsageRequirements struct {
+	RequireReported    bool  `json:"requireReported,omitempty"`
+	RequiredExtensions []Ref `json:"requiredExtensions,omitempty"`
+}
+
 // ArtifactInput describes one named artifact port on a versioned operation.
 type ArtifactInput struct {
 	Role     string `json:"role"`
@@ -134,6 +142,7 @@ type Descriptor struct {
 	ArtifactInputs        []ArtifactInput              `json:"artifactInputs,omitempty"`
 	ArtifactOutputs       []ArtifactOutput             `json:"artifactOutputs,omitempty"`
 	ArtifactInterpreters  []ArtifactInterpreterBinding `json:"artifactInterpreters,omitempty"`
+	UsageRequirements     UsageRequirements            `json:"usageRequirements,omitempty"`
 	LifecycleCapabilities []string                     `json:"lifecycleCapabilities,omitempty"`
 	FailureModes          []string                     `json:"failureModes,omitempty"`
 	ResourceBounds        ResourceBounds               `json:"resourceBounds"`
@@ -377,6 +386,9 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	if descriptor.Ref.Kind == SchemaKind {
 		return Descriptor{}, fmt.Errorf("schema descriptors must use RegisterSchema")
 	}
+	if err := prepareUsageRequirements(&descriptor); err != nil {
+		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
+	}
 	if strings.TrimSpace(descriptor.ImplementationVersion) == "" || strings.TrimSpace(descriptor.DisplayName) == "" || strings.TrimSpace(descriptor.Description) == "" {
 		return Descriptor{}, fmt.Errorf("extension %q requires implementation version and display metadata", descriptor.Ref.Key())
 	}
@@ -469,6 +481,43 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 		descriptor.SetupView = canonical
 	}
 	return cloneDescriptor(descriptor), nil
+}
+
+func prepareUsageRequirements(descriptor *Descriptor) error {
+	requirements := &descriptor.UsageRequirements
+	if descriptor.Ref.Kind != "operation" {
+		if requirements.RequireReported || len(requirements.RequiredExtensions) != 0 {
+			return fmt.Errorf("usage requirements may be declared only by operations")
+		}
+		return nil
+	}
+	if len(requirements.RequiredExtensions) > maxRequiredUsageRefs {
+		return fmt.Errorf("operation usage requirements exceed the %d-ref limit", maxRequiredUsageRefs)
+	}
+	seen := make(map[Ref]bool, len(requirements.RequiredExtensions))
+	for _, ref := range requirements.RequiredExtensions {
+		if err := ref.Validate(); err != nil || ref.Kind != UsageKind {
+			return fmt.Errorf("required usage extensions must be exact %q refs", UsageKind)
+		}
+		if seen[ref] {
+			return fmt.Errorf("duplicate required usage extension %q", ref.Key())
+		}
+		seen[ref] = true
+	}
+	requirements.RequiredExtensions = append([]Ref(nil), requirements.RequiredExtensions...)
+	// Required usage values participate in the catalog's existing exact
+	// dependency graph, cycle checks, fingerprint and portable lock closure.
+	dependencies := make(map[Ref]bool, len(descriptor.Dependencies)+len(requirements.RequiredExtensions))
+	for _, ref := range descriptor.Dependencies {
+		dependencies[ref] = true
+	}
+	for _, ref := range requirements.RequiredExtensions {
+		if !dependencies[ref] {
+			descriptor.Dependencies = append(descriptor.Dependencies, ref)
+			dependencies[ref] = true
+		}
+	}
+	return nil
 }
 
 func (c *Catalog) RegisterFactory(ref Ref, factory Factory) error {
@@ -1219,6 +1268,7 @@ func cloneDescriptor(descriptor Descriptor) Descriptor {
 	descriptor.ArtifactInputs = append([]ArtifactInput(nil), descriptor.ArtifactInputs...)
 	descriptor.ArtifactOutputs = append([]ArtifactOutput(nil), descriptor.ArtifactOutputs...)
 	descriptor.ArtifactInterpreters = append([]ArtifactInterpreterBinding(nil), descriptor.ArtifactInterpreters...)
+	descriptor.UsageRequirements.RequiredExtensions = append([]Ref(nil), descriptor.UsageRequirements.RequiredExtensions...)
 	for index := range descriptor.ArtifactInterpreters {
 		descriptor.ArtifactInterpreters[index].Options = append(json.RawMessage(nil), descriptor.ArtifactInterpreters[index].Options...)
 	}

@@ -244,6 +244,71 @@ func TestOperationArtifactOutputsAreTypedBoundedAndRecipientScoped(t *testing.T)
 	}
 }
 
+func TestOperationUsageRequirementsMatchFrozenDescriptorAndAreOwned(t *testing.T) {
+	catalog := extensions.NewCatalog()
+	registry, err := NewRegistry(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "usage-requirements.input", ContractVersion: 1}
+	inputSchema, err := extensions.BindSchemaDocument(inputRef, json.RawMessage(`{"type":"object"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RegisterSchema(inputRef, inputSchema); err != nil {
+		t.Fatal(err)
+	}
+	usageRef := extensions.Ref{Kind: extensions.UsageKind, ID: "vendor.example.search-units", ContractVersion: 2}
+	usageSchemaRef := extensions.Ref{Kind: extensions.SchemaKind, ID: "vendor.example.search-units.value", ContractVersion: 2}
+	usageSchema, err := extensions.BindSchemaDocument(usageSchemaRef, json.RawMessage(`{"type":"integer","minimum":0}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RegisterSchema(usageSchemaRef, usageSchema); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.RegisterDescriptor(extensions.Descriptor{
+		Ref: usageRef, ImplementationVersion: "2", DisplayName: "Search units", Description: "Provider search units.",
+		InputSchemaRef: &usageSchemaRef, UsagePolicy: &extensions.UsagePolicy{Unit: "items", Disclosure: extensions.UsageDisclosure("private"), MaxValueBytes: 64},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refs := []extensions.Ref{usageRef}
+	definition := Definition{
+		Ref:         extensions.Ref{Kind: "operation", ID: "usage-requirements.generate", ContractVersion: 1},
+		DisplayName: "Generate", Description: "Generate with required accounting.", InputSchemaRef: inputRef,
+		ResourceBounds: DefaultResourceBounds(), ReplaySafety: ReplayNever,
+		UsageRequirements:   extensions.UsageRequirements{RequireReported: true, RequiredExtensions: refs},
+		InputPayload:        func(normalize.Request) (json.RawMessage, error) { return json.RawMessage(`{}`), nil },
+		CompileRequirements: func(normalize.Request) ([]normalize.FeatureRequirement, error) { return nil, nil },
+	}
+	if err := registry.Register(definition); err != nil {
+		t.Fatal(err)
+	}
+	refs[0] = extensions.Ref{Kind: extensions.UsageKind, ID: "caller-mutated", ContractVersion: 1}
+	extensionSnapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := registry.Seal(extensionSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, ok := snapshot.Resolve(definition.Ref)
+	if !ok || !resolved.UsageRequirements.RequireReported || len(resolved.UsageRequirements.RequiredExtensions) != 1 || resolved.UsageRequirements.RequiredExtensions[0] != usageRef {
+		t.Fatalf("resolved definition lost or changed usage requirements: %#v", resolved.UsageRequirements)
+	}
+	resolved.UsageRequirements.RequiredExtensions[0].ID = "resolved-mutated"
+	resolvedAgain, ok := snapshot.Resolve(definition.Ref)
+	if !ok || resolvedAgain.UsageRequirements.RequiredExtensions[0] != usageRef {
+		t.Fatalf("mutating resolved definition changed snapshot requirements: %#v", resolvedAgain.UsageRequirements)
+	}
+	descriptor, ok := extensionSnapshot.Descriptor(definition.Ref)
+	if !ok || descriptor.UsageRequirements.RequireReported != resolvedAgain.UsageRequirements.RequireReported || len(descriptor.UsageRequirements.RequiredExtensions) != 1 || descriptor.UsageRequirements.RequiredExtensions[0] != usageRef {
+		t.Fatalf("operation descriptor disagrees with resolved definition: definition=%#v descriptor=%#v", resolvedAgain.UsageRequirements, descriptor.UsageRequirements)
+	}
+}
+
 func TestOperationPayloadBoundRejectsOversizedBodyBeforeSchemaDecode(t *testing.T) {
 	catalog := extensions.NewCatalog()
 	registry, err := NewRegistry(catalog)

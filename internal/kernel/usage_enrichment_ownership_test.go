@@ -15,7 +15,7 @@ import (
 
 type mutatingUsageEnricher struct{}
 
-func (mutatingUsageEnricher) EnrichUsage(_ context.Context, _ Route, _ http.Header, event UsageEvent) (UsageEvent, error) {
+func (mutatingUsageEnricher) EnrichUsage(_ context.Context, _ Route, _ UsageEvidence, event UsageEvent) (UsageEvent, error) {
 	*event.InputTokens = 999
 	if len(event.Extensions) > 0 {
 		event.Extensions[0].Value = []byte("mutated")
@@ -40,7 +40,7 @@ func (ownedUsageAdapter) Execute(context.Context, UpstreamRequest) (UpstreamResp
 }
 func (ownedUsageAdapter) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
 func (a ownedUsageAdapter) RenderResponse(_ context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
-	usage := UsageEvent{InputTokens: new(int64(17)), Extensions: []extensions.UsageValue{{TypeRef: extensions.Ref{Kind: "usage", ID: "test", ContractVersion: 1}, Value: []byte("original")}}}
+	usage := UsageEvent{InputTokens: new(int64(17)), Extensions: []extensions.UsageValue{{TypeRef: extensions.Ref{Kind: extensions.UsageKind, ID: "test", ContractVersion: 1}, Value: []byte(`"original"`)}}}
 	if !a.unknownOutput {
 		usage.OutputTokens = new(int64(9))
 	}
@@ -75,6 +75,7 @@ func ownedUsageKernel(t *testing.T, adapter ownedUsageAdapter, enricher UsageEnr
 	}
 	t.Cleanup(k.Close)
 	k.Adapters["owned-usage"] = adapter
+	k.UsageCatalog = fixtureUsageCatalog(t, `{"type":"string"}`, extensions.Ref{Kind: extensions.UsageKind, ID: "test", ContractVersion: 1})
 	if enricher != nil {
 		k.UsageSources[usageRef] = enricher
 	}
@@ -92,7 +93,7 @@ func TestUsageEnrichmentMutationRejectedOnSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := <-k.Events
-	if got.InputTokens == nil || *got.InputTokens != 17 || string(got.Extensions[0].Value) != "original" {
+	if got.InputTokens == nil || *got.InputTokens != 17 || len(got.Extensions) != 1 || string(got.Extensions[0].Value) != `"original"` {
 		t.Fatalf("rejected enrichment mutated successful usage: %+v", got)
 	}
 }
@@ -103,7 +104,7 @@ func TestUsageEnrichmentMutationRejectedOnRenderFailure(t *testing.T) {
 		t.Fatal("expected render failure")
 	}
 	got := <-k.Events
-	if got.InputTokens == nil || *got.InputTokens != 17 || string(got.Extensions[0].Value) != "original" {
+	if got.InputTokens == nil || *got.InputTokens != 17 || len(got.Extensions) != 1 || string(got.Extensions[0].Value) != `"original"` {
 		t.Fatalf("rejected enrichment mutated failed usage: %+v", got)
 	}
 }
@@ -138,7 +139,7 @@ func TestDirectProviderUsageCallbackCannotMutateDecoderCompletion(t *testing.T) 
 
 type prefilledThroughputEnricher struct{}
 
-func (prefilledThroughputEnricher) EnrichUsage(_ context.Context, _ Route, _ http.Header, event UsageEvent) (UsageEvent, error) {
+func (prefilledThroughputEnricher) EnrichUsage(_ context.Context, _ Route, _ UsageEvidence, event UsageEvent) (UsageEvent, error) {
 	event.OutputTokensPerSecond = new(float64(123))
 	return event, nil
 }

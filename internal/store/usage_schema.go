@@ -80,12 +80,14 @@ const usageEventsDDL = `CREATE TABLE IF NOT EXISTS usage_events (
 	cached_write_tokens INTEGER, reasoning_tokens INTEGER, estimated_cost REAL,
 	accounting_issues_json TEXT NOT NULL DEFAULT '[]',
 	request_class TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL DEFAULT '',
+	invocation_id TEXT NOT NULL DEFAULT '', attempt_id TEXT NOT NULL DEFAULT '',
 	ttft_ms INTEGER, output_tokens_per_second REAL,
 	compatibility_fidelity TEXT NOT NULL DEFAULT '',
 	compatibility_losses_json TEXT NOT NULL DEFAULT '[]',
 	compatibility_plan_json TEXT NOT NULL DEFAULT 'null'
 );
-CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);`
+CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_attempt_id ON usage_events(attempt_id) WHERE attempt_id != '';`
 
 const usageDailyDDL = `CREATE TABLE IF NOT EXISTS usage_daily (
 	date_key TEXT PRIMARY KEY,
@@ -130,7 +132,7 @@ func usageEventsHavePresenceShape(tx *sql.Tx) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, name := range []string{"timestamp", "logical_model", "provider_node_id", "external_model", "connection_id", "status", "latency_ms", "input_tokens", "output_tokens", "cached_read_tokens", "cached_write_tokens", "reasoning_tokens", "estimated_cost", "accounting_issues_json", "request_class", "session_id", "ttft_ms", "output_tokens_per_second", "compatibility_fidelity", "compatibility_losses_json", "compatibility_plan_json"} {
+	for _, name := range []string{"timestamp", "logical_model", "provider_node_id", "external_model", "connection_id", "status", "latency_ms", "input_tokens", "output_tokens", "cached_read_tokens", "cached_write_tokens", "reasoning_tokens", "estimated_cost", "accounting_issues_json", "request_class", "session_id", "invocation_id", "attempt_id", "ttft_ms", "output_tokens_per_second", "compatibility_fidelity", "compatibility_losses_json", "compatibility_plan_json"} {
 		if _, ok := columns[name]; !ok {
 			return false, nil
 		}

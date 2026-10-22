@@ -137,10 +137,15 @@ func TestComposedAdapterDoesNotNormalizeSpoofedOrCanceledFailures(t *testing.T) 
 		transform bool
 	}{
 		{name: "emit failure", ctx: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }, renderer: pipelineFailureRenderer{emitErr: evidence}, dec: func(emit func(ResponseEvent) error) error {
-			if err := emit(ResponseEvent{Kind: EventResponseComplete}); err != nil {
+			// Completion is staged until Decode returns. Use a content event to
+			// exercise an actual renderer failure before the decoder returns.
+			if err := emit(ResponseEvent{Kind: EventTextDelta}); err != nil {
 				return err
 			}
 			return evidence
+		}},
+		{name: "staged emit failure", ctx: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }, renderer: pipelineFailureRenderer{emitErr: evidence}, dec: func(emit func(ResponseEvent) error) error {
+			return emit(ResponseEvent{Kind: EventResponseComplete})
 		}},
 		{name: "transform failure", ctx: func() (context.Context, context.CancelFunc) { return context.Background(), func() {} }, transform: true, dec: func(emit func(ResponseEvent) error) error {
 			if err := emit(ResponseEvent{Kind: EventTextDelta}); err != nil {

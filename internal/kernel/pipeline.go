@@ -319,6 +319,11 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	decodeHooks.OnError = nil
 	decodeHooks.NormalizeProviderFailure = nil
 	decodeHooks.TransformResponse = nil
+	decodeHooks.CompleteUsage = nil
+	admitUsage := hooks.AdmitUsage
+	if admitUsage == nil {
+		admitUsage = func(event UsageEvent) UsageEvent { return event.SanitizeCommon() }
+	}
 	firstByte := false
 	signalFirstByte := func(at time.Time) {
 		if firstByte {
@@ -333,16 +338,18 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	decoderCompleted := false
 	completionUsage := UsageEvent{}
 	decodeHooks.OnComplete = func(event UsageEvent) {
-		event = event.SanitizeCommon()
+		event = admitUsage(event)
 		decoderCompleted = true
-		completionUsage = MergeProviderUsage(completionUsage, event)
+		completionUsage = admitUsage(MergeProviderUsage(completionUsage, event))
 		if hooks.OnProviderUsage != nil {
 			hooks.OnProviderUsage(event.Clone())
 		}
 	}
 	decodeHooks.OnProviderUsage = func(event UsageEvent) {
+		event = admitUsage(event)
+		completionUsage = admitUsage(MergeProviderUsage(completionUsage, event))
 		if hooks.OnProviderUsage != nil {
-			hooks.OnProviderUsage(event.SanitizeCommon())
+			hooks.OnProviderUsage(event.Clone())
 		}
 	}
 	privateSession := &sessionUpdates{ctx: ctx}
@@ -353,9 +360,10 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	providerBudget := responseEventBudget{maxEvent: hooks.MaxEventBytes, maxOutput: hooks.MaxOutputBytes}
 	clientBudget := responseEventBudget{maxEvent: hooks.MaxEventBytes, maxOutput: hooks.MaxOutputBytes}
 	var emitFailure error
-	emitOne := func(event ResponseEvent) error {
+	var pendingCompletion *ResponseEvent
+	emitOne := func(event ResponseEvent, providerBudgeted bool) error {
 		if event.Usage != nil {
-			usage := event.Usage.SanitizeCommon()
+			usage := admitUsage(*event.Usage)
 			event.Usage = &usage
 		}
 		if event.Usage != nil && (event.Kind == EventUsage || event.Kind == EventResponseComplete) && hooks.OnProviderUsage != nil {
@@ -367,8 +375,10 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		if err := ctx.Err(); err != nil {
 			return WrapResponseFailure(ResponseFailureProvider, err)
 		}
-		if err := providerBudget.consume(event); err != nil {
-			return WrapResponseFailure(ResponseFailureProvider, err)
+		if !providerBudgeted {
+			if err := providerBudget.consume(event); err != nil {
+				return WrapResponseFailure(ResponseFailureProvider, err)
+			}
 		}
 		if event.Kind == EventThinkingSignature && event.SignatureIssuer.ID == "" {
 			event.SignatureIssuer = hooks.ProviderIssuer
@@ -376,11 +386,18 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		if event.Kind == EventResponseComplete {
 			providerComplete = true
 			if event.Usage != nil {
-				completionUsage = MergeProviderUsage(completionUsage, *event.Usage)
+				completionUsage = admitUsage(MergeProviderUsage(completionUsage, *event.Usage))
+			}
+			if hooks.CompleteUsage != nil {
+				finalUsage, err := hooks.CompleteUsage(ctx, completionUsage)
+				if err != nil {
+					return err
+				}
+				completionUsage = finalUsage.Clone()
 			}
 		}
 		if event.Kind == EventUsage && event.Usage != nil {
-			completionUsage = MergeProviderUsage(completionUsage, *event.Usage)
+			completionUsage = admitUsage(MergeProviderUsage(completionUsage, *event.Usage))
 		}
 		if !firstEvent {
 			firstEvent = true
@@ -425,7 +442,39 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		return nil
 	}
 	emit := func(event ResponseEvent) error {
-		err := emitOne(event)
+		// A decoder may report final usage after its semantic completion event
+		// (for example an OpenAI usage-only tail). Gate client completion only
+		// after Decode has returned, not at the first finish_reason.
+		if event.Kind == EventResponseComplete {
+			if emitFailure != nil {
+				return emitFailure
+			}
+			if event.Usage != nil {
+				usage := admitUsage(*event.Usage)
+				event.Usage = &usage
+				completionUsage = admitUsage(MergeProviderUsage(completionUsage, usage))
+				if hooks.OnProviderUsage != nil {
+					hooks.OnProviderUsage(usage.Clone())
+				}
+			}
+			if err := providerBudget.consume(event); err != nil {
+				emitFailure = WrapResponseFailure(ResponseFailureProvider, err)
+				return emitFailure
+			}
+			// Multiple provider terminal observations (finish_reason and DONE,
+			// for example) still finalize this dispatch exactly once.
+			if pendingCompletion != nil {
+				if pendingCompletion.ResponseID == "" {
+					pendingCompletion.ResponseID = event.ResponseID
+				}
+				return nil
+			}
+			owned := cloneResponseEvent(event)
+			pendingCompletion = &owned
+			providerComplete = true
+			return nil
+		}
+		err := emitOne(event, false)
 		if err != nil && emitFailure == nil {
 			emitFailure = err
 		}
@@ -440,6 +489,19 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	}
 	if decodeErr == nil && !providerComplete {
 		decodeErr = io.ErrUnexpectedEOF
+	}
+	if decodeErr == nil && pendingCompletion != nil {
+		// Accounting is independent of the operation's client payload schema.
+		// Refresh a decoder-declared usage field, but never invent one merely
+		// because the host has operational accounting or enrichment metadata.
+		if pendingCompletion.Usage != nil {
+			usage := completionUsage.Clone()
+			pendingCompletion.Usage = &usage
+		}
+		decodeErr = emitOne(*pendingCompletion, true)
+		if decodeErr != nil {
+			emitFailure = decodeErr
+		}
 	}
 	if sessionErr := privateSession.finish(hooks.OnSessionState, decodeErr == nil); decodeErr == nil && sessionErr != nil {
 		decodeErr = sessionErr

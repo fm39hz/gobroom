@@ -62,7 +62,8 @@ func (snapshotPinAdapter) RenderResponse(_ context.Context, response UpstreamRes
 	return err
 }
 
-func (usageSourceFixture) EnrichUsage(_ context.Context, _ Route, headers http.Header, event UsageEvent) (UsageEvent, error) {
+func (usageSourceFixture) EnrichUsage(_ context.Context, _ Route, evidence UsageEvidence, event UsageEvent) (UsageEvent, error) {
+	headers := evidence.Headers
 	value, err := strconv.ParseInt(headers.Get("X-Usage-Input-Tokens"), 10, 64)
 	if err == nil {
 		event.InputTokens = new(value)

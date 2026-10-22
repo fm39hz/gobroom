@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,7 @@ type Definition struct {
 	ArtifactInputs              []ArtifactInput
 	ArtifactOutputs             []ArtifactOutput
 	ArtifactInterpreters        []extensions.ArtifactInterpreterBinding
+	UsageRequirements           extensions.UsageRequirements
 	NewResultProjector          ResultProjectorFactory
 	ResourceBounds              extensions.ResourceBounds
 	ReplaySafety                ReplaySafety
@@ -241,6 +243,7 @@ func (r *Registry) Register(definition Definition) error {
 	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
 	definition.ArtifactOutputs = append([]ArtifactOutput(nil), definition.ArtifactOutputs...)
 	definition.ArtifactInterpreters = append([]extensions.ArtifactInterpreterBinding(nil), definition.ArtifactInterpreters...)
+	definition.UsageRequirements.RequiredExtensions = append([]extensions.Ref(nil), definition.UsageRequirements.RequiredExtensions...)
 	if definition.ResultSchemaRef != nil {
 		copy := *definition.ResultSchemaRef
 		definition.ResultSchemaRef = &copy
@@ -249,7 +252,7 @@ func (r *Registry) Register(definition Definition) error {
 		Ref: definition.Ref, ImplementationVersion: fmt.Sprint(definition.Ref.ContractVersion),
 		DisplayName: definition.DisplayName, Description: definition.Description,
 		InputSchemaRef: &definition.InputSchemaRef, ResultSchemaRef: definition.ResultSchemaRef,
-		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactPortTypeRefs(definition.ArtifactInputs, definition.ArtifactOutputs), ArtifactInputs: definition.ArtifactInputs, ArtifactOutputs: definition.ArtifactOutputs, ArtifactInterpreters: definition.ArtifactInterpreters, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
+		EventSchemaRefs: definition.EventSchemaRefs, SemanticContracts: artifactPortTypeRefs(definition.ArtifactInputs, definition.ArtifactOutputs), ArtifactInputs: definition.ArtifactInputs, ArtifactOutputs: definition.ArtifactOutputs, ArtifactInterpreters: definition.ArtifactInterpreters, UsageRequirements: definition.UsageRequirements, ReplaySafety: string(definition.ReplaySafety), ResourceBounds: definition.ResourceBounds,
 	}
 	if err := r.catalog.Register(descriptor, func(json.RawMessage) (any, error) { return definition, nil }); err != nil {
 		return err
@@ -262,7 +265,7 @@ func (r *Registry) Register(definition Definition) error {
 	if _, exists := r.items[definition.Ref]; exists {
 		return fmt.Errorf("operation %q is already registered", definition.Ref.Key())
 	}
-	r.items[definition.Ref] = definition
+	r.items[definition.Ref] = cloneDefinition(definition)
 	return nil
 }
 
@@ -331,8 +334,13 @@ func (r *Registry) Seal(catalog *extensions.Snapshot) (*Snapshot, error) {
 	}
 	definitions := make(map[extensions.Ref]Definition, len(r.items))
 	for ref, definition := range r.items {
-		if _, ok := catalog.Descriptor(ref); !ok {
+		operationDescriptor, ok := catalog.Descriptor(ref)
+		if !ok {
 			return nil, fmt.Errorf("operation %q is missing from extension catalog", ref.Key())
+		}
+		if definition.UsageRequirements.RequireReported != operationDescriptor.UsageRequirements.RequireReported ||
+			!slices.Equal(definition.UsageRequirements.RequiredExtensions, operationDescriptor.UsageRequirements.RequiredExtensions) {
+			return nil, fmt.Errorf("operation %q usage requirements disagree with its frozen descriptor", ref.Key())
 		}
 		if _, ok := catalog.Schema(definition.InputSchemaRef); !ok {
 			return nil, fmt.Errorf("operation %q input schema is missing", ref.Key())
@@ -399,6 +407,7 @@ func cloneDefinition(definition Definition) Definition {
 	definition.ArtifactInputs = append([]ArtifactInput(nil), definition.ArtifactInputs...)
 	definition.ArtifactOutputs = append([]ArtifactOutput(nil), definition.ArtifactOutputs...)
 	definition.ArtifactInterpreters = append([]extensions.ArtifactInterpreterBinding(nil), definition.ArtifactInterpreters...)
+	definition.UsageRequirements.RequiredExtensions = append([]extensions.Ref(nil), definition.UsageRequirements.RequiredExtensions...)
 	for index := range definition.ArtifactInterpreters {
 		definition.ArtifactInterpreters[index].Options = append(json.RawMessage(nil), definition.ArtifactInterpreters[index].Options...)
 	}

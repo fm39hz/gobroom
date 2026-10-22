@@ -443,8 +443,11 @@ func TestKernelResponseTransformCancellationStopsFallbackBeforeAndAfterCommit(t 
 			}
 			select {
 			case usage := <-engine.Events:
-				t.Fatalf("cancelled response emitted a usage completion: %#v", usage)
+				if usage.Status != "cancelled" || usage.AttemptID == "" || usage.InvocationID == "" || usage.InputTokens != nil || usage.OutputTokens != nil {
+					t.Fatalf("cancelled dispatch lost its unknown accounting state: %#v", usage)
+				}
 			default:
+				t.Fatal("cancelled actual dispatch has no accounting record")
 			}
 		})
 	}

@@ -223,6 +223,21 @@ func testFallbackSelectedTransformAccounting(t *testing.T, rejectAtDispatch bool
 		t.Fatalf("transform executions=%v want candidate-local executions=%v", calls, wantCalls)
 	}
 
+	if adapter.rejectAtDispatch {
+		select {
+		case rejected := <-k.Events:
+			if rejected.Status != "error" || rejected.ProviderNodeID != "provider-rejected" || rejected.CompatibilityPlan == nil || rejected.AttemptID == "" {
+				t.Fatalf("rejected dispatch accounting missing or attributed to selected branch: %#v", rejected)
+			}
+			for _, step := range rejected.CompatibilityPlan.RequestTransformSteps {
+				if step.BindingID == "selected-model" || step.BindingID == "selected-attempt" || step.BindingID == "selected-provider" || step.BindingID == "selected-connection" {
+					t.Fatalf("rejected dispatch inherited selected branch transform: %#v", step)
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatal("missing rejected dispatch accounting")
+		}
+	}
 	select {
 	case usage := <-k.Events:
 		if usage.Status != "ok" || usage.CompatibilityPlan == nil {

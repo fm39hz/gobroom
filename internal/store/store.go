@@ -1261,7 +1261,7 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 		value := event.TTFT.Milliseconds()
 		ttftMS = &value
 	}
-	if _, err = tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, latencyMS, event.InputTokens, event.OutputTokens, event.CachedReadTokens, event.CachedWriteTokens, event.ReasoningTokens, event.EstimatedCost, string(accountingIssues), event.RequestClass, event.SessionID, ttftMS, event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
+	if _, err = tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, latencyMS, event.InputTokens, event.OutputTokens, event.CachedReadTokens, event.CachedWriteTokens, event.ReasoningTokens, event.EstimatedCost, string(accountingIssues), event.RequestClass, event.SessionID, ttftMS, event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan), event.InvocationID, event.AttemptID); err != nil {
 		return err
 	}
 	if _, err = tx.StmtContext(ctx, s.runtime.usageDaily).ExecContext(ctx, dateKey,
@@ -1277,6 +1277,8 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 type UsageRecord struct {
 	ID                                                                                         int64
 	Timestamp, LogicalModel, ProviderNodeID, ExternalModel, ConnectionID, Status               string
+	InvocationID                                                                               string `json:"invocationId"`
+	AttemptID                                                                                  string `json:"attemptId"`
 	LatencyMS, InputTokens, OutputTokens, CachedReadTokens, CachedWriteTokens, ReasoningTokens *int64
 	EstimatedCost, OutputTokensPerSecond                                                       *float64
 	RequestClass, SessionID                                                                    string
@@ -1350,7 +1352,7 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,cached_read_tokens,cached_write_tokens,reasoning_tokens,estimated_cost,COALESCE(accounting_issues_json,'[]'),COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),COALESCE(invocation_id,''),COALESCE(attempt_id,''),latency_ms,input_tokens,output_tokens,cached_read_tokens,cached_write_tokens,reasoning_tokens,estimated_cost,COALESCE(accounting_issues_json,'[]'),COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1360,7 +1362,7 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 		var item UsageRecord
 		var losses, plan string
 		var accountingIssues string
-		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.CachedReadTokens, &item.CachedWriteTokens, &item.ReasoningTokens, &item.EstimatedCost, &accountingIssues, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses, &plan); err != nil {
+		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.InvocationID, &item.AttemptID, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.CachedReadTokens, &item.CachedWriteTokens, &item.ReasoningTokens, &item.EstimatedCost, &accountingIssues, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses, &plan); err != nil {
 			return nil, err
 		}
 		if err := decodeJSON(accountingIssues, &item.AccountingIssues); err != nil {

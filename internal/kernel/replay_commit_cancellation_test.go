@@ -124,10 +124,14 @@ func testReplayWithKeyCancellationAtRender(t *testing.T, committed bool) {
 			if usage.Status == "ok" {
 				t.Fatalf("canceled response emitted successful usage: %#v", usage)
 			}
-			if !committed || usage.Status != "cancelled" || usage.OutputTokens == nil || *usage.OutputTokens != 1 {
+			if usage.Status != "cancelled" || usage.AttemptID == "" || usage.InvocationID == "" {
 				t.Fatalf("known failed usage was lost or misclassified: %#v", usage)
 			}
+			if committed && (usage.OutputTokens == nil || *usage.OutputTokens != 1) || !committed && usage.OutputTokens != nil {
+				t.Fatalf("cancelled dispatch did not retain known versus unknown output: %#v", usage)
+			}
 		default:
+			t.Fatal("cancelled actual dispatch has no accounting record")
 		}
 	})
 }

@@ -198,7 +198,7 @@ func sameUsageCost(left, right *float64) bool {
 	return *left == *right
 }
 
-func TestUnknownProviderUsageDoesNotFabricateFailureEvent(t *testing.T) {
+func TestUnknownProviderUsageRecordsFailedDispatchWithoutFabricatingCounters(t *testing.T) {
 	gate := &responseFailureGate{}
 	k := responseFailureKernel(t, gate, "provider-usage-failure")
 	k.Adapters["provider-usage-failure"] = providerUsageFailureAdapter{id: "provider-usage-failure", mode: "transform-fault"}
@@ -206,5 +206,5 @@ func TestUnknownProviderUsageDoesNotFabricateFailureEvent(t *testing.T) {
 	if err := executeProviderUsageFailure(k, context.Background()); err == nil {
 		t.Fatal("expected transform fault")
 	}
-	assertNoUsageEvent(t, k)
+	assertOneUsageEvent(t, k, "error", UsageEvent{})
 }

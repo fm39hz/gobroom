@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -28,6 +29,8 @@ type Kernel struct {
 	Adapters               map[string]ProviderAdapter
 	ErrorClassifiers       map[extensions.Ref]ErrorClassifier
 	UsageSources           map[extensions.Ref]UsageEnricher
+	UsageCatalog           *extensions.Snapshot
+	UsageLimits            UsageLimits
 	SessionStores          map[extensions.Ref]SessionStore
 	Transforms             *RequestTransformRegistry
 	ResponseTransforms     *ResponseTransformRegistry
@@ -61,7 +64,7 @@ func New(initial Snapshot, gate Gate, buffer int) (*Kernel, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build operation catalog: %w", err)
 	}
-	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[extensions.Ref]ErrorClassifier{}, UsageSources: map[extensions.Ref]UsageEnricher{}, SessionStores: map[extensions.Ref]SessionStore{}, Features: NewFeatureRegistry(), Operations: operationSnapshot, Transforms: NewRequestTransformRegistry(), ResponseTransforms: NewResponseTransformRegistry(), Events: make(chan UsageEvent, buffer)}, nil
+	return &Kernel{Snapshots: store, Scheduler: NewScheduler(gate), Adapters: map[string]ProviderAdapter{}, ErrorClassifiers: map[extensions.Ref]ErrorClassifier{}, UsageSources: map[extensions.Ref]UsageEnricher{}, UsageCatalog: operationSnapshot.ExtensionCatalog(), UsageLimits: DefaultUsageLimits(), SessionStores: map[extensions.Ref]SessionStore{}, Features: NewFeatureRegistry(), Operations: operationSnapshot, Transforms: NewRequestTransformRegistry(), ResponseTransforms: NewResponseTransformRegistry(), Events: make(chan UsageEvent, buffer)}, nil
 }
 
 func daemonTransformScope() TransformScope {
@@ -111,7 +114,7 @@ func (k *Kernel) EmitUsage(event UsageEvent) bool {
 		return false
 	}
 	select {
-	case k.Events <- event.SanitizeCommon():
+	case k.Events <- k.admitUsage(event):
 		return true
 	default:
 		k.usageDropped.Add(1)
@@ -133,6 +136,7 @@ func (k *Kernel) Close() {
 // Execute is the single data-plane orchestration boundary. Provider adapters
 // own protocol details; the kernel owns public-model resolution and selection.
 func (k *Kernel) Execute(ctx context.Context, req NormalizedRequest, credential Credential, writer http.ResponseWriter) error {
+	ctx = context.WithValue(ctx, usageInvocationKey{}, rand.Text())
 	if k.ArtifactStore != nil {
 		ctx = artifacts.WithStore(ctx, k.ArtifactStore)
 	}
@@ -580,8 +584,13 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			if idempotencyKey != "" && firstDispatch.IsZero() {
 				firstDispatch = time.Now()
 			}
+			invocationID, _ := ctx.Value(usageInvocationKey{}).(string)
+			accounting := k.newUsageAttempt(invocationID, candidate, candidateRequest)
+			accounting.setCompatibility(compatibilityPlan)
+			defer accounting.finish(ctx, "error")
 			response, err := adapter.Execute(attemptCtx, upstream)
 			if err != nil {
+				accounting.finish(ctx, "error")
 				if ctx.Err() != nil {
 					if errors.Is(context.Cause(ctx), ErrOperationDeadline) {
 						if observer, ok := k.Scheduler.gate.(OutcomeObserver); ok {
@@ -609,6 +618,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			if response.Status >= 400 {
 				body, _ := io.ReadAll(io.LimitReader(response.Body, 64*1024))
+				accounting.setEvidence(UsageEvidence{StatusCode: response.Status, Headers: response.Headers, ErrorBody: body})
+				accounting.finish(ctx, "error")
 				class := adapter.ClassifyError(response.Status, body)
 				outcome := classifyOutcome(adapter, response.Status, response.Headers, body, class)
 				if classifier, ok := k.ErrorClassifiers[candidate.ErrorClassifierRef]; ok {
@@ -713,6 +724,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				response.Body = &responseBodyLease{ReadCloser: response.Body}
 				defer response.Body.Close()
 			}
+			accounting.setEvidence(UsageEvidence{StatusCode: response.Status, Headers: response.Headers})
 			var firstByteAt time.Time
 			emitEvent := responseEventSink(writer)
 			streamWriter := &responseCommitWriter{ResponseWriter: writer, maxBytes: resourceBounds.MaxOutputBytes, ctx: ctx}
@@ -817,14 +829,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 			}
 			var stagedCompletion *UsageEvent
-			var providerUsage UsageEvent
-			providerUsageKnown := false
 			recordProviderUsage := func(event UsageEvent) {
-				event = event.SanitizeCommon()
-				providerUsage = MergeProviderUsage(providerUsage, event)
-				if knownProviderUsage(event) {
-					providerUsageKnown = true
-				}
+				accounting.observe(event)
 			}
 			var terminalFailure error
 			var providerFailureOutcome *ClassifiedOutcome
@@ -905,11 +911,6 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
 					}
 				}
-				if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
-					if enriched, enrichErr := source.EnrichUsage(ctx, candidate, response.Headers, event.Clone()); enrichErr == nil {
-						event = enriched
-					}
-				}
 				event = event.SanitizeCommon()
 				event.Status = "ok"
 				if _, rich := k.Scheduler.gate.(OutcomeObserver); !rich {
@@ -927,7 +928,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					event.FirstByteAt = firstByteAt
 				}
 				if !event.FirstByteAt.IsZero() {
-					event.TTFT = event.FirstByteAt.Sub(started)
+					event.TTFT = event.FirstByteAt.Sub(accounting.started)
 				}
 				if event.OutputTokens != nil && event.Latency > 0 {
 					event.OutputTokensPerSecond = new(float64(*event.OutputTokens) / event.Latency.Seconds())
@@ -959,7 +960,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					observed := event.Clone()
 					emitEvent(ResponseEvent{At: event.At, Kind: EventResponseComplete, Usage: &observed})
 				}
-				k.EmitUsage(event)
+				accounting.finishSuccess(ctx, event)
 			}
 			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, IncludeUsage: candidateRequest.Transport.IncludeUsage, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
 				reportFailure(streamErr)
@@ -985,10 +986,14 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if emitEvent != nil {
 					emitEvent(ResponseEvent{At: at, Kind: EventResponseStarted})
 				}
-			}, OnProviderUsage: recordProviderUsage, OnComplete: func(event UsageEvent) {
-				recordProviderUsage(event)
+			}, AdmitUsage: accounting.admit, CompleteUsage: accounting.complete, OnProviderUsage: recordProviderUsage, OnComplete: func(event UsageEvent) {
+				completed, completionErr := accounting.complete(attemptCtx, event)
+				if completionErr != nil {
+					terminalFailure = completionErr
+					return
+				}
 				if stagedCompletion == nil {
-					copy := MergeProviderUsage(providerUsage, event)
+					copy := completed.Clone()
 					stagedCompletion = &copy
 				}
 			}})
@@ -1023,23 +1028,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}
 			reportFailure(renderErr)
 			releaseCandidate()
-			failedUsage := providerUsage
-			if source := k.UsageSources[candidate.UsageSourceRef]; source != nil {
-				if enriched, err := source.EnrichUsage(ctx, candidate, response.Headers, failedUsage.Clone()); err == nil {
-					failedUsage = enriched
-				}
-			}
-			failedUsage = failedUsage.SanitizeCommon()
-			if providerUsageKnown || knownProviderUsage(failedUsage) || len(failedUsage.AccountingIssues) > 0 {
-				event := failedUsage
-				event.Status = "error"
-				if ctx.Err() != nil && !errors.Is(context.Cause(ctx), ErrOperationDeadline) {
-					event.Status = "cancelled"
-				}
-				event.At, event.LogicalModel, event.ProviderNodeID, event.ConnectionID, event.ExternalModel = time.Now(), req.Model, candidate.NodeID, candidate.CredentialID, candidate.ExternalModel
-				event.Latency, event.RequestClass, event.SessionID = time.Since(started), requestClass(req), req.Session.ID
-				k.EmitUsage(event)
-			}
+			accounting.finish(ctx, "error")
 			if err := ctx.Err(); err != nil {
 				return err
 			}

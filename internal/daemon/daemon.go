@@ -386,6 +386,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("validate configured transform bindings: %w", err)
 	}
 	d.kernel.Operations = operationSnapshot
+	d.kernel.UsageCatalog = operationSnapshot.ExtensionCatalog()
 	d.kernel.Adapters = runtimeRegistry.AdaptersForBindings(runtimeBindings)
 	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiersForBindings(runtimeBindings)
 	d.kernel.UsageSources = runtimeRegistry.UsageSources()

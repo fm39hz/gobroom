@@ -542,8 +542,12 @@ type StreamHooks struct {
 	ValidateEvent   func(context.Context, ResponseEvent) error
 	OnComplete      func(UsageEvent)
 	OnProviderUsage func(UsageEvent)
-	OnError         func(error)
-	OnSessionState  func(SessionState)
+	// Host admission runs before retaining optional accounting payloads.
+	AdmitUsage func(UsageEvent) UsageEvent
+	// Only the compositor finalizes original accounting before client transforms.
+	CompleteUsage  func(context.Context, UsageEvent) (UsageEvent, error)
+	OnError        func(error)
+	OnSessionState func(SessionState)
 	// Only the compositor calls this after a decoder has failed. It is removed
 	// from the hooks supplied to that decoder and cannot erase its failure.
 	NormalizeProviderFailure func(*ProviderResponseError) error
@@ -613,6 +617,8 @@ const (
 )
 
 type UsageEvent struct {
+	InvocationID          string          `json:"invocationId,omitempty"`
+	AttemptID             string          `json:"attemptId,omitempty"`
 	UpdateKind            UsageUpdateKind `json:"updateKind,omitempty"`
 	At                    time.Time
 	LogicalModel          string
@@ -645,8 +651,14 @@ type UsageSourceOptions struct {
 	EstimatedCostHeader string `json:"estimatedCostHeader,omitempty"`
 }
 
+type UsageEvidence struct {
+	StatusCode int
+	Headers    http.Header
+	ErrorBody  json.RawMessage
+}
+
 type UsageEnricher interface {
-	EnrichUsage(context.Context, Route, http.Header, UsageEvent) (UsageEvent, error)
+	EnrichUsage(context.Context, Route, UsageEvidence, UsageEvent) (UsageEvent, error)
 }
 
 type SessionState struct {

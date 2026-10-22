@@ -190,7 +190,8 @@ type UsageSource interface {
 type HTTPHeaderUsageSource struct{}
 
 func (HTTPHeaderUsageSource) ID() string { return "http-header-usage" }
-func (HTTPHeaderUsageSource) EnrichUsage(_ context.Context, route kernel.Route, headers http.Header, event kernel.UsageEvent) (kernel.UsageEvent, error) {
+func (HTTPHeaderUsageSource) EnrichUsage(_ context.Context, route kernel.Route, evidence kernel.UsageEvidence, event kernel.UsageEvent) (kernel.UsageEvent, error) {
+	headers := evidence.Headers
 	inputHeader := route.UsageOptions.InputTokensHeader
 	if inputHeader == "" {
 		inputHeader = "X-Usage-Input-Tokens"
