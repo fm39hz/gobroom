@@ -31,8 +31,11 @@ and add catalog/schema-bound usage extensions. For results, first prove the
 existing registered-artifact/renderer path without a text tunnel; do not add a
 second payload system or change the projector interface merely because the
 example currently uses text. A projector's logical result schema and the client
-wire envelope are distinct contracts. The usage contract change remains pending
-design approval and has not been implemented or declared closed.
+wire envelope are distinct contracts. The hybrid usage direction is now approved
+in conversation; its
+[written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
+awaits review before implementation planning. The contract change has not been
+implemented or declared closed.
 
 ### Source follow-up — typed results and usage models
 

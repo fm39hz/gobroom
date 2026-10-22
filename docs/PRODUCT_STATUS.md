@@ -36,7 +36,11 @@ gap: renderers already receive schema-validated artifact values. Projectors see
 metadata only and constrain a logical result, not the exact client wire schema.
 A module-only typed-result fixture should be attempted before changing that
 interface. The catalog part of C1 is implemented; usage-envelope closure remains
-reopened and public-contract design approval is pending.
+reopened. The hybrid usage direction is approved; the
+[written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
+awaits review and is not implemented. Typed common semantics, bounded registered
+details and optional raw retention stay distinct. Unfamiliar details do not
+automatically become aggregate, pricing or routing inputs.
 
 The bounded session fix now returns an error on persistence queue overflow,
 while preserving live memory continuity and the drop counter. Kernel handling
@@ -101,9 +105,10 @@ preserved, and tests used fake upstreams. The audit gaps above remain open.
 
 ## Next core work
 
-1. Review schema-bound usage extensions before claiming provider catch-up needs
-   no shared contract change. Keep normalized measures distinct from raw usage,
-   including unit/subset, unknown-vs-zero and snapshot/delta semantics.
+1. Review the written hybrid usage specification, then its implementation plan,
+   before changing public contracts or claiming provider catch-up needs no shared
+   contract change. Keep normalized measures distinct from raw usage, including
+   unit/subset, unknown-vs-zero and snapshot/delta semantics.
 2. Prove the module-only artifact/renderer path for typed job results, replacing
    the example's text tunnel before assuming a new kernel payload arm is needed.
 3. Finish ordinary session persistence overflow/failure observability:

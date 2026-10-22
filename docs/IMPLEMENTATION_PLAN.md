@@ -178,6 +178,13 @@ and logical result schemas need not equal client wire schemas. Direct projector
 value aggregation remains limited, but a kernel change is not established as
 necessary for every typed result. C2–C6 remain in progress.
 
+The hybrid usage direction was approved on 2026-10-22. Its
+[written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
+awaits review before implementation planning: common typed accounting, bounded
+schema-bound details and separate opt-in raw retention. Descriptor registration
+does not automatically grant aggregation, pricing or routing semantics. The
+module-only typed-result proof remains separate.
+
 1. **C1 — catalog complete; semantic envelope not closed:** the local-schema,
    versioned descriptor/factory catalog freezes with the provider runtime;
    provider, primitive and task refs pin exact contracts. Built-in endpoint,
