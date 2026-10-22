@@ -27,25 +27,27 @@ Useful acceptance anchors include
 
 ## Current integration milestone
 
-The core architecture audit found a real extension gap, not merely another
-provider implementation to copy: `UsageEvent` has no schema-bound dimension
-arm for cache/reasoning/other measurements. Native passthrough can preserve raw
-wire fields, but that is not normalized accounting or cross-protocol support.
-The jobs example transports JSON through text, but that does not prove a kernel
-gap: renderers already receive schema-validated artifact values. Projectors see
-metadata only and constrain a logical result, not the exact client wire schema.
-A module-only typed-result fixture should be attempted before changing that
-interface. The catalog part of C1 is implemented; usage-envelope closure remains
-reopened. The hybrid usage direction is approved; the
-[written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
-is approved and not implemented. The [usage implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
-and [independent typed-jobs plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
-are approved for execution. Usage catalog Task 1 is verified at `314e45d` /
-`a15af67`: data-only exact schema refs, private-by-default metadata, payload and
-descriptor bounds, dependency pins and installed CLI catalog acceptance. The
-new accounting path is not yet wired. Typed common semantics, bounded registered
-details and optional raw retention stay distinct. Unfamiliar details do not
-automatically become aggregate, pricing or routing inputs.
+The approved [hybrid usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
+is being implemented against its [specification](superpowers/specs/2026-10-22-usage-contract-design.md).
+The frozen catalog now supports bounded, private-by-default, exact-schema usage
+values. The common envelope carries nullable input/output/cache/reasoning
+counters, cost and throughput, plus registered values and bounded diagnostics.
+Partial observations preserve absent fields; full snapshots can retract a
+previously known quantity. Native normalization and client rendering share
+those semantics. SQLite and daily summaries preserve unknown versus reported
+zero and expose reporting coverage; TUI uses that distinction too.
+
+Per-dispatch identity/error accounting, immutable historical extension details,
+raw retention and gated detail access remain later tasks; C1 is not closed.
+Registered values do not automatically become aggregation, pricing or routing
+inputs. Native passthrough alone is not normalized accounting.
+
+The [typed-jobs plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
+has verified module-owned result artifacts and independently validated client
+envelopes. It required a generic correction to remove the unintended text-event
+requirement for non-chat operations. Projectors still consume artifact metadata,
+while renderers receive schema-validated values; no second payload system or
+direct projector access was introduced.
 
 The bounded session fix now returns an error on persistence queue overflow,
 while preserving live memory continuity and the drop counter. Kernel handling
@@ -97,6 +99,16 @@ Historical installation/version records remain in Git and that evidence file;
 this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
+
+Presence-aware usage checkpoint `7a36239` / `baad314` / `dffc8f6`: full
+root/external tests and vet, existing conformance, and three-run race coverage
+across kernel, adapters, store, runtime, daemon and TUI passed. Independent
+review fixes include native cache/thinking arithmetic, ownership and partial/
+full snapshot semantics. After `make install-all`, installed CLI status/usage/
+summary acceptance passed three race runs against fake providers. Main daemon
+status=ok, control=serving=501. Its 4 ambiguous events and 3 daily rows were
+discarded; provider/connection/credential/model configuration fingerprint was
+unchanged. No live provider traffic was used.
 
 Usage catalog checkpoint `a15af67`: root full tests/vet, selected public-module
 validation and explicit installed-CLI `TestInstalledCLIUsageDescriptorCatalog`

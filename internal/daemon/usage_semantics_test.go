@@ -158,11 +158,34 @@ func runUsagePresenceFixture(t *testing.T, installedCLI bool) {
 			if bytes.Contains(output, []byte("0x")) || bytes.Contains(output, []byte("presence-fixture-secret")) {
 				t.Fatalf("CLI %s leaked pointer or secret data: %s", command, output)
 			}
-			if command == "usage" && (!bytes.Contains(output, []byte(`"inputTokens":null`)) || !bytes.Contains(output, []byte(`"inputTokens":0`))) {
-				t.Fatalf("CLI usage omitted presence distinction: %s", output)
-			}
-			if command == "usage-summary" && (!bytes.Contains(output, []byte(`"attempts":2`)) || !bytes.Contains(output, []byte(`"reported":1`))) {
-				t.Fatalf("CLI summary lacks coverage: %s", output)
+			switch command {
+			case "usage":
+				var cliRows []store.UsageRecord
+				if err := json.Unmarshal(output, &cliRows); err != nil {
+					t.Fatalf("decode CLI usage: %v", err)
+				}
+				if len(cliRows) != 2 || cliRows[0].InputTokens != nil || cliRows[0].OutputTokens != nil ||
+					cliRows[1].InputTokens == nil || *cliRows[1].InputTokens != 0 ||
+					cliRows[1].OutputTokens == nil || *cliRows[1].OutputTokens != 0 {
+					t.Fatalf("CLI usage omitted presence distinction: %#v", cliRows)
+				}
+			case "usage-summary":
+				var cliSummaries []store.UsageSummary
+				if err := json.Unmarshal(output, &cliSummaries); err != nil {
+					t.Fatalf("decode CLI usage summary: %v", err)
+				}
+				if len(cliSummaries) != 1 || cliSummaries[0].Attempts != 2 ||
+					cliSummaries[0].Input.Reported != 1 || cliSummaries[0].Input.Sum != 0 ||
+					cliSummaries[0].Output.Reported != 1 || cliSummaries[0].Output.Sum != 0 {
+					t.Fatalf("CLI summary lacks coverage: %#v", cliSummaries)
+				}
+			case "status":
+				var status struct {
+					Status string `json:"status"`
+				}
+				if err := json.Unmarshal(output, &status); err != nil || status.Status != "ok" {
+					t.Fatalf("CLI status not healthy: %s (decode error=%v)", output, err)
+				}
 			}
 		}
 	}

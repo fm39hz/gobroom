@@ -66,7 +66,18 @@ validation plus explicit host limits, bounded metadata, private classification,
 factory-free exact schema bindings and compiler-derived schema dependencies.
 Full root regression/vet, selected external public-module and installed CLI
 catalog acceptance passed; independent review and bound-fix re-review passed.
-`UsageEvent` integration remains Task 2 and is not demonstrated by this catalog.
+Task 2 is now verified separately (`7a36239`, `baad314`, `dffc8f6`): the common
+envelope has presence-aware cache/reasoning counters, registered values and
+bounded diagnostics. Partial patches and full snapshots share one merge rule,
+including retraction to unknown. `TestGeminiNativeSnapshotInvalidationReachesClientAndKernelTerminal`
+proves that retraction reaches both client output and original accounting;
+`TestAnthropicRendererMergesPartialUsageInJSONAndSSE` proves partial retention.
+Store and summary tests prove NULL/zero and per-metric coverage; explicit
+`TestInstalledCLIUsagePresence` passed three race runs after installation.
+Full root/external tests and vet, existing conformance, and selected three-run
+race suites passed. Main control=serving=501, status=ok. Per-dispatch error
+accounting, historical extension metadata, capture/disclosure and their external
+module proof remain Tasks 3–8; this does not close C1 or all C1–C6.
 
 The read-only follow-up narrows the earlier result claim. Registered inline
 artifact values are validated by the catalog and output contract before the

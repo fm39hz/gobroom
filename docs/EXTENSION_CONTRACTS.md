@@ -5,6 +5,26 @@ extension contracts required by [solution architecture](SOLUTION_ARCHITECTURE.md
 It specifies implementation obligations; it does not claim that the current
 runtime implements them. Evidence is tracked in [M15 conformance](M15_CONFORMANCE.md).
 
+## Current usage contract — host 11
+
+`UsageEvent` uses nullable token counters, estimated cost and throughput:
+unknown is distinct from reported zero. Cache-read/cache-write and reasoning
+are canonical details, not amounts to add again to canonical totals.
+`UsageUpdateKind` distinguishes partial patches from full snapshots. A partial
+patch retains absent quantities; a full snapshot replaces them, including nil
+unknown values, and replaces the extension collection. `MergeProviderUsage`
+returns an owned full snapshot; diagnostics stay coalesced and bounded.
+Native protocol accumulators derive these observations before client transforms.
+
+Unfamiliar values use `Extensions []UsageValue`, exact `usage-value` refs and
+catalog-bound schemas. Registration is data-only, defaults private, and grants
+no aggregation, pricing, routing or disclosure behavior. This envelope and
+presence-aware common persistence are implemented; historical extension storage,
+per-dispatch completion requirements and gated raw/detail access remain in the
+[approved usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md).
+No legacy numeric usage reader is retained. Earlier host-version notes below
+describe individual historical checkpoints, not the current module version.
+
 ## Ownership and design boundary
 
 The model domain remains ProviderDefinition, ProviderNode, Connection,
