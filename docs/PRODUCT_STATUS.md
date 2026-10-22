@@ -40,8 +40,10 @@ reopened. The hybrid usage direction is approved; the
 [written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
 is approved and not implemented. The [usage implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
 and [independent typed-jobs plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
-are approved for execution; catalog and typed-jobs test-first work has started,
-without claiming the new accounting path is implemented. Typed common semantics, bounded registered
+are approved for execution. Usage catalog Task 1 is verified at `314e45d` /
+`a15af67`: data-only exact schema refs, private-by-default metadata, payload and
+descriptor bounds, dependency pins and installed CLI catalog acceptance. The
+new accounting path is not yet wired. Typed common semantics, bounded registered
 details and optional raw retention stay distinct. Unfamiliar details do not
 automatically become aggregate, pricing or routing inputs.
 
@@ -96,6 +98,20 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
+Usage catalog checkpoint `a15af67`: root full tests/vet, selected public-module
+validation and explicit installed-CLI `TestInstalledCLIUsageDescriptorCatalog`
+passed after `make install-all`. Independent review's two Important bound gaps
+were fixed and scoped re-review passed. Main daemon status=ok,
+control=serving=499; no real provider traffic was used for acceptance. This is
+metadata registration, not completed normalized accounting.
+
+Typed-jobs integration exposed a separate generic kernel bug: non-chat
+operations are currently required to declare `text_delta`. The source-level
+claim that the existing kernel admits artifact-only job results was too strong.
+A generic response-requirement regression/fix is being handled separately;
+the module result fixture has not passed end-to-end yet.
+
+Earlier session checkpoint:
 Installed checkpoint `103dbbc`, audit correction `2b9dc90`: the new overflow
 regression was observed red before the fix and green afterward. Full root/
 external regression, vet, conformance and three session-store race runs passed;

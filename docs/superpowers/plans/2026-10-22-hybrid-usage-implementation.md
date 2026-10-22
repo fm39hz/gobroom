@@ -54,12 +54,19 @@ Use `pkg/provider` aliases for module-facing types. Do not create a second publi
 
 Test assertion form: `if err := snapshot.ValidateUsageValue(wrongVersion); err == nil { t.Fatal("accepted unregistered version") }`.
 
-- [ ] Add `TestUsageValueBindsExactSchemaAndOwnsMetadata`: register two versions; wrong/missing ref, wrong schema, invalid policy and mutated caller buffers must not pass. Expected assertion: `ValidateUsageValue(wrongVersion) != nil`, while the frozen original remains unchanged.
-- [ ] Main runs `GOCACHE=/tmp/gobroom-go-cache go test ./internal/extensions ./internal/provider -run 'UsageValue|UsageDescriptor' -count=1`; observe missing-contract failure before implementation.
-- [ ] Implement descriptor validation/clone/fingerprint/dependency handling and public aliases using the existing schema compiler. Include schema dependencies in locks and immutable descriptor snapshots; no new registry parallel to the catalog. Bound descriptor strings/documents under existing catalog resource validation.
-- [ ] Main reruns the focused tests plus catalog/dependency-lock regressions; expected PASS. Confirm registering a value does not run inference, aggregation or policy code.
-- [ ] Main installs and uses `gobroom --ipc <temporary-socket> extensions catalog` against a temporary module-enabled host; assert the exact usage descriptor/schema appears and contains no runtime value or secret.
-- [ ] Commit `feat(extensions): register schema-bound usage values`.
+- [x] Add `TestUsageValueBindsExactSchemaAndOwnsMetadata`: register two versions; wrong/missing ref, wrong schema, invalid policy and mutated caller buffers must not pass. Expected assertion: `ValidateUsageValue(wrongVersion) != nil`, while the frozen original remains unchanged.
+- [x] Main runs `GOCACHE=/tmp/gobroom-go-cache go test ./internal/extensions ./internal/provider -run 'UsageValue|UsageDescriptor' -count=1`; observe missing-contract failure before implementation.
+- [x] Implement descriptor validation/clone/fingerprint/dependency handling and public aliases using the existing schema compiler. Include schema dependencies in locks and immutable descriptor snapshots; no new registry parallel to the catalog. Bound descriptor strings/documents under existing catalog resource validation.
+- [x] Main reruns the focused tests plus catalog/dependency-lock regressions; expected PASS. Confirm registering a value does not run inference, aggregation or policy code.
+- [x] Main installs and uses `gobroom --ipc <temporary-socket> extensions catalog` against a temporary module-enabled host; assert the exact usage descriptor/schema appears and contains no runtime value or secret.
+- [x] Commit `feat(extensions): register schema-bound usage values`.
+
+Verified checkpoint: `314e45d` + review fix `a15af67`. Full root tests/vet,
+selected external-module validation and explicit installed-CLI catalog fixture
+passed. Independent review's two bound findings were fixed and re-reviewed.
+Default value validation now applies 64 KiB; `ValidateUsageValueWithin` uses
+the smaller explicit host/descriptor limit. Total usage descriptor metadata
+is bounded to 64 KiB. This closes Task 1, not usage ingestion/persistence.
 
 ## Task 2: Atomic presence-aware common-contract cutover
 

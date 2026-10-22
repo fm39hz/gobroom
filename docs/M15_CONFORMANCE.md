@@ -41,6 +41,20 @@ has not been implemented or declared closed.
 
 ### Source follow-up — typed results and usage models
 
+Execution correction: the real typed-jobs fixture rejects an artifact-only
+decoder before dispatch. `RequiredResponseEvents` currently mandates
+`text_delta` even for non-chat operations. Thus the artifact/renderer payload
+path exists, but the original unmodified-kernel admission claim was incomplete.
+A separately tested generic correction is required; declaring unused text
+support to evade admission would not satisfy this proof.
+
+Usage catalog Task 1 is verified in `314e45d` and `a15af67`: default64KiB
+validation plus explicit host limits, bounded metadata, private classification,
+factory-free exact schema bindings and compiler-derived schema dependencies.
+Full root regression/vet, selected external public-module and installed CLI
+catalog acceptance passed; independent review and bound-fix re-review passed.
+`UsageEvent` integration remains Task 2 and is not demonstrated by this catalog.
+
 The read-only follow-up narrows the earlier result claim. Registered inline
 artifact values are validated by the catalog and output contract before the
 renderer receives `ResponseEvent.Artifacts`. A custom renderer can decode that
