@@ -86,14 +86,15 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
-Installed checkpoint `463e47d`, with selected fallback proof `f8f5f09`: full
-root/external regression, vet, conformance and focused repeated race tests passed.
-After `make install-all`, three installed-CLI race runs covered write-failure
-status, shutdown retention and config rejection during SSE. The installed daemon
-rejects a negative drain budget before creating state. Main control=serving=496,
-status=ok with zero persistence faults; secret-free bundle v9 validation passed.
-The short JSON/SSE `make perf` smoke passed without establishing RSS/tail targets.
-Real configuration and credentials were preserved; acceptance used fake upstreams.
+Installed checkpoint `103dbbc`, audit correction `2b9dc90`: the new overflow
+regression was observed red before the fix and green afterward. Full root/
+external regression, vet, conformance and three session-store race runs passed;
+independent review found no critical/important issue in the bounded change.
+After `make install-all`, three installed-CLI continuity/restart race runs passed.
+The queue-overflow error itself is unit/race evidence, not CLI observability:
+the kernel still ignores save errors. Main control=serving=498, status=ok;
+secret-free bundle v9 validation passed. Real configuration/credentials were
+preserved, and tests used fake upstreams. The audit gaps above remain open.
 
 ## Next core work
 

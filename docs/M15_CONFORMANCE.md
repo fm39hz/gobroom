@@ -38,6 +38,15 @@ It does not roll back the useful live state or change acknowledged invalidation.
 The kernel still ignores Save errors; this is not complete session persistence
 observability or a new durability guarantee.
 
+Bounded checkpoint `103dbbc`: red/green reproduction, full root/external
+regression/vet/conformance, three complete session-store race runs and
+independent review passed. After `make install-all`, the existing public-module
+continuity fixture passed three race runs using installed CLI controls. Main
+control=serving=498 and bundle-v9 validation were healthy. That installed test
+checks ordinary continuity/restart regression, not queue rejection visibility
+through CLI. Semantic-envelope design review and session error reporting remain
+open; this does not complete C1–C6 or the user’s architectural success criterion.
+
 The target begins with a focused transform-boundary group: opaque metadata on
 appended IR is rejected transactionally, canonical message suffixes are
 accepted, and Chat/Anthropic/Responses egress mappings plus their fail-closed
