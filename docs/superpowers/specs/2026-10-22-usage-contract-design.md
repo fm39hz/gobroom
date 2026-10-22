@@ -60,6 +60,13 @@ Common summaries retain known sums and completeness/coverage. A known subtotal
 is not a complete total when some attempts did not report the quantity.
 Throughput likewise requires appropriate known token and timing values.
 
+Explicit zero and extension-only observations count as reported accounting,
+including on failure. An absent field in a later partial report does not erase
+an earlier known field; an explicitly reported correction to zero does replace
+that field. Decoder completion without accounting must not overwrite the last
+known accounting view. These rules require presence information, not a test
+that any numeric value is nonzero.
+
 ## Extension contract
 
 Reuse the frozen catalog, exact version/digest references, existing JSON Schema
@@ -79,6 +86,9 @@ attempt, including reference/envelope overhead. Modules may impose smaller
 limits; host overrides must remain finite and positive. Do not retain an
 unbounded per-frame history. These are safety ceilings, not typical sizes or
 performance claims.
+
+Effective limits also obey the enclosing operation/event/output budgets;
+extension ceilings cannot authorize a larger response than those budgets.
 
 Unresolved required refs and invalid descriptors reject activation. Invalid
 optional runtime values are rejected while valid common accounting is retained;
@@ -137,6 +147,12 @@ renderers receive schema-validated inline values. Logical result validation and
 validation of the exact client wire envelope are separate obligations.
 
 The fixture must validate both boundaries without a text tunnel or kernel edit.
+The renderer consumes the registered result artifact's value; the projector may
+validate a declared logical artifact-reference result instead of duplicating
+the full client DTO. Revise that logical schema/version explicitly if needed.
+Do not connect independently created factories through global result maps,
+goroutine identity or an assumed shared request object. No such shared carrier
+is established by the current factory contracts.
 If a named operation later needs direct projector payload aggregation which
 existing primitives cannot express cleanly, review that specific contract
 separately. Source-level feasibility is not executed acceptance.
@@ -170,3 +186,37 @@ The implementation plan must name tests for:
 
 Written-spec review precedes implementation-plan review and execution. Direction
 approval does not close C1, M15 or the broader architecture acceptance gate.
+
+## Existing-source impact review
+
+The following source findings identify why a shared struct-only patch would
+not implement this specification. They are not newly executed acceptance:
+
+- `internal/kernel/response_failure.go:knownProviderUsage` recognizes only
+  nonzero common counters/cost. `kernel.go:recordProviderUsage` replaces its
+  view wholesale. Presence, partial reports and explicit zero need end-to-end
+  treatment, not just nullable storage columns.
+- `internal/kernel/pipeline.go` observes original provider usage before client
+  transforms and stages completion accounting. Preserve that boundary and
+  extend its ownership guarantees to new nested values. Existing
+  `TestResponseTransformDoesNotRewriteProviderUsageAccounting` covers common
+  counters, not unimplemented extension payloads.
+- `internal/kernel/kernel.go` handles HTTP error statuses before response
+  decoding. Its later render-failure path enriches known usage separately.
+  Attempt accounting acceptance must include reported usage on error-status
+  paths as well as accepted-response stream failures. Unknown accounting must
+  remain unknown; this is not a mandate to invent a charge for every rejection.
+- `internal/adapter/openai/events.go:openAIUsageFromMap` currently reduces
+  usage to fixed token counters; Anthropic and Gemini have separate conversion
+  paths. Each supported decoder and renderer needs semantic evidence rather
+  than assuming a shared type change automatically fixes all protocols.
+- `internal/store/store.go:SaveUsageEvent` and `UsageEvents` persist/read fixed
+  counters, while `runtime_statements.go:usageDailySQL` unconditionally sums
+  them. `internal/tui/rows.go` formats them as present numbers. Presence and
+  coverage must survive the store/query/control/display boundary, not merely
+  response decoding. Storing the authoritative provider view does not require
+  a second durable copy of every client projection.
+
+Existing drain/failure tests demonstrate persistence lifecycle behavior, not
+the new accounting semantics. This read-only review ran no tests and does not
+upgrade those tests into unknown/zero or extension acceptance evidence.
