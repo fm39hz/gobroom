@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/normalize"
 )
 
 func TestGeminiOptionalUsageFaultPreservesAnswerJSONAndSSE(t *testing.T) {
@@ -69,6 +70,63 @@ func TestGeminiOptionalUsageFaultPreservesAnswerJSONAndSSE(t *testing.T) {
 					t.Fatalf("accounting issue contains raw invalid value: %s (%v)", evidence, marshalErr)
 				}
 			})
+		}
+	}
+}
+
+func TestGeminiNativeSnapshotsInvalidatePreviouslyProvenOutput(t *testing.T) {
+	body := "data: {\"usageMetadata\":{\"promptTokenCount\":11,\"candidatesTokenCount\":6,\"totalTokenCount\":17}}\n\n" +
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":7}}\n\n"
+	var providerSnapshots, clientSnapshots []kernel.UsageEvent
+	var completed kernel.UsageEvent
+	err := (Gemini{}).DecodeResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, func(event kernel.ResponseEvent) error {
+		if event.Kind == kernel.EventUsage && event.Usage != nil {
+			clientSnapshots = append(clientSnapshots, event.Usage.Clone())
+		}
+		return nil
+	}, kernel.StreamHooks{
+		OnProviderUsage: func(event kernel.UsageEvent) { providerSnapshots = append(providerSnapshots, event.Clone()) },
+		OnComplete:      func(event kernel.UsageEvent) { completed = event },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(providerSnapshots) != 2 || len(clientSnapshots) != 2 {
+		t.Fatalf("provider snapshots=%#v client snapshots=%#v", providerSnapshots, clientSnapshots)
+	}
+	for name, snapshots := range map[string][]kernel.UsageEvent{"provider": providerSnapshots, "client": clientSnapshots} {
+		latest := snapshots[len(snapshots)-1]
+		if latest.OutputTokens != nil {
+			t.Errorf("%s snapshot retained stale proven output %d: %#v", name, *latest.OutputTokens, latest)
+		}
+		if latest.UpdateKind != kernel.UsageFullSnapshot {
+			t.Errorf("%s native observation kind=%q, want snapshot", name, latest.UpdateKind)
+		}
+	}
+	if completed.OutputTokens != nil {
+		t.Fatalf("completion retained stale output: %#v", completed)
+	}
+}
+
+func TestGeminiRequestCodecRejectsUnrecognizedRawStreamOptions(t *testing.T) {
+	mapped, err := normalize.Map("/v1/chat/completions", http.Header{}, map[string]any{
+		"model": "gemini-flash", "stream": true,
+		"stream_options": map[string]any{"include_usage": true},
+		"messages":       []any{map[string]any{"role": "user", "content": "hello"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []any{
+		map[string]any{"include_usage": true, "unknown_option": true},
+		map[string]any{"include_usage": "true"},
+	} {
+		request := normalize.CloneRequest(mapped.Request)
+		request.Raw["stream_options"] = raw
+		if _, err := geminiRequest(request); err == nil {
+			t.Errorf("Gemini codec accepted unsupported raw stream_options: %#v", raw)
 		}
 	}
 }

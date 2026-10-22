@@ -75,3 +75,25 @@ func TestAnthropicOptionalUsageFaultPreservesAnswerJSONAndSSE(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicNativeUsageSnapshotIsCanonicalFullObservation(t *testing.T) {
+	state := anthropicUsageState{}
+	for _, wire := range []string{
+		`{"input_tokens":2,"cache_read_input_tokens":8}`,
+		`{"cache_creation_input_tokens":4,"output_tokens":1}`,
+	} {
+		frame, err := decodeAnthropicUsageFrame([]byte(`{"usage":` + wire + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		state = state.apply(frame.EventUsage)
+	}
+	usage := state.snapshot()
+	if !anthropicCountIs(usage.InputTokens, 14) || !anthropicCountIs(usage.OutputTokens, 1) ||
+		!anthropicCountIs(usage.CachedReadTokens, 8) || !anthropicCountIs(usage.CachedWriteTokens, 4) {
+		t.Fatalf("Anthropic snapshot must contain canonical totals once: %#v", usage)
+	}
+	if usage.UpdateKind != kernel.UsageFullSnapshot {
+		t.Fatalf("Anthropic native usage must be marked as a full snapshot, got kind=%q", usage.UpdateKind)
+	}
+}

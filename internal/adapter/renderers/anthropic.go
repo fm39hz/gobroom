@@ -135,7 +135,7 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 		s.messageID = event.ResponseID
 	}
 	if event.Usage != nil {
-		s.usage = *event.Usage
+		s.usage = kernel.MergeProviderUsage(s.usage, *event.Usage)
 	}
 	if err := s.startMessage(); err != nil {
 		return err
@@ -244,7 +244,7 @@ func (s *anthropicSession) Emit(_ context.Context, event kernel.ResponseEvent) e
 		}
 	case kernel.EventUsage:
 		if event.Usage != nil {
-			s.usage = *event.Usage
+			s.usage = kernel.MergeProviderUsage(s.usage, *event.Usage)
 		}
 	case kernel.EventResponseComplete:
 		s.finished = true

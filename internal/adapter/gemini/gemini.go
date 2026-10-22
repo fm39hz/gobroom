@@ -330,7 +330,7 @@ func geminiGenerationOptionsRepresentable(raw map[string]any) bool {
 		"seed": true, "stop": true, "n": true, "response_format": true, "tool_choice": true,
 	}
 	for key, value := range raw {
-		if key == "model" || key == "stream" || key == "messages" || key == "tools" || key == "reasoning_effort" || key == "thinking" || key == "reasoning" {
+		if key == "model" || key == "stream" || key == "stream_options" || key == "messages" || key == "tools" || key == "reasoning_effort" || key == "thinking" || key == "reasoning" {
 			continue
 		}
 		if !supported[key] {
@@ -630,9 +630,20 @@ func geminiRequest(request kernel.NormalizedRequest) (generateContentRequest, er
 			return generateContentRequest{}, fmt.Errorf("decode thinking options: %w", err)
 		}
 	}
+	if len(options.StreamOptions) > 0 {
+		var streamOptions struct {
+			IncludeUsage bool `json:"include_usage"`
+		}
+		if err := decodeStrictJSON(options.StreamOptions, &streamOptions); err != nil {
+			return generateContentRequest{}, fmt.Errorf("invalid or unsupported stream_options: %w", err)
+		}
+		if request.Transport.IncludeUsage != (request.Stream && streamOptions.IncludeUsage) {
+			return generateContentRequest{}, fmt.Errorf("stream_options do not match normalized transport hints")
+		}
+	}
 	switch {
-	case options.User != "", len(options.StreamOptions) > 0, options.ServiceTier != "", options.Metadata != nil, options.PromptCacheKey != "", options.SafetyIdentifier != "":
-		return generateContentRequest{}, fmt.Errorf("Gemini adapter does not yet support OpenAI request attribution, stream_options, or service-tier options")
+	case options.User != "", options.ServiceTier != "", options.Metadata != nil, options.PromptCacheKey != "", options.SafetyIdentifier != "":
+		return generateContentRequest{}, fmt.Errorf("Gemini adapter does not yet support OpenAI request attribution or service-tier options")
 	case options.Store != nil && *options.Store:
 		return generateContentRequest{}, fmt.Errorf("Gemini adapter cannot honor OpenAI store=true")
 	case options.Verbosity != "", len(options.Modalities) > 0, len(options.Audio) > 0, len(options.Prediction) > 0:
@@ -1173,7 +1184,7 @@ func (state geminiUsageState) snapshot() kernel.UsageEvent {
 	}
 	return kernel.UsageEvent{InputTokens: copyGeminiCount(state.Prompt), OutputTokens: output,
 		CachedReadTokens: copyGeminiCount(state.Cached), ReasoningTokens: copyGeminiCount(state.Thoughts),
-		AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok"}
+		AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok", UpdateKind: kernel.UsageFullSnapshot}
 }
 
 func copyGeminiCount(count *int64) *int64 {

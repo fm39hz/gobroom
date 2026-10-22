@@ -90,6 +90,10 @@ func (event UsageEvent) BoundedIssues() []UsageIssue {
 func (event UsageEvent) SanitizeCommon() UsageEvent {
 	event = event.Clone()
 	invalid := false
+	if !validUsageUpdateKind(event.UpdateKind) {
+		event.UpdateKind = UsagePartialSnapshot
+		invalid = true
+	}
 	for _, counter := range []**int64{
 		&event.InputTokens, &event.OutputTokens, &event.CachedReadTokens,
 		&event.CachedWriteTokens, &event.ReasoningTokens,
@@ -124,6 +128,9 @@ func invalidCommonMeasure(value *float64) bool {
 // unknown and valid; present counters and costs must be nonnegative, and
 // floating point measurements must be finite.
 func (event UsageEvent) ValidateCommon() error {
+	if !validUsageUpdateKind(event.UpdateKind) {
+		return fmt.Errorf("unsupported usage update kind %q", event.UpdateKind)
+	}
 	for _, counter := range []struct {
 		name  string
 		value *int64
@@ -152,11 +159,27 @@ func (event UsageEvent) ValidateCommon() error {
 	return nil
 }
 
-// MergeProviderUsage applies an already-normalized partial snapshot. Present
-// fields in update replace current fields, including explicit zero values;
-// absent fields preserve current knowledge. This does not infer deltas.
+func validUsageUpdateKind(kind UsageUpdateKind) bool {
+	return kind == "" || kind == UsagePartialSnapshot || kind == UsageFullSnapshot
+}
+
+// MergeProviderUsage applies an already-normalized usage observation. Partial
+// observations replace present values and retain absent values. Full snapshots
+// replace common quantities and extensions, including unknown nil values. The
+// result is always an independently owned full snapshot.
 func MergeProviderUsage(current, update UsageEvent) UsageEvent {
 	merged := current.Clone()
+	fullSnapshot := update.UpdateKind == UsageFullSnapshot
+	if fullSnapshot {
+		merged.InputTokens = nil
+		merged.OutputTokens = nil
+		merged.CachedReadTokens = nil
+		merged.CachedWriteTokens = nil
+		merged.ReasoningTokens = nil
+		merged.EstimatedCost = nil
+		merged.OutputTokensPerSecond = nil
+		merged.Extensions = nil
+	}
 	if !update.At.IsZero() {
 		merged.At = update.At
 	}
@@ -221,8 +244,13 @@ func MergeProviderUsage(current, update UsageEvent) UsageEvent {
 	if update.OutputTokensPerSecond != nil {
 		merged.OutputTokensPerSecond = new(*update.OutputTokensPerSecond)
 	}
-	merged.Extensions = mergeUsageValues(merged.Extensions, update.Extensions)
+	if fullSnapshot {
+		merged.Extensions = cloneUsageValues(update.Extensions)
+	} else {
+		merged.Extensions = mergeUsageValues(merged.Extensions, update.Extensions)
+	}
 	merged.AccountingIssues = coalesceUsageIssues(merged.AccountingIssues, update.AccountingIssues)
+	merged.UpdateKind = UsageFullSnapshot
 	return merged
 }
 

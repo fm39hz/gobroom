@@ -603,7 +603,17 @@ type UsageIssue struct {
 	TypeRef extensions.Ref `json:"typeRef,omitzero"`
 }
 
+// UsageUpdateKind distinguishes a partial accounting patch from a complete
+// provider snapshot. The zero value deliberately means a partial patch.
+type UsageUpdateKind string
+
+const (
+	UsagePartialSnapshot UsageUpdateKind = "partial"
+	UsageFullSnapshot    UsageUpdateKind = "snapshot"
+)
+
 type UsageEvent struct {
+	UpdateKind            UsageUpdateKind `json:"updateKind,omitempty"`
 	At                    time.Time
 	LogicalModel          string
 	ProviderNodeID        string

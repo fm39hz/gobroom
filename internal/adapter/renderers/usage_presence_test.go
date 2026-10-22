@@ -279,3 +279,101 @@ func TestOpenAIResponsesRendererMergesUsageSnapshots(t *testing.T) {
 		t.Fatalf("renderer replaced earlier partial usage: %#v", usage)
 	}
 }
+
+func TestOpenAIRenderersFullSnapshotClearsUnknownUsage(t *testing.T) {
+	tests := []struct {
+		name   string
+		format normalize.Format
+		begin  func(kernel.ResponseRenderContext, *httptest.ResponseRecorder) (kernel.ResponseRenderSession, error)
+	}{
+		{name: "Chat", format: normalize.FormatOpenAIChat, begin: func(options kernel.ResponseRenderContext, writer *httptest.ResponseRecorder) (kernel.ResponseRenderSession, error) {
+			return (OpenAIChat{}).Begin(context.Background(), options, writer)
+		}},
+		{name: "Responses", format: normalize.FormatOpenAIResponses, begin: func(options kernel.ResponseRenderContext, writer *httptest.ResponseRecorder) (kernel.ResponseRenderSession, error) {
+			return (OpenAIResponses{}).Begin(context.Background(), options, writer)
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := httptest.NewRecorder()
+			options := kernel.ResponseRenderContext{
+				Status: 200, ClientFormat: tc.format, ProviderFormat: normalize.FormatOpenAIResponses,
+				SemanticTransformActive: true,
+			}
+			session, err := tc.begin(options, writer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			known := &kernel.UsageEvent{UpdateKind: kernel.UsageFullSnapshot, InputTokens: new(int64(11)), OutputTokens: new(int64(6))}
+			unknown := &kernel.UsageEvent{UpdateKind: kernel.UsageFullSnapshot}
+			for _, usage := range []*kernel.UsageEvent{known, unknown} {
+				if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: usage}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventResponseComplete}); err != nil {
+				t.Fatal(err)
+			}
+			if err := session.Finish(context.Background(), nil); err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(writer.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			usage := body["usage"].(map[string]any)
+			for _, field := range []string{"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens"} {
+				if _, exists := usage[field]; exists {
+					t.Fatalf("full unknown snapshot retained or fabricated %s: %#v", field, usage)
+				}
+			}
+		})
+	}
+}
+
+func TestAnthropicRendererMergesPartialUsageInJSONAndSSE(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		name := "json"
+		if streaming {
+			name = "sse"
+		}
+		t.Run(name, func(t *testing.T) {
+			writer := httptest.NewRecorder()
+			options := kernel.ResponseRenderContext{
+				Status: 200, ClientFormat: normalize.FormatAnthropic, ProviderFormat: normalize.FormatOpenAIChat,
+				Streaming: streaming, ProviderStreaming: streaming,
+			}
+			session, err := (AnthropicMessages{}).Begin(context.Background(), options, writer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, usage := range []*kernel.UsageEvent{{InputTokens: new(int64(100))}, {OutputTokens: new(int64(4))}} {
+				if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: usage}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := session.Finish(context.Background(), nil); err != nil {
+				t.Fatal(err)
+			}
+			if !streaming {
+				var body struct {
+					Usage struct {
+						Input  int64 `json:"input_tokens"`
+						Output int64 `json:"output_tokens"`
+					} `json:"usage"`
+				}
+				if err := json.Unmarshal(writer.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if body.Usage.Input != 100 || body.Usage.Output != 4 {
+					t.Fatalf("Anthropic JSON lost partial usage fields: %+v", body.Usage)
+				}
+				return
+			}
+			output := writer.Body.String()
+			if !strings.Contains(output, `"input_tokens":100`) || !strings.Contains(output, `"output_tokens":4`) {
+				t.Fatalf("Anthropic SSE lost partial usage fields: %s", output)
+			}
+		})
+	}
+}

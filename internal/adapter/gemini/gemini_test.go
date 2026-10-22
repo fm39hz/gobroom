@@ -393,10 +393,17 @@ func TestGeminiUsagePreservesMissingFieldsAndExplicitZero(t *testing.T) {
 	if !geminiCountIs(metadata.PromptTokenCount, 0) || metadata.CandidatesTokenCount != nil {
 		t.Fatalf("typed usage metadata=%#v", metadata)
 	}
-	current := kernel.UsageEvent{InputTokens: new(int64(7)), OutputTokens: new(int64(3))}
-	merged := kernel.MergeProviderUsage(current, geminiUsage(&metadata))
+	// Native patches accumulate before canonical full snapshots are derived.
+	state := (geminiUsageState{}).merge(&geminiUsageMetadata{
+		PromptTokenCount: new(int64(7)), CandidatesTokenCount: new(int64(3)), ThoughtsTokenCount: new(int64(0)),
+	})
+	merged := state.merge(&metadata).snapshot()
 	if !geminiCountIs(merged.InputTokens, 0) || !geminiCountIs(merged.OutputTokens, 3) {
 		t.Fatalf("merged usage=%#v", merged)
+	}
+	standalone := geminiUsage(&metadata)
+	if standalone.OutputTokens != nil || standalone.UpdateKind != kernel.UsageFullSnapshot {
+		t.Fatalf("standalone snapshot invented absent output: %#v", standalone)
 	}
 }
 

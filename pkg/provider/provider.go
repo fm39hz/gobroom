@@ -271,8 +271,15 @@ type FacetDisposition = kernel.FacetDisposition
 type ResponseEvent = kernel.ResponseEvent
 type ResponseEventKind = kernel.ResponseEventKind
 type UsageEvent = kernel.UsageEvent
+type UsageUpdateKind = kernel.UsageUpdateKind
 type UsageIssue = kernel.UsageIssue
 type UsageLimits = kernel.UsageLimits
+
+const (
+	UsagePartialSnapshot = kernel.UsagePartialSnapshot
+	UsageFullSnapshot    = kernel.UsageFullSnapshot
+)
+
 type ResponseFailureOrigin = kernel.ResponseFailureOrigin
 type ResponseFailure = kernel.ResponseFailure
 

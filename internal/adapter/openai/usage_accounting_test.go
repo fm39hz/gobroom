@@ -48,6 +48,29 @@ func TestOpenAIIssueOnlyUsagePreservesProviderError(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesTerminalUsageIsFullAccumulatedSnapshot(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"usage\":{\"input_tokens\":11}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_usage\",\"status\":\"completed\",\"usage\":{\"output_tokens\":6}}}\n\n"
+	var final kernel.UsageEvent
+	err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, normalize.FormatOpenAIResponses, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
+		OnComplete: func(usage kernel.UsageEvent) { final = usage },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.UpdateKind != kernel.UsageFullSnapshot {
+		t.Fatalf("terminal accumulated usage must be a full snapshot, got update kind %q", final.UpdateKind)
+	}
+	if final.InputTokens == nil || *final.InputTokens != 11 || final.OutputTokens == nil || *final.OutputTokens != 6 {
+		t.Fatalf("terminal snapshot must retain accumulated known counters exactly once: %+v", final)
+	}
+	if final.CachedReadTokens != nil || final.CachedWriteTokens != nil || final.ReasoningTokens != nil {
+		t.Fatalf("terminal snapshot fabricated unreported counters: %+v", final)
+	}
+}
+
 func TestOpenAIOptionalInvalidCounterPreservesAnswerAndValidUsage(t *testing.T) {
 	for _, wire := range []string{"json", "sse"} {
 		for _, counter := range []struct {

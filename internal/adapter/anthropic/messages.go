@@ -547,7 +547,7 @@ func (state anthropicUsageState) snapshot() kernel.UsageEvent {
 	}
 	return kernel.UsageEvent{InputTokens: input, OutputTokens: copyAnthropicCount(state.OutputTokens),
 		CachedReadTokens: copyAnthropicCount(state.CachedReadTokens), CachedWriteTokens: copyAnthropicCount(state.CachedWriteTokens),
-		ReasoningTokens: copyAnthropicCount(state.ReasoningTokens), AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok"}
+		ReasoningTokens: copyAnthropicCount(state.ReasoningTokens), AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok", UpdateKind: kernel.UsageFullSnapshot}
 }
 
 func copyAnthropicCount(count *int64) *int64 {
