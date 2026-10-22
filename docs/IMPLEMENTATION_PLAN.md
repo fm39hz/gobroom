@@ -171,9 +171,12 @@ The design is fixed in [Semantic extension contracts](EXTENSION_CONTRACTS.md).
 These slices implement that design; they do not reopen the model graph or
 introduce provider-specific core workflows. C1's catalog, exact module pins
 and static-link resolution contract are in place. The 2026-10-22 audit reopens
-the semantic-envelope part of C1: registered usage dimensions are absent, and
-typed operation-result data needs a proper projector path rather than the jobs
-example's JSON-in-text transport. C2–C6 remain in progress.
+the semantic-envelope part of C1: registered usage dimensions are absent.
+The jobs example's JSON-in-text transport is a separate implementation/proof
+gap: registered artifacts already carry schema-validated values to renderers,
+and logical result schemas need not equal client wire schemas. Direct projector
+value aggregation remains limited, but a kernel change is not established as
+necessary for every typed result. C2–C6 remain in progress.
 
 1. **C1 — catalog complete; semantic envelope not closed:** the local-schema,
    versioned descriptor/factory catalog freezes with the provider runtime;

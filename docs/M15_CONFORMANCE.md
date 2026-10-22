@@ -22,14 +22,42 @@ criterion; passing existing conformance simulations does not remove them.
 | Boundary | Inspected evidence | Current conclusion |
 |---|---|---|
 | Additional usage dimensions | `internal/kernel/contract.go:UsageEvent` has fixed common counters/cost/timing, no registered measurement/value collection. The Qoder usage normalizer in the adjacent source preserves cache-read/cache-creation/reasoning details. | A new first-class dimension currently needs a shared type change. Native raw preservation is not a normalized usage extension. |
-| Typed operation results | `examples/external-provider-module/jobs.go` emits marshalled job DTOs as `EventTextDelta`; its projector reparses that text. `operationEventPayload` carries artifact metadata, not inline values. | The example proves schema validation of a text tunnel, not the intended typed result path. Projector visibility/access needs design and proof. |
+| Typed operation results | `examples/external-provider-module/jobs.go` emits marshalled job DTOs as `EventTextDelta`; its projector reparses that text. `operationEventPayload` carries artifact metadata, but the renderer receives the full artifact including inline values. | The text tunnel is an example implementation choice, not proof that every typed result needs a kernel change. A module can declare a logical artifact-reference result and render its schema-validated value. Direct projector aggregation over values is a narrower, separate limitation. |
 | Existing artifact extension arm | `extensions.Snapshot.validateArtifact` validates inline values against exact registered schemas and enforces owner/recipient/expiry policy; response scopes live in `internal/artifacts/response.go`. | Reuse this legitimate primitive. Do not infer that every custom event requires a new kernel enum merely because common fields are fixed: event kinds are string-backed and registered artifacts are supported. |
 | Auth/replay | Public-module setup/resource/owner/activation fixtures and job/replay-shutdown fixtures exist. | No missing generic replay mechanism was established in this audit. Remaining proof must be a finite clause-to-test map, not a requirement for one giant universal matrix. |
 
-Recommended design direction for review: retain efficient common typed values,
-add catalog/schema-bound usage extensions, and give result projectors a legitimate
-typed/authorized path to operation-specific values instead of text serialization.
-That public-contract change has not been implemented or declared closed.
+Recommended usage direction for review: retain efficient common typed values
+and add catalog/schema-bound usage extensions. For results, first prove the
+existing registered-artifact/renderer path without a text tunnel; do not add a
+second payload system or change the projector interface merely because the
+example currently uses text. A projector's logical result schema and the client
+wire envelope are distinct contracts. The usage contract change remains pending
+design approval and has not been implemented or declared closed.
+
+### Source follow-up — typed results and usage models
+
+The read-only follow-up narrows the earlier result claim. Registered inline
+artifact values are validated by the catalog and output contract before the
+renderer receives `ResponseEvent.Artifacts`. A custom renderer can decode that
+validated value into its client DTO. A logical result schema may describe the
+artifact reference/metadata; it need not equal the client wire response schema.
+The current projector cannot inspect inline values through its metadata-only
+event input. That limits direct payload aggregation, but does not eliminate the
+existing typed client-result path. Arbitrary surrounding JSON emitted by a
+renderer is not automatically validated by the artifact or logical result schema.
+This is source-level feasibility evidence, not an executed replacement of the
+jobs example; that example still needs a module-only conformance fixture.
+
+| Local reference | Observed representation | Implication, not a drop-in dependency |
+|---|---|---|
+| Bifrost `core/schemas/chatcompletions.go` and `responses.go` | Common totals plus typed cache/read/write/reasoning details and non-token units. Served-tier/geography/model hints include internal-only fields. Cache aliases are normalized explicitly; cache writes are not exported as cache reads. | A normalized measure needs inclusion/unit/projection semantics. Merely preserving extra JSON or adding numbers together is insufficient. Its growing provider-specific shared fields are not a schema registry. |
+| TensorZero `crates/tensorzero-types/src/usage.rs` | Optional common/cache counters, decimal cost, and separate `RawUsageEntry` carrying provider/API identity plus raw JSON. `None` distinguishes unreported cache usage from a reported zero. | Separate normalized accounting from raw preservation, and preserve unknown-vs-zero. Raw usage does not by itself make reasoning/custom dimensions normalized. The Rust application types are not a Go library to import. |
+
+Any approved usage extension must address per-response snapshot/delta handling,
+cross-invocation aggregation, units, overlapping/subset token counts, optional
+values, original-provider versus client-transformed data, and public projection
+versus internal context. Existing catalog/schema validation should be reused;
+the source comparison does not authorize new public contract code before review.
 
 Session admission regression: `TestCacheSaveReportsOverflowWithoutDiscardingLiveState`
 failed before the bounded fix because full queues returned nil. Save now preserves
