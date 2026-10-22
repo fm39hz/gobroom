@@ -74,7 +74,7 @@ func assertOneUsageEvent(t *testing.T, k *Kernel, wantStatus string, want UsageE
 	t.Helper()
 	select {
 	case got := <-k.Events:
-		if got.Status != wantStatus || got.InputTokens != want.InputTokens || got.OutputTokens != want.OutputTokens || got.EstimatedCost != want.EstimatedCost {
+		if got.Status != wantStatus || !sameUsageCounter(got.InputTokens, want.InputTokens) || !sameUsageCounter(got.OutputTokens, want.OutputTokens) || !sameUsageCost(got.EstimatedCost, want.EstimatedCost) {
 			t.Fatalf("usage event=%+v, want status=%q and provider counters %+v", got, wantStatus, want)
 		}
 	default:
@@ -99,7 +99,7 @@ func assertNoUsageEvent(t *testing.T, k *Kernel) {
 func TestProviderUsageSurvivesTransformFaultWithoutSuccessObservation(t *testing.T) {
 	gate := &responseFailureGate{}
 	k := responseFailureKernel(t, gate, "first", "second")
-	usage := UsageEvent{InputTokens: 17, OutputTokens: 9, EstimatedCost: 0.004}
+	usage := UsageEvent{InputTokens: new(int64(17)), OutputTokens: new(int64(9)), EstimatedCost: new(float64(0.004))}
 	calls := 0
 	k.Adapters["first"] = providerUsageFailureAdapter{id: "first", mode: "transform-fault", usage: usage, calls: &calls}
 	k.Adapters["second"] = providerUsageFailureAdapter{id: "second", calls: &calls}
@@ -126,7 +126,7 @@ func TestProviderUsageSurvivesTransformFaultWithoutSuccessObservation(t *testing
 func TestProviderUsageSurvivesCancellationAfterAdapterCompletion(t *testing.T) {
 	gate := &responseFailureGate{}
 	k := responseFailureKernel(t, gate, "provider-usage-failure")
-	usage := UsageEvent{InputTokens: 23, OutputTokens: 5, EstimatedCost: 0.002}
+	usage := UsageEvent{InputTokens: new(int64(23)), OutputTokens: new(int64(5)), EstimatedCost: new(float64(0.002))}
 	ctx, cancel := context.WithCancel(context.Background())
 	k.Adapters["provider-usage-failure"] = providerUsageFailureAdapter{id: "provider-usage-failure", mode: "complete-then-cancel", usage: usage, cancel: cancel}
 
@@ -148,7 +148,7 @@ func TestProviderUsageSurvivesCancellationAfterAdapterCompletion(t *testing.T) {
 func TestProviderCompletionIsStagedUntilTerminalReturn(t *testing.T) {
 	gate := &responseFailureGate{}
 	k := responseFailureKernel(t, gate, "provider-usage-failure")
-	usage := UsageEvent{InputTokens: 31, OutputTokens: 12, EstimatedCost: 0.006}
+	usage := UsageEvent{InputTokens: new(int64(31)), OutputTokens: new(int64(12)), EstimatedCost: new(float64(0.006))}
 	k.Adapters["provider-usage-failure"] = providerUsageFailureAdapter{id: "provider-usage-failure", mode: "complete-then-fault", usage: usage}
 
 	err := executeProviderUsageFailure(k, context.Background())
@@ -169,19 +169,33 @@ func TestProviderCompletionIsStagedUntilTerminalReturn(t *testing.T) {
 func TestProviderUsageHappyCompletionStillEmitsOnce(t *testing.T) {
 	gate := &responseFailureGate{}
 	k := responseFailureKernel(t, gate, "provider-usage-failure")
-	usage := UsageEvent{InputTokens: 8, OutputTokens: 3, EstimatedCost: 0.001}
+	usage := UsageEvent{InputTokens: new(int64(8)), OutputTokens: new(int64(3)), EstimatedCost: new(float64(0.001))}
 	k.Adapters["provider-usage-failure"] = providerUsageFailureAdapter{id: "provider-usage-failure", mode: "success", usage: usage}
 
 	if err := executeProviderUsageFailure(k, context.Background()); err != nil {
 		t.Fatalf("Execute error=%v", err)
 	}
 	assertOneUsageEvent(t, k, "ok", usage)
-	if len(gate.usage) != 1 || gate.usage[0].InputTokens != usage.InputTokens || gate.usage[0].OutputTokens != usage.OutputTokens {
+	if len(gate.usage) != 1 || !sameUsageCounter(gate.usage[0].InputTokens, usage.InputTokens) || !sameUsageCounter(gate.usage[0].OutputTokens, usage.OutputTokens) {
 		t.Fatalf("successful performance usage=%+v, want one provider usage observation", gate.usage)
 	}
 	if len(gate.outcomes) != 1 || gate.outcomes[0].Cause != CauseSuccess {
 		t.Fatalf("successful outcomes=%+v, want exactly one success", gate.outcomes)
 	}
+}
+
+func sameUsageCounter(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func sameUsageCost(left, right *float64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func TestUnknownProviderUsageDoesNotFabricateFailureEvent(t *testing.T) {

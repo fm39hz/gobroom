@@ -597,6 +597,12 @@ type ResponseEvent struct {
 	Artifacts       []extensions.ArtifactRef
 }
 
+// UsageIssue is bounded accounting evidence, never a raw provider or storage error.
+type UsageIssue struct {
+	Code    string         `json:"code"`
+	TypeRef extensions.Ref `json:"typeRef,omitzero"`
+}
+
 type UsageEvent struct {
 	At                    time.Time
 	LogicalModel          string
@@ -607,12 +613,17 @@ type UsageEvent struct {
 	Latency               time.Duration
 	FirstByteAt           time.Time
 	TTFT                  time.Duration
-	OutputTokensPerSecond float64
+	OutputTokensPerSecond *float64
 	RequestClass          string
 	SessionID             string
-	InputTokens           int64
-	OutputTokens          int64
-	EstimatedCost         float64
+	InputTokens           *int64
+	OutputTokens          *int64
+	CachedReadTokens      *int64
+	CachedWriteTokens     *int64
+	ReasoningTokens       *int64
+	EstimatedCost         *float64
+	Extensions            []extensions.UsageValue   `json:"extensions,omitempty"`
+	AccountingIssues      []UsageIssue              `json:"accountingIssues,omitempty"`
 	CompatibilityFidelity CompatibilityFidelity     `json:"compatibilityFidelity,omitempty"`
 	CompatibilityLosses   []LossRecord              `json:"compatibilityLosses,omitempty"`
 	CompatibilityPlan     *CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`

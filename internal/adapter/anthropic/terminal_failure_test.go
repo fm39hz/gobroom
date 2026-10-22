@@ -53,12 +53,12 @@ func TestAnthropicTerminalErrorEvidence(t *testing.T) {
 			if completed {
 				t.Fatal("terminal error invoked OnComplete")
 			}
-			wantOutput := int64(0)
-			if tc.name == "after text and usage" {
-				wantOutput = 7
-			}
-			if gotUsage.OutputTokens != wantOutput {
-				t.Fatalf("reported usage = %+v, want output tokens %d", gotUsage, wantOutput)
+			if tc.name == "before text" {
+				if gotUsage.OutputTokens != nil {
+					t.Fatalf("reported usage = %+v, want unknown output tokens before usage", gotUsage)
+				}
+			} else if gotUsage.OutputTokens == nil || *gotUsage.OutputTokens != 7 {
+				t.Fatalf("reported usage = %+v, want known output tokens 7", gotUsage)
 			}
 		})
 	}
@@ -76,7 +76,7 @@ func TestAnthropicJSONTerminalErrorAndStreamCompletion(t *testing.T) {
 		var usage kernel.UsageEvent
 		body := "data: {\"type\":\"message_start\",\"message\":{\"id\":\"partial\",\"usage\":{\"input_tokens\":9,\"output_tokens\":0}}}\n\n"
 		err := (Messages{}).DecodeResponse(context.Background(), kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{OnProviderUsage: func(event kernel.UsageEvent) { usage = event }})
-		if !errors.Is(err, io.ErrUnexpectedEOF) || usage.InputTokens != 9 {
+		if !errors.Is(err, io.ErrUnexpectedEOF) || !anthropicCountIs(usage.InputTokens, 9) {
 			t.Fatalf("incomplete stream lost usage: err=%v usage=%#v", err, usage)
 		}
 	})

@@ -111,7 +111,7 @@ func (k *Kernel) EmitUsage(event UsageEvent) bool {
 		return false
 	}
 	select {
-	case k.Events <- event:
+	case k.Events <- event.Clone():
 		return true
 	default:
 		k.usageDropped.Add(1)
@@ -820,8 +820,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			var providerUsage UsageEvent
 			providerUsageKnown := false
 			recordProviderUsage := func(event UsageEvent) {
+				providerUsage = MergeProviderUsage(providerUsage, event)
 				if knownProviderUsage(event) {
-					providerUsage, providerUsageKnown = event, true
+					providerUsageKnown = true
 				}
 			}
 			var terminalFailure error
@@ -926,8 +927,8 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				if !event.FirstByteAt.IsZero() {
 					event.TTFT = event.FirstByteAt.Sub(started)
 				}
-				if event.OutputTokens > 0 && event.Latency > 0 {
-					event.OutputTokensPerSecond = float64(event.OutputTokens) / event.Latency.Seconds()
+				if event.OutputTokens != nil && event.Latency > 0 {
+					event.OutputTokensPerSecond = new(float64(*event.OutputTokens) / event.Latency.Seconds())
 				}
 				if event.LogicalModel == "" {
 					event.LogicalModel = req.Model
@@ -948,10 +949,11 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					event.SessionID = req.Session.ID
 				}
 				if observer, ok := k.Scheduler.gate.(UsageObserver); ok {
-					observer.ObserveUsage(candidate, event)
+					observer.ObserveUsage(candidate, event.Clone())
 				}
 				if emitEvent != nil {
-					emitEvent(ResponseEvent{At: event.At, Kind: EventResponseComplete, Usage: &event})
+					observed := event.Clone()
+					emitEvent(ResponseEvent{At: event.At, Kind: EventResponseComplete, Usage: &observed})
 				}
 				k.EmitUsage(event)
 			}
@@ -982,7 +984,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			}, OnProviderUsage: recordProviderUsage, OnComplete: func(event UsageEvent) {
 				recordProviderUsage(event)
 				if stagedCompletion == nil {
-					copy := event
+					copy := MergeProviderUsage(providerUsage, event)
 					stagedCompletion = &copy
 				}
 			}})
@@ -1023,7 +1025,7 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 					failedUsage = enriched
 				}
 			}
-			if providerUsageKnown || knownProviderUsage(failedUsage) {
+			if providerUsageKnown || knownProviderUsage(failedUsage) || len(failedUsage.AccountingIssues) > 0 {
 				event := failedUsage
 				event.Status = "error"
 				if ctx.Err() != nil && !errors.Is(context.Cause(ctx), ErrOperationDeadline) {

@@ -361,14 +361,18 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 				}
 				continue
 			}
-			var event map[string]any
-			if err := json.Unmarshal([]byte(data), &event); err != nil {
+			event, err := decodeAnthropicContent([]byte(data))
+			if err != nil {
 				return fmt.Errorf("decode Anthropic SSE event: %w", err)
 			}
 			if stringValue(event["type"]) == "error" || event["error"] != nil {
 				if err := reportAnthropicProviderError([]byte(data), usage, hooks); err != nil {
 					return err
 				}
+			}
+			usageFrame, err := decodeAnthropicUsageFrame([]byte(data))
+			if err != nil {
+				return fmt.Errorf("decode Anthropic usage: %w", err)
 			}
 			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
 				return err
@@ -379,7 +383,7 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 					hooks.OnFirstByte(time.Now())
 				}
 			}
-			updatedUsage, updatedToolIndex, err := emitAnthropicEvents(event, usage, toolIndex, emit)
+			updatedUsage, updatedToolIndex, err := emitAnthropicEvents(event, usageFrame, usage, toolIndex, emit)
 			usage, toolIndex = updatedUsage, updatedToolIndex
 			if hooks.OnProviderUsage != nil {
 				hooks.OnProviderUsage(usage)
@@ -407,12 +411,16 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 	if err != nil {
 		return err
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	payload, err := decodeAnthropicContent(data)
+	if err != nil {
 		return fmt.Errorf("decode Anthropic response: %w", err)
 	}
 	if stringValue(payload["type"]) == "error" || payload["error"] != nil {
 		return reportAnthropicProviderError(data, kernel.UsageEvent{}, hooks)
+	}
+	usageFrame, err := decodeAnthropicUsageFrame(data)
+	if err != nil {
+		return fmt.Errorf("decode Anthropic usage: %w", err)
 	}
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
@@ -421,7 +429,7 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 		return err
 	}
 	completed := false
-	usage, _, err := emitAnthropicEvents(payload, kernel.UsageEvent{}, -1, func(event kernel.ResponseEvent) error {
+	usage, _, err := emitAnthropicEvents(payload, usageFrame, kernel.UsageEvent{}, -1, func(event kernel.ResponseEvent) error {
 		if event.Kind == kernel.EventResponseComplete {
 			completed = true
 		}
@@ -477,13 +485,102 @@ func splitAnthropicSSELines(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 
-func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolIndex int, emit func(kernel.ResponseEvent) error) (kernel.UsageEvent, int, error) {
-	now := time.Now()
-	if message, ok := event["message"].(map[string]any); ok {
-		if rawUsage, ok := message["usage"].(map[string]any); ok {
-			usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
-			usage.OutputTokens = int64(numberValue(rawUsage["output_tokens"]))
+type anthropicUsageDTO struct {
+	InputTokens       *int64              `json:"input_tokens"`
+	OutputTokens      *int64              `json:"output_tokens"`
+	CachedReadTokens  *int64              `json:"cache_read_input_tokens"`
+	CachedWriteTokens *int64              `json:"cache_creation_input_tokens"`
+	ReasoningTokens   *int64              `json:"reasoning_tokens"`
+	AccountingIssues  []kernel.UsageIssue `json:"-"`
+}
+
+type anthropicUsageFrame struct {
+	MessageUsage *anthropicUsageDTO
+	EventUsage   *anthropicUsageDTO
+}
+
+// Decode semantic content without converting optional usage numbers through
+// float64. The original response bytes remain available for native passthrough.
+func decodeAnthropicContent(data []byte) (map[string]any, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "usage")
+	if message := bytes.TrimSpace(fields["message"]); len(message) > 0 && message[0] == '{' {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(message, &nested); err != nil {
+			return nil, err
 		}
+		delete(nested, "usage")
+		encoded, err := json.Marshal(nested)
+		if err != nil {
+			return nil, err
+		}
+		fields["message"] = encoded
+	}
+	content, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	var event map[string]any
+	if err := json.Unmarshal(content, &event); err != nil {
+		return nil, err
+	}
+	return event, nil
+}
+
+func decodeAnthropicUsageFrame(data []byte) (anthropicUsageFrame, error) {
+	var raw struct {
+		Message json.RawMessage `json:"message"`
+		Usage   json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return anthropicUsageFrame{}, err
+	}
+	var frame anthropicUsageFrame
+	if len(raw.Message) > 0 && strings.TrimSpace(string(raw.Message)) != "null" {
+		var message struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(raw.Message, &message); err != nil {
+			return anthropicUsageFrame{}, err
+		}
+		if len(message.Usage) > 0 && strings.TrimSpace(string(message.Usage)) != "null" {
+			var usage anthropicUsageDTO
+			if err := json.Unmarshal(message.Usage, &usage); err != nil {
+				return anthropicUsageFrame{}, err
+			}
+			frame.MessageUsage = &usage
+		}
+	}
+	if len(raw.Usage) > 0 && strings.TrimSpace(string(raw.Usage)) != "null" {
+		var usage anthropicUsageDTO
+		if err := json.Unmarshal(raw.Usage, &usage); err != nil {
+			return anthropicUsageFrame{}, err
+		}
+		frame.EventUsage = &usage
+	}
+	return frame, nil
+}
+
+func mergeAnthropicUsage(usage kernel.UsageEvent, update *anthropicUsageDTO) kernel.UsageEvent {
+	if update == nil {
+		return usage
+	}
+	return kernel.MergeProviderUsage(usage, kernel.UsageEvent{
+		InputTokens: update.InputTokens, OutputTokens: update.OutputTokens,
+		CachedReadTokens: update.CachedReadTokens, CachedWriteTokens: update.CachedWriteTokens,
+		ReasoningTokens:  update.ReasoningTokens,
+		AccountingIssues: update.AccountingIssues,
+	})
+}
+
+func emitAnthropicEvents(event map[string]any, frame anthropicUsageFrame, usage kernel.UsageEvent, toolIndex int, emit func(kernel.ResponseEvent) error) (kernel.UsageEvent, int, error) {
+	now := time.Now()
+	usage = mergeAnthropicUsage(usage, frame.MessageUsage)
+	usage = mergeAnthropicUsage(usage, frame.EventUsage)
+	if message, ok := event["message"].(map[string]any); ok {
 		if id := stringValue(message["id"]); id != "" {
 			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
 				return usage, toolIndex, err
@@ -499,10 +596,6 @@ func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolInde
 		}
 	}
 	if stringValue(event["type"]) == "" || stringValue(event["type"]) == "message" {
-		if rawUsage, ok := event["usage"].(map[string]any); ok {
-			usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
-			usage.OutputTokens = int64(numberValue(rawUsage["output_tokens"]))
-		}
 		if id := stringValue(event["id"]); id != "" {
 			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
 				return usage, toolIndex, err
@@ -529,8 +622,6 @@ func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolInde
 	switch stringValue(event["type"]) {
 	case "message_start":
 		message, _ := event["message"].(map[string]any)
-		rawUsage, _ := message["usage"].(map[string]any)
-		usage.InputTokens = int64(numberValue(rawUsage["input_tokens"]))
 		if id := stringValue(message["id"]); id != "" {
 			if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventResponseStarted, ResponseID: id, Usage: &usage}); err != nil {
 				return usage, toolIndex, err
@@ -570,10 +661,6 @@ func emitAnthropicEvents(event map[string]any, usage kernel.UsageEvent, toolInde
 		}
 	case "message_delta":
 		delta, _ := event["delta"].(map[string]any)
-		rawUsage, _ := event["usage"].(map[string]any)
-		if value := int64(numberValue(rawUsage["output_tokens"])); value > 0 {
-			usage.OutputTokens = value
-		}
 		if err := emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &usage}); err != nil {
 			return usage, toolIndex, err
 		}

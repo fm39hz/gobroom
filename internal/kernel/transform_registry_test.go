@@ -1125,7 +1125,7 @@ func TestResponseTransformEffectMatrixAcceptsOnlyDeclaredSemanticPayload(t *test
 		{name: "text", event: ResponseEvent{Kind: EventTextDelta, Text: "before"}, mutate: func(event ResponseEvent) ResponseEvent { event.Text = "after"; return event }, effect: ResponseEffectText},
 		{name: "thinking", event: ResponseEvent{Kind: EventThinkingDelta, Text: "before"}, mutate: func(event ResponseEvent) ResponseEvent { event.Text = "after"; return event }, effect: ResponseEffectThinking},
 		{name: "tool arguments", event: ResponseEvent{Kind: EventToolCallDelta, ToolCallID: "call-1", ToolName: "search", ToolArguments: `{}`}, mutate: func(event ResponseEvent) ResponseEvent { event.ToolArguments = `{"q":"x"}`; return event }, effect: ResponseEffectToolArguments},
-		{name: "usage", event: ResponseEvent{Kind: EventUsage, Usage: &UsageEvent{InputTokens: 1}}, mutate: func(event ResponseEvent) ResponseEvent { event.Usage.OutputTokens = 2; return event }, effect: ResponseEffectUsage},
+		{name: "usage", event: ResponseEvent{Kind: EventUsage, Usage: &UsageEvent{InputTokens: new(int64(1))}}, mutate: func(event ResponseEvent) ResponseEvent { event.Usage.OutputTokens = new(int64(2)); return event }, effect: ResponseEffectUsage},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

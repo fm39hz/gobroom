@@ -20,7 +20,7 @@ func TestSaveUsageEventCanceledBeforeAdmissionDoesNotWrite(t *testing.T) {
 	cancel()
 	err = s.SaveUsageEvent(ctx, kernel.UsageEvent{
 		At:          time.Date(2026, time.October, 21, 12, 0, 0, 0, time.UTC),
-		InputTokens: 11, OutputTokens: 4, EstimatedCost: 0.75,
+		InputTokens: new(int64(11)), OutputTokens: new(int64(4)), EstimatedCost: new(float64(0.75)),
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("SaveUsageEvent with canceled context=%v", err)

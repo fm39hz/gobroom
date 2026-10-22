@@ -288,7 +288,7 @@ func (s *anthropicSession) Finish(_ context.Context, decodeErr error) error {
 		if s.stopReason == "" {
 			s.stopReason = "end_turn"
 		}
-		if err := s.emitSSE("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": s.stopReason, "stop_sequence": nil}, "usage": map[string]any{"output_tokens": s.usage.OutputTokens}}); err != nil {
+		if err := s.emitSSE("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": s.stopReason, "stop_sequence": nil}, "usage": anthropicOutputUsage(s.usage.OutputTokens)}); err != nil {
 			return err
 		}
 		if err := s.emitSSE("message_stop", map[string]any{"type": "message_stop"}); err != nil {
@@ -322,7 +322,7 @@ func (s *anthropicSession) Finish(_ context.Context, decodeErr error) error {
 	if s.stopReason == "" {
 		s.stopReason = "end_turn"
 	}
-	message := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "model": s.model, "content": content, "stop_reason": s.stopReason, "stop_sequence": nil, "usage": map[string]any{"input_tokens": s.usage.InputTokens, "output_tokens": s.usage.OutputTokens}}
+	message := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "model": s.model, "content": content, "stop_reason": s.stopReason, "stop_sequence": nil, "usage": anthropicUsage(s.usage)}
 	encoded, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -341,8 +341,27 @@ func (s *anthropicSession) startMessage() error {
 		return nil
 	}
 	s.commit()
-	message := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "model": s.model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": map[string]any{"input_tokens": s.usage.InputTokens, "output_tokens": 0}}
+	message := map[string]any{"id": s.messageID, "type": "message", "role": "assistant", "model": s.model, "content": []any{}, "stop_reason": nil, "stop_sequence": nil, "usage": anthropicUsage(s.usage)}
 	return s.emitSSE("message_start", map[string]any{"type": "message_start", "message": message})
+}
+
+func anthropicUsage(usage kernel.UsageEvent) map[string]any {
+	result := map[string]any{}
+	if usage.InputTokens != nil {
+		result["input_tokens"] = *usage.InputTokens
+	}
+	if usage.OutputTokens != nil {
+		result["output_tokens"] = *usage.OutputTokens
+	}
+	return result
+}
+
+func anthropicOutputUsage(output *int64) map[string]any {
+	result := map[string]any{}
+	if output != nil {
+		result["output_tokens"] = *output
+	}
+	return result
 }
 
 func (s *anthropicSession) getBlock(event kernel.ResponseEvent, kind string) *anthropicBlock {

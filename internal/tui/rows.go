@@ -136,11 +136,13 @@ type quotaSnapshot struct {
 type usageRecord struct {
 	ID                                                                           int64
 	Timestamp, LogicalModel, ProviderNodeID, ExternalModel, ConnectionID, Status string
-	LatencyMS, InputTokens, OutputTokens                                         int64
-	EstimatedCost                                                                float64
+	LatencyMS, InputTokens, OutputTokens                                         *int64
+	CachedReadTokens, CachedWriteTokens, ReasoningTokens                         *int64
+	EstimatedCost                                                                *float64
 	RequestClass, SessionID                                                      string
-	TTFTMS                                                                       int64
-	OutputTokensPerSecond                                                        float64
+	TTFTMS                                                                       *int64
+	OutputTokensPerSecond                                                        *float64
+	AccountingIssues                                                             []kernel.UsageIssue              `json:"accountingIssues,omitempty"`
 	CompatibilityPlan                                                            *kernel.CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
 }
 
@@ -479,7 +481,13 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 		}
 		entries := make([]entry, 0, len(values))
 		for _, value := range values {
-			detail := fmt.Sprintf("Usage event\n\nModel      %s\nProvider   %s\nExternal   %s\nConnection %s\nStatus     %s\nClass      %s\nSession    %s\nLatency    %d ms\nTTFT       %d ms\nThroughput %.2f tok/s\nTokens     %d in / %d out\nCost       %.6f\nTimestamp  %s", value.LogicalModel, value.ProviderNodeID, value.ExternalModel, value.ConnectionID, value.Status, value.RequestClass, value.SessionID, value.LatencyMS, value.TTFTMS, value.OutputTokensPerSecond, value.InputTokens, value.OutputTokens, value.EstimatedCost, value.Timestamp)
+			detail := fmt.Sprintf("Usage event\n\nModel      %s\nProvider   %s\nExternal   %s\nConnection %s\nStatus     %s\nClass      %s\nSession    %s\nLatency    %s\nTTFT       %s\nThroughput %s\nTokens     %s in / %s out\nCached     %s read / %s write\nReasoning  %s\nCost       %s\nTimestamp  %s", value.LogicalModel, value.ProviderNodeID, value.ExternalModel, value.ConnectionID, value.Status, value.RequestClass, value.SessionID, formatInt64(value.LatencyMS, " ms"), formatInt64(value.TTFTMS, " ms"), formatFloat64(value.OutputTokensPerSecond, " tok/s", 2), formatInt64(value.InputTokens, ""), formatInt64(value.OutputTokens, ""), formatInt64(value.CachedReadTokens, ""), formatInt64(value.CachedWriteTokens, ""), formatInt64(value.ReasoningTokens, ""), formatFloat64(value.EstimatedCost, "", 6), value.Timestamp)
+			if len(value.AccountingIssues) > 0 {
+				detail += "\n\nAccounting incomplete"
+				for _, issue := range value.AccountingIssues {
+					detail += fmt.Sprintf("\n  %q", issue.Code)
+				}
+			}
 			if value.CompatibilityPlan != nil {
 				detail += "\n\nCompatibility  " + string(value.CompatibilityPlan.Fidelity)
 				for _, mapping := range value.CompatibilityPlan.Mappings {
@@ -501,7 +509,7 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 					detail += fmt.Sprintf("\n  transform failure  %s · %s · %s", failure.BindingID, failure.Mode, failure.Reason)
 				}
 			}
-			entries = append(entries, entry{key: fmt.Sprintf("%d", value.ID), title: value.LogicalModel, summary: fmt.Sprintf("%s · %d ms", value.Status, value.LatencyMS), detail: detail, payload: value})
+			entries = append(entries, entry{key: fmt.Sprintf("%d", value.ID), title: value.LogicalModel, summary: fmt.Sprintf("%s · %s", value.Status, formatInt64(value.LatencyMS, " ms")), detail: detail, payload: value})
 		}
 		return entries, nil
 	case "logs.list":
@@ -605,6 +613,20 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 	default:
 		return nil, fmt.Errorf("unsupported TUI resource %q", method)
 	}
+}
+
+func formatInt64(value *int64, suffix string) string {
+	if value == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%d%s", *value, suffix)
+}
+
+func formatFloat64(value *float64, suffix string, precision int) string {
+	if value == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%.*f%s", precision, *value, suffix)
 }
 
 func pretty(value any) string {

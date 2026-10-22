@@ -220,6 +220,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.store = s
 	d.appendLog("info", "daemon starting")
+	if reset := s.UsageResetCounts(); reset.Events > 0 || reset.Daily > 0 {
+		d.appendLog("warn", fmt.Sprintf("replaced incompatible usage history: events=%d daily=%d; provider configuration preserved", reset.Events, reset.Daily))
+	}
 	spoolPath := d.config.RuntimeSpoolPath
 	if spoolPath == "" && d.config.DBPath != ":memory:" {
 		spoolPath = d.config.DBPath + ".runtime-spool.json"

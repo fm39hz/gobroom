@@ -58,7 +58,7 @@ func TestOpenAIChatSemanticStreamIncludesUsageOnlyChunk(t *testing.T) {
 	}
 	for _, event := range []kernel.ResponseEvent{
 		{Kind: kernel.EventTextDelta, Text: "answer"},
-		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: 11, OutputTokens: 7}},
+		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: new(int64(11)), OutputTokens: new(int64(7))}},
 		{Kind: kernel.EventContentBlockEnd, StopReason: "completed"},
 		{Kind: kernel.EventResponseComplete},
 	} {
@@ -122,7 +122,7 @@ func TestOpenAIChatSemanticStreamUsageOptOutAndMissingUsage(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tt.emitUsage {
-				if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: 3, OutputTokens: 2}}); err != nil {
+				if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: new(int64(3)), OutputTokens: new(int64(2))}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -148,7 +148,7 @@ func TestOpenAIChatFailedFinishDoesNotEmitUsageOrDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: 9, OutputTokens: 4}}); err != nil {
+	if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: new(int64(9)), OutputTokens: new(int64(4))}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Finish(context.Background(), errors.New("decode failed")); err == nil {

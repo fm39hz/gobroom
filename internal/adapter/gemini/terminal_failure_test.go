@@ -56,7 +56,7 @@ func TestGeminiTerminalErrorsStopJSONAndSSE(t *testing.T) {
 			if envelope.Error.Code != 400 || len(envelope.Error.Details) != 1 || !strings.Contains(string(envelope.Error.Details[0]), "private detail") {
 				t.Fatalf("provider error evidence lost fields: %s", typed.Data())
 			}
-			if providerUsage.InputTokens != 11 || providerUsage.OutputTokens != 4 {
+			if !geminiCountIs(providerUsage.InputTokens, 11) || !geminiCountIs(providerUsage.OutputTokens, 4) {
 				t.Fatalf("provider usage=%+v", providerUsage)
 			}
 			if err.Error() != "provider reported a terminal response error" {
@@ -87,7 +87,7 @@ func TestGeminiHealthyResponseStillCompletes(t *testing.T) {
 	}, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
 		OnComplete: func(usage kernel.UsageEvent) {
 			completeCalls++
-			if usage.InputTokens != 3 || usage.OutputTokens != 2 {
+			if !geminiCountIs(usage.InputTokens, 3) || !geminiCountIs(usage.OutputTokens, 2) {
 				t.Errorf("usage=%+v", usage)
 			}
 		},

@@ -64,7 +64,7 @@ func TestPreparedUsageStatementsPreserveAtomicRollbackAndLifecycle(t *testing.T)
 	if _, err := s.DB.Exec(`CREATE TRIGGER reject_daily BEFORE INSERT ON usage_daily BEGIN SELECT RAISE(FAIL,'fixture rejection'); END`); err != nil {
 		t.Fatal(err)
 	}
-	event := kernel.UsageEvent{At: time.Now(), Status: "ok", InputTokens: 7, OutputTokens: 2}
+	event := kernel.UsageEvent{At: time.Now(), Status: "ok", InputTokens: new(int64(7)), OutputTokens: new(int64(2))}
 	if err := s.SaveUsageEvent(context.Background(), event); err == nil {
 		t.Fatal("failed daily write was accepted")
 	}

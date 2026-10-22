@@ -65,7 +65,7 @@ func (snapshotPinAdapter) RenderResponse(_ context.Context, response UpstreamRes
 func (usageSourceFixture) EnrichUsage(_ context.Context, _ Route, headers http.Header, event UsageEvent) (UsageEvent, error) {
 	value, err := strconv.ParseInt(headers.Get("X-Usage-Input-Tokens"), 10, 64)
 	if err == nil {
-		event.InputTokens = value
+		event.InputTokens = new(value)
 	}
 	return event, err
 }
@@ -170,7 +170,7 @@ func TestKernelAppliesSelectedUsageSourceBeforeEmission(t *testing.T) {
 	}
 	select {
 	case event := <-k.Events:
-		if event.InputTokens != 23 {
+		if event.InputTokens == nil || *event.InputTokens != 23 {
 			t.Fatalf("usage source was not applied before emission: %#v", event)
 		}
 	case <-time.After(time.Second):

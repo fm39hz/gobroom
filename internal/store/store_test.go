@@ -408,7 +408,7 @@ func TestNormalizedRuntimePrimitivesPersistSeparately(t *testing.T) {
 		Mappings:          []kernel.CompatibilityMappingSummary{{Facet: "reasoning.effort", Paths: []string{"request.reasoning.effort"}, Disposition: kernel.FacetDegraded, Reason: "clamped"}},
 		TransformFailures: []kernel.TransformFailure{{BindingID: "best-effort", TransformRef: extensions.Ref{Kind: kernel.RequestTransformKind, ID: "fixture.best-effort", ContractVersion: 1}, Scope: kernel.TransformScope{Kind: kernel.TransformScopeModel, ID: "junior"}, Mode: kernel.TransformSafeFailOpen, Reason: kernel.TransformFailureApply}},
 	}
-	if err := s.SaveUsageEvent(context.Background(), kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: 2, OutputTokens: 3, EstimatedCost: 0.5, CompatibilityFidelity: kernel.FidelityLossy, CompatibilityLosses: []kernel.LossRecord{loss}, CompatibilityPlan: plan}); err != nil {
+	if err := s.SaveUsageEvent(context.Background(), kernel.UsageEvent{At: time.Now(), ConnectionID: "conn-a", InputTokens: new(int64(2)), OutputTokens: new(int64(3)), EstimatedCost: new(float64(0.5)), CompatibilityFidelity: kernel.FidelityLossy, CompatibilityLosses: []kernel.LossRecord{loss}, CompatibilityPlan: plan}); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := s.UsageEvents(1)

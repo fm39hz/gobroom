@@ -918,7 +918,7 @@ func TestOpenAIResponsesDecoderPreservesToolIdentityForAnthropicEgress(t *testin
 	if !strings.Contains(semantic.String(), "call_1|lookup|") {
 		t.Fatalf("Responses decoder did not preserve tool identity in IR: %q", semantic.String())
 	}
-	if usage.InputTokens != 9 || usage.OutputTokens != 4 {
+	if usage.InputTokens == nil || *usage.InputTokens != 9 || usage.OutputTokens == nil || *usage.OutputTokens != 4 {
 		t.Fatalf("Responses nested usage was lost: %#v", usage)
 	}
 }

@@ -909,15 +909,15 @@ func TestHTTPHeaderUsageSourceUsesTypedHeaderMapping(t *testing.T) {
 	source := HTTPHeaderUsageSource{}
 	route := kernel.Route{UsageOptions: kernel.UsageSourceOptions{InputTokensHeader: "X-Prompt", OutputTokensHeader: "X-Completion", EstimatedCostHeader: "X-Cost"}}
 	headers := http.Header{"X-Prompt": []string{"12"}, "X-Completion": []string{"7"}, "X-Cost": []string{"0.004"}}
-	event, err := source.EnrichUsage(context.Background(), route, headers, kernel.UsageEvent{InputTokens: 2, OutputTokens: 3, EstimatedCost: 1})
+	event, err := source.EnrichUsage(context.Background(), route, headers, kernel.UsageEvent{InputTokens: new(int64(2)), OutputTokens: new(int64(3)), EstimatedCost: new(float64(1))})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.InputTokens != 12 || event.OutputTokens != 7 || event.EstimatedCost != 0.004 {
+	if event.InputTokens == nil || *event.InputTokens != 12 || event.OutputTokens == nil || *event.OutputTokens != 7 || event.EstimatedCost == nil || *event.EstimatedCost != 0.004 {
 		t.Fatalf("header usage not applied: %#v", event)
 	}
-	event, err = source.EnrichUsage(context.Background(), route, http.Header{"X-Cost": []string{"Inf"}}, kernel.UsageEvent{EstimatedCost: 1})
-	if err != nil || event.EstimatedCost != 1 {
+	event, err = source.EnrichUsage(context.Background(), route, http.Header{"X-Cost": []string{"Inf"}}, kernel.UsageEvent{EstimatedCost: new(float64(1))})
+	if err != nil || event.EstimatedCost == nil || *event.EstimatedCost != 1 {
 		t.Fatalf("non-finite cost header should not replace the recorded value: %#v err=%v", event, err)
 	}
 }

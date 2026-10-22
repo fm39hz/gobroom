@@ -222,7 +222,7 @@ func TestGeminiRuntimeBindingExecutesOpenAIChatToolRoundTrip(t *testing.T) {
 	}
 	select {
 	case usage := <-gateway.Events:
-		if usage.Status != "ok" || usage.InputTokens != 11 || usage.OutputTokens != 6 || usage.ExternalModel != "gemini-3-flash" {
+		if usage.Status != "ok" || usage.InputTokens == nil || *usage.InputTokens != 11 || usage.OutputTokens == nil || *usage.OutputTokens != 6 || usage.ExternalModel != "gemini-3-flash" {
 			t.Fatalf("kernel usage event=%#v", usage)
 		}
 	case <-time.After(time.Second):
@@ -502,7 +502,7 @@ func TestGeminiRuntimeBindingTranslatesNonStreamingTextCompletion(t *testing.T) 
 	}
 	select {
 	case usage := <-gateway.Events:
-		if usage.InputTokens != 8 || usage.OutputTokens != 3 {
+		if usage.InputTokens == nil || *usage.InputTokens != 8 || usage.OutputTokens == nil || *usage.OutputTokens != 3 {
 			t.Fatalf("usage=%#v", usage)
 		}
 	case <-time.After(time.Second):

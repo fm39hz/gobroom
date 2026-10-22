@@ -334,9 +334,9 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	completionUsage := UsageEvent{}
 	decodeHooks.OnComplete = func(event UsageEvent) {
 		decoderCompleted = true
-		completionUsage = event
+		completionUsage = MergeProviderUsage(completionUsage, event)
 		if hooks.OnProviderUsage != nil {
-			hooks.OnProviderUsage(event)
+			hooks.OnProviderUsage(event.Clone())
 		}
 	}
 	decodeHooks.OnProviderUsage = hooks.OnProviderUsage
@@ -350,7 +350,7 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	var emitFailure error
 	emitOne := func(event ResponseEvent) error {
 		if event.Usage != nil && (event.Kind == EventUsage || event.Kind == EventResponseComplete) && hooks.OnProviderUsage != nil {
-			hooks.OnProviderUsage(*event.Usage)
+			hooks.OnProviderUsage(event.Usage.Clone())
 		}
 		if emitFailure != nil {
 			return emitFailure
@@ -367,11 +367,11 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		if event.Kind == EventResponseComplete {
 			providerComplete = true
 			if event.Usage != nil {
-				completionUsage = *event.Usage
+				completionUsage = MergeProviderUsage(completionUsage, *event.Usage)
 			}
 		}
 		if event.Kind == EventUsage && event.Usage != nil {
-			completionUsage = *event.Usage
+			completionUsage = MergeProviderUsage(completionUsage, *event.Usage)
 		}
 		if !firstEvent {
 			firstEvent = true

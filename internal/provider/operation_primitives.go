@@ -204,13 +204,13 @@ func (HTTPHeaderUsageSource) EnrichUsage(_ context.Context, route kernel.Route, 
 		costHeader = "X-Usage-Cost-USD"
 	}
 	if value, err := strconv.ParseInt(strings.TrimSpace(headers.Get(inputHeader)), 10, 64); err == nil && value >= 0 {
-		event.InputTokens = value
+		event.InputTokens = new(value)
 	}
 	if value, err := strconv.ParseInt(strings.TrimSpace(headers.Get(outputHeader)), 10, 64); err == nil && value >= 0 {
-		event.OutputTokens = value
+		event.OutputTokens = new(value)
 	}
 	if value, err := strconv.ParseFloat(strings.TrimSpace(headers.Get(costHeader)), 64); err == nil && value >= 0 && !math.IsInf(value, 0) && !math.IsNaN(value) {
-		event.EstimatedCost = value
+		event.EstimatedCost = new(value)
 	}
 	return event, nil
 }

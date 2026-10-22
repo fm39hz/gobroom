@@ -56,7 +56,7 @@ func TestResponseTransformOwnsNestedUsageEvidence(t *testing.T) {
 	for _, allowed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "undeclared", true: "declared"}[allowed], func(t *testing.T) {
 			event := ResponseEvent{Kind: EventUsage, Usage: &UsageEvent{
-				InputTokens:         7,
+				InputTokens:         new(int64(7)),
 				CompatibilityLosses: []LossRecord{{ID: "loss", Requested: map[string]any{"value": "original"}}},
 				CompatibilityPlan:   &CompatibilityPlanSummary{Mappings: []CompatibilityMappingSummary{{Paths: []string{"original"}}}, RequestTransformSteps: []RequestTransformPlanStep{{Effects: []TransformEffect{TransformInput}}}},
 			}}

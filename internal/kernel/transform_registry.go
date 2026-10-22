@@ -711,21 +711,7 @@ func cloneResponseEvent(event ResponseEvent) ResponseEvent {
 		event.Artifacts[index] = event.Artifacts[index].Clone()
 	}
 	if event.Usage != nil {
-		usage := *event.Usage
-		usage.CompatibilityLosses = cloneLossRecords(usage.CompatibilityLosses)
-		if usage.CompatibilityPlan != nil {
-			plan := *usage.CompatibilityPlan
-			plan.Mappings = slices.Clone(plan.Mappings)
-			for index := range plan.Mappings {
-				plan.Mappings[index].Paths = slices.Clone(plan.Mappings[index].Paths)
-			}
-			plan.RequestTransformSteps = cloneRequestTransformSteps(plan.RequestTransformSteps)
-			plan.ResponseTransformSteps = cloneResponseTransformSteps(plan.ResponseTransformSteps)
-			plan.ArtifactTransfers = slices.Clone(plan.ArtifactTransfers)
-			plan.ArtifactOutputs = slices.Clone(plan.ArtifactOutputs)
-			plan.TransformFailures = slices.Clone(plan.TransformFailures)
-			usage.CompatibilityPlan = &plan
-		}
+		usage := event.Usage.Clone()
 		event.Usage = &usage
 	}
 	return event

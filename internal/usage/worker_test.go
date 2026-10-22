@@ -31,9 +31,9 @@ func (r *recordingRepository) SaveUsageEvent(_ context.Context, event kernel.Usa
 func TestWorkerDrainsAcceptedEventsInOrderAfterClose(t *testing.T) {
 	events := make(chan kernel.UsageEvent, 3)
 	want := []kernel.UsageEvent{
-		{LogicalModel: "first", InputTokens: 1},
-		{LogicalModel: "second", InputTokens: 2},
-		{LogicalModel: "third", InputTokens: 3},
+		{LogicalModel: "first", InputTokens: new(int64(1))},
+		{LogicalModel: "second", InputTokens: new(int64(2))},
+		{LogicalModel: "third", InputTokens: new(int64(3))},
 	}
 	for _, event := range want {
 		events <- event
@@ -68,7 +68,7 @@ func TestWorkerDrainsAcceptedEventsInOrderAfterClose(t *testing.T) {
 
 func TestWorkerWaitsForInFlightSaveBeforeReturning(t *testing.T) {
 	events := make(chan kernel.UsageEvent, 1)
-	event := kernel.UsageEvent{LogicalModel: "held", OutputTokens: 7}
+	event := kernel.UsageEvent{LogicalModel: "held", OutputTokens: new(int64(7))}
 	events <- event
 	close(events)
 

@@ -271,6 +271,8 @@ type FacetDisposition = kernel.FacetDisposition
 type ResponseEvent = kernel.ResponseEvent
 type ResponseEventKind = kernel.ResponseEventKind
 type UsageEvent = kernel.UsageEvent
+type UsageIssue = kernel.UsageIssue
+type UsageLimits = kernel.UsageLimits
 type ResponseFailureOrigin = kernel.ResponseFailureOrigin
 type ResponseFailure = kernel.ResponseFailure
 

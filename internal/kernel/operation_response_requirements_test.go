@@ -8,12 +8,12 @@ import (
 
 func TestRequiredResponseEventsByOperation(t *testing.T) {
 	toolRequest := normalize.Request{
-		Operation: normalize.Operation("example.jobs.create@2"),
-		Tools:     []normalize.Tool{{Name: "lookup"}},
+		Operation: normalize.Operation("example.jobs.create"), OperationContractVersion: 2,
+		Tools: []normalize.Tool{{Name: "lookup"}},
 	}
 	thinkingRequest := normalize.Request{
-		Operation: normalize.Operation("example.jobs.create@2"),
-		Thinking:  normalize.ThinkingIntent{Mode: "enabled"},
+		Operation: normalize.Operation("example.jobs.create"), OperationContractVersion: 2,
+		Thinking: normalize.ThinkingIntent{Mode: "enabled"},
 	}
 
 	tests := []struct {
@@ -24,7 +24,7 @@ func TestRequiredResponseEventsByOperation(t *testing.T) {
 	}{
 		{
 			name:    "non-chat operation requires completion without text",
-			request: normalize.Request{Operation: normalize.Operation("example.jobs.create@2")},
+			request: normalize.Request{Operation: normalize.Operation("example.jobs.create"), OperationContractVersion: 2},
 			want:    []ResponseEventKind{EventResponseComplete},
 			unwant:  []ResponseEventKind{EventTextDelta},
 		},

@@ -1,6 +1,10 @@
 package gemini
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/fm39hz/gobroom/internal/kernel"
+)
 
 // Gemini REST wire types keep provider JSON binding out of the kernel and
 // make unsupported/missing fields explicit at the adapter boundary.
@@ -95,9 +99,12 @@ type geminiCandidate struct {
 }
 
 type geminiUsageMetadata struct {
-	PromptTokenCount     int64 `json:"promptTokenCount,omitempty"`
-	CandidatesTokenCount int64 `json:"candidatesTokenCount,omitempty"`
-	TotalTokenCount      int64 `json:"totalTokenCount,omitempty"`
+	PromptTokenCount        *int64              `json:"promptTokenCount,omitempty"`
+	CandidatesTokenCount    *int64              `json:"candidatesTokenCount,omitempty"`
+	TotalTokenCount         *int64              `json:"totalTokenCount,omitempty"`
+	CachedContentTokenCount *int64              `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount      *int64              `json:"thoughtsTokenCount,omitempty"`
+	AccountingIssues        []kernel.UsageIssue `json:"-"`
 }
 
 type geminiPromptFeedback struct {
@@ -138,9 +145,9 @@ type openAIChatToolFunction struct {
 }
 
 type openAIChatUsage struct {
-	PromptTokens     int64 `json:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens"`
-	TotalTokens      int64 `json:"total_tokens"`
+	PromptTokens     *int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens *int64 `json:"completion_tokens,omitempty"`
+	TotalTokens      *int64 `json:"total_tokens,omitempty"`
 }
 
 type openAIChatChunk struct {

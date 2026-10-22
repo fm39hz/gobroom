@@ -23,8 +23,9 @@ import (
 )
 
 type Store struct {
-	DB      *sql.DB
-	runtime runtimeStatements
+	DB         *sql.DB
+	runtime    runtimeStatements
+	usageReset UsageResetCount
 }
 
 func Open(path string) (*Store, error) {
@@ -152,15 +153,6 @@ CREATE TABLE IF NOT EXISTS model_connection_assignments (
 );
 CREATE INDEX IF NOT EXISTS idx_model_connection_assignments_connection ON model_connection_assignments(connection_id,model_id);
 CREATE INDEX IF NOT EXISTS idx_custom_model_identity ON model_catalog(provider_node_id,external_id) WHERE kind='custom' AND external_id<>'';
-CREATE TABLE IF NOT EXISTS usage_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
-  status TEXT, latency_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0, estimated_cost REAL NOT NULL DEFAULT 0,
-  compatibility_fidelity TEXT NOT NULL DEFAULT '', compatibility_losses_json TEXT NOT NULL DEFAULT '[]',
-  compatibility_plan_json TEXT NOT NULL DEFAULT 'null'
-);
-CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
 CREATE TABLE IF NOT EXISTS quota_snapshots (
   id TEXT PRIMARY KEY, provider_node_id TEXT NOT NULL, connection_id TEXT,
   model_ref TEXT, window_name TEXT NOT NULL, generation TEXT NOT NULL DEFAULT '',
@@ -271,11 +263,6 @@ CREATE TABLE IF NOT EXISTS transform_bindings (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_transform_bindings_ref ON transform_bindings(transform_kind,transform_id,contract_version,enabled);
-CREATE TABLE IF NOT EXISTS usage_daily (
-  date_key TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0,
-  prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0,
-  estimated_cost REAL NOT NULL DEFAULT 0, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS provider_definitions (
   id TEXT NOT NULL, contract_version INTEGER NOT NULL,
@@ -311,6 +298,9 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	if err != nil {
 		return err
 	}
+	if err := s.migrateUsageSchema(); err != nil {
+		return err
+	}
 	if err := s.migrateCustomModelAssignments(); err != nil {
 		return err
 	}
@@ -319,14 +309,6 @@ CREATE INDEX IF NOT EXISTS idx_combo_members_reference ON combo_model_members(re
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN definition_id TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE provider_nodes ADD COLUMN definition_contract_version INTEGER NOT NULL DEFAULT 1`)
 	_, _ = s.DB.Exec(`ALTER TABLE connections ADD COLUMN email TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN estimated_cost REAL NOT NULL DEFAULT 0`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN request_class TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN ttft_ms INTEGER NOT NULL DEFAULT 0`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN output_tokens_per_second REAL NOT NULL DEFAULT 0`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_fidelity TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_losses_json TEXT NOT NULL DEFAULT '[]'`)
-	_, _ = s.DB.Exec(`ALTER TABLE usage_events ADD COLUMN compatibility_plan_json TEXT NOT NULL DEFAULT 'null'`)
 	_, _ = s.DB.Exec(`ALTER TABLE connection_runtime ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE provider_runtime ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.DB.Exec(`ALTER TABLE model_availability ADD COLUMN generation TEXT NOT NULL DEFAULT ''`)
@@ -1265,32 +1247,65 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 	if err != nil {
 		return fmt.Errorf("encode usage compatibility plan: %w", err)
 	}
-	if _, err = tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, event.Latency.Milliseconds(), event.InputTokens, event.OutputTokens, event.EstimatedCost, event.RequestClass, event.SessionID, event.TTFT.Milliseconds(), event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
+	accountingIssues, err := json.Marshal(event.BoundedIssues())
+	if err != nil {
+		return fmt.Errorf("encode usage accounting issues: %w", err)
+	}
+	var latencyMS, ttftMS *int64
+	if event.Latency != 0 {
+		value := event.Latency.Milliseconds()
+		latencyMS = &value
+	}
+	if !event.FirstByteAt.IsZero() || event.TTFT > 0 {
+		value := event.TTFT.Milliseconds()
+		ttftMS = &value
+	}
+	if _, err = tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, latencyMS, event.InputTokens, event.OutputTokens, event.CachedReadTokens, event.CachedWriteTokens, event.ReasoningTokens, event.EstimatedCost, string(accountingIssues), event.RequestClass, event.SessionID, ttftMS, event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan)); err != nil {
 		return err
 	}
-	if _, err = tx.StmtContext(ctx, s.runtime.usageDaily).ExecContext(ctx, dateKey, event.InputTokens, event.OutputTokens, event.EstimatedCost); err != nil {
+	if _, err = tx.StmtContext(ctx, s.runtime.usageDaily).ExecContext(ctx, dateKey,
+		len(event.AccountingIssues) > 0,
+		event.InputTokens, event.InputTokens, event.OutputTokens, event.OutputTokens,
+		event.CachedReadTokens, event.CachedReadTokens, event.CachedWriteTokens, event.CachedWriteTokens,
+		event.ReasoningTokens, event.ReasoningTokens, event.EstimatedCost, event.EstimatedCost); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 type UsageRecord struct {
-	ID                                                                           int64
-	Timestamp, LogicalModel, ProviderNodeID, ExternalModel, ConnectionID, Status string
-	LatencyMS, InputTokens, OutputTokens                                         int64
-	EstimatedCost                                                                float64
-	RequestClass, SessionID                                                      string
-	TTFTMS                                                                       int64
-	OutputTokensPerSecond                                                        float64
-	CompatibilityFidelity                                                        kernel.CompatibilityFidelity     `json:"compatibilityFidelity,omitempty"`
-	CompatibilityLosses                                                          []kernel.LossRecord              `json:"compatibilityLosses,omitempty"`
-	CompatibilityPlan                                                            *kernel.CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
+	ID                                                                                         int64
+	Timestamp, LogicalModel, ProviderNodeID, ExternalModel, ConnectionID, Status               string
+	LatencyMS, InputTokens, OutputTokens, CachedReadTokens, CachedWriteTokens, ReasoningTokens *int64
+	EstimatedCost, OutputTokensPerSecond                                                       *float64
+	RequestClass, SessionID                                                                    string
+	TTFTMS                                                                                     *int64
+	AccountingIssues                                                                           []kernel.UsageIssue              `json:"accountingIssues,omitempty"`
+	CompatibilityFidelity                                                                      kernel.CompatibilityFidelity     `json:"compatibilityFidelity,omitempty"`
+	CompatibilityLosses                                                                        []kernel.LossRecord              `json:"compatibilityLosses,omitempty"`
+	CompatibilityPlan                                                                          *kernel.CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
+}
+
+type UsageMetricSummary struct {
+	Sum      int64 `json:"sum"`
+	Reported int64 `json:"reported"`
+}
+
+type UsageCostSummary struct {
+	Sum      float64 `json:"sum"`
+	Reported int64   `json:"reported"`
 }
 
 type UsageSummary struct {
-	DateKey                                  string  `json:"dateKey"`
-	Requests, PromptTokens, CompletionTokens int64   `json:",omitempty"`
-	EstimatedCost                            float64 `json:"estimatedCost"`
+	DateKey            string             `json:"dateKey"`
+	Attempts           int64              `json:"attempts"`
+	IncompleteAttempts int64              `json:"incompleteAttempts"`
+	Input              UsageMetricSummary `json:"input"`
+	Output             UsageMetricSummary `json:"output"`
+	CachedRead         UsageMetricSummary `json:"cachedRead"`
+	CachedWrite        UsageMetricSummary `json:"cachedWrite"`
+	Reasoning          UsageMetricSummary `json:"reasoning"`
+	EstimatedCost      UsageCostSummary   `json:"estimatedCost"`
 }
 
 func (s *Store) PruneUsage(before time.Time) (int64, error) {
@@ -1311,7 +1326,7 @@ func (s *Store) UsageSummary(limit int) ([]UsageSummary, error) {
 	if limit <= 0 || limit > 366 {
 		limit = 30
 	}
-	rows, err := s.DB.Query(`SELECT date_key,requests,prompt_tokens,completion_tokens,estimated_cost FROM usage_daily ORDER BY date_key DESC LIMIT ?`, limit)
+	rows, err := s.DB.Query(`SELECT date_key,attempts,incomplete_attempts,input_tokens_sum,input_tokens_reported,output_tokens_sum,output_tokens_reported,cached_read_tokens_sum,cached_read_tokens_reported,cached_write_tokens_sum,cached_write_tokens_reported,reasoning_tokens_sum,reasoning_tokens_reported,estimated_cost_sum,estimated_cost_reported FROM usage_daily ORDER BY date_key DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1319,7 +1334,10 @@ func (s *Store) UsageSummary(limit int) ([]UsageSummary, error) {
 	var result []UsageSummary
 	for rows.Next() {
 		var item UsageSummary
-		if err := rows.Scan(&item.DateKey, &item.Requests, &item.PromptTokens, &item.CompletionTokens, &item.EstimatedCost); err != nil {
+		if err := rows.Scan(&item.DateKey, &item.Attempts, &item.IncompleteAttempts,
+			&item.Input.Sum, &item.Input.Reported, &item.Output.Sum, &item.Output.Reported,
+			&item.CachedRead.Sum, &item.CachedRead.Reported, &item.CachedWrite.Sum, &item.CachedWrite.Reported,
+			&item.Reasoning.Sum, &item.Reasoning.Reported, &item.EstimatedCost.Sum, &item.EstimatedCost.Reported); err != nil {
 			return nil, err
 		}
 		result = append(result, item)
@@ -1331,7 +1349,7 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,estimated_cost,COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),latency_ms,input_tokens,output_tokens,cached_read_tokens,cached_write_tokens,reasoning_tokens,estimated_cost,COALESCE(accounting_issues_json,'[]'),COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1340,8 +1358,12 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 	for rows.Next() {
 		var item UsageRecord
 		var losses, plan string
-		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.EstimatedCost, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses, &plan); err != nil {
+		var accountingIssues string
+		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.CachedReadTokens, &item.CachedWriteTokens, &item.ReasoningTokens, &item.EstimatedCost, &accountingIssues, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses, &plan); err != nil {
 			return nil, err
+		}
+		if err := decodeJSON(accountingIssues, &item.AccountingIssues); err != nil {
+			return nil, fmt.Errorf("usage event %d accounting issues: %w", item.ID, err)
 		}
 		if err := decodeJSON(losses, &item.CompatibilityLosses); err != nil {
 			return nil, fmt.Errorf("usage event %d compatibility losses: %w", item.ID, err)

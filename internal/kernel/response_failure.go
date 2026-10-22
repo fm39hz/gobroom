@@ -62,5 +62,5 @@ func providerResponseFailure(ctx context.Context, err error) bool {
 }
 
 func knownProviderUsage(event UsageEvent) bool {
-	return event.InputTokens != 0 || event.OutputTokens != 0 || event.EstimatedCost != 0
+	return event.HasReportedUsage()
 }

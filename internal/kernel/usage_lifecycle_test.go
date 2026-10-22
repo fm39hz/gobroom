@@ -10,7 +10,7 @@ func TestKernelUsageCloseSerializesConcurrentProducers(t *testing.T) {
 	for range 32 {
 		engine := &Kernel{Events: make(chan UsageEvent, 32)}
 		var accepted atomic.Int64
-		if !engine.EmitUsage(UsageEvent{InputTokens: 1}) {
+		if !engine.EmitUsage(UsageEvent{InputTokens: new(int64(1))}) {
 			t.Fatal("initial event rejected")
 		}
 		accepted.Add(1)
@@ -28,7 +28,7 @@ func TestKernelUsageCloseSerializesConcurrentProducers(t *testing.T) {
 			producers.Go(func() {
 				<-start
 				for range 64 {
-					if engine.EmitUsage(UsageEvent{InputTokens: 1}) {
+					if engine.EmitUsage(UsageEvent{InputTokens: new(int64(1))}) {
 						accepted.Add(1)
 					}
 				}

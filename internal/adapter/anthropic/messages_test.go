@@ -72,7 +72,7 @@ func TestAnthropicToolAndTextEventsBecomeOpenAIChunks(t *testing.T) {
 	if !strings.Contains(output, "tool_calls") || !strings.Contains(output, "done") || !strings.Contains(output, "tool_calls") {
 		t.Fatalf("output=%s", output)
 	}
-	if usage.InputTokens != 12 || usage.OutputTokens != 4 {
+	if !anthropicCountIs(usage.InputTokens, 12) || !anthropicCountIs(usage.OutputTokens, 4) {
 		t.Fatalf("usage=%#v", usage)
 	}
 	seenText, seenTool, seenUsage, seenStart, seenEnd := false, false, false, false, false
@@ -359,7 +359,7 @@ func TestAnthropicPassthroughJSONPreservesBodyAndReportsUsage(t *testing.T) {
 	if recorder.Body.String() != body {
 		t.Fatalf("Anthropic passthrough body changed: %s", recorder.Body.String())
 	}
-	if usage.Status != "ok" || usage.InputTokens != 10370 || usage.OutputTokens != 4 {
+	if usage.Status != "ok" || !anthropicCountIs(usage.InputTokens, 10370) || !anthropicCountIs(usage.OutputTokens, 4) {
 		t.Fatalf("usage=%#v", usage)
 	}
 }
@@ -381,8 +381,35 @@ func TestAnthropicPassthroughStreamReportsUsageWithoutChangingEvents(t *testing.
 	if recorder.Body.String() != body {
 		t.Fatalf("Anthropic SSE passthrough body changed: %s", recorder.Body.String())
 	}
-	if usage.Status != "ok" || usage.InputTokens != 21 || usage.OutputTokens != 7 {
+	if usage.Status != "ok" || !anthropicCountIs(usage.InputTokens, 21) || !anthropicCountIs(usage.OutputTokens, 7) {
 		t.Fatalf("usage=%#v", usage)
+	}
+}
+
+func anthropicCountIs(value *int64, want int64) bool {
+	return value != nil && *value == want
+}
+
+func TestAnthropicUsageFramePreservesMissingFieldsAndExplicitZero(t *testing.T) {
+	usage := kernel.UsageEvent{InputTokens: new(int64(9)), OutputTokens: new(int64(4))}
+	frame, err := decodeAnthropicUsageFrame([]byte(`{"usage":{"input_tokens":0}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage = mergeAnthropicUsage(usage, frame.EventUsage)
+	if !anthropicCountIs(usage.InputTokens, 0) || !anthropicCountIs(usage.OutputTokens, 4) {
+		t.Fatalf("partial usage update=%#v", usage)
+	}
+}
+
+func TestAnthropicUsageInvalidCountIsUnknownWithIssue(t *testing.T) {
+	frame, err := decodeAnthropicUsageFrame([]byte(`{"usage":{"input_tokens":1.5,"output_tokens":7}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := mergeAnthropicUsage(kernel.UsageEvent{}, frame.EventUsage)
+	if usage.InputTokens != nil || !anthropicCountIs(usage.OutputTokens, 7) || len(usage.AccountingIssues) != 1 || usage.AccountingIssues[0].Code != "invalid_usage_counter" {
+		t.Fatalf("fractional count must be unknown with an issue, preserving valid siblings: %#v", usage)
 	}
 }
 

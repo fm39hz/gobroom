@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,8 +56,8 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) er
 				function, _ := call["function"].(map[string]any)
 				toolIndex := index
 				if rawIndex, exists := call["index"]; exists {
-					n, valid := rawIndex.(float64)
-					if !valid || n < 0 || n > float64(int(^uint(0)>>1)) || n != float64(int(n)) {
+					n, valid := integerValue(rawIndex)
+					if !valid || n < 0 || uint64(n) > uint64(int(^uint(0)>>1)) {
 						return fmt.Errorf("OpenAI tool call delta has invalid index %v", rawIndex)
 					}
 					toolIndex = int(n)
@@ -110,15 +111,10 @@ func emitOpenAIEvent(payload map[string]any, emit func(kernel.ResponseEvent)) er
 		}
 	}
 	if ok {
-		inputTokens := usage["input_tokens"]
-		if inputTokens == nil {
-			inputTokens = usage["prompt_tokens"]
+		event, _, err := openAIUsageFromMap(usage)
+		if err != nil {
+			return fmt.Errorf("decode OpenAI usage: %w", err)
 		}
-		outputTokens := usage["output_tokens"]
-		if outputTokens == nil {
-			outputTokens = usage["completion_tokens"]
-		}
-		event := kernel.UsageEvent{InputTokens: int64(numberValue(inputTokens)), OutputTokens: int64(numberValue(outputTokens))}
 		emit(kernel.ResponseEvent{At: now, Kind: kernel.EventUsage, Usage: &event})
 	}
 	return nil
@@ -179,9 +175,10 @@ func emitOpenAIResponsesJSON(payload map[string]any, emit func(kernel.ResponseEv
 		}
 	}
 	if usage, ok := payload["usage"].(map[string]any); ok {
-		input := usage["input_tokens"]
-		output := usage["output_tokens"]
-		event := kernel.UsageEvent{InputTokens: int64(numberValue(input)), OutputTokens: int64(numberValue(output))}
+		event, _, err := openAIUsageFromMap(usage)
+		if err != nil {
+			return fmt.Errorf("decode OpenAI Responses usage: %w", err)
+		}
 		emit(kernel.ResponseEvent{At: at, Kind: kernel.EventUsage, ResponseID: responseID, Usage: &event})
 	}
 	emit(kernel.ResponseEvent{At: at, Kind: kernel.EventResponseComplete, ResponseID: responseID})
@@ -234,11 +231,17 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				started = true
 			}
 			var payload map[string]any
-			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			decoder := json.NewDecoder(bytes.NewReader([]byte(data)))
+			decoder.UseNumber()
+			if err := decoder.Decode(&payload); err != nil {
 				return fmt.Errorf("decode upstream SSE JSON: %w", err)
 			}
 			if errPayload, candidate := openAIErrorPayload(payload, []byte(data), true); candidate {
-				if event, ok := openAIUsageFromPayload(payload); ok && hooks.OnProviderUsage != nil {
+				event, ok, usageErr := openAIUsageFromPayload(payload)
+				if usageErr != nil {
+					return fmt.Errorf("decode OpenAI provider error usage: %w", usageErr)
+				}
+				if ok && hooks.OnProviderUsage != nil {
 					hooks.OnProviderUsage(event)
 				}
 				evidence, err := kernel.NewProviderResponseError(errPayload)
@@ -248,7 +251,11 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				return evidence
 			}
 			if stringValue(payload["type"]) == "response.incomplete" {
-				if event, exists := openAIUsageFromPayload(payload); exists && hooks.OnProviderUsage != nil {
+				event, exists, usageErr := openAIUsageFromPayload(payload)
+				if usageErr != nil {
+					return fmt.Errorf("decode OpenAI incomplete response usage: %w", usageErr)
+				}
+				if exists && hooks.OnProviderUsage != nil {
 					hooks.OnProviderUsage(event)
 				}
 				return fmt.Errorf("OpenAI Responses SSE response was incomplete")
@@ -289,11 +296,17 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 		return err
 	}
 	var payload map[string]any
-	if err := json.Unmarshal(data, &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
 		return fmt.Errorf("decode upstream JSON: %w", err)
 	}
 	if errPayload, candidate := openAIErrorPayload(payload, data, false); candidate {
-		if event, ok := openAIUsageFromPayload(payload); ok && hooks.OnProviderUsage != nil {
+		event, ok, usageErr := openAIUsageFromPayload(payload)
+		if usageErr != nil {
+			return fmt.Errorf("decode OpenAI provider error usage: %w", usageErr)
+		}
+		if ok && hooks.OnProviderUsage != nil {
 			hooks.OnProviderUsage(event)
 		}
 		evidence, err := kernel.NewProviderResponseError(errPayload)
@@ -375,41 +388,95 @@ func openAIErrorPayload(payload map[string]any, data []byte, sse bool) ([]byte, 
 	return canonical, true
 }
 
-func openAIUsageFromPayload(payload map[string]any) (kernel.UsageEvent, bool) {
-	if event, found := openAIUsageFromMap(payload["usage"]); found {
-		return event, true
+func openAIUsageFromPayload(payload map[string]any) (kernel.UsageEvent, bool, error) {
+	if event, found, err := openAIUsageFromMap(payload["usage"]); err != nil {
+		return kernel.UsageEvent{}, false, err
+	} else if found {
+		return event, true, nil
 	}
 	if response, ok := payload["response"].(map[string]any); ok {
-		if event, found := openAIUsageFromMap(response["usage"]); found {
-			return event, true
+		if event, found, err := openAIUsageFromMap(response["usage"]); err != nil {
+			return kernel.UsageEvent{}, false, err
+		} else if found {
+			return event, true, nil
 		}
 		if providerError, ok := response["error"].(map[string]any); ok {
-			if event, found := openAIUsageFromMap(providerError["usage"]); found {
-				return event, true
+			if event, found, err := openAIUsageFromMap(providerError["usage"]); err != nil {
+				return kernel.UsageEvent{}, false, err
+			} else if found {
+				return event, true, nil
 			}
 		}
 	}
 	if providerError, ok := payload["error"].(map[string]any); ok {
-		if event, found := openAIUsageFromMap(providerError["usage"]); found {
-			return event, true
+		if event, found, err := openAIUsageFromMap(providerError["usage"]); err != nil {
+			return kernel.UsageEvent{}, false, err
+		} else if found {
+			return event, true, nil
 		}
 	}
-	return kernel.UsageEvent{}, false
+	return kernel.UsageEvent{}, false, nil
 }
 
-func openAIUsageFromMap(raw any) (kernel.UsageEvent, bool) {
+func openAIUsageFromMap(raw any) (kernel.UsageEvent, bool, error) {
 	fields, ok := raw.(map[string]any)
 	if !ok {
-		return kernel.UsageEvent{}, false
+		return kernel.UsageEvent{}, false, nil
 	}
-	in, out := fields["input_tokens"], fields["output_tokens"]
-	if in == nil {
-		in = fields["prompt_tokens"]
+	event := kernel.UsageEvent{}
+	invalidCounter := func() {
+		event.AccountingIssues = append(event.AccountingIssues, kernel.UsageIssue{Code: "invalid_usage_counter"})
 	}
-	if out == nil {
-		out = fields["completion_tokens"]
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		invalidCounter()
+		return event, true, nil
 	}
-	return kernel.UsageEvent{InputTokens: int64(numberValue(in)), OutputTokens: int64(numberValue(out))}, in != nil || out != nil
+	var usage map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &usage); err != nil {
+		invalidCounter()
+		return event, true, nil
+	}
+	// Bind optional fields independently so one invalid counter cannot discard
+	// a valid answer or the other reported counters.
+	detailCounter := func(detailsName, counterName string) json.RawMessage {
+		detailsRaw := usage[detailsName]
+		if len(detailsRaw) == 0 || bytes.Equal(detailsRaw, []byte("null")) {
+			return nil
+		}
+		var details map[string]json.RawMessage
+		if json.Unmarshal(detailsRaw, &details) != nil {
+			invalidCounter()
+			return nil
+		}
+		return details[counterName]
+	}
+	inputRaw, outputRaw := usage["input_tokens"], usage["output_tokens"]
+	if len(inputRaw) == 0 {
+		inputRaw = usage["prompt_tokens"]
+	}
+	if len(outputRaw) == 0 {
+		outputRaw = usage["completion_tokens"]
+	}
+	for _, item := range []struct {
+		raw    json.RawMessage
+		target **int64
+	}{
+		{inputRaw, &event.InputTokens}, {outputRaw, &event.OutputTokens},
+		{detailCounter("input_tokens_details", "cached_tokens"), &event.CachedReadTokens}, {detailCounter("prompt_tokens_details", "cached_tokens"), &event.CachedReadTokens},
+		{usage["cache_creation_input_tokens"], &event.CachedWriteTokens}, {detailCounter("output_tokens_details", "reasoning_tokens"), &event.ReasoningTokens},
+	} {
+		if len(item.raw) == 0 || bytes.Equal(item.raw, []byte("null")) {
+			continue
+		}
+		var value int64
+		if err := json.Unmarshal(item.raw, &value); err != nil || value < 0 {
+			invalidCounter()
+			continue
+		}
+		*item.target = new(value)
+	}
+	return event, event.HasReportedUsage() || len(event.AccountingIssues) > 0, nil
 }
 
 func splitSSELines(data []byte, atEOF bool) (int, []byte, error) {
@@ -422,5 +489,21 @@ func splitSSELines(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 
-func numberValue(value any) float64 { n, _ := value.(float64); return n }
-func stringValue(value any) string  { result, _ := value.(string); return result }
+func integerValue(value any) (int64, bool) {
+	switch number := value.(type) {
+	case json.Number:
+		parsed, err := strconv.ParseInt(number.String(), 10, 64)
+		return parsed, err == nil
+	case float64:
+		if number < 0 || number > float64(int64(^uint64(0)>>1)) || number != float64(int64(number)) {
+			return 0, false
+		}
+		return int64(number), true
+	case int:
+		return int64(number), true
+	default:
+		return 0, false
+	}
+}
+
+func stringValue(value any) string { result, _ := value.(string); return result }

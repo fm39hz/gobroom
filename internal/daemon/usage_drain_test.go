@@ -23,7 +23,7 @@ func TestDaemonStopDrainsAcceptedUsageBeforeClosingStore(t *testing.T) {
 	defer func() { _ = d.Stop(context.Background()) }()
 	const count = 128
 	for index := range count {
-		if !d.kernel.EmitUsage(kernel.UsageEvent{At: time.Now(), LogicalModel: fmt.Sprintf("accepted-%03d", index), Status: "error", InputTokens: 3, OutputTokens: 2}) {
+		if !d.kernel.EmitUsage(kernel.UsageEvent{At: time.Now(), LogicalModel: fmt.Sprintf("accepted-%03d", index), Status: "error", InputTokens: new(int64(3)), OutputTokens: new(int64(2))}) {
 			t.Fatalf("fixture queue did not accept event %d", index)
 		}
 	}
@@ -49,7 +49,7 @@ func TestDaemonStopDrainsAcceptedUsageBeforeClosingStore(t *testing.T) {
 		t.Fatalf("drained rows=%d want%d err=%v", len(rows), count, err)
 	}
 	for index, row := range rows {
-		if row.LogicalModel != fmt.Sprintf("accepted-%03d", count-index-1) || row.Status != "error" || row.InputTokens != 3 || row.OutputTokens != 2 {
+		if row.LogicalModel != fmt.Sprintf("accepted-%03d", count-index-1) || row.Status != "error" || row.InputTokens == nil || *row.InputTokens != 3 || row.OutputTokens == nil || *row.OutputTokens != 2 {
 			t.Fatalf("lost or changed usage row %d: %#v", index, row)
 		}
 	}

@@ -110,7 +110,7 @@ func (usageAccountingDecoder) PossibleEvents() []ResponseEventKind {
 }
 func (usageAccountingDecoder) ClassifyError(int, []byte) ErrorClass { return ErrorRetryable }
 func (usageAccountingDecoder) Decode(_ context.Context, _ UpstreamResponse, emit func(ResponseEvent) error, _ StreamHooks) error {
-	usage := UsageEvent{InputTokens: 11, OutputTokens: 7, EstimatedCost: 0.25, Status: "ok"}
+	usage := UsageEvent{InputTokens: new(int64(11)), OutputTokens: new(int64(7)), EstimatedCost: new(float64(0.25)), Status: "ok"}
 	if err := emit(ResponseEvent{Kind: EventUsage, Usage: &usage}); err != nil {
 		return err
 	}
@@ -245,7 +245,7 @@ func (usageAccountingTransform) Definition() ResponseTransformDefinition {
 func (usageAccountingTransform) ApplyResponse(_ context.Context, event ResponseEvent, _ json.RawMessage) (ResponseEvent, error) {
 	if event.Usage != nil {
 		usage := *event.Usage
-		usage.InputTokens, usage.OutputTokens, usage.EstimatedCost = 900, 800, 99
+		usage.InputTokens, usage.OutputTokens, usage.EstimatedCost = new(int64(900)), new(int64(800)), new(float64(99))
 		event.Usage = &usage
 	}
 	return event, nil
@@ -273,10 +273,10 @@ func TestResponseTransformDoesNotRewriteProviderUsageAccounting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rendered.InputTokens != 900 || rendered.OutputTokens != 800 || rendered.EstimatedCost != 99 {
+	if rendered.InputTokens == nil || *rendered.InputTokens != 900 || rendered.OutputTokens == nil || *rendered.OutputTokens != 800 || rendered.EstimatedCost == nil || *rendered.EstimatedCost != 99 {
 		t.Fatalf("client projection was not transformed: %#v", rendered)
 	}
-	if accounted.InputTokens != 11 || accounted.OutputTokens != 7 || accounted.EstimatedCost != 0.25 {
+	if accounted.InputTokens == nil || *accounted.InputTokens != 11 || accounted.OutputTokens == nil || *accounted.OutputTokens != 7 || accounted.EstimatedCost == nil || *accounted.EstimatedCost != 0.25 {
 		t.Fatalf("provider accounting was changed by client projection: %#v", accounted)
 	}
 }

@@ -423,10 +423,7 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 			}
 			if payload.UsageMetadata != nil {
 				usage := geminiUsage(payload.UsageMetadata)
-				totalUsage.InputTokens = usage.InputTokens
-				if usage.OutputTokens > 0 {
-					totalUsage.OutputTokens = usage.OutputTokens
-				}
+				totalUsage = kernel.MergeProviderUsage(totalUsage, usage)
 				if hooks.OnProviderUsage != nil {
 					hooks.OnProviderUsage(totalUsage)
 				}
@@ -1089,7 +1086,10 @@ func openAIResponse(payload geminiGenerateContentResponse, issuer extensions.Ref
 	var outputUsage *openAIChatUsage
 	if payload.UsageMetadata != nil {
 		usage = geminiUsage(payload.UsageMetadata)
-		outputUsage = &openAIChatUsage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: usage.InputTokens + usage.OutputTokens}
+		outputUsage = &openAIChatUsage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens}
+		if usage.InputTokens != nil && usage.OutputTokens != nil && *usage.InputTokens <= 9223372036854775807-*usage.OutputTokens {
+			outputUsage.TotalTokens = new(*usage.InputTokens + *usage.OutputTokens)
+		}
 		events = append(events, kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventUsage, Usage: &usage})
 	}
 	response := openAIChatResponse{ID: "chatcmpl-gemini", Object: "chat.completion", Created: created, Choices: []openAIChatChoice{{Index: 0, Message: message, FinishReason: finish}}, Usage: outputUsage}
@@ -1100,7 +1100,11 @@ func geminiUsage(metadata *geminiUsageMetadata) kernel.UsageEvent {
 	if metadata == nil {
 		return kernel.UsageEvent{Status: "ok"}
 	}
-	return kernel.UsageEvent{InputTokens: metadata.PromptTokenCount, OutputTokens: metadata.CandidatesTokenCount, Status: "ok"}
+	return kernel.UsageEvent{
+		InputTokens: metadata.PromptTokenCount, OutputTokens: metadata.CandidatesTokenCount,
+		CachedReadTokens: metadata.CachedContentTokenCount, ReasoningTokens: metadata.ThoughtsTokenCount, Status: "ok",
+		AccountingIssues: metadata.AccountingIssues,
+	}
 }
 
 func openAIFinishReason(reason string) string {

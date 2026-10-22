@@ -152,7 +152,7 @@ func TestKernelTransfersProviderResponseArtifactThroughAuthorizedRendererLease(t
 type missingArtifactCompletionAdapter struct{ responseArtifactAdapter }
 
 func (missingArtifactCompletionAdapter) RenderResponse(_ context.Context, _ UpstreamResponse, _ http.ResponseWriter, _ normalize.Format, hooks StreamHooks) error {
-	hooks.OnComplete(UsageEvent{Status: "ok", InputTokens: 11})
+	hooks.OnComplete(UsageEvent{Status: "ok", InputTokens: new(int64(11))})
 	return nil
 }
 
@@ -253,7 +253,7 @@ func runResponseArtifactCompletionFixture(t *testing.T, omitArtifact bool) {
 		}
 		select {
 		case event := <-k.Events:
-			if event.Status != "error" || event.InputTokens != 11 {
+			if event.Status != "error" || event.InputTokens == nil || *event.InputTokens != 11 {
 				t.Fatalf("lost provider accounting on late validation: %#v", event)
 			}
 		default:

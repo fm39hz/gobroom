@@ -336,7 +336,7 @@ func TestTranslateGeminiJSONToOpenAIChat(t *testing.T) {
 	if tool.ThoughtSignature != "sig" {
 		t.Fatalf("signature lost: %#v", tool)
 	}
-	if completed.InputTokens != 4 || completed.OutputTokens != 2 {
+	if !geminiCountIs(completed.InputTokens, 4) || !geminiCountIs(completed.OutputTokens, 2) {
 		t.Fatalf("usage=%#v", completed)
 	}
 	if len(events) < 2 {
@@ -376,8 +376,53 @@ func TestTranslateGeminiSSEEmitsIncrementalOpenAIChunks(t *testing.T) {
 	if !textChunks || !sawLength {
 		t.Fatalf("typed OpenAI SSE chunks did not preserve content and finish reason: %q", output)
 	}
-	if completed.InputTokens != 3 || completed.OutputTokens != 5 {
+	if !geminiCountIs(completed.InputTokens, 3) || !geminiCountIs(completed.OutputTokens, 5) {
 		t.Fatalf("usage=%#v", completed)
+	}
+}
+
+func geminiCountIs(value *int64, want int64) bool {
+	return value != nil && *value == want
+}
+
+func TestGeminiUsagePreservesMissingFieldsAndExplicitZero(t *testing.T) {
+	var metadata geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":0}`), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	if !geminiCountIs(metadata.PromptTokenCount, 0) || metadata.CandidatesTokenCount != nil {
+		t.Fatalf("typed usage metadata=%#v", metadata)
+	}
+	current := kernel.UsageEvent{InputTokens: new(int64(7)), OutputTokens: new(int64(3))}
+	merged := kernel.MergeProviderUsage(current, geminiUsage(&metadata))
+	if !geminiCountIs(merged.InputTokens, 0) || !geminiCountIs(merged.OutputTokens, 3) {
+		t.Fatalf("merged usage=%#v", merged)
+	}
+}
+
+func TestGeminiUsageFractionalCountIsUnknownWithIssue(t *testing.T) {
+	var metadata geminiUsageMetadata
+	if err := json.Unmarshal([]byte(`{"promptTokenCount":1.5,"candidatesTokenCount":7}`), &metadata); err != nil {
+		t.Fatal(err)
+	}
+	usage := geminiUsage(&metadata)
+	if usage.InputTokens != nil || !geminiCountIs(usage.OutputTokens, 7) || len(usage.AccountingIssues) != 1 || usage.AccountingIssues[0].Code != "invalid_usage_counter" {
+		t.Fatalf("fractional count must be unknown with an issue, preserving valid siblings: %#v", usage)
+	}
+}
+
+func TestGeminiSSEUsageMergesPartialSnapshotsAndKnownZero(t *testing.T) {
+	body := "data: {\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":2}}\n\n" +
+		"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"candidatesTokenCount\":0}}\n\n"
+	var completed kernel.UsageEvent
+	err := (Gemini{}).DecodeResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{OnComplete: func(usage kernel.UsageEvent) { completed = usage }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !geminiCountIs(completed.InputTokens, 8) || !geminiCountIs(completed.OutputTokens, 0) {
+		t.Fatalf("merged SSE usage=%#v", completed)
 	}
 }
 

@@ -54,7 +54,7 @@ func TestAnthropicMessagesRendererProjectsCanonicalTextAndTools(t *testing.T) {
 		{Kind: kernel.EventToolCallDelta, Index: 0, ToolArguments: `"weather"}`},
 		{Kind: kernel.EventContentBlockEnd, StopReason: "tool_calls"},
 		{Kind: kernel.EventResponseComplete},
-		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: 7, OutputTokens: 5}},
+		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: new(int64(7)), OutputTokens: new(int64(5))}},
 	}
 	for _, event := range events {
 		if err := session.Emit(context.Background(), event); err != nil {

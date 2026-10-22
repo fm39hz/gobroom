@@ -219,7 +219,7 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 			chunk := map[string]any{
 				"id": s.id, "object": "chat.completion.chunk", "created": s.created, "model": s.model,
 				"choices": []any{},
-				"usage":   map[string]any{"prompt_tokens": s.usage.InputTokens, "completion_tokens": s.usage.OutputTokens, "total_tokens": s.usage.InputTokens + s.usage.OutputTokens},
+				"usage":   chatUsage(s.usage),
 			}
 			if err := writeSSEJSON(s.writer, chunk); err != nil {
 				return err
@@ -263,9 +263,23 @@ func (s *openAIChatSession) Finish(_ context.Context, decodeErr error) error {
 	choice := map[string]any{"index": 0, "message": message, "finish_reason": s.finish}
 	body := map[string]any{"id": s.id, "object": "chat.completion", "created": s.created, "model": s.model, "choices": []any{choice}}
 	if s.usage != nil {
-		body["usage"] = map[string]any{"prompt_tokens": s.usage.InputTokens, "completion_tokens": s.usage.OutputTokens, "total_tokens": s.usage.InputTokens + s.usage.OutputTokens}
+		body["usage"] = chatUsage(s.usage)
 	}
 	return json.NewEncoder(s.writer).Encode(body)
+}
+
+func chatUsage(usage *kernel.UsageEvent) map[string]any {
+	result := map[string]any{}
+	if usage.InputTokens != nil {
+		result["prompt_tokens"] = *usage.InputTokens
+	}
+	if usage.OutputTokens != nil {
+		result["completion_tokens"] = *usage.OutputTokens
+	}
+	if usage.InputTokens != nil && usage.OutputTokens != nil {
+		result["total_tokens"] = *usage.InputTokens + *usage.OutputTokens
+	}
+	return result
 }
 
 func (s *openAIChatSession) toolIndex(event kernel.ResponseEvent) int {

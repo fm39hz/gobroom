@@ -64,7 +64,7 @@ func (a *replayCancellationAdapter) RenderResponse(ctx context.Context, response
 	close(a.entered)
 	<-ctx.Done()
 	if a.commit && hooks.OnComplete != nil {
-		hooks.OnComplete(UsageEvent{Status: "ok", OutputTokens: 1})
+		hooks.OnComplete(UsageEvent{Status: "ok", OutputTokens: new(int64(1))})
 	}
 	return ctx.Err()
 }
@@ -124,7 +124,7 @@ func testReplayWithKeyCancellationAtRender(t *testing.T, committed bool) {
 			if usage.Status == "ok" {
 				t.Fatalf("canceled response emitted successful usage: %#v", usage)
 			}
-			if !committed || usage.Status != "cancelled" || usage.OutputTokens != 1 {
+			if !committed || usage.Status != "cancelled" || usage.OutputTokens == nil || *usage.OutputTokens != 1 {
 				t.Fatalf("known failed usage was lost or misclassified: %#v", usage)
 			}
 		default:

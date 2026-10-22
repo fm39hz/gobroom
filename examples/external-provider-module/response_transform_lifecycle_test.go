@@ -47,7 +47,9 @@ func (responseLifecycleTransform) ApplyResponse(_ context.Context, event provide
 		event.Text += options.Suffix
 	case provider.EventUsage:
 		if event.Usage != nil {
-			event.Usage.OutputTokens += options.UsageAdjustment
+			if event.Usage.OutputTokens != nil {
+				event.Usage.OutputTokens = new(*event.Usage.OutputTokens + options.UsageAdjustment)
+			}
 		}
 	}
 	return event, nil

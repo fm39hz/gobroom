@@ -66,7 +66,7 @@ func TestOpenAIResponsesRendererProjectsSemanticJSON(t *testing.T) {
 		{Kind: kernel.EventTextDelta, Text: "answer"},
 		{Kind: kernel.EventThinkingDelta, Text: "summary"},
 		{Kind: kernel.EventToolCallDelta, Index: 0, ToolCallID: "call_1", ToolName: "lookup", ToolArguments: `{"q":"x"}`},
-		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: 11, OutputTokens: 7}},
+		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: new(int64(11)), OutputTokens: new(int64(7))}},
 		{Kind: kernel.EventResponseComplete, ResponseID: "resp_semantic"},
 	} {
 		if err := session.Emit(context.Background(), event); err != nil {
@@ -116,7 +116,7 @@ func TestOpenAIResponsesRendererStreamsItemLifecycleAndFinalEnvelope(t *testing.
 		{Kind: kernel.EventResponseStarted, ResponseID: "resp_stream"},
 		{Kind: kernel.EventTextDelta, Text: "partial"},
 		{Kind: kernel.EventToolCallDelta, Index: 0, ToolCallID: "call_stream", ToolName: "lookup", ToolArguments: `{"id":7}`},
-		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: 4, OutputTokens: 2}},
+		{Kind: kernel.EventUsage, Usage: &kernel.UsageEvent{InputTokens: new(int64(4)), OutputTokens: new(int64(2))}},
 		{Kind: kernel.EventResponseComplete},
 	} {
 		if err := session.Emit(context.Background(), event); err != nil {

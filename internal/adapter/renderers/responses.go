@@ -442,12 +442,23 @@ func (s *openAIResponsesSession) responseObject(status string) map[string]any {
 		response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
 	}
 	if s.usage != nil {
-		response["usage"] = map[string]any{
-			"input_tokens": s.usage.InputTokens, "output_tokens": s.usage.OutputTokens,
-			"total_tokens": s.usage.InputTokens + s.usage.OutputTokens,
-		}
+		response["usage"] = responsesUsage(s.usage)
 	}
 	return response
+}
+
+func responsesUsage(usage *kernel.UsageEvent) map[string]any {
+	result := map[string]any{}
+	if usage.InputTokens != nil {
+		result["input_tokens"] = *usage.InputTokens
+	}
+	if usage.OutputTokens != nil {
+		result["output_tokens"] = *usage.OutputTokens
+	}
+	if usage.InputTokens != nil && usage.OutputTokens != nil {
+		result["total_tokens"] = *usage.InputTokens + *usage.OutputTokens
+	}
+	return result
 }
 
 func (s *openAIResponsesSession) ensureStarted() error {

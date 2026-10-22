@@ -146,38 +146,6 @@ const (
 	ToolCallFailed   ToolCallState = "failed"
 )
 
-// Response is the semantic result independent of the client's wire protocol.
-// Opaque carries provider-only continuation/signature data without interpreting it.
-type Response struct {
-	ID         string          `json:"id,omitempty"`
-	Model      string          `json:"model,omitempty"`
-	Content    []ResponsePart  `json:"content,omitempty"`
-	StopReason string          `json:"stop_reason,omitempty"`
-	Usage      Usage           `json:"usage,omitempty"`
-	Opaque     json.RawMessage `json:"opaque,omitempty"`
-}
-type ResponsePart struct {
-	Kind     ResponsePartKind `json:"kind"`
-	Text     string           `json:"text,omitempty"`
-	Thinking string           `json:"thinking,omitempty"`
-	ToolCall *ToolCall        `json:"tool_call,omitempty"`
-	Opaque   json.RawMessage  `json:"opaque,omitempty"`
-}
-type ResponsePartKind string
-
-const (
-	ResponseText     ResponsePartKind = "text"
-	ResponseThinking ResponsePartKind = "thinking"
-	ResponseToolCall ResponsePartKind = "tool_call"
-	ResponseOpaque   ResponsePartKind = "opaque"
-)
-
-type Usage struct {
-	InputTokens       int64 `json:"input_tokens,omitempty"`
-	OutputTokens      int64 `json:"output_tokens,omitempty"`
-	CachedInputTokens int64 `json:"cached_input_tokens,omitempty"`
-}
-
 type Tool struct {
 	Type     string         `json:"type"`
 	Name     string         `json:"name,omitempty"`
