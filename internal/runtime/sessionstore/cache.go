@@ -129,6 +129,10 @@ func (c *Cache) Save(ctx context.Context, route kernel.Route, sessionID string, 
 	case c.writes <- write{record: item}:
 	default:
 		c.dropped.Add(1)
+		c.mu.Unlock()
+		// The live update remains useful, but failed queue admission is not
+		// an acknowledgement of asynchronous persistence.
+		return fmt.Errorf("session write queue is full")
 	}
 	c.mu.Unlock()
 	return nil
