@@ -37,7 +37,12 @@ previously known quantity. Native normalization and client rendering share
 those semantics. SQLite and daily summaries preserve unknown versus reported
 zero and expose reporting coverage; TUI uses that distinction too.
 
-Per-dispatch identity/error accounting, immutable historical extension details,
+Each actual upstream dispatch now has host-owned invocation/attempt identity
+and one final accounting record, including rejected, failed and cancelled
+dispatches. Sources receive bounded response/error evidence before release;
+required accounting gates completion without granting replay or poisoning
+health. Direct callbacks and aggregate partial updates share admission bounds.
+Immutable historical extension details, remaining protocol/charge semantics,
 raw retention and gated detail access remain later tasks; C1 is not closed.
 Registered values do not automatically become aggregation, pricing or routing
 inputs. Native passthrough alone is not normalized accounting.
@@ -100,54 +105,40 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
-Presence-aware usage checkpoint `7a36239` / `baad314` / `dffc8f6`: full
-root/external tests and vet, existing conformance, and three-run race coverage
-across kernel, adapters, store, runtime, daemon and TUI passed. Independent
-review fixes include native cache/thinking arithmetic, ownership and partial/
-full snapshot semantics. After `make install-all`, installed CLI status/usage/
-summary acceptance passed three race runs against fake providers. Main daemon
-status=ok, control=serving=501. Its 4 ambiguous events and 3 daily rows were
-discarded; provider/connection/credential/model configuration fingerprint was
-unchanged. No live provider traffic was used.
+Per-dispatch accounting checkpoint `bb16321` / `ccefbc3`: full root/external
+regression and vet passed, with selected three-run race coverage. Existing
+conformance passed on `bb16321`; the final cancellation guard then passed fresh
+full regression/vet and focused three-run race. Independent scoped reviews
+passed. After `make install-all`, installed CLI attempt and presence fixtures
+each passed three race runs: one 429 rejection plus one successful dispatch
+share an invocation ID but have distinct attempt IDs, exact provider/account
+attribution, nullable quantities and per-metric coverage. Strict operation
+client schemas do not gain fields from operational accounting. Main status=ok,
+control=serving=502, no persistence failures; configuration/credential fingerprint
+unchanged, no additional usage history lost (0 rows before this upgrade).
+No live provider traffic was used.
 
-Usage catalog checkpoint `a15af67`: root full tests/vet, selected public-module
-validation and explicit installed-CLI `TestInstalledCLIUsageDescriptorCatalog`
-passed after `make install-all`. Independent review's two Important bound gaps
-were fixed and scoped re-review passed. Main daemon status=ok,
-control=serving=499; no real provider traffic was used for acceptance. This is
-metadata registration, not completed normalized accounting.
+Installed public-module regressions also passed three race runs for typed jobs,
+usage catalog, concurrent JSON/SSE and response-transform lifecycle. This is
+not yet historical usage-extension persistence or the final combined M15 gate.
 
-Typed-jobs checkpoint `0d16e4c` / `7796a04` / `e2ef9d5`: a generic correction
-removed the unintended text requirement for non-chat, then the module-only
-result implementation passed real-daemon create/status/cancel, independent wire
-schema validation, per-caller concurrency and replay/restart checks. The
-original unmodified-kernel claim was false; the generic prerequisite is explicit.
-Full tests, vet and existing conformance passed; three race runs and three
-installed-CLI race runs passed after the proof fix. Independent task reviews
-are clean. Main control=serving=500, status=ok. This is extension conformance,
-not a claim that the standard daemon ships a hosted job service or that M15
-is complete. Common accounting Task 2 and session persistence visibility remain
-open.
-
-Earlier session checkpoint:
-Installed checkpoint `103dbbc`, audit correction `2b9dc90`: the new overflow
-regression was observed red before the fix and green afterward. Full root/
-external regression, vet, conformance and three session-store race runs passed;
-independent review found no critical/important issue in the bounded change.
-After `make install-all`, three installed-CLI continuity/restart race runs passed.
-The queue-overflow error itself is unit/race evidence, not CLI observability:
-the kernel still ignores save errors. Main control=serving=498, status=ok;
-secret-free bundle v9 validation passed. Real configuration/credentials were
-preserved, and tests used fake upstreams. The audit gaps above remain open.
+The initial nullable-usage cutover discarded 4 ambiguous events and 3 daily
+rows under the pre-release reset policy, preserving configuration/credentials.
+Exact earlier catalog, presence, typed-jobs and session-store acceptance records
+are retained in [M15 conformance](M15_CONFORMANCE.md) and the linked task plans.
+Typed jobs is an extension proof, not a hosted job service in the standard
+daemon. Ordinary session-save failure visibility remains open despite verified
+queue rejection and invalidation behavior.
 
 ## Next core work
 
-1. Execute the approved hybrid usage and independent typed-jobs plans without
-   claiming provider catch-up needs no shared contract change until their
-   acceptance passes. Keep normalized measures distinct from raw usage, including
-   unit/subset, unknown-vs-zero and snapshot/delta semantics.
-2. Prove the module-only artifact/renderer path for typed job results, replacing
-   the example's text tunnel before assuming a new kernel payload arm is needed.
+1. Execute hybrid usage Tasks 4–8: finish protocol/reported-charge semantics,
+   historical descriptor/value persistence, explicit capture/disclosure,
+   external-module acceptance and resource measurement. Tasks 1–3 are verified;
+   this is not yet the complete no-kernel-change catch-up proof.
+2. Include the verified typed-jobs artifact/renderer implementation in the
+   final combined acceptance/review. Do not revive a text tunnel or introduce
+   direct projector access without a separately established requirement.
 3. Finish ordinary session persistence overflow/failure observability:
    `Cache.Save` now reports queue rejection, but the kernel ignores save errors
    and asynchronous write failures are not surfaced. Do not confuse

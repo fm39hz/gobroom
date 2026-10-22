@@ -95,7 +95,7 @@ installed `TestInstalledCLIUsagePresence` passed three race runs after
 4 old events and 3 daily rows were discarded, with unchanged provider/connection/
 credential/model configuration fingerprint. Independent core, protocol and
 storage/control review findings were fixed and scoped re-reviews passed.
-Tasks 3–8 remain open; common coverage from Task 5 was brought forward to keep
+At that checkpoint Tasks 3–8 remained open; common coverage from Task 5 was brought forward to keep
 this atomic cutover's summaries honest. Extensions are not yet durable history.
 
 ## Task 3: Per-dispatch lifecycle, error evidence and completion policy
@@ -106,14 +106,32 @@ this atomic cutover's summaries honest. Extensions are not yet durable history.
 
 Bind `Kernel.UsageLimits` and the frozen usage catalog before execution; no per-request schema compilation. This breaking public interface checkpoint advances host contract 11 to 12 and updates built-in/external consumers together.
 
+`StreamHooks.AdmitUsage` applies schema/count/encoded-byte and enclosing
+operation bounds before retaining observations. `CompleteUsage` finalizes
+original accounting and required-usage policy after decoder completion, before
+client terminal projection. The compositor stages semantic completion so
+usage-only tails and repeated terminal observations cannot finalize too early.
+It refreshes only decoder-declared client usage fields; internal accounting
+never invents fields in an operation's client payload schema.
+
 Test assertion form: `if len(events) != 2 || events[0].AttemptID == events[1].AttemptID || upstreamCalls != 2 { t.Fatal("lost or duplicated dispatch accounting") }`.
 
-- [ ] Add `TestAttemptUsageFinalizesOnceAcrossFailureAndFallback`: distinct dispatches have distinct IDs; callbacks/frame updates do not duplicate records; HTTP-error usage and transport failure remain attributed to the correct attempt; unknown is not synthesized as zero. Add `TestRequiredUsageFailureCannotReplayAcceptedEffect` and `TestOptionalUsageIssueDoesNotPoisonHealth`.
-- [ ] Main runs `go test ./internal/kernel ./internal/provider ./internal/operations -run 'AttemptUsage|RequiredUsage|OptionalUsage' -count=1`; observe failures for missing attempt/rejection behavior.
-- [ ] Centralize attempt-local merge/finalization in `usage_attempt.go`; include successful, rejected, failed and cancelled actual dispatches, even if counters are unknown. Skipped/ineligible candidates are not attempts. Reuse staged completion and accepted-effect fences. Feed header/error-body evidence to the selected source before its response is released, including before retry/fallback. Do not let parsing an error usage fragment grant replay.
-- [ ] Keep accounting validation and diagnostics separate from health. Sanitize invalid optional values, retain valid common counters, mark accounting incomplete. A required-accounting failure fails completion with local/unknown attribution and never retries an accepted effect. Preserve ordinary persisted failed-attempt evidence and distinguish semantic incompleteness from persistence queue failure.
-- [ ] Validate and bound all observation entrances before copying/retaining, including direct `OnProviderUsage` callbacks; they must not bypass accounting bounds because canonical event budgeting occurs elsewhere. Keep repeated snapshot storage bounded and respect caller/operation cancellation.
-- [ ] Extend clone/transform/budget handling and `operationEventPayload` to explicitly allowed common accounting only; extension/raw disclosure is never implicit. Main runs focused tests, response failure/replay regressions and race coverage. Install and run a new fake-upstream CLI acceptance with one rejected attempt then one success; assert `usage` contains two attempt IDs and no duplicate. Commit `feat(kernel): finalize accounting once per upstream dispatch`.
+- [x] Add `TestAttemptUsageFinalizesOnceAcrossFailureAndFallback`: distinct dispatches have distinct IDs; callbacks/frame updates do not duplicate records; HTTP-error usage and transport failure remain attributed to the correct attempt; unknown is not synthesized as zero. Add `TestRequiredUsageFailureCannotReplayAcceptedEffect` and `TestOptionalUsageIssueDoesNotPoisonHealth`.
+- [x] Main observes missing-contract RED separately with `go test ./internal/kernel -run '^TestAttemptUsageFinalizesOnceAcrossFailureAndFallback$' -count=1` and `go test ./internal/extensions ./internal/operations -run UsageRequirements -count=1`, then verifies integrated kernel/provider/operation behavior after wiring.
+- [x] Centralize attempt-local merge/finalization in `usage_attempt.go`; include successful, rejected, failed and cancelled actual dispatches, even if counters are unknown. Skipped/ineligible candidates are not attempts. Reuse staged completion and accepted-effect fences. Feed header/error-body evidence to the selected source before its response is released, including before retry/fallback. Do not let parsing an error usage fragment grant replay.
+- [x] Keep accounting validation and diagnostics separate from health. Sanitize invalid optional values, retain valid common counters, mark accounting incomplete. A required-accounting failure fails completion with local/unknown attribution and never retries an accepted effect. Preserve ordinary persisted failed-attempt evidence and distinguish semantic incompleteness from persistence queue failure.
+- [x] Validate and bound all observation entrances before copying/retaining, including direct `OnProviderUsage` callbacks; they must not bypass accounting bounds because canonical event budgeting occurs elsewhere. Keep repeated snapshot storage bounded and respect caller/operation cancellation.
+- [x] Extend clone/transform/budget handling and `operationEventPayload` to explicitly allowed common accounting only; extension/raw disclosure is never implicit. Main runs focused tests, response failure/replay regressions and race coverage. Install and run a new fake-upstream CLI acceptance with one rejected attempt then one success; assert `usage` contains two attempt IDs and no duplicate. Commit `feat(kernel): finalize accounting once per upstream dispatch`.
+
+Verified Task 3 checkpoint: `bb16321` plus cancellation correction `ccefbc3`.
+Full root/external regression and vet passed; selected three-run race suites
+passed. Existing conformance passed on `bb16321`; the cancellation correction
+then passed fresh full regression, vet and focused three-run race. Independent
+scoped reviews passed. After `make install-all`, explicit installed
+`TestInstalledCLIAttemptUsage` and `TestInstalledCLIUsagePresence` each passed
+three race runs. Main status=ok, control=serving=502, no persistence failures;
+configuration/credential fingerprint unchanged and no additional history lost
+(0 event/daily rows before this upgrade). Tasks 4–8 remain open.
 
 ## Task 4: Protocol normalization and faithful projections
 

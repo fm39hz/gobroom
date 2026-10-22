@@ -16,8 +16,9 @@ acceptance cases below are implemented.
 ## Architecture audit correction — 2026-10-22
 
 Registration/catalog completeness is not semantic-envelope completeness.
-The following findings prevent closing the user's no-kernel-change catch-up
-criterion; passing existing conformance simulations does not remove them.
+The table records the audit baseline. Verified follow-ups below supersede its
+source-state findings, but do not yet close the complete no-kernel-change
+catch-up criterion; passing existing simulations alone does not remove gaps.
 
 | Boundary | Inspected evidence | Current conclusion |
 |---|---|---|
@@ -77,7 +78,22 @@ Store and summary tests prove NULL/zero and per-metric coverage; explicit
 Full root/external tests and vet, existing conformance, and selected three-run
 race suites passed. Main control=serving=501, status=ok. Per-dispatch error
 accounting, historical extension metadata, capture/disclosure and their external
-module proof remain Tasks 3–8; this does not close C1 or all C1–C6.
+module proof remain later tasks; this does not close C1 or all C1–C6.
+
+Task 3 is verified in `bb16321` / `ccefbc3`: host invocation/dispatch IDs,
+once-only finalization across failure/fallback/auth retry, bounded source error
+evidence, exact operation usage requirements and optional-fault health neutrality.
+Direct callbacks and aggregate snapshots obey host/operation/schema/envelope
+bounds. `TestAttemptUsageCompletionDoesNotInventClientPayloadFields` separates
+operational accounting from strict client event schemas. SQL IDs round-trip
+and duplicate nonempty attempt IDs cannot increment daily totals twice.
+Full root/external regression/vet and selected three-run race passed; existing
+conformance passed on `bb16321`, followed by fresh full/race verification of
+the small terminal-cancellation correction. Installed CLI attempt and presence
+acceptance each passed three race runs after installation. Main status=ok,
+control=serving=502; configuration/credential fingerprint unchanged. Historical
+extension details, capture/disclosure and full public-module/performance proof
+remain Tasks 4–8. No live upstream was called for acceptance.
 
 The read-only follow-up narrows the earlier result claim. Registered inline
 artifact values are validated by the catalog and output contract before the

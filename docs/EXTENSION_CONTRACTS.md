@@ -5,7 +5,7 @@ extension contracts required by [solution architecture](SOLUTION_ARCHITECTURE.md
 It specifies implementation obligations; it does not claim that the current
 runtime implements them. Evidence is tracked in [M15 conformance](M15_CONFORMANCE.md).
 
-## Current usage contract — host 11
+## Current usage contract — host 12
 
 `UsageEvent` uses nullable token counters, estimated cost and throughput:
 unknown is distinct from reported zero. Cache-read/cache-write and reasoning
@@ -16,11 +16,26 @@ unknown values, and replaces the extension collection. `MergeProviderUsage`
 returns an owned full snapshot; diagnostics stay coalesced and bounded.
 Native protocol accumulators derive these observations before client transforms.
 
+`InvocationID` is host-owned per invocation and `AttemptID` per actual dispatch,
+including auth/idempotency retries. One final record survives rejection,
+transport failure or cancellation even if all counters remain unknown.
+`UsageEvidence` gives the selected source status, headers and at most 64 KiB
+of error body before response release; the body is not automatically persisted.
+Operation `UsageRequirements` bind exact registered refs and may require reported
+accounting. A missing requirement is a local/unknown completion failure, never
+an accepted-effect replay grant or fabricated provider-health failure.
+
+The compositor admits observations before retaining them, using frozen schemas,
+host limits and enclosing operation bounds. It stages client completion until
+decoding ends, including usage-only tails. Accounting/enrichment remains
+independent of the operation's client payload: it does not invent a client
+usage field or grant extension/raw disclosure.
+
 Unfamiliar values use `Extensions []UsageValue`, exact `usage-value` refs and
 catalog-bound schemas. Registration is data-only, defaults private, and grants
 no aggregation, pricing, routing or disclosure behavior. This envelope and
-presence-aware common persistence are implemented; historical extension storage,
-per-dispatch completion requirements and gated raw/detail access remain in the
+presence-aware common persistence and per-dispatch completion requirements are
+implemented; historical extension storage and gated raw/detail access remain in the
 [approved usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md).
 No legacy numeric usage reader is retained. Earlier host-version notes below
 describe individual historical checkpoints, not the current module version.
