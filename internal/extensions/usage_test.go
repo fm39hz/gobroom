@@ -301,3 +301,81 @@ func TestUsageDescriptorRejectsOversizedPolicyStringsAndSchemaDocuments(t *testi
 		}
 	})
 }
+
+func TestUsageValueDefaultAndHostByteBounds(t *testing.T) {
+	catalog := NewCatalog()
+	schema := ref(SchemaKind, "vendor.example.usage.large-value", 1)
+	testSchema(t, catalog, schema, `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"$id-placeholder","type":"string"}`)
+	typeRef := ref(UsageKind, "vendor.example.usage.large-value", 1)
+	if err := catalog.RegisterDescriptor(Descriptor{
+		Ref: typeRef, ImplementationVersion: "1", DisplayName: "Large value", Description: "A value with an explicit module bound.",
+		InputSchemaRef: &schema, UsagePolicy: &UsagePolicy{MaxValueBytes: 128 * 1024},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := catalog.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(strings.Repeat("x", 64*1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := UsageValue{TypeRef: typeRef, Value: encoded}
+	if err := snapshot.ValidateUsageValue(value); err == nil {
+		t.Fatal("default usage validation accepted a payload over 64 KiB")
+	}
+	validator, ok := any(snapshot).(interface {
+		ValidateUsageValueWithin(UsageValue, int64) error
+	})
+	if !ok {
+		t.Fatal("usage snapshot does not expose explicit host-bounded validation")
+	}
+	if err := validator.ValidateUsageValueWithin(value, 128*1024); err != nil {
+		t.Fatalf("explicit larger host limit rejected a descriptor-bounded payload: %v", err)
+	}
+	if err := validator.ValidateUsageValueWithin(value, 0); err == nil {
+		t.Fatal("usage validation accepted a non-positive host byte limit")
+	}
+	if err := validator.ValidateUsageValueWithin(value, 32); err == nil {
+		t.Fatal("usage validation ignored the smaller host byte limit")
+	}
+}
+
+func TestUsageRegistrationBoundsSerializedDescriptorBeforeExposure(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Descriptor)
+	}{
+		{
+			name: "large setup view",
+			mutate: func(descriptor *Descriptor) {
+				descriptor.SetupView = json.RawMessage(`{"annotation":"` + strings.Repeat("x", 64*1024) + `"}`)
+			},
+		},
+		{
+			name: "large reference identity",
+			mutate: func(descriptor *Descriptor) {
+				descriptor.Ref.ID += strings.Repeat("x", 64*1024)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := NewCatalog()
+			schema := ref(SchemaKind, "vendor.example.usage.descriptor-bound", 1)
+			testSchema(t, catalog, schema, `{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"$id-placeholder","type":"null"}`)
+			descriptor := Descriptor{
+				Ref: ref(UsageKind, "vendor.example.usage.descriptor-bound", 1), ImplementationVersion: "1",
+				DisplayName: "Bounded metadata", Description: "A descriptor subject to the total serialized size bound.",
+				InputSchemaRef: &schema, UsagePolicy: &UsagePolicy{MaxValueBytes: 32},
+			}
+			tc.mutate(&descriptor)
+			if err := catalog.RegisterDescriptor(descriptor); err == nil {
+				t.Fatal("oversized usage descriptor was registered")
+			}
+			if _, err := catalog.Freeze(); err != nil {
+				t.Fatalf("rejected descriptor affected frozen catalog: %v", err)
+			}
+		})
+	}
+}

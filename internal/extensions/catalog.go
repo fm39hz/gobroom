@@ -383,6 +383,9 @@ func prepareDescriptor(descriptor Descriptor) (Descriptor, error) {
 	if err := prepareUsagePolicy(&descriptor); err != nil {
 		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
 	}
+	if err := validateUsageDescriptorSize(descriptor); err != nil {
+		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
+	}
 	if err := validateBounds(descriptor); err != nil {
 		return Descriptor{}, fmt.Errorf("extension %q: %w", descriptor.Ref.Key(), err)
 	}

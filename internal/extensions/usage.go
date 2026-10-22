@@ -12,6 +12,9 @@ import (
 
 const UsageKind = "usage-value"
 
+const usageValueDefaultMaxBytes int64 = 64 << 10
+const usageDescriptorMaxBytes = 64 << 10
+
 // UsageDisclosure controls whether a registered usage value may be disclosed
 // in management interfaces. Private is the default when omitted.
 type UsageDisclosure string
@@ -51,8 +54,18 @@ type UsageDescriptorSnapshot struct {
 // contract, its byte bound, and its frozen JSON Schema. Errors intentionally
 // omit payload bytes and schema validator details.
 func (s *Snapshot) ValidateUsageValue(value UsageValue) error {
+	return s.ValidateUsageValueWithin(value, usageValueDefaultMaxBytes)
+}
+
+// ValidateUsageValueWithin validates a usage value under the smaller of its
+// descriptor limit and the host's per-value limit. Hosts may explicitly allow
+// larger values without changing the registered contract.
+func (s *Snapshot) ValidateUsageValueWithin(value UsageValue, maxBytes int64) error {
 	if s == nil {
 		return fmt.Errorf("usage catalog snapshot is unavailable")
+	}
+	if maxBytes <= 0 {
+		return fmt.Errorf("host usage value byte limit must be positive")
 	}
 	if err := value.TypeRef.Validate(); err != nil || value.TypeRef.Kind != UsageKind {
 		return fmt.Errorf("usage value requires an exact usage contract reference")
@@ -61,7 +74,11 @@ func (s *Snapshot) ValidateUsageValue(value UsageValue) error {
 	if !ok || item.descriptor.Ref.Kind != UsageKind || item.descriptor.UsagePolicy == nil || item.descriptor.InputSchemaRef == nil {
 		return fmt.Errorf("usage contract is not registered")
 	}
-	if int64(len(value.Value)) > item.descriptor.UsagePolicy.MaxValueBytes {
+	effectiveMaxBytes := maxBytes
+	if item.descriptor.UsagePolicy.MaxValueBytes < effectiveMaxBytes {
+		effectiveMaxBytes = item.descriptor.UsagePolicy.MaxValueBytes
+	}
+	if int64(len(value.Value)) > effectiveMaxBytes {
 		return fmt.Errorf("usage value exceeds its registered byte limit")
 	}
 	if !json.Valid(value.Value) {
@@ -74,6 +91,23 @@ func (s *Snapshot) ValidateUsageValue(value UsageValue) error {
 	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(value.Value))
 	if err != nil || schema.Validate(instance) != nil {
 		return fmt.Errorf("usage value does not satisfy its registered contract")
+	}
+	return nil
+}
+
+func validateUsageDescriptorSize(descriptor Descriptor) error {
+	if descriptor.Ref.Kind != UsageKind {
+		return nil
+	}
+	if len(descriptor.SetupView) > usageDescriptorMaxBytes {
+		return fmt.Errorf("usage setup view exceeds the descriptor byte limit")
+	}
+	serialized, err := json.Marshal(descriptor)
+	if err != nil {
+		return fmt.Errorf("usage descriptor cannot be serialized")
+	}
+	if len(serialized) > usageDescriptorMaxBytes {
+		return fmt.Errorf("usage descriptor exceeds the total byte limit")
 	}
 	return nil
 }
