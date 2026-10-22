@@ -45,8 +45,21 @@ Execution correction: the real typed-jobs fixture rejects an artifact-only
 decoder before dispatch. `RequiredResponseEvents` currently mandates
 `text_delta` even for non-chat operations. Thus the artifact/renderer payload
 path exists, but the original unmodified-kernel admission claim was incomplete.
-A separately tested generic correction is required; declaring unused text
-support to evade admission would not satisfy this proof.
+A separately tested generic correction was required; declaring unused text
+support to evade admission would not satisfy this proof. `0d16e4c` fixes that
+shared assumption, preserving chat/tool/thinking requirements and existing
+artifact-output admission. It has independent clean review and root regression.
+
+After that prerequisite, module changes `7796a04` / proof fix `e2ef9d5` use
+registered result artifacts, logical metadata projection and independently
+schema-validated client envelopes. The real-daemon lifecycle checks decoder
+events and each concurrent caller's own upstream ID, not just aggregate sets.
+Create/status/cancel, handle expiry/owner/restart and accepted-effect fences
+passed full external tests, focused three-run race and explicit installed-CLI
+three-run race acceptance after `make install-all`. Main status=ok,
+control=serving=500. Full root/external regression, vet and existing conformance
+passed. Both task reviews and scoped proof-fix review are clean. This does not
+introduce direct projector access to artifact values or close all C1–C6.
 
 Usage catalog Task 1 is verified in `314e45d` and `a15af67`: default64KiB
 validation plus explicit host limits, bounded metadata, private classification,

@@ -105,11 +105,17 @@ were fixed and scoped re-review passed. Main daemon status=ok,
 control=serving=499; no real provider traffic was used for acceptance. This is
 metadata registration, not completed normalized accounting.
 
-Typed-jobs integration exposed a separate generic kernel bug: non-chat
-operations are currently required to declare `text_delta`. The source-level
-claim that the existing kernel admits artifact-only job results was too strong.
-A generic response-requirement regression/fix is being handled separately;
-the module result fixture has not passed end-to-end yet.
+Typed-jobs checkpoint `0d16e4c` / `7796a04` / `e2ef9d5`: a generic correction
+removed the unintended text requirement for non-chat, then the module-only
+result implementation passed real-daemon create/status/cancel, independent wire
+schema validation, per-caller concurrency and replay/restart checks. The
+original unmodified-kernel claim was false; the generic prerequisite is explicit.
+Full tests, vet and existing conformance passed; three race runs and three
+installed-CLI race runs passed after the proof fix. Independent task reviews
+are clean. Main control=serving=500, status=ok. This is extension conformance,
+not a claim that the standard daemon ships a hosted job service or that M15
+is complete. Common accounting Task 2 and session persistence visibility remain
+open.
 
 Earlier session checkpoint:
 Installed checkpoint `103dbbc`, audit correction `2b9dc90`: the new overflow
