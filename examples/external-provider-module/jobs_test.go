@@ -28,7 +28,7 @@ func jobManifest() provider.ProviderDefinition {
 		ref := jobOperation(action)
 		binding := provider.OperationBinding{Protocol: "example_jobs", TaskRef: &ref, ProviderFormat: "example.jobs.wire",
 			Endpoint: provider.PrimitiveRef{Kind: provider.PrimitiveEndpoint, ID: "http-json", ContractVersion: 1}, Transport: provider.PrimitiveRef{Kind: provider.PrimitiveTransport, ID: "http", ContractVersion: 1},
-			RequestCodec: provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: ref.ID, ContractVersion: 1}, ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: ref.ID, ContractVersion: 1},
+			RequestCodec: provider.PrimitiveRef{Kind: provider.PrimitiveRequestCodec, ID: ref.ID, ContractVersion: 1}, ResponseDecoder: provider.PrimitiveRef{Kind: provider.PrimitiveResponseDecoder, ID: ref.ID, ContractVersion: 2},
 		}
 		if action == "create" {
 			binding.Idempotency = provider.IdempotencyPolicy{Header: "Idempotency-Key", MinRetentionSeconds: 60}
@@ -55,6 +55,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	createCallsByAccount := map[string]int{}
 	creates, createCalls, cancelCalls, statusCalls, wrongAccount := 0, 0, 0, 0, 0
 	rejectCreates := false
+	dropFirstCancelResponse := true
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -119,12 +120,17 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 		if cancel && r.Method == http.MethodPost {
 			cancelCalls++
 			job.state.Status = "cancelled"
-			conn, _, err := w.(http.Hijacker).Hijack()
-			if err != nil {
-				t.Errorf("lose cancellation response: %v", err)
+			if dropFirstCancelResponse {
+				dropFirstCancelResponse = false
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Errorf("lose cancellation response: %v", err)
+					return
+				}
+				_ = conn.Close()
 				return
 			}
-			_ = conn.Close()
+			_ = json.NewEncoder(w).Encode(job.state)
 			return
 		}
 		if r.Method != http.MethodGet {
@@ -152,15 +158,14 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if err := os.Mkdir(manifestDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := provider.EncodeManifest(jobManifest())
-	if err != nil {
-		t.Fatal(err)
-	}
+	observer := newJobEventObserver()
+	validateEnvelope := newJobClientEnvelopeValidator(t, observer)
+	manifest := observedJobManifest(t)
 	if err := os.WriteFile(filepath.Join(manifestDir, "jobs.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	config := daemon.Config{DBPath: filepath.Join(root, "state.db"), IPCPath: filepath.Join(root, "daemon.sock"), ProviderManifestDir: manifestDir, ArtifactStoreDir: filepath.Join(root, "artifacts"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:0"}
-	service := daemon.NewWithProviderModules(config, JobModule{})
+	service := daemon.NewWithProviderModules(config, jobObservedModule{observer: observer})
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +242,9 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 		}
 		var result jobEnvelope
 		if response.StatusCode < 300 {
+			if err := validateEnvelope(json.RawMessage(encoded)); err != nil {
+				t.Fatalf("client envelope failed its separately registered schema: %v; body=%s", err, encoded)
+			}
 			if err := json.Unmarshal(encoded, &result); err != nil {
 				t.Fatalf("job JSON=%s: %v", encoded, err)
 			}
@@ -247,6 +255,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if status >= 300 || created.Result.Status != "pending" || len(created.Artifacts) != 1 {
 		t.Fatalf("create status=%d body=%s", status, body)
 	}
+	assertJobResultEvents(t, observer.take("create"), created.Result, true)
 	handle := created.Artifacts[0]
 	if handle.Owner.ConnectionID != accountA || handle.ReplayScope != provider.ArtifactReplayConnection || handle.Owner.IssuerRef == nil || *handle.Owner.IssuerRef != jobProvider {
 		t.Fatalf("unscoped job handle: %#v", handle)
@@ -260,7 +269,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if err := service.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	service = daemon.NewWithProviderModules(config, JobModule{})
+	service = daemon.NewWithProviderModules(config, jobObservedModule{observer: observer})
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -291,6 +300,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if status >= 300 || running.Result.Status != "running" || running.Result.ID != created.Result.ID {
 		t.Fatalf("status after restart=%d body=%s", status, body)
 	}
+	assertJobResultEvents(t, observer.take("status"), running.Result, false)
 	selectedModel = "other-job-role"
 	if code, _, raw := call("status", "", "", json.RawMessage(`{}`), []provider.ArtifactRef{handle}); code < 400 {
 		t.Fatalf("handle escaped into another connection's role: %d %s", code, raw)
@@ -361,7 +371,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if err := service.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	service = daemon.NewWithProviderModules(config, JobModule{})
+	service = daemon.NewWithProviderModules(config, jobObservedModule{observer: observer})
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -397,6 +407,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if status >= 300 || cancelled.Result.Status != "cancelled" {
 		t.Fatalf("could not reconcile cancellation: %d %s", status, body)
 	}
+	assertJobResultEvents(t, observer.take("status"), cancelled.Result, false)
 	health, err = daemon.CallIPC(context.Background(), config.IPCPath, daemon.IPCRequest{Method: "health.list"})
 	if err != nil || !health.OK {
 		t.Fatalf("health after status reconciliation: %#v %v", health, err)
@@ -424,15 +435,61 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if !cancelFound {
 		t.Fatalf("cancel operation health disappeared after status reconciliation: %#v", states)
 	}
-	status, second, body := call("create", accountA, "completion-case", json.RawMessage(`{"prompt":"finish a fixture"}`), nil)
-	if status >= 300 || len(second.Artifacts) != 1 || second.Result.ID == created.Result.ID {
-		t.Fatalf("independent job create=%d %s", status, body)
+	type concurrentCreate struct {
+		status int
+		result jobEnvelope
+		body   []byte
 	}
+	concurrentCreates := make(chan concurrentCreate, 2)
+	var createWait sync.WaitGroup
+	for _, request := range []struct {
+		key       string
+		preferred string
+		payload   json.RawMessage
+	}{
+		{key: "completion-case", preferred: accountA, payload: json.RawMessage(`{"prompt":"finish a fixture"}`)},
+		{key: "completion-case-concurrent", preferred: accountB, payload: json.RawMessage(`{"prompt":"finish another fixture"}`)},
+	} {
+		request := request
+		createWait.Add(1)
+		go func() {
+			defer createWait.Done()
+			status, result, body := call("create", request.preferred, request.key, request.payload, nil)
+			concurrentCreates <- concurrentCreate{status: status, result: result, body: body}
+		}()
+	}
+	createWait.Wait()
+	close(concurrentCreates)
+	var second, otherConcurrent jobEnvelope
+	for createdResult := range concurrentCreates {
+		if createdResult.status >= 300 || len(createdResult.result.Artifacts) != 1 || createdResult.result.Result.ID == created.Result.ID {
+			t.Fatalf("independent concurrent job create=%d %s", createdResult.status, createdResult.body)
+		}
+		switch createdResult.result.Artifacts[0].Owner.ConnectionID {
+		case accountA:
+			if second.Result.ID != "" {
+				t.Fatalf("more than one concurrent handle belongs to account A: %#v", createdResult.result.Artifacts[0].Owner)
+			}
+			second = createdResult.result
+		case accountB:
+			if otherConcurrent.Result.ID != "" {
+				t.Fatalf("more than one concurrent handle belongs to account B: %#v", createdResult.result.Artifacts[0].Owner)
+			}
+			otherConcurrent = createdResult.result
+		default:
+			t.Fatalf("concurrent handle belongs to unexpected account: %#v", createdResult.result.Artifacts[0].Owner)
+		}
+	}
+	if second.Result.ID == otherConcurrent.Result.ID || second.Result.ID == "" || otherConcurrent.Result.ID == "" {
+		t.Fatalf("concurrent creates did not receive distinct upstream IDs: %#v %#v", second.Result, otherConcurrent.Result)
+	}
+	assertConcurrentJobResultEvents(t, observer.take("create"), second.Result, otherConcurrent.Result)
 	for _, expected := range []string{"running", "completed"} {
 		status, result, body := call("status", "", "", json.RawMessage(`{}`), second.Artifacts)
 		if status >= 300 || result.Result.Status != expected || result.Result.ID != second.Result.ID {
 			t.Fatalf("job transition expected=%s got=%d %s", expected, status, body)
 		}
+		assertJobResultEvents(t, observer.take("status"), result.Result, false)
 	}
 	mu.Lock()
 	rejectCreates = true
@@ -442,7 +499,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 		t.Fatalf("quota rejection unexpectedly succeeded: %d %s", status, body)
 	}
 	mu.Lock()
-	if creates != 2 || createCalls != 5 {
+	if creates != 3 || createCalls != 7 {
 		mu.Unlock()
 		t.Fatalf("quota rejection changed job effects: created=%d create calls=%d", creates, createCalls)
 	}
@@ -514,7 +571,7 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if err := service.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	service = daemon.NewWithProviderModules(config, JobModule{})
+	service = daemon.NewWithProviderModules(config, jobObservedModule{observer: observer})
 	if err := service.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -538,9 +595,15 @@ func TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart(t *testin
 	if status >= 300 || completed.Result.Status != "completed" || completed.Result.ID != second.Result.ID {
 		t.Fatalf("operation quota blocked status reconciliation: %d %s", status, body)
 	}
+	assertJobResultEvents(t, observer.take("status"), completed.Result, false)
+	status, cancelledSecond, body := call("cancel", "", "", json.RawMessage(`{}`), otherConcurrent.Artifacts)
+	if status >= 300 || cancelledSecond.Result.Status != "cancelled" || cancelledSecond.Result.ID != otherConcurrent.Result.ID {
+		t.Fatalf("successful job cancellation=%d %s", status, body)
+	}
+	assertJobResultEvents(t, observer.take("cancel"), cancelledSecond.Result, false)
 	mu.Lock()
 	defer mu.Unlock()
-	if creates != 2 || createCalls != 6 || createCallsByAccount["Bearer account-a"] != 5 || createCallsByAccount["Bearer account-b"] != 1 || cancelCalls != 1 || statusCalls != 5 || wrongAccount != 0 {
+	if creates != 3 || createCalls != 8 || createCallsByAccount["Bearer account-a"] != 5 || createCallsByAccount["Bearer account-b"] != 3 || cancelCalls != 2 || statusCalls != 5 || wrongAccount != 0 {
 		t.Fatalf("job effects escaped their contracts: created=%d cancellations=%d polls=%d wrongAccount=%d", creates, cancelCalls, statusCalls, wrongAccount)
 	}
 }
