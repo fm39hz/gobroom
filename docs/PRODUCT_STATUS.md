@@ -1,6 +1,6 @@
 # Product progress
 
-Snapshot: 2026-10-21. This is a use-case-level review, not a completion
+Snapshot: 2026-10-22. This is a use-case-level review, not a completion
 percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
@@ -26,6 +26,18 @@ Useful acceptance anchors include
 `TestPublicDaemonHostsExternalProviderModuleAndManifest`.
 
 ## Current integration milestone
+
+The core architecture audit found a real extension gap, not merely another
+provider implementation to copy: `UsageEvent` has no schema-bound dimension
+arm for cache/reasoning/other measurements. Native passthrough can preserve raw
+wire fields, but that is not normalized accounting or cross-protocol support.
+The jobs example also transports its typed JSON result through text events;
+registered artifacts exist, but projector input currently omits their values.
+The catalog part of C1 is implemented; its semantic-envelope closure is reopened.
+
+The bounded session fix now returns an error on persistence queue overflow,
+while preserving live memory continuity and the drop counter. Kernel handling
+of that error and asynchronous session-write visibility remain open.
 
 Usage persistence now receives context through the existing atomic event/daily
 transaction. It is independent of request cancellation and provider health.
@@ -85,15 +97,18 @@ Real configuration and credentials were preserved; acceptance used fake upstream
 
 ## Next core work
 
-1. Make ordinary session persistence overflow/failure observable: `Cache.Save`
-   currently reports successful memory update even when its persistence queue
-   drops the write, and the kernel ignores session-save errors. Do not confuse
+1. Design schema-bound usage extensions and the typed artifact/result-projector
+   path before claiming provider catch-up needs no shared contract change.
+   Reuse the existing catalog/schema/artifact primitives, not JSON-in-text.
+2. Finish ordinary session persistence overflow/failure observability:
+   `Cache.Save` now reports queue rejection, but the kernel ignores save errors
+   and asynchronous write failures are not surfaced. Do not confuse
    reliable invalidation acknowledgement with ordinary asynchronous saves.
-2. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
+3. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
    serving boundaries. Provider-specific codecs, envelopes and live-harness
    breadth are implementation/product acceptance, not an undefined universal
    core matrix.
-3. Finish explicit persistence-failure durability and whole-daemon shutdown
+4. Finish explicit persistence-failure durability and whole-daemon shutdown
    obligations. Usage counters/cooperative cancellation are not a durable spool
    or a sandbox for uncooperative module code.
 

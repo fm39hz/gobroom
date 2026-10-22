@@ -13,6 +13,31 @@ The command currently exercises the following composition simulations. It
 must not be described as the complete semantic closure suite until the
 acceptance cases below are implemented.
 
+## Architecture audit correction — 2026-10-22
+
+Registration/catalog completeness is not semantic-envelope completeness.
+The following findings prevent closing the user's no-kernel-change catch-up
+criterion; passing existing conformance simulations does not remove them.
+
+| Boundary | Inspected evidence | Current conclusion |
+|---|---|---|
+| Additional usage dimensions | `internal/kernel/contract.go:UsageEvent` has fixed common counters/cost/timing, no registered measurement/value collection. The Qoder usage normalizer in the adjacent source preserves cache-read/cache-creation/reasoning details. | A new first-class dimension currently needs a shared type change. Native raw preservation is not a normalized usage extension. |
+| Typed operation results | `examples/external-provider-module/jobs.go` emits marshalled job DTOs as `EventTextDelta`; its projector reparses that text. `operationEventPayload` carries artifact metadata, not inline values. | The example proves schema validation of a text tunnel, not the intended typed result path. Projector visibility/access needs design and proof. |
+| Existing artifact extension arm | `extensions.Snapshot.validateArtifact` validates inline values against exact registered schemas and enforces owner/recipient/expiry policy; response scopes live in `internal/artifacts/response.go`. | Reuse this legitimate primitive. Do not infer that every custom event requires a new kernel enum merely because common fields are fixed: event kinds are string-backed and registered artifacts are supported. |
+| Auth/replay | Public-module setup/resource/owner/activation fixtures and job/replay-shutdown fixtures exist. | No missing generic replay mechanism was established in this audit. Remaining proof must be a finite clause-to-test map, not a requirement for one giant universal matrix. |
+
+Recommended design direction for review: retain efficient common typed values,
+add catalog/schema-bound usage extensions, and give result projectors a legitimate
+typed/authorized path to operation-specific values instead of text serialization.
+That public-contract change has not been implemented or declared closed.
+
+Session admission regression: `TestCacheSaveReportsOverflowWithoutDiscardingLiveState`
+failed before the bounded fix because full queues returned nil. Save now preserves
+the latest live state, counts the rejected write once and returns an error.
+It does not roll back the useful live state or change acknowledged invalidation.
+The kernel still ignores Save errors; this is not complete session persistence
+observability or a new durability guarantee.
+
 The target begins with a focused transform-boundary group: opaque metadata on
 appended IR is rejected transactionally, canonical message suffixes are
 accepted, and Chat/Anthropic/Responses egress mappings plus their fail-closed
