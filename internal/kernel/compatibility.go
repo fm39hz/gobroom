@@ -468,7 +468,10 @@ func requestHasToolSignature(messages []normalize.Message) bool {
 // RequiredResponseEvents describes event families the selected client renderer
 // must be able to encode if the provider emits them for this invocation.
 func RequiredResponseEvents(request NormalizedRequest) []ResponseEventKind {
-	events := []ResponseEventKind{EventTextDelta, EventResponseComplete}
+	events := []ResponseEventKind{EventResponseComplete}
+	if request.Operation == normalize.OperationChatGenerate {
+		events = append(events, EventTextDelta)
+	}
 	if len(request.Tools) > 0 {
 		events = append(events, EventToolCallDelta)
 	}
