@@ -387,6 +387,14 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.kernel.Operations = operationSnapshot
 	d.kernel.UsageCatalog = operationSnapshot.ExtensionCatalog()
+	if err := s.SetUsageCatalog(d.kernel.UsageCatalog); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind usage history catalog: %w", err)
+	}
+	if err := s.SetUsageLimits(d.kernel.UsageLimits); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind usage history limits: %w", err)
+	}
 	d.kernel.Adapters = runtimeRegistry.AdaptersForBindings(runtimeBindings)
 	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiersForBindings(runtimeBindings)
 	d.kernel.UsageSources = runtimeRegistry.UsageSources()

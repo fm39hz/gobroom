@@ -54,7 +54,13 @@ func (s *Store) migrateUsageSchema() error {
 				return err
 			}
 		}
-		if _, err := tx.Exec(`DROP TABLE IF EXISTS usage_events; DROP TABLE IF EXISTS usage_daily;`); err != nil {
+		if _, err := tx.Exec(`
+DROP TABLE IF EXISTS usage_extension_values;
+DROP TABLE IF EXISTS usage_extension_descriptor_schemas;
+DROP TABLE IF EXISTS usage_extension_descriptors;
+DROP TABLE IF EXISTS usage_extension_schemas;
+DROP TABLE IF EXISTS usage_events;
+DROP TABLE IF EXISTS usage_daily;`); err != nil {
 			return err
 		}
 	}
@@ -62,6 +68,9 @@ func (s *Store) migrateUsageSchema() error {
 		return err
 	}
 	if _, err := tx.Exec(usageDailyDDL); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(usageExtensionDDL); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -101,6 +110,37 @@ const usageDailyDDL = `CREATE TABLE IF NOT EXISTS usage_daily (
 	estimated_cost_sum REAL NOT NULL DEFAULT 0, estimated_cost_reported INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`
+
+const usageExtensionDDL = `CREATE TABLE IF NOT EXISTS usage_extension_schemas (
+	kind TEXT NOT NULL, id TEXT NOT NULL, contract_version INTEGER NOT NULL,
+	digest TEXT NOT NULL, document BLOB NOT NULL,
+	PRIMARY KEY(kind,id,contract_version)
+);
+CREATE TABLE IF NOT EXISTS usage_extension_descriptors (
+	kind TEXT NOT NULL, id TEXT NOT NULL, contract_version INTEGER NOT NULL,
+	descriptor_json BLOB NOT NULL, schema_pins_json BLOB NOT NULL,
+	PRIMARY KEY(kind,id,contract_version)
+);
+CREATE TABLE IF NOT EXISTS usage_extension_descriptor_schemas (
+	descriptor_kind TEXT NOT NULL, descriptor_id TEXT NOT NULL, descriptor_version INTEGER NOT NULL,
+	schema_kind TEXT NOT NULL, schema_id TEXT NOT NULL, schema_version INTEGER NOT NULL,
+	schema_digest TEXT NOT NULL, is_root INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(descriptor_kind,descriptor_id,descriptor_version,schema_kind,schema_id,schema_version),
+	FOREIGN KEY(descriptor_kind,descriptor_id,descriptor_version)
+		REFERENCES usage_extension_descriptors(kind,id,contract_version) ON DELETE CASCADE,
+	FOREIGN KEY(schema_kind,schema_id,schema_version)
+		REFERENCES usage_extension_schemas(kind,id,contract_version) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS usage_extension_values (
+	event_id INTEGER NOT NULL REFERENCES usage_events(id) ON DELETE CASCADE,
+	descriptor_kind TEXT NOT NULL, descriptor_id TEXT NOT NULL, descriptor_version INTEGER NOT NULL,
+	value_json BLOB NOT NULL,
+	PRIMARY KEY(event_id,descriptor_kind,descriptor_id,descriptor_version),
+	FOREIGN KEY(descriptor_kind,descriptor_id,descriptor_version)
+		REFERENCES usage_extension_descriptors(kind,id,contract_version) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_usage_extension_values_descriptor
+	ON usage_extension_values(descriptor_kind,descriptor_id,descriptor_version);`
 
 func usageTableExists(tx *sql.Tx, name string) (bool, error) {
 	var exists bool

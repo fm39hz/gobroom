@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
@@ -23,9 +24,13 @@ import (
 )
 
 type Store struct {
-	DB         *sql.DB
-	runtime    runtimeStatements
-	usageReset UsageResetCount
+	DB             *sql.DB
+	runtime        runtimeStatements
+	usageReset     UsageResetCount
+	usageMu        sync.RWMutex
+	usageCatalog   *extensions.Snapshot
+	usageLimits    kernel.UsageLimits
+	usageLimitsSet bool
 }
 
 func Open(path string) (*Store, error) {
@@ -1227,156 +1232,6 @@ func scanCredential(row *sql.Row) (Credential, bool) {
 	}
 	c.Owner.Definition.Kind = "provider-definition"
 	return c, true
-}
-
-func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	event = event.SanitizeCommon()
-	dateKey := event.At.UTC().Format("2006-01-02")
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	losses, err := json.Marshal(event.CompatibilityLosses)
-	if err != nil {
-		return fmt.Errorf("encode usage compatibility losses: %w", err)
-	}
-	plan, err := json.Marshal(event.CompatibilityPlan)
-	if err != nil {
-		return fmt.Errorf("encode usage compatibility plan: %w", err)
-	}
-	accountingIssues, err := json.Marshal(event.BoundedIssues())
-	if err != nil {
-		return fmt.Errorf("encode usage accounting issues: %w", err)
-	}
-	var latencyMS, ttftMS *int64
-	if event.Latency != 0 {
-		value := event.Latency.Milliseconds()
-		latencyMS = &value
-	}
-	if !event.FirstByteAt.IsZero() || event.TTFT > 0 {
-		value := event.TTFT.Milliseconds()
-		ttftMS = &value
-	}
-	if _, err = tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, latencyMS, event.InputTokens, event.OutputTokens, event.CachedReadTokens, event.CachedWriteTokens, event.ReasoningTokens, event.EstimatedCost, string(accountingIssues), event.RequestClass, event.SessionID, ttftMS, event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan), event.InvocationID, event.AttemptID); err != nil {
-		return err
-	}
-	if _, err = tx.StmtContext(ctx, s.runtime.usageDaily).ExecContext(ctx, dateKey,
-		len(event.AccountingIssues) > 0 || !event.HasReportedUsage(),
-		event.InputTokens, event.InputTokens, event.OutputTokens, event.OutputTokens,
-		event.CachedReadTokens, event.CachedReadTokens, event.CachedWriteTokens, event.CachedWriteTokens,
-		event.ReasoningTokens, event.ReasoningTokens, event.EstimatedCost, event.EstimatedCost); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-type UsageRecord struct {
-	ID                                                                                         int64
-	Timestamp, LogicalModel, ProviderNodeID, ExternalModel, ConnectionID, Status               string
-	InvocationID                                                                               string `json:"invocationId"`
-	AttemptID                                                                                  string `json:"attemptId"`
-	LatencyMS, InputTokens, OutputTokens, CachedReadTokens, CachedWriteTokens, ReasoningTokens *int64
-	EstimatedCost, OutputTokensPerSecond                                                       *float64
-	RequestClass, SessionID                                                                    string
-	TTFTMS                                                                                     *int64
-	AccountingIssues                                                                           []kernel.UsageIssue              `json:"accountingIssues,omitempty"`
-	CompatibilityFidelity                                                                      kernel.CompatibilityFidelity     `json:"compatibilityFidelity,omitempty"`
-	CompatibilityLosses                                                                        []kernel.LossRecord              `json:"compatibilityLosses,omitempty"`
-	CompatibilityPlan                                                                          *kernel.CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
-}
-
-type UsageMetricSummary struct {
-	Sum      int64 `json:"sum"`
-	Reported int64 `json:"reported"`
-}
-
-type UsageCostSummary struct {
-	Sum      float64 `json:"sum"`
-	Reported int64   `json:"reported"`
-}
-
-type UsageSummary struct {
-	DateKey            string             `json:"dateKey"`
-	Attempts           int64              `json:"attempts"`
-	IncompleteAttempts int64              `json:"incompleteAttempts"`
-	Input              UsageMetricSummary `json:"input"`
-	Output             UsageMetricSummary `json:"output"`
-	CachedRead         UsageMetricSummary `json:"cachedRead"`
-	CachedWrite        UsageMetricSummary `json:"cachedWrite"`
-	Reasoning          UsageMetricSummary `json:"reasoning"`
-	EstimatedCost      UsageCostSummary   `json:"estimatedCost"`
-}
-
-func (s *Store) PruneUsage(before time.Time) (int64, error) {
-	if before.IsZero() {
-		return 0, fmt.Errorf("retention cutoff is required")
-	}
-	result, err := s.DB.Exec(`DELETE FROM usage_events WHERE timestamp < ?`, before.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return 0, err
-	}
-	if _, err := s.DB.Exec(`DELETE FROM usage_daily WHERE date_key < ?`, before.UTC().Format("2006-01-02")); err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (s *Store) UsageSummary(limit int) ([]UsageSummary, error) {
-	if limit <= 0 || limit > 366 {
-		limit = 30
-	}
-	rows, err := s.DB.Query(`SELECT date_key,attempts,incomplete_attempts,input_tokens_sum,input_tokens_reported,output_tokens_sum,output_tokens_reported,cached_read_tokens_sum,cached_read_tokens_reported,cached_write_tokens_sum,cached_write_tokens_reported,reasoning_tokens_sum,reasoning_tokens_reported,estimated_cost_sum,estimated_cost_reported FROM usage_daily ORDER BY date_key DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []UsageSummary
-	for rows.Next() {
-		var item UsageSummary
-		if err := rows.Scan(&item.DateKey, &item.Attempts, &item.IncompleteAttempts,
-			&item.Input.Sum, &item.Input.Reported, &item.Output.Sum, &item.Output.Reported,
-			&item.CachedRead.Sum, &item.CachedRead.Reported, &item.CachedWrite.Sum, &item.CachedWrite.Reported,
-			&item.Reasoning.Sum, &item.Reasoning.Reported, &item.EstimatedCost.Sum, &item.EstimatedCost.Reported); err != nil {
-			return nil, err
-		}
-		result = append(result, item)
-	}
-	return result, rows.Err()
-}
-
-func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
-	if limit <= 0 || limit > 1000 {
-		limit = 100
-	}
-	rows, err := s.DB.Query(`SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),COALESCE(invocation_id,''),COALESCE(attempt_id,''),latency_ms,input_tokens,output_tokens,cached_read_tokens,cached_write_tokens,reasoning_tokens,estimated_cost,COALESCE(accounting_issues_json,'[]'),COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events ORDER BY id DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var result []UsageRecord
-	for rows.Next() {
-		var item UsageRecord
-		var losses, plan string
-		var accountingIssues string
-		if err := rows.Scan(&item.ID, &item.Timestamp, &item.LogicalModel, &item.ProviderNodeID, &item.ExternalModel, &item.ConnectionID, &item.Status, &item.InvocationID, &item.AttemptID, &item.LatencyMS, &item.InputTokens, &item.OutputTokens, &item.CachedReadTokens, &item.CachedWriteTokens, &item.ReasoningTokens, &item.EstimatedCost, &accountingIssues, &item.RequestClass, &item.SessionID, &item.TTFTMS, &item.OutputTokensPerSecond, &item.CompatibilityFidelity, &losses, &plan); err != nil {
-			return nil, err
-		}
-		if err := decodeJSON(accountingIssues, &item.AccountingIssues); err != nil {
-			return nil, fmt.Errorf("usage event %d accounting issues: %w", item.ID, err)
-		}
-		if err := decodeJSON(losses, &item.CompatibilityLosses); err != nil {
-			return nil, fmt.Errorf("usage event %d compatibility losses: %w", item.ID, err)
-		}
-		if err := decodeJSON(plan, &item.CompatibilityPlan); err != nil {
-			return nil, fmt.Errorf("usage event %d compatibility plan: %w", item.ID, err)
-		}
-		result = append(result, item)
-	}
-	return result, rows.Err()
 }
 
 func (s *Store) SaveQuotaSnapshot(snapshot quota.Snapshot) error {
