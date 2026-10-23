@@ -230,6 +230,45 @@ force semantic rendering. Opt-out omits that chunk; unavailable counters are
 not invented. Typed binding rejects malformed/unsupported stream options.
 This changes client visibility, not stored provider usage or billed accounting.
 
+## Usage capture and explicit detail access
+
+Ordinary usage lists and summaries contain common counters and diagnostics, not
+extension payloads or raw usage. Raw capture is off by default. Enable
+`--usage-capture-raw` only when needed: built-in decoders retain a bounded,
+validated usage object, never the complete provider response or headers.
+Unknown or unsafe shapes are omitted with a diagnostic. This is not a sandbox
+for arbitrary statically linked modules.
+
+Host bounds default to 32 extension values, 65536 extension bytes per attempt,
+and 262144 raw bytes. Override with `--usage-max-values`, `--usage-max-bytes`
+and `--usage-max-raw-bytes`. All bounds must be positive. The positive
+`--usage-retention` duration defaults to 720h (30 days). Local pruning runs at
+startup and every 15 minutes in bounded batches; expired details are denied
+even while physical cleanup catches up. This does not poll providers.
+
+All detail access is denied by default. `--usage-details` permits explicit
+management detail requests; `--usage-private-details` and
+`--usage-raw-details` separately permit those classes and require the parent
+grant. Capture does not grant access. These startup flags require a daemon
+restart. For an authorized host:
+
+```sh
+gobroom usage detail 123
+gobroom usage detail 123 --include-private --include-raw
+```
+
+In the TUI Usage view, `d` opens disclosure options; selecting an event alone
+does not fetch details. Both frontends escape terminal controls and omit detail
+output exceeding their 64 KiB display budget rather than truncating JSON.
+
+Unix control uses the private IPC socket. HTTP control remains disabled by
+default. Enabling `--http-control` requires an independent `--control-token`
+or `GOBROOM_CONTROL_TOKEN`, different from the data-plane `--http-token`.
+Every HTTP control route requires this bearer token. Explicit details use
+`POST /api/usage/detail` and still require the host's class-specific grants.
+Treat possession of the control token or IPC socket access as administrative
+authority; keep them private and terminate TLS outside the daemon if remote.
+
 ## Service and logs
 
 Usage persistence runs independently of requests and provider health. Status

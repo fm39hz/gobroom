@@ -354,8 +354,12 @@ func extensionCommands() *cobra.Command {
 func healthCommand() *cobra.Command {
 	return listCommand("health", "health.list", nil)
 }
-func quotaCommand() *cobra.Command        { return listCommand("quota", "quota.list", nil) }
-func usageCommand() *cobra.Command        { return listCommand("usage", "usage.list", nil) }
+func quotaCommand() *cobra.Command { return listCommand("quota", "quota.list", nil) }
+func usageCommand() *cobra.Command {
+	command := listCommand("usage", "usage.list", nil)
+	command.AddCommand(usageDetailCommand())
+	return command
+}
 func usageSummaryCommand() *cobra.Command { return listCommand("usage-summary", "usage.summary", nil) }
 func logsCommand() *cobra.Command {
 	var limit int

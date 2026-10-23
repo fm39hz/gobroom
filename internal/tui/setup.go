@@ -249,6 +249,7 @@ func (m *app) handleSetupResult(message setupResultMsg) tea.Cmd {
 		m.setupSubmitting, m.setupNeedsRefresh, m.loading = false, false, false
 		m.status = "connection setup cancelled"
 		m.previewExtra, m.previewTitle = "", ""
+		m.usageDetailPreview = nil
 		m.syncDetail()
 		return nil
 	}
@@ -295,6 +296,7 @@ func (m *app) handleSetupResult(message setupResultMsg) tea.Cmd {
 		fmt.Fprintf(&actions, "Callback: %s\n", callback.Mode)
 	}
 	m.previewExtra, m.previewTitle, m.previewKey = strings.TrimSpace(actions.String()), "Connection setup actions · "+view.ConnectionID, ""
+	m.usageDetailPreview = nil
 	if view.Status == "awaiting_user" || view.Status == "starting" {
 		m.status = fmt.Sprintf("connection setup · %d public action(s) · revision %d · D input/resume · O cancel", len(view.Actions), view.Revision)
 		m.syncDetail()

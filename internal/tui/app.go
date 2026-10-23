@@ -153,9 +153,10 @@ type fetchMsg struct {
 }
 
 type actionMsg struct {
-	method string
-	result json.RawMessage
-	err    error
+	method      string
+	result      json.RawMessage
+	err         error
+	usageDetail usageDetailRequest
 }
 
 type authActivationResult = daemon.CredentialActivationView
@@ -319,6 +320,8 @@ type app struct {
 	previewTitle       string
 	previewKey         string
 	pendingPreviewKey  string
+	usageDetailEpoch   uint64
+	usageDetailPreview *usageDetailRequest
 	lastError          string
 	loading            bool
 	confirmTitle       string
@@ -781,6 +784,12 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case actionMsg:
+		if message.method == "usage.detail" {
+			if m.acceptsUsageDetail(message.usageDetail) {
+				m.applyUsageDetail(message)
+			}
+			return m, nil
+		}
 		m.loading = false
 		if message.err != nil {
 			m.lastError = message.err.Error()
@@ -861,6 +870,7 @@ func (m *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastError = ""
 		m.status = message.method + " completed"
 		m.previewExtra, m.previewTitle = "", ""
+		m.usageDetailPreview = nil
 		m.previewKey, m.pendingPreviewKey = m.pendingPreviewKey, ""
 		if message.method == "routes.explain" {
 			m.previewExtra = pretty(json.RawMessage(message.result))
@@ -973,6 +983,26 @@ func (m *app) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.discardSetupInput()
 				m.setupActionIndex++
 				return m, m.openSetupInput()
+			}
+		}
+		if m.form.method == "usage.detail" {
+			if keyText == "esc" {
+				m.usageDetailEpoch++
+				m.form = nil
+				m.mode = modeBrowse
+				m.syncDetail()
+				return m, nil
+			}
+			if keyText == "ctrl+s" {
+				params, err := usageDetailParams(m.form)
+				if err != nil {
+					m.status = err.Error()
+					return m, nil
+				}
+				m.mode = modeBrowse
+				m.loading = true
+				m.status = "requesting usage detail…"
+				return m, m.requestUsageDetail(params)
 			}
 		}
 		if keyText == "a" && m.form.method == "custom_models.upsert" && m.form.memberMode {
@@ -1363,6 +1393,25 @@ func (m *app) updateDashboardAction(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.resize()
 		return m, nil
 	case "d":
+		if current.definition.view == "usage" {
+			selected := m.selectedEntry()
+			if selected == nil {
+				m.status = "select a usage event first"
+				return m, nil
+			}
+			value, ok := selected.payload.(usageRecord)
+			if !ok || value.ID <= 0 {
+				m.status = "selected usage row has no valid event ID"
+				return m, nil
+			}
+			m.previewExtra, m.previewTitle, m.previewKey = "", "", ""
+			m.usageDetailPreview = nil
+			m.usageDetailEpoch++
+			m.form = newUsageDetailForm(value.ID)
+			m.mode = modeForm
+			m.resize()
+			return m, nil
+		}
 		return m, m.confirmDelete()
 	case "t":
 		if current.definition.id == dashboardConnections {
@@ -1815,12 +1864,16 @@ func (m *app) mainPreview(selected entry) string {
 		actions = append(actions, "e            edit strategy", "m            edit members", "p            toggle /v1/models exposure", "x            explain effective route order", "c            compose nested Combo", "d            delete Combo")
 	}
 	preview := selected.detail
-	if m.previewExtra != "" && (m.previewKey == "" || m.previewKey == selected.key) {
+	if m.previewExtra != "" && (m.previewKey == "" || m.previewKey == selected.key) && (m.usageDetailPreview == nil || m.showsAcceptedUsageDetail(selected)) {
 		title := m.previewTitle
 		if title == "" {
 			title = "Action result"
 		}
-		preview += "\n\n" + title + "\n" + m.previewExtra
+		if m.usageDetailPreview != nil {
+			preview = title + "\n" + m.previewExtra + "\n\n" + preview
+		} else {
+			preview += "\n\n" + title + "\n" + m.previewExtra
+		}
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, preview, "", muted.Render("Actions"), muted.Render(strings.Join(actions, "\n")))
 }
