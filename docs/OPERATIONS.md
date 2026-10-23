@@ -269,6 +269,17 @@ Every HTTP control route requires this bearer token. Explicit details use
 Treat possession of the control token or IPC socket access as administrative
 authority; keep them private and terminate TLS outside the daemon if remote.
 
+After installation, run the explicit installed-client gate:
+
+```sh
+make test-installed-usage GOBROOM_TEST_CLI=/absolute/path/to/gobroom
+```
+
+It rejects a missing/non-executable path and runs the named CLI acceptance
+fixtures three times with the race detector. These use temporary daemons and
+fake upstreams, not configured live providers. Ordinary `make test` does not
+prove installed-binary acceptance when the CLI environment variable is unset.
+
 ## Service and logs
 
 Usage persistence runs independently of requests and provider health. Status

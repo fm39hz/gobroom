@@ -7,7 +7,7 @@ BRANCH   := master
 BENCHTIME ?= 1s
 BENCHCPU  ?= 1,4
 
-.PHONY: help build build-daemon build-all run run-daemon tui test test-conformance test-conformance-transform-boundaries test-external-provider-module test-model-workflow test-v race bench perf fmt vet install install-all clean reload status
+.PHONY: help build build-daemon build-all run run-daemon tui test test-installed-usage test-conformance test-conformance-transform-boundaries test-external-provider-module test-model-workflow test-v race bench perf fmt vet install install-all clean reload status
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -37,6 +37,12 @@ reload: ## reload daemon snapshot over IPC
 
 test: test-external-provider-module ## unit and integration tests, including the separate-module provider API
 	go test ./...
+
+test-installed-usage: ## installed-client acceptance (requires GOBROOM_TEST_CLI=/absolute/path)
+	@case "$(GOBROOM_TEST_CLI)" in /*) ;; *) echo 'Set GOBROOM_TEST_CLI to the absolute installed CLI path' >&2; exit 1;; esac
+	@test -f "$(GOBROOM_TEST_CLI)" && test -x "$(GOBROOM_TEST_CLI)" || { echo 'GOBROOM_TEST_CLI must be an executable file' >&2; exit 1; }
+	GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./internal/daemon -run '^TestInstalledCLI(RawUsageCaptureAndDetailPolicy|UsagePresence|AttemptUsage|UsageHistoryWithoutModule|ReportedChargeProtocolAcceptance)$$' -race -count=3
+	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^TestInstalledCLIUsagePreservesPresenceAndPrivacy$$' -race -count=3
 
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./cmd/gobroom -run '^TestTransform' -count=1
