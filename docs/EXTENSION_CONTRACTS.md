@@ -35,7 +35,9 @@ Unfamiliar values use `Extensions []UsageValue`, exact `usage-value` refs and
 catalog-bound schemas. Registration is data-only, defaults private, and grants
 no aggregation, pricing, routing or disclosure behavior. This envelope and
 presence-aware common persistence and per-dispatch completion requirements are
-implemented, including historical extension storage. Gated raw/detail access remains in the
+implemented, including historical extension storage and opt-in raw/detail
+access under independent host disclosure grants. Public-module inference
+acceptance and resource measurements remain in the
 [approved usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md).
 No legacy numeric usage reader is retained. Earlier host-version notes below
 describe individual historical checkpoints, not the current module version.
@@ -56,7 +58,9 @@ contracts may survive module rebuilds; conflicting schema/metadata fails closed.
 `UsageValue.OwnedEncoding` keeps actual encoded and retained data within bounds,
 including whitespace and JSON escaping, without losing numeric precision.
 Repository detail reads do not grant management disclosure; ordinary IPC/CLI
-lists remain payload-free until an explicit authorized detail policy is added.
+lists remain payload-free. Explicit `usage.detail` reads authorize each requested
+class before fetching it; capture alone grants no disclosure. See the
+[operations policy](OPERATIONS.md#usage-capture-and-explicit-detail-access).
 
 ## Ownership and design boundary
 

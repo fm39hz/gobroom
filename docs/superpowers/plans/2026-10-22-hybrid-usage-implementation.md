@@ -197,12 +197,32 @@ Add `UsageEvent.RawUsage *RawUsageFragment` at this checkpoint, with clone/reten
 
 Test assertion form: `if bytes.Contains(ordinaryOutput, []byte(privateMarker)) || detailDenied == nil { t.Fatal("usage detail disclosure bypass") }`.
 
-- [ ] Add `TestUsageRawCaptureIsOptInBoundedAndPrivate`: disabled capture never retains raw bytes; enabled capture preserves a number greater than 2^53; oversized/unsafe input yields a sanitized issue, not truncated JSON. Secret-bearing fixture strings must not occur in logs, ordinary usage lists, status, public responses or config exports. Test a valid schema with a private string, not merely an invalid payload.
-- [ ] Main runs focused capture/policy/control tests and observes RED before implementing the policy.
-- [ ] Implement host-gated capture of a decoder-selected usage fragment, never headers or the whole response. Bound before retaining/copying; use `json.RawMessage`/`json.Number` and decoder-owned typed selection of allowed usage shapes. Unsupported or sensitive raw shapes are omitted with a diagnostic. Do not claim arbitrary JSON can be made safe by generic key-name redaction or sandbox arbitrary statically linked module code.
-- [ ] Add an explicit `usage detail <id>` CLI operation and IPC `usage.detail`; authorize before fetching payloads. HTTP control details require the existing control authentication plus the host disclosure grant; ordinary reads exclude details. TUI detail fetch is an explicit user action and renders bounded sanitized text, never terminal escape sequences. Private descriptors stay private unless a separate explicit grant permits that class; enabling raw capture alone never permits disclosure.
-- [ ] Run bounded retention pruning at startup and every 15 minutes under daemon cancellation, using the store transaction; retention cannot be disabled while raw capture is enabled. Add equivalent positive host flags and document restart semantics. Verify with virtual time and temporary stores, not sleeps.
-- [ ] Main runs policy/privacy/TUI/CLI tests, installs and exercises denied and granted detail operations against temporary daemons. Commit `feat(usage): add bounded private capture and explicit detail access`.
+- [x] Add `TestUsageRawCaptureIsOptInBoundedAndPrivate`: disabled capture never retains raw bytes; enabled capture preserves a number greater than 2^53; oversized/unsafe input yields a sanitized issue, not truncated JSON. Secret-bearing fixture strings must not occur in logs, ordinary usage lists, status, public responses or config exports. Test a valid schema with a private string, not merely an invalid payload.
+- [x] Main runs focused capture/policy/control tests and observes RED before implementing the policy.
+- [x] Implement host-gated capture of a decoder-selected usage fragment, never headers or the whole response. Bound before retaining/copying; use `json.RawMessage`/`json.Number` and decoder-owned typed selection of allowed usage shapes. Unsupported or sensitive raw shapes are omitted with a diagnostic. Do not claim arbitrary JSON can be made safe by generic key-name redaction or sandbox arbitrary statically linked module code.
+- [x] Add an explicit `usage detail <id>` CLI operation and IPC `usage.detail`; authorize before fetching payloads. HTTP control details require independent control authentication plus the host disclosure grant; ordinary reads exclude details. TUI detail fetch is an explicit user action and renders bounded sanitized text, never terminal escape sequences. Private descriptors stay private unless a separate explicit grant permits that class; enabling raw capture alone never permits disclosure.
+- [x] Run bounded retention pruning at startup and every 15 minutes under daemon cancellation, using the store transaction; retention cannot be disabled while raw capture is enabled. Add equivalent positive host flags and document restart semantics. Verify with virtual time and temporary stores, not sleeps.
+- [x] Main runs policy/privacy/TUI/CLI tests, installs and exercises denied and granted detail operations against temporary daemons. Commits `0bcfe20`, `767bab1`, `9b0e8e9`.
+
+Task 6 evidence: root/external `make test`, root/external vet and full
+`make test-conformance` passed. Frontend tests passed three race runs; backend
+capture/detail/retention and adapter matrices passed their focused checks.
+After `make install-all`, explicit installed CLI raw/detail, presence,
+attempt identity, module-free history and reported-charge tests each passed
+three race runs (17.343s combined). Main status=ok, control=serving=505;
+configuration/credential fingerprint unchanged; usage rows remained 0/0.
+No live provider calls or additional history loss.
+
+Rulings: HTTP control previously had no authentication, contrary to the plan's
+premise; it now requires an independent control token. Exact retention uses
+numeric seconds/nanoseconds, not lexicographic RFC3339Nano comparisons. Strict
+raw bindings use Go's JSON v2 duplicate rejection, with bounded owned RawMessage
+slots; no handwritten JSON scanner remains. The host contract is 13.
+
+One initial external full-suite run timed out at the existing HTTPS callback
+test's daemon Stop. Its unchanged focused test passed 3 then 30 repetitions,
+and subsequent full regression/conformance passed. Cause remains unestablished;
+this is not recorded as a fixed shutdown bug.
 
 ## Task 7: External-module and installed-client acceptance
 
