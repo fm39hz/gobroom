@@ -33,25 +33,32 @@ type usageAttempt struct {
 	fidelity                        CompatibilityFidelity
 	losses                          []LossRecord
 	limits                          UsageLimits
+	capture                         UsageCapturePolicy
 }
 
 func (k *Kernel) newUsageAttempt(invocationID string, route Route, request NormalizedRequest) *usageAttempt {
 	operationRef := extensions.Ref{Kind: "operation", ID: string(request.Operation), ContractVersion: request.OperationContractVersion}
 	limits := k.resolvedUsageLimits()
+	capture := k.UsageCapture
 	if definition, ok := k.Operations.Resolve(operationRef); ok {
 		for _, bound := range []int64{definition.ResourceBounds.MaxBufferedBytes, definition.ResourceBounds.MaxOutputBytes} {
 			if bound > 0 {
 				limits.MaxExtensionBytes = min(limits.MaxExtensionBytes, bound)
+				capture.MaxBytes = min(capture.MaxBytes, bound)
 			}
 		}
 	}
 	return &usageAttempt{kernel: k, invocationID: invocationID, id: rand.Text(), route: route,
 		logicalModel: request.Model, workload: requestClass(request), session: request.Session.ID,
-		operationRef: operationRef, limits: limits, started: time.Now()}
+		operationRef: operationRef, limits: limits, capture: capture, started: time.Now()}
 }
 
 func (a *usageAttempt) admit(event UsageEvent) UsageEvent {
-	return a.kernel.admitUsageWithin(event, a.limits)
+	if event.RawUsage != nil && event.RawUsage.ProviderDefinition != a.route.DefinitionRef {
+		event.RawUsage = nil
+		event.AccountingIssues = append(event.AccountingIssues, UsageIssue{Code: "raw_usage_issuer_mismatch"})
+	}
+	return a.kernel.admitUsageWithCapture(event, a.limits, a.capture)
 }
 
 func (a *usageAttempt) observe(event UsageEvent) {
@@ -197,9 +204,20 @@ func (k *Kernel) admitUsage(event UsageEvent) UsageEvent {
 }
 
 func (k *Kernel) admitUsageWithin(event UsageEvent, limits UsageLimits) UsageEvent {
+	return k.admitUsageWithCapture(event, limits, k.UsageCapture)
+}
+
+func (k *Kernel) admitUsageWithCapture(event UsageEvent, limits UsageLimits, capture UsageCapturePolicy) UsageEvent {
 	values, issues := event.Extensions, event.AccountingIssues
+	raw := event.RawUsage
+	event.RawUsage = nil
 	event.Extensions, event.AccountingIssues = nil, nil
 	event = event.SanitizeCommon()
+	if raw != nil {
+		var captureIssues []UsageIssue
+		event.RawUsage, captureIssues = SelectRawUsage(capture, raw.ProviderDefinition, raw.API, raw.Value)
+		event.AccountingIssues = append(event.AccountingIssues, captureIssues...)
+	}
 	for index, issue := range issues {
 		if index == maxAccountingIssues {
 			event.AccountingIssues = append(event.AccountingIssues, UsageIssue{Code: accountingIssueOverflowCode})

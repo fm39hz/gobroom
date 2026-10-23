@@ -278,6 +278,14 @@ type UsageRequirements = extensions.UsageRequirements
 type UsageUpdateKind = kernel.UsageUpdateKind
 type UsageIssue = kernel.UsageIssue
 type UsageLimits = kernel.UsageLimits
+type UsageCapturePolicy = kernel.UsageCapturePolicy
+type RawUsageFragment = kernel.RawUsageFragment
+
+func DefaultUsageCapturePolicy() UsageCapturePolicy { return kernel.DefaultUsageCapturePolicy() }
+func SelectRawUsage(policy UsageCapturePolicy, definition extensions.Ref, api string, value json.RawMessage) (*RawUsageFragment, []UsageIssue) {
+	return kernel.SelectRawUsage(policy, definition, api, value)
+}
+
 type UsageCounter = usagewire.Counter
 type ReportedCharge = usagewire.ReportedCharge
 type ChargeProvenance = usagewire.ChargeProvenance

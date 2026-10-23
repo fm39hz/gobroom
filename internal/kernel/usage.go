@@ -50,6 +50,11 @@ func (event UsageEvent) Clone() UsageEvent {
 	event.ReasoningTokens = cloneInt64(event.ReasoningTokens)
 	event.EstimatedCost = cloneFloat64(event.EstimatedCost)
 	event.OutputTokensPerSecond = cloneFloat64(event.OutputTokensPerSecond)
+	if event.RawUsage != nil {
+		rawUsage := *event.RawUsage
+		rawUsage.Value = slices.Clone(rawUsage.Value)
+		event.RawUsage = &rawUsage
+	}
 	event.Extensions = cloneUsageValues(event.Extensions)
 	event.AccountingIssues = slices.Clone(event.AccountingIssues)
 	event.CompatibilityLosses = cloneLossRecords(event.CompatibilityLosses)
@@ -182,6 +187,11 @@ func MergeProviderUsage(current, update UsageEvent) UsageEvent {
 	}
 	if !update.At.IsZero() {
 		merged.At = update.At
+	}
+	if update.RawUsage != nil {
+		rawUsage := *update.RawUsage
+		rawUsage.Value = slices.Clone(rawUsage.Value)
+		merged.RawUsage = &rawUsage
 	}
 	if update.LogicalModel != "" {
 		merged.LogicalModel = update.LogicalModel

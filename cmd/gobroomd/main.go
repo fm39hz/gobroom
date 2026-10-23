@@ -34,6 +34,16 @@ func main() {
 	httpControl := flag.Bool("http-control", false, "expose HTTP control plane")
 	controlAddr := flag.String("control-addr", defaults.HTTPControlAddr, "HTTP control plane listen address")
 	httpToken := flag.String("http-token", "", "optional bearer token for HTTP data plane")
+	controlToken := flag.String("control-token", "", "independent bearer token required for HTTP control (or GOBROOM_CONTROL_TOKEN)")
+	usageDefaults := daemon.DefaultUsagePolicy()
+	usageMaxValues := flag.Int("usage-max-values", usageDefaults.MaxValues, "maximum registered usage values per attempt")
+	usageMaxBytes := flag.Int64("usage-max-bytes", usageDefaults.MaxExtensionBytes, "maximum encoded extension usage bytes per attempt")
+	usageCaptureRaw := flag.Bool("usage-capture-raw", false, "opt in to bounded decoder-selected raw usage capture")
+	usageRawBytes := flag.Int64("usage-max-raw-bytes", usageDefaults.MaxRawBytes, "maximum raw usage fragment bytes")
+	usageRetention := flag.Duration("usage-retention", usageDefaults.Retention, "positive local usage history retention")
+	usageDetails := flag.Bool("usage-details", false, "allow explicit management usage detail requests")
+	usagePrivate := flag.Bool("usage-private-details", false, "separately permit private extension detail requests")
+	usageRaw := flag.Bool("usage-raw-details", false, "separately permit raw usage detail requests")
 	providerManifestDir := flag.String("provider-manifests", defaults.ProviderManifestDir, "directory containing provider definition JSON files")
 	quotaPolling := flag.Bool("quota-poll", false, "opt in to periodic provider quota polling")
 	usageDrainTimeout := flag.Duration("usage-drain-timeout", defaults.UsageDrainTimeout, "cooperative usage persistence drain budget (0 uses default)")
@@ -56,6 +66,11 @@ func main() {
 	config.HTTPControl = *httpControl
 	config.HTTPControlAddr = *controlAddr
 	config.HTTPToken = *httpToken
+	config.HTTPControlToken = *controlToken
+	if config.HTTPControlToken == "" {
+		config.HTTPControlToken = os.Getenv("GOBROOM_CONTROL_TOKEN")
+	}
+	config.UsagePolicy = &daemon.UsagePolicy{MaxValues: *usageMaxValues, MaxExtensionBytes: *usageMaxBytes, CaptureRaw: *usageCaptureRaw, MaxRawBytes: *usageRawBytes, Retention: *usageRetention, AllowManagementDetails: *usageDetails, AllowPrivateDetails: *usagePrivate, AllowRawDetails: *usageRaw}
 	config.ProviderManifestDir = *providerManifestDir
 	config.QuotaPolling = *quotaPolling
 	config.UsageDrainTimeout = *usageDrainTimeout

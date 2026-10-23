@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
+	"github.com/fm39hz/gobroom/internal/usage"
 )
 
 func TestUsageHistoryRejectsIncompleteRecordedSchemaClosure(t *testing.T) {
@@ -47,7 +48,7 @@ func TestUsageHistoryRejectsIncompleteRecordedSchemaClosure(t *testing.T) {
 			s = reopened
 			// No catalog is bound after restart. Both intact reads and corruption
 			// detection must use only the archived data contract and schemas.
-			detail, err := s.UsageDetail(context.Background(), events[0].ID)
+			detail, err := s.UsageDetail(context.Background(), events[0].ID, usage.DetailOptions{IncludePrivate: true})
 			if err != nil || len(detail.Extensions) != 1 || string(detail.Extensions[0].Value) != value {
 				t.Fatalf("intact dependency archive: detail=%#v err=%v", detail, err)
 			}
@@ -84,7 +85,7 @@ func TestUsageHistoryRejectsIncompleteRecordedSchemaClosure(t *testing.T) {
 				mutateUsageArchiveRow(t, s, `DELETE FROM usage_extension_descriptor_schemas`+linkWhere, linkArgs...)
 				mutateUsageArchiveRow(t, s, `DELETE FROM usage_extension_schemas`+schemaWhere, schemaArgs...)
 			}
-			if _, err := s.UsageDetail(context.Background(), events[0].ID); err == nil {
+			if _, err := s.UsageDetail(context.Background(), events[0].ID, usage.DetailOptions{IncludePrivate: true}); err == nil {
 				t.Fatal("historical detail accepted an incomplete or altered recorded schema closure")
 			}
 		})

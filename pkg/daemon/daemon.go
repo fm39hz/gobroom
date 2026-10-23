@@ -10,6 +10,12 @@ import (
 )
 
 type Config = core.Config
+type UsagePolicy = core.UsagePolicy
+type UsageDetailOptions = core.UsageDetailOptions
+type UsageDetailRequest = core.UsageDetailRequest
+
+func DefaultUsagePolicy() UsagePolicy { return core.DefaultUsagePolicy() }
+
 type Daemon = core.Daemon
 type IPCRequest = core.IPCRequest
 type IPCResponse = core.IPCResponse

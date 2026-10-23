@@ -31,6 +31,7 @@ type Kernel struct {
 	UsageSources           map[extensions.Ref]UsageEnricher
 	UsageCatalog           *extensions.Snapshot
 	UsageLimits            UsageLimits
+	UsageCapture           UsageCapturePolicy
 	SessionStores          map[extensions.Ref]SessionStore
 	Transforms             *RequestTransformRegistry
 	ResponseTransforms     *ResponseTransformRegistry
@@ -958,11 +959,12 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				}
 				if emitEvent != nil {
 					observed := event.Clone()
+					observed.RawUsage = nil
 					emitEvent(ResponseEvent{At: event.At, Kind: EventResponseComplete, Usage: &observed})
 				}
 				accounting.finishSuccess(ctx, event)
 			}
-			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{Streaming: candidateRequest.Stream, IncludeUsage: candidateRequest.Transport.IncludeUsage, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
+			renderErr := adapter.RenderResponse(attemptCtx, response, streamWriter, candidateRequest.SourceFormat, StreamHooks{UsageCapture: accounting.capture, Streaming: candidateRequest.Stream, IncludeUsage: candidateRequest.Transport.IncludeUsage, Model: candidateRequest.Model, ProviderIssuer: candidate.DefinitionRef, MaxEventBytes: resourceBounds.MaxBufferedBytes, MaxOutputBytes: resourceBounds.MaxOutputBytes, TransformResponse: responseTransform, ArtifactAccess: responseArtifactAccess, OnError: func(streamErr error) {
 				reportFailure(streamErr)
 			}, ValidateEvent: validateEvent, OnEvent: func(event ResponseEvent) {
 				if event.ResponseID != "" {

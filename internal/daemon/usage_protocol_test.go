@@ -160,7 +160,7 @@ func runReportedChargeProtocolAcceptance(t *testing.T, installedCLI bool) {
 		}
 	}
 	for _, row := range rows {
-		detail, err := d.store.UsageDetail(context.Background(), row.ID)
+		detail, err := d.store.UsageDetail(context.Background(), row.ID, UsageDetailOptions{IncludeExtensions: true, IncludePrivate: true})
 		if err != nil {
 			t.Fatalf("usage detail for event %d: %v", row.ID, err)
 		}

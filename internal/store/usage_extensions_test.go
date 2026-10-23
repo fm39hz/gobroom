@@ -9,6 +9,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/usage"
 )
 
 var usageHistoryRef = extensions.Ref{Kind: extensions.UsageKind, ID: "vendor.example.precise", ContractVersion: 1}
@@ -91,7 +92,7 @@ func TestUsageHistoryRetainsExactDescriptorWithoutModule(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	detail, err := s.UsageDetail(context.Background(), ordinary[0].ID)
+	detail, err := s.UsageDetail(context.Background(), ordinary[0].ID, usage.DetailOptions{IncludePrivate: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +204,7 @@ func TestPrunedUsageReleasesDescriptorMetadataForLaterWrite(t *testing.T) {
 	if err := s.SaveUsageEvent(context.Background(), usageHistoryEvent(`3`)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := s.PruneUsage(time.Date(2026, time.October, 23, 0, 0, 0, 0, time.UTC)); err != nil || n != 1 {
+	if n, err := s.PruneUsage(context.Background(), time.Date(2026, time.October, 23, 0, 0, 0, 0, time.UTC)); err != nil || n != 1 {
 		t.Fatalf("PruneUsage=(%d, %v), want one removed event", n, err)
 	}
 	if err := s.Close(); err != nil {
@@ -228,7 +229,7 @@ func TestPrunedUsageReleasesDescriptorMetadataForLaterWrite(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("history after recreation: rows=%d err=%v", len(rows), err)
 	}
-	detail, err := s.UsageDetail(context.Background(), rows[0].ID)
+	detail, err := s.UsageDetail(context.Background(), rows[0].ID, usage.DetailOptions{IncludePrivate: true})
 	if err != nil || len(detail.Extensions) != 1 || detail.Extensions[0].Descriptor.Label != "After prune" || string(detail.Extensions[0].Value) != `"new"` {
 		t.Fatalf("recreated descriptor/value mismatch: detail=%#v err=%v", detail, err)
 	}

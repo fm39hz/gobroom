@@ -12,9 +12,15 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/usage"
 )
 
 const usageRecordSelect = `SELECT id,timestamp,COALESCE(logical_model,''),COALESCE(provider_node_id,''),COALESCE(external_model,''),COALESCE(connection_id,''),COALESCE(status,''),COALESCE(invocation_id,''),COALESCE(attempt_id,''),latency_ms,input_tokens,output_tokens,cached_read_tokens,cached_write_tokens,reasoning_tokens,estimated_cost,COALESCE(accounting_issues_json,'[]'),COALESCE(request_class,''),COALESCE(session_id,''),ttft_ms,output_tokens_per_second,COALESCE(compatibility_fidelity,''),COALESCE(compatibility_losses_json,'[]'),COALESCE(compatibility_plan_json,'null') FROM usage_events`
+
+const (
+	storeIssueRawCaptureDisabled = "raw_usage_capture_disabled"
+	storeIssueInvalidRawUsage    = "invalid_raw_usage"
+)
 
 type usageRowScanner interface {
 	Scan(...any) error
@@ -42,12 +48,21 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	preparedRaw, rawIssue := s.prepareRawUsage(event.RawUsage)
+	event.RawUsage = nil
+	if rawIssue != "" {
+		event.AccountingIssues = append(event.AccountingIssues, kernel.UsageIssue{Code: rawIssue})
+	}
 	preparedExtensions, err := s.prepareUsageExtensions(event.Extensions)
 	if err != nil {
 		return err
 	}
 	event = event.SanitizeCommon()
-	dateKey := event.At.UTC().Format("2006-01-02")
+	if preparedRaw != nil {
+		event.RawUsage = preparedRaw
+	}
+	at := event.At.UTC()
+	dateKey := at.Format("2006-01-02")
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -74,13 +89,20 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 		value := event.TTFT.Milliseconds()
 		ttftMS = &value
 	}
-	result, err := tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, event.At.UTC().Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, latencyMS, event.InputTokens, event.OutputTokens, event.CachedReadTokens, event.CachedWriteTokens, event.ReasoningTokens, event.EstimatedCost, string(accountingIssues), event.RequestClass, event.SessionID, ttftMS, event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan), event.InvocationID, event.AttemptID)
+	result, err := tx.StmtContext(ctx, s.runtime.usageEvent).ExecContext(ctx, at.Format(time.RFC3339Nano), event.LogicalModel, event.ProviderNodeID, event.ExternalModel, event.ConnectionID, event.Status, latencyMS, event.InputTokens, event.OutputTokens, event.CachedReadTokens, event.CachedWriteTokens, event.ReasoningTokens, event.EstimatedCost, string(accountingIssues), event.RequestClass, event.SessionID, ttftMS, event.OutputTokensPerSecond, event.CompatibilityFidelity, string(losses), string(plan), event.InvocationID, event.AttemptID, at.Unix(), at.Nanosecond())
 	if err != nil {
 		return err
 	}
 	eventID, err := result.LastInsertId()
 	if err != nil {
 		return err
+	}
+	if preparedRaw != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_raw_fragments(event_id,provider_kind,provider_id,provider_version,api,value_json) VALUES(?,?,?,?,?,?)`,
+			eventID, preparedRaw.ProviderDefinition.Kind, preparedRaw.ProviderDefinition.ID,
+			preparedRaw.ProviderDefinition.ContractVersion, preparedRaw.API, []byte(preparedRaw.Value)); err != nil {
+			return err
+		}
 	}
 	if err := s.persistUsageExtensionsTx(ctx, tx, eventID, preparedExtensions); err != nil {
 		return err
@@ -93,6 +115,43 @@ func (s *Store) SaveUsageEvent(ctx context.Context, event kernel.UsageEvent) err
 		return err
 	}
 	return tx.Commit()
+}
+
+// SetUsageCapturePolicy binds a positive raw retention bound. The policy is
+// store-local and never grants read access; details still require explicit
+// options from an already-authorized caller.
+func (s *Store) SetUsageCapturePolicy(policy kernel.UsageCapturePolicy) error {
+	if policy.MaxBytes <= 0 {
+		return fmt.Errorf("raw usage capture limit must be positive")
+	}
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	if s.usageCaptureSet {
+		if s.usageCapture == policy {
+			return nil
+		}
+		return fmt.Errorf("raw usage capture policy is already bound")
+	}
+	s.usageCapture = policy
+	s.usageCaptureSet = true
+	return nil
+}
+
+func (s *Store) prepareRawUsage(fragment *kernel.RawUsageFragment) (*kernel.RawUsageFragment, string) {
+	if fragment == nil {
+		return nil, ""
+	}
+	s.usageMu.RLock()
+	policy := s.usageCapture
+	s.usageMu.RUnlock()
+	if !policy.Enabled {
+		return nil, storeIssueRawCaptureDisabled
+	}
+	selected, issues := kernel.SelectRawUsage(policy, fragment.ProviderDefinition, fragment.API, fragment.Value)
+	if selected == nil || len(issues) != 0 {
+		return nil, storeIssueInvalidRawUsage
+	}
+	return selected, ""
 }
 
 type UsageRecord struct {
@@ -132,29 +191,64 @@ type UsageSummary struct {
 	EstimatedCost      UsageCostSummary   `json:"estimatedCost"`
 }
 
-func (s *Store) PruneUsage(before time.Time) (int64, error) {
+// PruneUsage removes all expired events in one transaction for manual pruning.
+func (s *Store) PruneUsage(ctx context.Context, before time.Time) (int64, error) {
+	return s.pruneUsage(ctx, before, 0)
+}
+
+// PruneUsageBatch removes at most limit expired events, oldest timestamp first
+// with event ID as the tie breaker. A partial day retains its full aggregate.
+func (s *Store) PruneUsageBatch(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if limit <= 0 {
+		return 0, fmt.Errorf("usage prune batch limit must be positive")
+	}
+	return s.pruneUsage(ctx, before, limit)
+}
+
+// pruneUsage shares transaction and cleanup semantics between the full manual
+// operation (limit zero) and a bounded batch (positive limit).
+func (s *Store) pruneUsage(ctx context.Context, before time.Time, limit int) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	if before.IsZero() {
 		return 0, fmt.Errorf("retention cutoff is required")
 	}
-	tx, err := s.DB.BeginTx(context.Background(), nil)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	result, err := tx.Exec(`DELETE FROM usage_events WHERE timestamp < ?`, before.UTC().Format(time.RFC3339Nano))
+	cutoff := before.UTC()
+	deleteEvents := `DELETE FROM usage_events WHERE (timestamp_seconds,timestamp_nanos) < (?,?)`
+	args := []any{cutoff.Unix(), cutoff.Nanosecond()}
+	if limit > 0 {
+		deleteEvents = `DELETE FROM usage_events WHERE id IN (
+			SELECT id FROM usage_events WHERE (timestamp_seconds,timestamp_nanos) < (?,?)
+			ORDER BY timestamp_seconds,timestamp_nanos,id LIMIT ?
+		)`
+		args = append(args, limit)
+	}
+	result, err := tx.ExecContext(ctx, deleteEvents, args...)
 	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`DELETE FROM usage_daily WHERE date_key < ?`, before.UTC().Format("2006-01-02")); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_daily WHERE date_key < ? AND NOT EXISTS (
+		SELECT 1 FROM usage_events e WHERE e.timestamp >= usage_daily.date_key
+		AND e.timestamp < date(usage_daily.date_key,'+1 day')
+	)`, before.UTC().Format("2006-01-02")); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`DELETE FROM usage_extension_descriptors WHERE NOT EXISTS (
+	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_extension_descriptors WHERE NOT EXISTS (
 		SELECT 1 FROM usage_extension_values v WHERE v.descriptor_kind=usage_extension_descriptors.kind
 		AND v.descriptor_id=usage_extension_descriptors.id AND v.descriptor_version=usage_extension_descriptors.contract_version
 	)`); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`DELETE FROM usage_extension_schemas WHERE NOT EXISTS (
+	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_extension_schemas WHERE NOT EXISTS (
 		SELECT 1 FROM usage_extension_descriptor_schemas ds WHERE ds.schema_kind=usage_extension_schemas.kind
 		AND ds.schema_id=usage_extension_schemas.id AND ds.schema_version=usage_extension_schemas.contract_version
 	)`); err != nil {
@@ -216,8 +310,9 @@ func (s *Store) UsageEvents(limit int) ([]UsageRecord, error) {
 // UsageDetailRecord contains common event fields and the immutable typed
 // extension values captured with the event.
 type UsageDetailRecord struct {
-	Event      UsageRecord        `json:"event"`
-	Extensions []UsageDetailValue `json:"extensions,omitempty"`
+	Event      UsageRecord              `json:"event"`
+	Extensions []UsageDetailValue       `json:"extensions,omitempty"`
+	RawUsage   *kernel.RawUsageFragment `json:"rawUsage,omitempty"`
 }
 
 // UsageDetailValue pairs an owned raw JSON value with its historical,
@@ -527,7 +622,7 @@ func verifyUsageSchemaClosure(ctx context.Context, tx *sql.Tx, descriptor extens
 
 // UsageDetail reads solely from persisted rows; it does not require a live
 // catalog or call any extension implementation.
-func (s *Store) UsageDetail(ctx context.Context, id int64) (UsageDetailRecord, error) {
+func (s *Store) UsageDetail(ctx context.Context, id int64, options usage.DetailOptions) (UsageDetailRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return UsageDetailRecord{}, err
 	}
@@ -540,17 +635,32 @@ func (s *Store) UsageDetail(ctx context.Context, id int64) (UsageDetailRecord, e
 	if err != nil {
 		return UsageDetailRecord{}, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT v.value_json,v.descriptor_kind,v.descriptor_id,v.descriptor_version,d.descriptor_json,d.schema_pins_json
-		FROM usage_extension_values v
-		LEFT JOIN usage_extension_descriptors d ON d.kind=v.descriptor_kind AND d.id=v.descriptor_id AND d.contract_version=v.descriptor_version
-		WHERE v.event_id=? ORDER BY v.descriptor_kind,v.descriptor_id,v.descriptor_version`, id)
-	if err != nil {
-		return UsageDetailRecord{}, err
-	}
-	defer rows.Close()
 	result := UsageDetailRecord{Event: event}
 	var recordedPins [][]byte
-	for rows.Next() {
+	var rows *sql.Rows
+	wantExtensions := options.IncludeExtensions || options.IncludePrivate
+	if wantExtensions {
+		query := `SELECT v.value_json,v.descriptor_kind,v.descriptor_id,v.descriptor_version,d.descriptor_json,d.schema_pins_json
+			FROM usage_extension_values v
+			LEFT JOIN usage_extension_descriptors d ON d.kind=v.descriptor_kind AND d.id=v.descriptor_id AND d.contract_version=v.descriptor_version
+			WHERE v.event_id=?`
+		if options.IncludePrivate {
+			query += ` AND json_extract(CAST(d.descriptor_json AS TEXT),'$.classification') IN (?,?)`
+		} else {
+			query += ` AND json_extract(CAST(d.descriptor_json AS TEXT),'$.classification')=?`
+		}
+		query += ` ORDER BY v.descriptor_kind,v.descriptor_id,v.descriptor_version`
+		if options.IncludePrivate {
+			rows, err = tx.QueryContext(ctx, query, id,
+				string(extensions.UsagePrivate), string(extensions.UsageManagementVisible))
+		} else {
+			rows, err = tx.QueryContext(ctx, query, id, string(extensions.UsageManagementVisible))
+		}
+		if err != nil {
+			return UsageDetailRecord{}, err
+		}
+	}
+	for wantExtensions && rows.Next() {
 		var rawValue, descriptorJSON, pinsJSON []byte
 		var valueRef extensions.Ref
 		if err := rows.Scan(&rawValue, &valueRef.Kind, &valueRef.ID, &valueRef.ContractVersion, &descriptorJSON, &pinsJSON); err != nil {
@@ -572,15 +682,33 @@ func (s *Store) UsageDetail(ctx context.Context, id int64) (UsageDetailRecord, e
 		})
 		recordedPins = append(recordedPins, pinsJSON)
 	}
-	if err := rows.Err(); err != nil {
-		return UsageDetailRecord{}, err
-	}
-	if err := rows.Close(); err != nil {
-		return UsageDetailRecord{}, err
-	}
-	for index, value := range result.Extensions {
-		if err := verifyUsageSchemaClosure(ctx, tx, value.Descriptor, recordedPins[index]); err != nil {
+	if wantExtensions {
+		if err := rows.Err(); err != nil {
 			return UsageDetailRecord{}, err
+		}
+		if err := rows.Close(); err != nil {
+			return UsageDetailRecord{}, err
+		}
+		for index, value := range result.Extensions {
+			if err := verifyUsageSchemaClosure(ctx, tx, value.Descriptor, recordedPins[index]); err != nil {
+				return UsageDetailRecord{}, err
+			}
+		}
+	}
+	if options.IncludeRaw {
+		var raw kernel.RawUsageFragment
+		var value []byte
+		err := tx.QueryRowContext(ctx, `SELECT provider_kind,provider_id,provider_version,api,value_json FROM usage_raw_fragments WHERE event_id=?`, id).Scan(
+			&raw.ProviderDefinition.Kind, &raw.ProviderDefinition.ID, &raw.ProviderDefinition.ContractVersion, &raw.API, &value)
+		if err != nil && err != sql.ErrNoRows {
+			return UsageDetailRecord{}, err
+		}
+		if err == nil {
+			if raw.ProviderDefinition.Validate() != nil || raw.ProviderDefinition.Kind != "provider-definition" || raw.API == "" || !json.Valid(value) || len(bytes.TrimSpace(value)) == 0 || bytes.TrimSpace(value)[0] != '{' {
+				return UsageDetailRecord{}, fmt.Errorf("persisted raw usage fragment is invalid")
+			}
+			raw.Value = append(json.RawMessage(nil), value...)
+			result.RawUsage = &raw
 		}
 	}
 	if err := tx.Commit(); err != nil {

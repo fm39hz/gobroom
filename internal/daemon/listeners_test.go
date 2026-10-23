@@ -22,6 +22,7 @@ func listenerTestConfig(t *testing.T) Config {
 		DBPath: filepath.Join(directory, "state.db"), IPCPath: filepath.Join(directory, "daemon.sock"),
 		ArtifactStoreDir: filepath.Join(directory, "artifacts"),
 		HTTPEnabled:      true, HTTPAddr: "127.0.0.1:0", HTTPControl: true, HTTPControlAddr: "127.0.0.1:0",
+		HTTPControlToken: "listener-fixture-control",
 	}
 }
 
@@ -251,7 +252,11 @@ func TestDaemonPublishesBoundListenersAndReleasesThemOnStop(t *testing.T) {
 		{addresses.HTTPControl, "/api/status", http.StatusOK},
 		{addresses.HTTPControl, "/v1/models", http.StatusNotFound},
 	} {
-		response, err := client.Get("http://" + check.address + check.path)
+		request, _ := http.NewRequest(http.MethodGet, "http://"+check.address+check.path, nil)
+		if check.address == addresses.HTTPControl {
+			request.Header.Set("Authorization", "Bearer "+config.HTTPControlToken)
+		}
+		response, err := client.Do(request)
 		if err != nil {
 			t.Fatalf("listener was not reachable immediately after Start: %v", err)
 		}

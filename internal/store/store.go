@@ -24,13 +24,15 @@ import (
 )
 
 type Store struct {
-	DB             *sql.DB
-	runtime        runtimeStatements
-	usageReset     UsageResetCount
-	usageMu        sync.RWMutex
-	usageCatalog   *extensions.Snapshot
-	usageLimits    kernel.UsageLimits
-	usageLimitsSet bool
+	DB              *sql.DB
+	runtime         runtimeStatements
+	usageReset      UsageResetCount
+	usageMu         sync.RWMutex
+	usageCatalog    *extensions.Snapshot
+	usageLimits     kernel.UsageLimits
+	usageLimitsSet  bool
+	usageCapture    kernel.UsageCapturePolicy
+	usageCaptureSet bool
 }
 
 func Open(path string) (*Store, error) {
@@ -41,7 +43,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{DB: db}
+	s := &Store{DB: db, usageCapture: kernel.DefaultUsageCapturePolicy()}
 	if err := s.Migrate(); err != nil {
 		db.Close()
 		return nil, err

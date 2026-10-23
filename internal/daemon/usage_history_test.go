@@ -155,7 +155,7 @@ func runUsageHistoryWithoutModule(t *testing.T, installedCLI bool) {
 		}
 	}
 
-	detail, err := restarted.store.UsageDetail(context.Background(), eventID)
+	detail, err := restarted.store.UsageDetail(context.Background(), eventID, UsageDetailOptions{IncludeExtensions: true, IncludePrivate: true})
 	if err != nil {
 		t.Fatalf("repository historical detail without live catalog: %v", err)
 	}

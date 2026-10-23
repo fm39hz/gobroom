@@ -542,6 +542,7 @@ type StreamHooks struct {
 	ValidateEvent   func(context.Context, ResponseEvent) error
 	OnComplete      func(UsageEvent)
 	OnProviderUsage func(UsageEvent)
+	UsageCapture    UsageCapturePolicy
 	// Host admission runs before retaining optional accounting payloads.
 	AdmitUsage func(UsageEvent) UsageEvent
 	// Only the compositor finalizes original accounting before client transforms.
@@ -617,9 +618,10 @@ const (
 )
 
 type UsageEvent struct {
-	InvocationID          string          `json:"invocationId,omitempty"`
-	AttemptID             string          `json:"attemptId,omitempty"`
-	UpdateKind            UsageUpdateKind `json:"updateKind,omitempty"`
+	RawUsage              *RawUsageFragment `json:"rawUsage,omitempty"`
+	InvocationID          string            `json:"invocationId,omitempty"`
+	AttemptID             string            `json:"attemptId,omitempty"`
+	UpdateKind            UsageUpdateKind   `json:"updateKind,omitempty"`
 	At                    time.Time
 	LogicalModel          string
 	ProviderNodeID        string
@@ -643,6 +645,17 @@ type UsageEvent struct {
 	CompatibilityFidelity CompatibilityFidelity     `json:"compatibilityFidelity,omitempty"`
 	CompatibilityLosses   []LossRecord              `json:"compatibilityLosses,omitempty"`
 	CompatibilityPlan     *CompatibilityPlanSummary `json:"compatibilityPlan,omitempty"`
+}
+
+type UsageCapturePolicy struct {
+	Enabled  bool  `json:"enabled"`
+	MaxBytes int64 `json:"maxBytes"`
+}
+
+type RawUsageFragment struct {
+	ProviderDefinition extensions.Ref  `json:"providerDefinition"`
+	API                string          `json:"api"`
+	Value              json.RawMessage `json:"value"`
 }
 
 type UsageSourceOptions struct {

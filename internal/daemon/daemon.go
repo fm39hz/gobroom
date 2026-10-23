@@ -43,6 +43,8 @@ type Config struct {
 	HTTPControl               bool
 	HTTPControlAddr           string
 	HTTPToken                 string
+	HTTPControlToken          string
+	UsagePolicy               *UsagePolicy
 	ProviderManifestDir       string
 	QuotaPolling              bool
 	UsageDrainTimeout         time.Duration
@@ -53,6 +55,7 @@ type Config struct {
 }
 
 type Daemon struct {
+	usagePolicy          UsagePolicy
 	config               Config
 	providerModules      []provider.RuntimeModule
 	store                *store.Store
@@ -181,6 +184,20 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if d.config.UsageDrainTimeout < 0 {
 		return fmt.Errorf("usage drain timeout must not be negative")
 	}
+	if d.config.HTTPControl && strings.TrimSpace(d.config.HTTPControlToken) == "" {
+		return fmt.Errorf("HTTP control token is required")
+	}
+	if d.config.HTTPControl && d.config.HTTPControlToken == d.config.HTTPToken {
+		return fmt.Errorf("HTTP control token must differ from inference token")
+	}
+	policy := DefaultUsagePolicy()
+	if d.config.UsagePolicy != nil {
+		policy = *d.config.UsagePolicy
+	}
+	if err := policy.Validate(); err != nil {
+		return err
+	}
+	d.usagePolicy = policy
 	callbackIngress, err := callbackIngressConfig(d.config.CallbackIngress)
 	if err != nil {
 		return err
@@ -387,6 +404,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	d.kernel.Operations = operationSnapshot
 	d.kernel.UsageCatalog = operationSnapshot.ExtensionCatalog()
+	d.kernel.UsageLimits = kernel.UsageLimits{MaxValues: d.usagePolicy.MaxValues, MaxExtensionBytes: d.usagePolicy.MaxExtensionBytes}
+	d.kernel.UsageCapture = kernel.UsageCapturePolicy{Enabled: d.usagePolicy.CaptureRaw, MaxBytes: d.usagePolicy.MaxRawBytes}
 	if err := s.SetUsageCatalog(d.kernel.UsageCatalog); err != nil {
 		_ = s.Close()
 		return fmt.Errorf("bind usage history catalog: %w", err)
@@ -394,6 +413,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if err := s.SetUsageLimits(d.kernel.UsageLimits); err != nil {
 		_ = s.Close()
 		return fmt.Errorf("bind usage history limits: %w", err)
+	}
+	if err := s.SetUsageCapturePolicy(d.kernel.UsageCapture); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("bind raw usage policy: %w", err)
 	}
 	d.kernel.Adapters = runtimeRegistry.AdaptersForBindings(runtimeBindings)
 	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiersForBindings(runtimeBindings)
@@ -504,6 +527,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	})
 	d.activationWake, d.activationDone = make(chan struct{}, 1), make(chan struct{})
 	go d.runCredentialActivations(ctx)
+	retentionDone := runUsageRetention(ctx, d.usagePolicy.Retention, s.PruneUsageBatch, func() { d.appendLog("warn", "usage retention pass incomplete") })
 	usageCtx, cancelUsage := context.WithCancelCause(context.Background())
 	usageDone := make(chan error, 1)
 	engine := d.kernel
@@ -527,6 +551,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	d.stop = func(stopCtx context.Context) error {
 		cancel()
+		<-retentionDone
 		d.cancelAuthorizationSessions()
 		d.authWG.Wait()
 		<-d.activationDone
@@ -586,7 +611,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 	if listeners.control != nil {
 		addresses.HTTPControl = listeners.control.Addr().String()
-		d.httpControl = newDaemonHTTPServer(addresses.HTTPControl, d.server.HandlerWithOptions(api.HandlerOptions{ControlPlane: true}), ctx)
+		d.httpControl = newDaemonHTTPServer(addresses.HTTPControl, d.controlHTTPHandler(), ctx)
 		d.serveHTTP(d.httpControl, listeners.control, "control plane")
 	}
 	if listeners.callback != nil {
@@ -1218,6 +1243,19 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 			d.appendLog("info", fmt.Sprintf("requeued %d runtime persistence dead letters", requeued))
 		}
 		return success(request, map[string]any{"requeued": requeued})
+	case "usage.detail":
+		var input UsageDetailRequest
+		if err := decodeParams(request.Params, &input); err != nil || input.ID <= 0 {
+			return fail(request, "usage detail requires a positive event ID and boolean options")
+		}
+		if err := d.usagePolicy.Authorize(input.UsageDetailOptions); err != nil {
+			return fail(request, err.Error())
+		}
+		item, err := d.fetchUsageDetail(ctx, input.ID, input.UsageDetailOptions)
+		if err != nil {
+			return fail(request, "usage detail is unavailable")
+		}
+		return success(request, item)
 	case "usage.list":
 		var input struct {
 			Limit *int `json:"limit"`
@@ -1246,7 +1284,7 @@ func (d *Daemon) handleIPC(ctx context.Context, request IPCRequest) IPCResponse 
 		if err != nil {
 			return fail(request, "before must be RFC3339")
 		}
-		deleted, err := d.store.PruneUsage(before)
+		deleted, err := d.store.PruneUsage(ctx, before)
 		if err != nil {
 			return fail(request, err.Error())
 		}

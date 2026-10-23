@@ -170,6 +170,61 @@ INSERT INTO connection_runtime(connection_id,status) VALUES('conn-preserve','rat
 	}
 }
 
+func TestUsageNumericTimestampShapeResetPreservesNonUsageData(t *testing.T) {
+	for _, missingColumn := range []string{"timestamp_seconds", "timestamp_nanos"} {
+		t.Run(missingColumn, func(t *testing.T) {
+			s := openUsageExtensionStore(t)
+			if err := s.SetUsageCapturePolicy(kernel.UsageCapturePolicy{Enabled: true, MaxBytes: 256}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SetUsageCatalog(storeUsageCatalog(t, `{"type":"number"}`, "Timestamp migration measurement")); err != nil {
+				t.Fatal(err)
+			}
+			event := rawUsageEvent(time.Date(2026, time.October, 23, 10, 0, 0, 1, time.UTC), `{"input_tokens":7}`)
+			event.Extensions = []extensions.UsageValue{{TypeRef: usageHistoryRef, Value: []byte(`7`)}}
+			if err := s.SaveUsageEvent(context.Background(), event); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Exec(`CREATE TABLE retention_config_fixture (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO retention_config_fixture VALUES('preserve','non-usage-state')`); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.runtime.close(); err != nil {
+				t.Fatal(err)
+			}
+			s.runtime = runtimeStatements{}
+			if _, err := s.DB.Exec(`DROP INDEX idx_usage_events_time`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB.Exec(`ALTER TABLE usage_events DROP COLUMN ` + missingColumn); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Migrate(); err != nil {
+				t.Fatal(err)
+			}
+			if got := s.UsageResetCounts(); got.Events != 1 || got.Daily != 1 {
+				t.Fatalf("numeric timestamp reset counts=%#v, want one event and one day", got)
+			}
+			for _, table := range []string{"usage_events", "usage_daily", "usage_raw_fragments", "usage_extension_values", "usage_extension_descriptor_schemas", "usage_extension_descriptors", "usage_extension_schemas"} {
+				var count int
+				if err := s.DB.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
+					t.Fatalf("after numeric timestamp reset %s rows=%d err=%v", table, count, err)
+				}
+			}
+			var retained string
+			if err := s.DB.QueryRow(`SELECT value FROM retention_config_fixture WHERE key='preserve'`).Scan(&retained); err != nil || retained != "non-usage-state" {
+				t.Fatalf("numeric timestamp reset changed non-usage state: value=%q err=%v", retained, err)
+			}
+			if err := s.prepareRuntimeStatements(); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.SaveUsageEvent(context.Background(), event); err != nil {
+				t.Fatalf("write with restored numeric timestamp bindings: %v", err)
+			}
+		})
+	}
+}
+
 func TestUsagePresenceAtomicRollbackAndCancellation(t *testing.T) {
 	s, err := Open(t.TempDir() + "/usage-atomic.db")
 	if err != nil {

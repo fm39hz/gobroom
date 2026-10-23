@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/usage"
 )
 
 func TestUsageSummaryReportsPartialCoverage(t *testing.T) {
@@ -54,7 +55,7 @@ func TestUsageTransactionRollsBackDetailsAndSummary(t *testing.T) {
 	if err != nil || len(baselineRows) != 1 {
 		t.Fatalf("baseline history rows=%d err=%v", len(baselineRows), err)
 	}
-	baselineDetail, err := s.UsageDetail(context.Background(), baselineRows[0].ID)
+	baselineDetail, err := s.UsageDetail(context.Background(), baselineRows[0].ID, usage.DetailOptions{IncludePrivate: true})
 	if err != nil || len(baselineDetail.Extensions) != 1 || string(baselineDetail.Extensions[0].Value) != `1` {
 		t.Fatalf("baseline detail=%#v err=%v", baselineDetail, err)
 	}
@@ -89,7 +90,7 @@ func assertUsageHistoryAndSummaryUnchanged(t *testing.T, s *Store, wantEvents, w
 		t.Fatalf("history rows=%d err=%v, want %d", len(events), err, wantEvents)
 	}
 	for _, event := range events {
-		detail, err := s.UsageDetail(context.Background(), event.ID)
+		detail, err := s.UsageDetail(context.Background(), event.ID, usage.DetailOptions{IncludePrivate: true})
 		if err != nil || len(detail.Extensions) != 1 || string(detail.Extensions[0].Value) != `1` {
 			t.Fatalf("event %d has missing or uncommitted detail: %#v err=%v", event.ID, detail, err)
 		}

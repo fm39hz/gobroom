@@ -29,7 +29,7 @@ func TestDaemonUsageWriteFailureIsVisibleWithoutFailingInference(t *testing.T) {
 	}))
 	defer upstream.Close()
 	root := t.TempDir()
-	config := Config{DBPath: filepath.Join(root, "state.db"), IPCPath: filepath.Join(root, "run", "daemon.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:0", HTTPControl: true, HTTPControlAddr: "127.0.0.1:0"}
+	config := Config{DBPath: filepath.Join(root, "state.db"), IPCPath: filepath.Join(root, "run", "daemon.sock"), HTTPEnabled: true, HTTPAddr: "127.0.0.1:0", HTTPControl: true, HTTPControlAddr: "127.0.0.1:0", HTTPControlToken: "usage-fixture-control"}
 	d := New(config)
 	if err := d.Start(context.Background()); err != nil {
 		t.Fatal(err)
@@ -119,7 +119,9 @@ func TestDaemonUsageWriteFailureIsVisibleWithoutFailingInference(t *testing.T) {
 	call()
 	wait(func(s usage.Status) bool { return s.Failed == 1 })
 	assertDegraded(readStatus(), 0)
-	response, err := client.Get("http://" + d.Addresses().HTTPControl + "/api/status")
+	request, _ := http.NewRequest(http.MethodGet, "http://"+d.Addresses().HTTPControl+"/api/status", nil)
+	request.Header.Set("Authorization", "Bearer "+config.HTTPControlToken)
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}

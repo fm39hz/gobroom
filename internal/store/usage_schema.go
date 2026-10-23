@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// UsageResetCount reports discarded rows when ambiguous legacy usage tables
-// are replaced during the nullable usage cutover.
+// UsageResetCount reports discarded rows when legacy usage tables are replaced
+// during the nullable usage or exact timestamp cutover.
 type UsageResetCount struct {
 	Events int64 `json:"events"`
 	Daily  int64 `json:"daily"`
@@ -56,6 +56,7 @@ func (s *Store) migrateUsageSchema() error {
 		}
 		if _, err := tx.Exec(`
 DROP TABLE IF EXISTS usage_extension_values;
+DROP TABLE IF EXISTS usage_raw_fragments;
 DROP TABLE IF EXISTS usage_extension_descriptor_schemas;
 DROP TABLE IF EXISTS usage_extension_descriptors;
 DROP TABLE IF EXISTS usage_extension_schemas;
@@ -73,6 +74,9 @@ DROP TABLE IF EXISTS usage_daily;`); err != nil {
 	if _, err := tx.Exec(usageExtensionDDL); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(usageRawDDL); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -83,6 +87,8 @@ DROP TABLE IF EXISTS usage_daily;`); err != nil {
 const usageEventsDDL = `CREATE TABLE IF NOT EXISTS usage_events (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	timestamp TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	timestamp_seconds INTEGER NOT NULL,
+	timestamp_nanos INTEGER NOT NULL CHECK(timestamp_nanos >= 0 AND timestamp_nanos < 1000000000),
 	logical_model TEXT, provider_node_id TEXT, external_model TEXT, connection_id TEXT,
 	status TEXT, latency_ms INTEGER,
 	input_tokens INTEGER, output_tokens INTEGER, cached_read_tokens INTEGER,
@@ -96,6 +102,7 @@ const usageEventsDDL = `CREATE TABLE IF NOT EXISTS usage_events (
 	compatibility_plan_json TEXT NOT NULL DEFAULT 'null'
 );
 CREATE INDEX IF NOT EXISTS idx_usage_events_timestamp ON usage_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_events_time ON usage_events(timestamp_seconds,timestamp_nanos,id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_attempt_id ON usage_events(attempt_id) WHERE attempt_id != '';`
 
 const usageDailyDDL = `CREATE TABLE IF NOT EXISTS usage_daily (
@@ -142,6 +149,12 @@ CREATE TABLE IF NOT EXISTS usage_extension_values (
 CREATE INDEX IF NOT EXISTS idx_usage_extension_values_descriptor
 	ON usage_extension_values(descriptor_kind,descriptor_id,descriptor_version);`
 
+const usageRawDDL = `CREATE TABLE IF NOT EXISTS usage_raw_fragments (
+	event_id INTEGER PRIMARY KEY REFERENCES usage_events(id) ON DELETE CASCADE,
+	provider_kind TEXT NOT NULL, provider_id TEXT NOT NULL, provider_version INTEGER NOT NULL,
+	api TEXT NOT NULL, value_json BLOB NOT NULL
+);`
+
 func usageTableExists(tx *sql.Tx, name string) (bool, error) {
 	var exists bool
 	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)`, name).Scan(&exists)
@@ -174,6 +187,11 @@ func usageEventsHavePresenceShape(tx *sql.Tx) (bool, error) {
 	}
 	for _, name := range []string{"timestamp", "logical_model", "provider_node_id", "external_model", "connection_id", "status", "latency_ms", "input_tokens", "output_tokens", "cached_read_tokens", "cached_write_tokens", "reasoning_tokens", "estimated_cost", "accounting_issues_json", "request_class", "session_id", "invocation_id", "attempt_id", "ttft_ms", "output_tokens_per_second", "compatibility_fidelity", "compatibility_losses_json", "compatibility_plan_json"} {
 		if _, ok := columns[name]; !ok {
+			return false, nil
+		}
+	}
+	for _, name := range []string{"timestamp_seconds", "timestamp_nanos"} {
+		if !columns[name] {
 			return false, nil
 		}
 	}

@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -71,8 +72,10 @@ INSERT INTO model_connection_assignments(model_id,connection_id,source) VALUES('
 	}
 	if _, err := source.DB.Exec(`INSERT INTO connection_runtime(connection_id,status,last_error,error_code,generation) VALUES('privacy-connection','degraded','runtime-health-marker','runtime-error-code-marker','runtime-health-generation-marker');
 INSERT INTO provider_runtime(provider_node_id,status,last_error,error_code,generation) VALUES('privacy-node','degraded','provider-health-marker','provider-error-marker','provider-generation-marker');
-INSERT INTO model_availability(connection_id,model_ref,status,reason,last_error,error_code,generation) VALUES('privacy-connection','privacy-model','blocked','runtime-quota-marker','model-health-marker','model-error-marker','model-generation-marker');
-INSERT INTO usage_events(timestamp,logical_model,provider_node_id,external_model,connection_id,status,input_tokens,output_tokens,estimated_cost,compatibility_fidelity) VALUES(CURRENT_TIMESTAMP,'runtime-logical-marker','privacy-node','runtime-external-marker','privacy-connection','runtime-usage-marker',12345,6789,987.65,'runtime-fidelity-marker');`); err != nil {
+INSERT INTO model_availability(connection_id,model_ref,status,reason,last_error,error_code,generation) VALUES('privacy-connection','privacy-model','blocked','runtime-quota-marker','model-health-marker','model-error-marker','model-generation-marker');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SaveUsageEvent(context.Background(), kernel.UsageEvent{At: time.Now(), LogicalModel: "runtime-logical-marker", ProviderNodeID: "privacy-node", ExternalModel: "runtime-external-marker", ConnectionID: "privacy-connection", Status: "runtime-usage-marker", InputTokens: new(int64(12345)), OutputTokens: new(int64(6789)), EstimatedCost: new(987.65), CompatibilityFidelity: "runtime-fidelity-marker"}); err != nil {
 		t.Fatal(err)
 	}
 	remaining := 17.0

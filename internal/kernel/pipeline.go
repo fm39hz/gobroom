@@ -320,9 +320,21 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 	decodeHooks.NormalizeProviderFailure = nil
 	decodeHooks.TransformResponse = nil
 	decodeHooks.CompleteUsage = nil
-	admitUsage := hooks.AdmitUsage
-	if admitUsage == nil {
-		admitUsage = func(event UsageEvent) UsageEvent { return event.SanitizeCommon() }
+	baseAdmission := hooks.AdmitUsage
+	if baseAdmission == nil {
+		baseAdmission = func(event UsageEvent) UsageEvent { return event.SanitizeCommon() }
+	}
+	admitUsage := func(event UsageEvent) UsageEvent {
+		raw := event.RawUsage
+		event.RawUsage = nil
+		if raw != nil && raw.ProviderDefinition != hooks.ProviderIssuer {
+			event.AccountingIssues = append(event.AccountingIssues, UsageIssue{Code: "raw_usage_issuer_mismatch"})
+		} else if raw != nil {
+			selected, issues := SelectRawUsage(hooks.UsageCapture, raw.ProviderDefinition, raw.API, raw.Value)
+			event.RawUsage = selected
+			event.AccountingIssues = append(event.AccountingIssues, issues...)
+		}
+		return baseAdmission(event)
 	}
 	firstByte := false
 	signalFirstByte := func(at time.Time) {
@@ -398,6 +410,12 @@ func (a ComposedAdapter) RenderResponse(ctx context.Context, response UpstreamRe
 		}
 		if event.Kind == EventUsage && event.Usage != nil {
 			completionUsage = admitUsage(MergeProviderUsage(completionUsage, *event.Usage))
+		}
+		if event.Usage != nil {
+			clientUsage := *event.Usage
+			clientUsage.RawUsage = nil
+			clientUsage = clientUsage.Clone()
+			event.Usage = &clientUsage
 		}
 		if !firstEvent {
 			firstEvent = true
