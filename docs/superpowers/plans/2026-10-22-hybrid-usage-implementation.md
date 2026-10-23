@@ -135,18 +135,27 @@ configuration/credential fingerprint unchanged and no additional history lost
 
 ## Task 4: Protocol normalization and faithful projections
 
-**Files:** Create `internal/adapter/openai/usage.go`, `usage_test.go`, `internal/adapter/anthropic/usage.go`, `usage_test.go`, `internal/adapter/gemini/usage.go`, `usage_test.go`, `internal/adapter/renderers/usage.go`, `usage_test.go`; modify the existing decoder/renderer files and `internal/provider/operation_primitives.go` only where wiring changes.
+**Files:** Add the OpenAI usage helper, protocol usage tests and shared `internal/adapter/usagewire` binding; update existing Anthropic/Gemini usage binding and renderer files, `internal/provider/operation_primitives.go`, builtin descriptor registration and public aliases. Keep the already verified Chat/Responses projection helpers in place rather than introducing a duplicate renderer utility.
 
 **Interfaces:** Package-local `decodeOpenAIUsage`, `decodeAnthropicUsage`, `decodeGeminiUsage` each take `json.RawMessage` and return `(kernel.UsageEvent, error)`. Their exact wire DTOs remain package-private. Renderers consume the presence-aware `UsageEvent` from Task 2. Typed native field structs use `json.RawMessage`/`json.Number` when precision must be retained; no string splitting or schema-by-string manipulation.
 
 Test assertion form: `if usage.InputTokens == nil || *usage.InputTokens != 1000 || usage.CachedReadTokens == nil || *usage.CachedReadTokens != 900 { t.Fatal("wrong cache normalization") }`. Use `CachedReadTokens`, `CachedWriteTokens` and `ReasoningTokens` consistently as the new common field names.
 
-- [ ] Add table tests for each JSON/SSE dialect and header source: missing versus zero; cache inclusion/exclusion differences; reasoning as output subset; partial/final reports; corrected snapshots; malformed numeric fields; absent usage at completion. Assert canonical total is 1000 with a cache subset of 900, not 1900, only where the provider fixture establishes the relationship.
-- [ ] Main observes RED with `go test ./internal/adapter/... ./internal/provider -run 'Usage' -count=1` before wiring the richer semantics.
-- [ ] Verify the meaning of each fixture from local reference source and checked wire samples. Normalize only evidenced disjoint components. Do not infer a Gemini reasoning relationship or provider alias from field names alone. Map known details into canonical counters; unfamiliar registered values remain module-owned.
-- [ ] Implement explicit Chat/Responses/Anthropic/Gemini output mappings. Unknown optional details stay absent; required unmappable facets obey existing fidelity/loss policy. Test native passthrough bytes remain unchanged where permitted and transformed accounting cannot alter original accounting.
-- [ ] Keep a provider-reported monetary amount distinct from `EstimatedCost`: represent it through a registered reported-charge value with precision-preserving amount, explicitly reported currency when available, and provenance. Never infer currency, settled status or a common daily charge sum from that value.
-- [ ] Main runs protocol tests plus kernel cross-protocol suites, installs and tests installed-CLI usage through temporary fake JSON/SSE upstreams. Commit each independently green protocol slice; workers own distinct adapter directories, and main alone owns shared renderer/kernel edits.
+- [x] Add table tests for each JSON/SSE dialect and header source: missing versus zero; cache inclusion/exclusion differences; reasoning as output subset; partial/final reports; corrected snapshots; malformed numeric fields; absent usage at completion. Assert canonical total is 1000 with a cache subset of 900, not 1900, only where the provider fixture establishes the relationship.
+- [x] Main observes missing-helper and semantic RED in focused protocol/provider runs before wiring the richer semantics; specific regression selectors also cover incomplete JSON, malformed terminal counters and JSON/SSE callback ownership.
+- [x] Verify the meaning of each fixture from local reference source and checked wire samples. Normalize only evidenced disjoint components. Do not infer a Gemini reasoning relationship or provider alias from field names alone. Map known details into canonical counters; unfamiliar registered values remain module-owned.
+- [x] Implement explicit Chat/Responses/Anthropic/Gemini output mappings. Unknown optional details stay absent; required unmappable facets obey existing fidelity/loss policy. Test native passthrough bytes remain unchanged where permitted and transformed accounting cannot alter original accounting.
+- [x] Keep a provider-reported monetary amount distinct from `EstimatedCost`: represent it through a registered reported-charge value with precision-preserving amount, explicitly reported currency when available, and provenance. Never infer currency, settled status or a common daily charge sum from that value.
+- [x] Main runs protocol tests plus kernel cross-protocol suites, installs and tests installed-CLI usage through temporary fake JSON/SSE upstreams. Commit each independently green protocol slice; workers own distinct adapter directories, and main alone owns shared renderer/kernel edits.
+
+Task 4 verified in `d2c587c` and acceptance `2e8e5ed`, installed with the Task 5
+checkpoint. Full root/external tests, vet and selected three-run race passed;
+independent review and scoped fixes passed. Real-daemon JSON/SSE charge tests
+preserve each invocation's precise amount or explicit zero without inferring
+currency or estimated cost. Explicit installed-client acceptance passed three
+race runs after `make install-all`. Main status=ok, control=serving=504, no
+persistence failures or live provider traffic. Counter and charge binding uses
+existing stdlib/jsonschema dependencies, not a new pricing/telemetry engine.
 
 ## Task 5: Immutable historical descriptors and complete summaries
 
@@ -158,11 +167,25 @@ Test assertion form: `if usage.InputTokens == nil || *usage.InputTokens != 1000 
 
 Test assertion form: `if summary.Attempts != 2 || summary.Input.Reported != 1 || summary.Input.Sum != 0 { t.Fatal("unknown counted as reported zero") }`. Use `UsageMetricSummary{Sum int64, Reported int64}` for token quantities and a separate float-valued estimated-cost summary; extensions have no automatic summary field.
 
-- [ ] Add `TestUsageHistoryRetainsExactDescriptorWithoutModule`, `TestUsageSummaryReportsPartialCoverage` and `TestUsageTransactionRollsBackDetailsAndSummary`. Assertions: one known-zero and one unknown input yield known sum zero with coverage 1/2; cache is not added again; arbitrary extension values do not alter common sums.
-- [ ] Main runs `go test ./internal/store -run 'UsageHistory|UsageSummaryReports|UsageTransaction' -count=1`; observe RED.
-- [ ] Store descriptor/schema snapshots once by exact identity/digest in data-only tables and usage values by event/descriptor identity. Persist event, details, issue metadata and daily updates in one context-aware transaction. Verify digest collision/mismatched descriptor identity fails rather than reinterpreting history. Do not invoke module factories when reading old records.
-- [ ] Keep precision-preserving raw bytes separate from normalized numerics. Prune dependent details and orphaned metadata safely under the same retention transaction; no unbounded metadata accumulation after history pruning. Overflow/cancellation retains existing persistence failure counters.
-- [ ] Main runs store/worker cancellation, atomicity and restart tests; install and query CLI common/history summaries after module removal in a temporary daemon. Commit `feat(store): persist versioned usage details and coverage`.
+- [x] Add `TestUsageHistoryRetainsExactDescriptorWithoutModule`, `TestUsageSummaryReportsPartialCoverage` and `TestUsageTransactionRollsBackDetailsAndSummary`. Assertions: one known-zero and one unknown input yield known sum zero with coverage 1/2; cache is not added again; arbitrary extension values do not alter common sums.
+- [x] Main runs `go test ./internal/store -run 'UsageHistory|UsageSummaryReports|UsageTransaction' -count=1`; observe RED.
+- [x] Store descriptor/schema snapshots once by exact identity/digest in data-only tables and usage values by event/descriptor identity. Persist event, details, issue metadata and daily updates in one context-aware transaction. Verify digest collision/mismatched descriptor identity fails rather than reinterpreting history. Do not invoke module factories when reading old records.
+- [x] Keep precision-preserving raw bytes separate from normalized numerics. Prune dependent details and orphaned metadata safely under the same retention transaction; no unbounded metadata accumulation after history pruning. Overflow/cancellation retains existing persistence failure counters.
+- [x] Main runs store/worker cancellation, atomicity and restart tests; install and query CLI common/history summaries after module removal in a temporary daemon. Commit `feat(store): persist versioned usage details and coverage`.
+
+Task 5 verified in `29ebd03`. Frozen data-only descriptor snapshots, schema
+documents and immutable dependency pins survive module removal; reads verify
+the entire recorded closure without loading a catalog or executable module.
+Unchanged data contracts can survive module rebuilds; changed metadata/digests
+fail closed. `UsageValue.OwnedEncoding` uses actual JSON encoding so escaped
+values and retained whitespace cannot bypass byte budgets. Repository-only
+`UsageDetail` is not a disclosure grant; ordinary CLI/IPC lists exclude values.
+Installed module-removal history tests passed three race runs. Main setup/
+credential fingerprint remained unchanged, usage rows stayed 0/0 through this
+upgrade; no additional history was discarded. Full conformance rerun passed
+after one unreproduced external-suite failure (first output lost its test name).
+Tasks 6–8 remain open, including authorized details/raw retention, the complete
+public-module inference acceptance and measured resource costs.
 
 ## Task 6: Opt-in raw retention and authorized management views
 

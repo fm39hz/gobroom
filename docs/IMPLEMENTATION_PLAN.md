@@ -10,12 +10,13 @@ journey across these milestones. Update it at integrated milestones; do not
 report only the feature currently being changed or infer product completeness
 from a green architecture subset.
 
-2026-10-22 integrated checkpoint: the approved [hybrid usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
-Tasks 1–3 and [typed-jobs proof](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
+2026-10-23 integrated checkpoint: the approved [hybrid usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
+Tasks 1–5 and [typed-jobs proof](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
 are verified and installed. Host 12 accounting preserves NULL/zero,
 cache/reasoning details, partial/full snapshots and daily reporting coverage,
-with per-dispatch identities, failed-attempt evidence and required-usage gates.
-Main daemon status=ok, control=serving=502. Usage Tasks 4–8 remain open;
+with per-dispatch identities, failed-attempt evidence, required-usage gates,
+typed protocol/charge normalization and immutable extension history.
+Main daemon status=ok, control=serving=504. Usage Tasks 6–8 remain open;
 M8/M15 and C1–C6 are not closed by this checkpoint. See the
 [product snapshot](PRODUCT_STATUS.md#latest-acceptance) for exact evidence.
 

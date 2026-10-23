@@ -35,10 +35,28 @@ Unfamiliar values use `Extensions []UsageValue`, exact `usage-value` refs and
 catalog-bound schemas. Registration is data-only, defaults private, and grants
 no aggregation, pricing, routing or disclosure behavior. This envelope and
 presence-aware common persistence and per-dispatch completion requirements are
-implemented; historical extension storage and gated raw/detail access remain in the
+implemented, including historical extension storage. Gated raw/detail access remains in the
 [approved usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md).
 No legacy numeric usage reader is retained. Earlier host-version notes below
 describe individual historical checkpoints, not the current module version.
+
+Typed protocol bindings use documented native quantities. Anthropic thinking
+maps `output_tokens_details.thinking_tokens`; uncached input is projected only
+when inclusive input and both cache components are known. Provider-reported
+charges use the private `gobroom.usage.reported-charge@1` value with a precise
+numeric lexeme, optional explicit currency and provenance, not `EstimatedCost`
+or an automatically comparable daily amount. The header source distinguishes
+`X-Estimated-Cost-USD` from `X-Usage-Cost-USD`; custom charge/currency headers
+are explicit bindings.
+
+Historical values and data-only descriptor/schema snapshots commit atomically
+with the event and common summary. Recorded schema pins verify the full
+dependency closure without module code or a current catalog. Unchanged data
+contracts may survive module rebuilds; conflicting schema/metadata fails closed.
+`UsageValue.OwnedEncoding` keeps actual encoded and retained data within bounds,
+including whitespace and JSON escaping, without losing numeric precision.
+Repository detail reads do not grant management disclosure; ordinary IPC/CLI
+lists remain payload-free until an explicit authorized detail policy is added.
 
 ## Ownership and design boundary
 

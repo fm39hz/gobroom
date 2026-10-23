@@ -78,7 +78,8 @@ Store and summary tests prove NULL/zero and per-metric coverage; explicit
 Full root/external tests and vet, existing conformance, and selected three-run
 race suites passed. Main control=serving=501, status=ok. Per-dispatch error
 accounting, historical extension metadata, capture/disclosure and their external
-module proof remain later tasks; this does not close C1 or all C1–C6.
+module proof were still later tasks at that checkpoint; this did not close C1
+or all C1–C6.
 
 Task 3 is verified in `bb16321` / `ccefbc3`: host invocation/dispatch IDs,
 once-only finalization across failure/fallback/auth retry, bounded source error
@@ -93,7 +94,32 @@ the small terminal-cancellation correction. Installed CLI attempt and presence
 acceptance each passed three race runs after installation. Main status=ok,
 control=serving=502; configuration/credential fingerprint unchanged. Historical
 extension details, capture/disclosure and full public-module/performance proof
-remain Tasks 4–8. No live upstream was called for acceptance.
+remained open at that checkpoint. No live upstream was called for acceptance.
+
+Tasks 4–5 are now verified (`d2c587c`, `29ebd03`, `2e8e5ed`). Typed protocol
+bindings preserve documented cache/thinking semantics, malformed corrections
+and accounting on incomplete JSON responses. Owned callback snapshots prevent
+client mutation of original charge bytes. Private reported-charge values retain
+precision, explicit currency when available and provenance without becoming
+estimates or aggregate charges. JSON/SSE real-daemon acceptance verifies each
+invocation's own value, not merely an aggregate set.
+
+Historical data-only descriptors and exact schema documents/pins survive
+module removal. Full closure verification rejects missing or altered links,
+dependency documents and coordinated digest rewrites; no current catalog,
+module factory or schema reinterpretation is required. Atomicity, pruning,
+metadata recreation and module rebuild tests passed. The internal repository
+detail API is not yet a management disclosure grant.
+
+Full root/external tests and vet, selected three-run race, independent scoped
+reviews and installed CLI acceptance passed after `make install-all`.
+Installed history/module-removal, charge JSON/SSE, attempt and presence tests
+each ran three times with race detection. Main status=ok, control=serving=504,
+configuration/credential fingerprint unchanged, no additional history lost.
+The full conformance rerun passed after an unreproduced external-suite failure
+whose initial output omitted the exact failing test. Tasks 6–8 still own raw/
+authorized details, complete external usage-module inference proof and measured
+resource costs. No live upstream call or new dependency was used.
 
 The read-only follow-up narrows the earlier result claim. Registered inline
 artifact values are validated by the catalog and output contract before the

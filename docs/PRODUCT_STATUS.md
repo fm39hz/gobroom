@@ -42,8 +42,12 @@ and one final accounting record, including rejected, failed and cancelled
 dispatches. Sources receive bounded response/error evidence before release;
 required accounting gates completion without granting replay or poisoning
 health. Direct callbacks and aggregate partial updates share admission bounds.
-Immutable historical extension details, remaining protocol/charge semantics,
-raw retention and gated detail access remain later tasks; C1 is not closed.
+Protocol bindings now preserve documented cache/thinking semantics and private
+reported charges without inventing currency or treating them as estimates.
+Historical extension values retain their immutable data descriptor, exact
+schema documents and dependency pins after module removal. Ordinary lists
+stay payload-free. Raw retention, authorized detail access, complete external
+usage-module acceptance and resource measurement remain later tasks; C1 is not closed.
 Registered values do not automatically become aggregation, pricing or routing
 inputs. Native passthrough alone is not normalized accounting.
 
@@ -105,22 +109,21 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
-Per-dispatch accounting checkpoint `bb16321` / `ccefbc3`: full root/external
-regression and vet passed, with selected three-run race coverage. Existing
-conformance passed on `bb16321`; the final cancellation guard then passed fresh
-full regression/vet and focused three-run race. Independent scoped reviews
-passed. After `make install-all`, installed CLI attempt and presence fixtures
-each passed three race runs: one 429 rejection plus one successful dispatch
-share an invocation ID but have distinct attempt IDs, exact provider/account
-attribution, nullable quantities and per-metric coverage. Strict operation
-client schemas do not gain fields from operational accounting. Main status=ok,
-control=serving=502, no persistence failures; configuration/credential fingerprint
-unchanged, no additional usage history lost (0 rows before this upgrade).
-No live provider traffic was used.
+Protocol/history checkpoint `d2c587c` / `29ebd03`, inference acceptance
+`2e8e5ed`: full root/external regression, vet, selected three-run race suites,
+independent review and scoped fixes passed. Full conformance rerun passed after
+one external-suite failure that did not reproduce in a direct run; its first
+output was truncated, so no exact cause is claimed.
 
-Installed public-module regressions also passed three race runs for typed jobs,
-usage catalog, concurrent JSON/SSE and response-transform lifecycle. This is
-not yet historical usage-extension persistence or the final combined M15 gate.
+After `make install-all`, explicit installed CLI tests each passed three race
+runs for charge JSON/SSE inference, history after module removal, per-dispatch
+identity/fallback and unknown versus zero. Each JSON/SSE invocation retained
+its own precise amount or explicit zero; ordinary controls exposed neither
+extension values nor credentials. Installed public-module regressions for typed
+jobs, catalog, concurrent JSON/SSE and response transforms also passed three
+race runs. Main status=ok, control=serving=504, persistence failures=0;
+configuration/credential fingerprint unchanged and usage rows 0/0 across the
+upgrade. No live provider traffic or additional history loss occurred.
 
 The initial nullable-usage cutover discarded 4 ambiguous events and 3 daily
 rows under the pre-release reset policy, preserving configuration/credentials.
@@ -132,9 +135,8 @@ queue rejection and invalidation behavior.
 
 ## Next core work
 
-1. Execute hybrid usage Tasks 4–8: finish protocol/reported-charge semantics,
-   historical descriptor/value persistence, explicit capture/disclosure,
-   external-module acceptance and resource measurement. Tasks 1–3 are verified;
+1. Execute hybrid usage Tasks 6–8: explicit capture/disclosure, complete
+   external-module inference acceptance and resource measurement. Tasks 1–5 are verified;
    this is not yet the complete no-kernel-change catch-up proof.
 2. Include the verified typed-jobs artifact/renderer implementation in the
    final combined acceptance/review. Do not revive a text tunnel or introduce
