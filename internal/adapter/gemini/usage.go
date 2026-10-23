@@ -2,46 +2,34 @@ package gemini
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
-// UnmarshalJSON only relaxes optional usage metadata. The enclosing response,
-// content, and tool fields still use their normal JSON decoders.
 func (usage *geminiUsageMetadata) UnmarshalJSON(data []byte) error {
-	*usage = geminiUsageMetadata{}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		if _, optionalFault := err.(*json.UnmarshalTypeError); !optionalFault {
-			return err
+	type wire geminiUsageMetadata
+	var decoded wire
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		var typeError *json.UnmarshalTypeError
+		if errors.As(err, &typeError) {
+			*usage = geminiUsageMetadata{AccountingIssues: []kernel.UsageIssue{{Code: "invalid_usage_counter"}}}
+			return nil
 		}
-		usage.AccountingIssues = []kernel.UsageIssue{{Code: "invalid_usage_counter"}}
-		return nil
+		return err
 	}
-	invalid := false
-	for _, field := range []struct {
-		name        string
-		destination **int64
-	}{
-		{"promptTokenCount", &usage.PromptTokenCount},
-		{"candidatesTokenCount", &usage.CandidatesTokenCount},
-		{"totalTokenCount", &usage.TotalTokenCount},
-		{"cachedContentTokenCount", &usage.CachedContentTokenCount},
-		{"thoughtsTokenCount", &usage.ThoughtsTokenCount},
-	} {
-		raw, present := fields[field.name]
-		if !present {
-			continue
-		}
-		var count *int64
-		if err := json.Unmarshal(raw, &count); err != nil || (count != nil && *count < 0) {
-			invalid = true
-			continue
-		}
-		*field.destination = count
-	}
-	if invalid {
+	*usage = geminiUsageMetadata(decoded)
+	if usage.PromptTokenCount.Invalid || usage.CandidatesTokenCount.Invalid || usage.TotalTokenCount.Invalid ||
+		usage.CachedContentTokenCount.Invalid || usage.ThoughtsTokenCount.Invalid {
 		usage.AccountingIssues = []kernel.UsageIssue{{Code: "invalid_usage_counter"}}
 	}
 	return nil
+}
+
+func decodeGeminiUsage(data json.RawMessage) (kernel.UsageEvent, error) {
+	var native geminiUsageMetadata
+	if err := json.Unmarshal(data, &native); err != nil {
+		return kernel.UsageEvent{}, err
+	}
+	return geminiUsage(&native), nil
 }

@@ -191,6 +191,7 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 	}
 	contentType := strings.ToLower(response.Headers.Get("content-type"))
 	if strings.Contains(contentType, "text/event-stream") {
+		usageState := openAIUsageState{}
 		scanner := bufio.NewScanner(response.Body)
 		scanner.Buffer(make([]byte, 4096), 4*1024*1024)
 		scanner.Split(splitSSELines)
@@ -237,12 +238,15 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				return fmt.Errorf("decode upstream SSE JSON: %w", err)
 			}
 			if errPayload, candidate := openAIErrorPayload(payload, []byte(data), true); candidate {
-				event, ok, usageErr := openAIUsageFromPayload(payload)
+				wire, ok, usageErr := openAIUsageWireFromPayload(payload)
 				if usageErr != nil {
 					return fmt.Errorf("decode OpenAI provider error usage: %w", usageErr)
 				}
-				if ok && hooks.OnProviderUsage != nil {
-					hooks.OnProviderUsage(event)
+				if ok {
+					usageState = usageState.apply(&wire)
+					if hooks.OnProviderUsage != nil {
+						hooks.OnProviderUsage(usageState.snapshot())
+					}
 				}
 				evidence, err := kernel.NewProviderResponseError(errPayload)
 				if err != nil {
@@ -251,12 +255,15 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				return evidence
 			}
 			if stringValue(payload["type"]) == "response.incomplete" {
-				event, exists, usageErr := openAIUsageFromPayload(payload)
+				wire, exists, usageErr := openAIUsageWireFromPayload(payload)
 				if usageErr != nil {
 					return fmt.Errorf("decode OpenAI incomplete response usage: %w", usageErr)
 				}
-				if exists && hooks.OnProviderUsage != nil {
-					hooks.OnProviderUsage(event)
+				if exists {
+					usageState = usageState.apply(&wire)
+					if hooks.OnProviderUsage != nil {
+						hooks.OnProviderUsage(usageState.snapshot())
+					}
 				}
 				return fmt.Errorf("OpenAI Responses SSE response was incomplete")
 			}
@@ -272,7 +279,16 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 					completed = true
 				}
 				if event.Usage != nil {
-					usage = kernel.MergeProviderUsage(usage, *event.Usage)
+					wire, found, usageErr := openAIUsageWireFromPayload(payload)
+					if usageErr != nil {
+						return fmt.Errorf("decode OpenAI usage snapshot: %w", usageErr)
+					}
+					if found {
+						usageState = usageState.apply(&wire)
+						canonical := usageState.snapshot()
+						event.Usage = &canonical
+						usage = canonical.Clone()
+					}
 				}
 				if err := emit(event); err != nil {
 					return err
@@ -302,12 +318,12 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 		return fmt.Errorf("decode upstream JSON: %w", err)
 	}
 	if errPayload, candidate := openAIErrorPayload(payload, data, false); candidate {
-		event, ok, usageErr := openAIUsageFromPayload(payload)
+		wire, ok, usageErr := openAIUsageWireFromPayload(payload)
 		if usageErr != nil {
 			return fmt.Errorf("decode OpenAI provider error usage: %w", usageErr)
 		}
 		if ok && hooks.OnProviderUsage != nil {
-			hooks.OnProviderUsage(event)
+			hooks.OnProviderUsage((openAIUsageState{}).apply(&wire).snapshot())
 		}
 		evidence, err := kernel.NewProviderResponseError(errPayload)
 		if err != nil {
@@ -316,6 +332,13 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 		return evidence
 	}
 	if stringValue(payload["status"]) == "incomplete" {
+		wire, exists, usageErr := openAIUsageWireFromPayload(payload)
+		if usageErr != nil {
+			return fmt.Errorf("decode OpenAI incomplete response usage: %w", usageErr)
+		}
+		if exists && hooks.OnProviderUsage != nil {
+			hooks.OnProviderUsage((openAIUsageState{}).apply(&wire).snapshot())
+		}
 		return fmt.Errorf("OpenAI Responses JSON has non-completed status %q", "incomplete")
 	}
 	var events []kernel.ResponseEvent
@@ -329,13 +352,23 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 		return err
 	}
 	var usage kernel.UsageEvent
+	usageState := openAIUsageState{}
 	completed := false
 	for _, event := range events {
 		if event.Kind == kernel.EventResponseComplete {
 			completed = true
 		}
 		if event.Usage != nil {
-			usage = kernel.MergeProviderUsage(usage, *event.Usage)
+			wire, found, usageErr := openAIUsageWireFromPayload(payload)
+			if usageErr != nil {
+				return fmt.Errorf("decode OpenAI usage snapshot: %w", usageErr)
+			}
+			if found {
+				usageState = usageState.apply(&wire)
+				canonical := usageState.snapshot()
+				event.Usage = &canonical
+				usage = canonical.Clone()
+			}
 		}
 		if err := emit(event); err != nil {
 			return err
@@ -388,34 +421,42 @@ func openAIErrorPayload(payload map[string]any, data []byte, sse bool) ([]byte, 
 	return canonical, true
 }
 
-func openAIUsageFromPayload(payload map[string]any) (kernel.UsageEvent, bool, error) {
-	if event, found, err := openAIUsageFromMap(payload["usage"]); err != nil {
-		return kernel.UsageEvent{}, false, err
-	} else if found {
-		return event, true, nil
+func openAIUsageWireFromPayload(payload map[string]any) (openAIUsageWire, bool, error) {
+	if wire, found, err := openAIUsageWireFromMap(payload["usage"]); found || err != nil {
+		return wire, found, err
 	}
 	if response, ok := payload["response"].(map[string]any); ok {
-		if event, found, err := openAIUsageFromMap(response["usage"]); err != nil {
-			return kernel.UsageEvent{}, false, err
-		} else if found {
-			return event, true, nil
+		if wire, found, err := openAIUsageWireFromMap(response["usage"]); found || err != nil {
+			return wire, found, err
 		}
 		if providerError, ok := response["error"].(map[string]any); ok {
-			if event, found, err := openAIUsageFromMap(providerError["usage"]); err != nil {
-				return kernel.UsageEvent{}, false, err
-			} else if found {
-				return event, true, nil
+			if wire, found, err := openAIUsageWireFromMap(providerError["usage"]); found || err != nil {
+				return wire, found, err
 			}
 		}
 	}
 	if providerError, ok := payload["error"].(map[string]any); ok {
-		if event, found, err := openAIUsageFromMap(providerError["usage"]); err != nil {
-			return kernel.UsageEvent{}, false, err
-		} else if found {
-			return event, true, nil
+		if wire, found, err := openAIUsageWireFromMap(providerError["usage"]); found || err != nil {
+			return wire, found, err
 		}
 	}
-	return kernel.UsageEvent{}, false, nil
+	return openAIUsageWire{}, false, nil
+}
+
+func openAIUsageWireFromMap(raw any) (openAIUsageWire, bool, error) {
+	fields, ok := raw.(map[string]any)
+	if !ok {
+		return openAIUsageWire{}, false, nil
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return openAIUsageWire{}, false, err
+	}
+	wire, err := decodeOpenAIUsageWire(encoded)
+	if err != nil {
+		return openAIUsageWire{}, false, err
+	}
+	return wire, true, nil
 }
 
 func openAIUsageFromMap(raw any) (kernel.UsageEvent, bool, error) {
@@ -432,50 +473,10 @@ func openAIUsageFromMap(raw any) (kernel.UsageEvent, bool, error) {
 		invalidCounter()
 		return event, true, nil
 	}
-	var usage map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &usage); err != nil {
+	event, err = decodeOpenAIUsage(encoded)
+	if err != nil {
 		invalidCounter()
 		return event, true, nil
-	}
-	// Bind optional fields independently so one invalid counter cannot discard
-	// a valid answer or the other reported counters.
-	detailCounter := func(detailsName, counterName string) json.RawMessage {
-		detailsRaw := usage[detailsName]
-		if len(detailsRaw) == 0 || bytes.Equal(detailsRaw, []byte("null")) {
-			return nil
-		}
-		var details map[string]json.RawMessage
-		if json.Unmarshal(detailsRaw, &details) != nil {
-			invalidCounter()
-			return nil
-		}
-		return details[counterName]
-	}
-	inputRaw, outputRaw := usage["input_tokens"], usage["output_tokens"]
-	if len(inputRaw) == 0 {
-		inputRaw = usage["prompt_tokens"]
-	}
-	if len(outputRaw) == 0 {
-		outputRaw = usage["completion_tokens"]
-	}
-	for _, item := range []struct {
-		raw    json.RawMessage
-		target **int64
-	}{
-		{inputRaw, &event.InputTokens}, {outputRaw, &event.OutputTokens},
-		{detailCounter("input_tokens_details", "cached_tokens"), &event.CachedReadTokens}, {detailCounter("prompt_tokens_details", "cached_tokens"), &event.CachedReadTokens},
-		{detailCounter("input_tokens_details", "cache_write_tokens"), &event.CachedWriteTokens}, {detailCounter("prompt_tokens_details", "cache_write_tokens"), &event.CachedWriteTokens},
-		{detailCounter("output_tokens_details", "reasoning_tokens"), &event.ReasoningTokens}, {detailCounter("completion_tokens_details", "reasoning_tokens"), &event.ReasoningTokens},
-	} {
-		if len(item.raw) == 0 || bytes.Equal(item.raw, []byte("null")) {
-			continue
-		}
-		var value int64
-		if err := json.Unmarshal(item.raw, &value); err != nil || value < 0 {
-			invalidCounter()
-			continue
-		}
-		*item.target = new(value)
 	}
 	return event, event.HasReportedUsage() || len(event.AccountingIssues) > 0, nil
 }

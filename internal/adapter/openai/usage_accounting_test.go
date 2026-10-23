@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -48,6 +49,62 @@ func TestOpenAIIssueOnlyUsagePreservesProviderError(t *testing.T) {
 	}
 }
 
+func TestOpenAIIncompleteJSONReportsUsageBeforeReturningError(t *testing.T) {
+	for _, tc := range []struct {
+		name, usage           string
+		wantInput, wantOutput *int64
+		wantIssue             bool
+	}{
+		{name: "valid", usage: `{"input_tokens":7,"output_tokens":3}`, wantInput: new(int64(7)), wantOutput: new(int64(3))},
+		{name: "malformed output preserves input", usage: `{"input_tokens":7,"output_tokens":"private-counter"}`, wantInput: new(int64(7)), wantIssue: true},
+		{name: "issue only", usage: `{"output_tokens":"private-counter"}`, wantIssue: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"object":"response","id":"resp_incomplete_usage","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"private-partial-answer"}]}],"usage":` + tc.usage + `}`
+			var received []kernel.UsageEvent
+			emitted, completed := 0, 0
+			err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+				Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)),
+			}, normalize.FormatOpenAIResponses, func(kernel.ResponseEvent) error {
+				emitted++
+				return nil
+			}, kernel.StreamHooks{
+				OnProviderUsage: func(usage kernel.UsageEvent) { received = append(received, usage) },
+				OnComplete:      func(kernel.UsageEvent) { completed++ },
+			})
+			var providerError *kernel.ProviderResponseError
+			if err == nil || !strings.Contains(err.Error(), `non-completed status "incomplete"`) || errors.As(err, &providerError) {
+				t.Fatalf("incomplete JSON changed error classification: %T %v", err, err)
+			}
+			if emitted != 0 || completed != 0 {
+				t.Fatalf("incomplete JSON replayed response or completed successfully: emitted=%d completed=%d", emitted, completed)
+			}
+			if len(received) != 1 {
+				t.Fatalf("expected one accounting callback before returning incomplete error, got %d", len(received))
+			}
+			usage := received[0]
+			if usage.UpdateKind != kernel.UsageFullSnapshot || !sameOptionalInt(usage.InputTokens, tc.wantInput) || !sameOptionalInt(usage.OutputTokens, tc.wantOutput) {
+				t.Fatalf("incomplete JSON lost canonical usage or valid sibling counters: %+v", usage)
+			}
+			if !tc.wantIssue && len(usage.AccountingIssues) != 0 || tc.wantIssue && len(usage.AccountingIssues) == 0 {
+				t.Fatalf("unexpected malformed-counter accounting evidence: %+v", usage.AccountingIssues)
+			}
+			for _, issue := range usage.AccountingIssues {
+				if issue.Code != "invalid_usage_counter" {
+					t.Fatalf("unexpected accounting issue code: %q", issue.Code)
+				}
+			}
+			encoded, marshalErr := json.Marshal(usage.AccountingIssues)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if strings.Contains(string(encoded), "private") || strings.Contains(string(encoded), "cannot unmarshal") {
+				t.Fatalf("accounting evidence contains private data or decoder details: %s", encoded)
+			}
+		})
+	}
+}
+
 func TestOpenAIResponsesTerminalUsageIsFullAccumulatedSnapshot(t *testing.T) {
 	body := "data: {\"type\":\"response.output_item.added\",\"usage\":{\"input_tokens\":11}}\n\n" +
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_usage\",\"status\":\"completed\",\"usage\":{\"output_tokens\":6}}}\n\n"
@@ -68,6 +125,71 @@ func TestOpenAIResponsesTerminalUsageIsFullAccumulatedSnapshot(t *testing.T) {
 	}
 	if final.CachedReadTokens != nil || final.CachedWriteTokens != nil || final.ReasoningTokens != nil {
 		t.Fatalf("terminal snapshot fabricated unreported counters: %+v", final)
+	}
+}
+
+func TestOpenAIResponsesMalformedLaterCounterInvalidatesEarlierValue(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_invalidated\",\"status\":\"completed\",\"usage\":{\"output_tokens\":\"bad\"}}}\n\n"
+	var final kernel.UsageEvent
+	err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, normalize.FormatOpenAIResponses, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
+		OnComplete: func(usage kernel.UsageEvent) { final = usage },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.InputTokens == nil || *final.InputTokens != 7 || final.OutputTokens != nil {
+		t.Fatalf("later malformed output must invalidate only output while retaining input: %+v", final)
+	}
+	if final.UpdateKind != kernel.UsageFullSnapshot {
+		t.Fatalf("terminal usage must be a canonical full snapshot, got %q", final.UpdateKind)
+	}
+}
+
+func TestOpenAIResponsesTerminalZeroChargeReplacesEarlierCharge(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"usage\":{\"input_tokens\":7,\"cost\":0.1234567890123456789}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_cost\",\"status\":\"completed\",\"usage\":{\"cost\":0}}}\n\n"
+	var final kernel.UsageEvent
+	err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, normalize.FormatOpenAIResponses, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
+		OnComplete: func(usage kernel.UsageEvent) { final = usage },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(final.Extensions) != 1 {
+		t.Fatalf("terminal zero charge must replace the earlier charge: %+v", final.Extensions)
+	}
+	var charge usagewire.ReportedCharge
+	if err := json.Unmarshal(final.Extensions[0].Value, &charge); err != nil {
+		t.Fatal(err)
+	}
+	if charge.Amount != "0" {
+		t.Fatalf("terminal charge lost exact zero correction: %q", charge.Amount)
+	}
+}
+
+func TestOpenAIResponsesErrorStatusUsageInvalidatesCounterAndPreservesError(t *testing.T) {
+	body := "data: {\"type\":\"response.output_item.added\",\"usage\":{\"input_tokens\":7,\"output_tokens\":3}}\n\n" +
+		"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"provider_failure\"},\"usage\":{\"output_tokens\":\"bad\"}}}\n\n"
+	var received []kernel.UsageEvent
+	err := decodeOpenAIResponse(context.Background(), kernel.UpstreamResponse{
+		Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)),
+	}, normalize.FormatOpenAIResponses, func(kernel.ResponseEvent) error { return nil }, kernel.StreamHooks{
+		OnProviderUsage: func(usage kernel.UsageEvent) { received = append(received, usage) },
+	})
+	var providerError *kernel.ProviderResponseError
+	if !errors.As(err, &providerError) {
+		t.Fatalf("expected original provider response error, got %T: %v", err, err)
+	}
+	if len(received) != 1 {
+		t.Fatalf("expected one terminal usage observation, got %d", len(received))
+	}
+	if received[0].InputTokens == nil || *received[0].InputTokens != 7 || received[0].OutputTokens != nil {
+		t.Fatalf("terminal error usage must retain input and invalidate output: %+v", received[0])
 	}
 }
 

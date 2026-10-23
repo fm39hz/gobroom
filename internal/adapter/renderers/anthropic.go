@@ -288,7 +288,7 @@ func (s *anthropicSession) Finish(_ context.Context, decodeErr error) error {
 		if s.stopReason == "" {
 			s.stopReason = "end_turn"
 		}
-		if err := s.emitSSE("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": s.stopReason, "stop_sequence": nil}, "usage": anthropicOutputUsage(s.usage.OutputTokens)}); err != nil {
+		if err := s.emitSSE("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": s.stopReason, "stop_sequence": nil}, "usage": anthropicUsage(s.usage)}); err != nil {
 			return err
 		}
 		if err := s.emitSSE("message_stop", map[string]any{"type": "message_stop"}); err != nil {
@@ -345,21 +345,33 @@ func (s *anthropicSession) startMessage() error {
 	return s.emitSSE("message_start", map[string]any{"type": "message_start", "message": message})
 }
 
-func anthropicUsage(usage kernel.UsageEvent) map[string]any {
-	result := map[string]any{}
-	if usage.InputTokens != nil {
-		result["input_tokens"] = *usage.InputTokens
-	}
-	if usage.OutputTokens != nil {
-		result["output_tokens"] = *usage.OutputTokens
-	}
-	return result
+type anthropicUsageDTO struct {
+	InputTokens              *int64                        `json:"input_tokens,omitempty"`
+	CacheReadInputTokens     *int64                        `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens *int64                        `json:"cache_creation_input_tokens,omitempty"`
+	OutputTokens             *int64                        `json:"output_tokens,omitempty"`
+	OutputTokensDetails      *anthropicOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
-func anthropicOutputUsage(output *int64) map[string]any {
-	result := map[string]any{}
-	if output != nil {
-		result["output_tokens"] = *output
+type anthropicOutputTokensDetails struct {
+	ThinkingTokens *int64 `json:"thinking_tokens,omitempty"`
+}
+
+func anthropicUsage(usage kernel.UsageEvent) anthropicUsageDTO {
+	result := anthropicUsageDTO{
+		CacheReadInputTokens:     usage.CachedReadTokens,
+		CacheCreationInputTokens: usage.CachedWriteTokens,
+		OutputTokens:             usage.OutputTokens,
+	}
+	if usage.InputTokens != nil && usage.CachedReadTokens != nil && usage.CachedWriteTokens != nil {
+		total, read, write := *usage.InputTokens, *usage.CachedReadTokens, *usage.CachedWriteTokens
+		if total >= 0 && read >= 0 && write >= 0 && read <= total && write <= total-read {
+			uncached := total - read - write
+			result.InputTokens = &uncached
+		}
+	}
+	if usage.ReasoningTokens != nil {
+		result.OutputTokensDetails = &anthropicOutputTokensDetails{ThinkingTokens: usage.ReasoningTokens}
 	}
 	return result
 }

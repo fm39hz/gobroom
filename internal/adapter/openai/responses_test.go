@@ -242,7 +242,7 @@ func TestKernelPreservesNativeResponsesJSONWithoutTransforms(t *testing.T) {
 }
 
 func TestKernelRendersResponsesJSONItemsAsAnthropicToolUseBlocks(t *testing.T) {
-	responseBody := `{"id":"resp_crosswire","object":"response","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"I found two results."}]},{"id":"fc_item_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"alpha\"}"},{"id":"fc_item_2","type":"function_call","call_id":"call_2","name":"lookup","arguments":"{\"q\":\"beta\"}"}],"usage":{"input_tokens":10,"output_tokens":5}}`
+	responseBody := `{"id":"resp_crosswire","object":"response","status":"completed","output":[{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"I found two results."}]},{"id":"fc_item_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"alpha\"}"},{"id":"fc_item_2","type":"function_call","call_id":"call_2","name":"lookup","arguments":"{\"q\":\"beta\"}"}],"usage":{"input_tokens":10,"output_tokens":5,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}`
 	composed := NewResponsesAdapter().(kernel.ComposedAdapter)
 	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(responseBody)), Request: request}, nil

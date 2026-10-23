@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
+	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/quota"
 )
@@ -202,17 +204,64 @@ func (HTTPHeaderUsageSource) EnrichUsage(_ context.Context, route kernel.Route, 
 	}
 	costHeader := route.UsageOptions.EstimatedCostHeader
 	if costHeader == "" {
-		costHeader = "X-Usage-Cost-USD"
+		costHeader = "X-Estimated-Cost-USD"
 	}
-	if value, err := strconv.ParseInt(strings.TrimSpace(headers.Get(inputHeader)), 10, 64); err == nil && value >= 0 {
-		event.InputTokens = new(value)
+	issue := func(code string) {
+		event.AccountingIssues = append(event.AccountingIssues, kernel.UsageIssue{Code: code})
 	}
-	if value, err := strconv.ParseInt(strings.TrimSpace(headers.Get(outputHeader)), 10, 64); err == nil && value >= 0 {
-		event.OutputTokens = new(value)
+	counter := func(name string, target **int64) {
+		values := headers.Values(name)
+		if len(values) == 0 {
+			return
+		}
+		value, err := strconv.ParseInt(strings.TrimSpace(values[0]), 10, 64)
+		if len(values) != 1 || err != nil || value < 0 {
+			issue("invalid_usage_counter")
+			return
+		}
+		*target = new(value)
 	}
-	if value, err := strconv.ParseFloat(strings.TrimSpace(headers.Get(costHeader)), 64); err == nil && value >= 0 && !math.IsInf(value, 0) && !math.IsNaN(value) {
-		event.EstimatedCost = new(value)
+	counter(inputHeader, &event.InputTokens)
+	counter(outputHeader, &event.OutputTokens)
+	if values := headers.Values(costHeader); len(values) > 0 {
+		value, err := strconv.ParseFloat(strings.TrimSpace(values[0]), 64)
+		if len(values) != 1 || err != nil || value < 0 || math.IsInf(value, 0) || math.IsNaN(value) {
+			issue("invalid_estimated_cost")
+		} else {
+			event.EstimatedCost = new(value)
+		}
 	}
+	chargeHeader := route.UsageOptions.ReportedChargeHeader
+	if chargeHeader == "" {
+		chargeHeader = "X-Usage-Cost-USD"
+	}
+	if values := headers.Values(chargeHeader); len(values) > 0 {
+		var currency *string
+		if http.CanonicalHeaderKey(chargeHeader) == "X-Usage-Cost-Usd" {
+			currency = new("USD")
+		}
+		valid := len(values) == 1
+		if name := route.UsageOptions.ReportedCurrencyHeader; name != "" {
+			currencies := headers.Values(name)
+			if len(currencies) > 1 {
+				valid = false
+			}
+			if len(currencies) == 1 {
+				reported := strings.TrimSpace(currencies[0])
+				if currency != nil && *currency != reported {
+					valid = false
+				}
+				currency = &reported
+			}
+		}
+		value, err := usagewire.ChargeValue(json.RawMessage(strings.TrimSpace(values[0])), currency, "header", http.CanonicalHeaderKey(chargeHeader))
+		if !valid || err != nil {
+			issue("invalid_reported_charge")
+		} else {
+			event = kernel.MergeProviderUsage(event, kernel.UsageEvent{Extensions: []extensions.UsageValue{value}})
+		}
+	}
+	event.AccountingIssues = event.BoundedIssues()
 	return event, nil
 }
 

@@ -3,6 +3,7 @@ package gemini
 import (
 	"encoding/json"
 
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
@@ -99,11 +100,11 @@ type geminiCandidate struct {
 }
 
 type geminiUsageMetadata struct {
-	PromptTokenCount        *int64              `json:"promptTokenCount,omitempty"`
-	CandidatesTokenCount    *int64              `json:"candidatesTokenCount,omitempty"`
-	TotalTokenCount         *int64              `json:"totalTokenCount,omitempty"`
-	CachedContentTokenCount *int64              `json:"cachedContentTokenCount,omitempty"`
-	ThoughtsTokenCount      *int64              `json:"thoughtsTokenCount,omitempty"`
+	PromptTokenCount        usagewire.Counter   `json:"promptTokenCount,omitempty"`
+	CandidatesTokenCount    usagewire.Counter   `json:"candidatesTokenCount,omitempty"`
+	TotalTokenCount         usagewire.Counter   `json:"totalTokenCount,omitempty"`
+	CachedContentTokenCount usagewire.Counter   `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount      usagewire.Counter   `json:"thoughtsTokenCount,omitempty"`
 	AccountingIssues        []kernel.UsageIssue `json:"-"`
 }
 

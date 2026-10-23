@@ -347,7 +347,10 @@ func TestAnthropicRendererMergesPartialUsageInJSONAndSSE(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, usage := range []*kernel.UsageEvent{{InputTokens: new(int64(100))}, {OutputTokens: new(int64(4))}} {
+			for _, usage := range []*kernel.UsageEvent{
+				{InputTokens: new(int64(100)), CachedReadTokens: new(int64(0)), CachedWriteTokens: new(int64(0))},
+				{OutputTokens: new(int64(4))},
+			} {
 				if err := session.Emit(context.Background(), kernel.ResponseEvent{Kind: kernel.EventUsage, Usage: usage}); err != nil {
 					t.Fatal(err)
 				}

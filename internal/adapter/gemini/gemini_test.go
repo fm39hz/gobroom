@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
@@ -390,12 +391,12 @@ func TestGeminiUsagePreservesMissingFieldsAndExplicitZero(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"promptTokenCount":0}`), &metadata); err != nil {
 		t.Fatal(err)
 	}
-	if !geminiCountIs(metadata.PromptTokenCount, 0) || metadata.CandidatesTokenCount != nil {
+	if !geminiCountIs(metadata.PromptTokenCount.Value, 0) || metadata.CandidatesTokenCount.Value != nil {
 		t.Fatalf("typed usage metadata=%#v", metadata)
 	}
 	// Native patches accumulate before canonical full snapshots are derived.
 	state := (geminiUsageState{}).merge(&geminiUsageMetadata{
-		PromptTokenCount: new(int64(7)), CandidatesTokenCount: new(int64(3)), ThoughtsTokenCount: new(int64(0)),
+		PromptTokenCount: usagewire.Counter{Value: new(int64(7))}, CandidatesTokenCount: usagewire.Counter{Value: new(int64(3))}, ThoughtsTokenCount: usagewire.Counter{Value: new(int64(0))},
 	})
 	merged := state.merge(&metadata).snapshot()
 	if !geminiCountIs(merged.InputTokens, 0) || !geminiCountIs(merged.OutputTokens, 3) {
@@ -492,7 +493,7 @@ func TestGeminiUsageIncludesReportedThoughtsInCanonicalOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	usage = geminiUsage(&ambiguousTotal)
-	if usage.OutputTokens != nil || !geminiCountIs(ambiguousTotal.CandidatesTokenCount, 6) {
+	if usage.OutputTokens != nil || !geminiCountIs(ambiguousTotal.CandidatesTokenCount.Value, 6) {
 		t.Fatalf("mismatched aggregate total must remain unproven while retaining candidates: %#v / %#v", usage, ambiguousTotal)
 	}
 
@@ -514,7 +515,7 @@ func TestGeminiUsageIncludesReportedThoughtsInCanonicalOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	usage = geminiUsage(&partial)
-	if !geminiCountIs(usage.InputTokens, 11) || usage.OutputTokens != nil || usage.ReasoningTokens != nil || !geminiCountIs(usage.CachedReadTokens, 4) || !geminiCountIs(partial.CandidatesTokenCount, 6) {
+	if !geminiCountIs(usage.InputTokens, 11) || usage.OutputTokens != nil || usage.ReasoningTokens != nil || !geminiCountIs(usage.CachedReadTokens, 4) || !geminiCountIs(partial.CandidatesTokenCount.Value, 6) {
 		t.Fatalf("unproven Gemini output must remain unknown while valid fields survive: %#v", usage)
 	}
 }

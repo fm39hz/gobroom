@@ -2,46 +2,54 @@ package anthropic
 
 import (
 	"encoding/json"
+	"errors"
 
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"github.com/fm39hz/gobroom/internal/kernel"
 )
 
-// UnmarshalJSON isolates optional accounting faults from response decoding.
-// Each valid counter survives even when a sibling counter is invalid.
 func (usage *anthropicUsageDTO) UnmarshalJSON(data []byte) error {
-	*usage = anthropicUsageDTO{}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		if _, optionalFault := err.(*json.UnmarshalTypeError); !optionalFault {
-			return err
-		}
-		usage.AccountingIssues = []kernel.UsageIssue{{Code: "invalid_usage_counter"}}
-		return nil
+	var decoded struct {
+		InputTokens         usagewire.Counter `json:"input_tokens"`
+		OutputTokens        usagewire.Counter `json:"output_tokens"`
+		CachedReadTokens    usagewire.Counter `json:"cache_read_input_tokens"`
+		CachedWriteTokens   usagewire.Counter `json:"cache_creation_input_tokens"`
+		OutputTokensDetails json.RawMessage   `json:"output_tokens_details"`
 	}
-	invalid := false
-	for _, field := range []struct {
-		name        string
-		destination **int64
-	}{
-		{"input_tokens", &usage.InputTokens},
-		{"output_tokens", &usage.OutputTokens},
-		{"cache_read_input_tokens", &usage.CachedReadTokens},
-		{"cache_creation_input_tokens", &usage.CachedWriteTokens},
-		{"reasoning_tokens", &usage.ReasoningTokens},
-	} {
-		raw, present := fields[field.name]
-		if !present {
-			continue
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		var typeError *json.UnmarshalTypeError
+		if errors.As(err, &typeError) {
+			*usage = anthropicUsageDTO{AccountingIssues: []kernel.UsageIssue{{Code: "invalid_usage_counter"}}}
+			return nil
 		}
-		var count *int64
-		if err := json.Unmarshal(raw, &count); err != nil || (count != nil && *count < 0) {
-			invalid = true
-			continue
-		}
-		*field.destination = count
+		return err
 	}
-	if invalid {
+	*usage = anthropicUsageDTO{
+		InputTokens: decoded.InputTokens, OutputTokens: decoded.OutputTokens,
+		CachedReadTokens: decoded.CachedReadTokens, CachedWriteTokens: decoded.CachedWriteTokens,
+	}
+	if len(decoded.OutputTokensDetails) > 0 && string(decoded.OutputTokensDetails) != "null" {
+		var details anthropicOutputTokensDetails
+		if err := json.Unmarshal(decoded.OutputTokensDetails, &details); err != nil {
+			usage.OutputTokensDetails = &anthropicOutputTokensDetails{
+				ThinkingTokens: usagewire.Counter{Invalid: true, Present: true},
+			}
+			usage.AccountingIssues = []kernel.UsageIssue{{Code: "invalid_usage_counter"}}
+		} else {
+			usage.OutputTokensDetails = &details
+		}
+	}
+	if usage.InputTokens.Invalid || usage.OutputTokens.Invalid || usage.CachedReadTokens.Invalid || usage.CachedWriteTokens.Invalid ||
+		usage.OutputTokensDetails != nil && usage.OutputTokensDetails.ThinkingTokens.Invalid {
 		usage.AccountingIssues = []kernel.UsageIssue{{Code: "invalid_usage_counter"}}
 	}
 	return nil
+}
+
+func decodeAnthropicUsage(data json.RawMessage) (kernel.UsageEvent, error) {
+	var native anthropicUsageDTO
+	if err := json.Unmarshal(data, &native); err != nil {
+		return kernel.UsageEvent{}, err
+	}
+	return (anthropicUsageState{}).apply(&native).snapshot(), nil
 }

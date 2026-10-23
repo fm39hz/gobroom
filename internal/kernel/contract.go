@@ -646,9 +646,11 @@ type UsageEvent struct {
 }
 
 type UsageSourceOptions struct {
-	InputTokensHeader   string `json:"inputTokensHeader,omitempty"`
-	OutputTokensHeader  string `json:"outputTokensHeader,omitempty"`
-	EstimatedCostHeader string `json:"estimatedCostHeader,omitempty"`
+	InputTokensHeader      string `json:"inputTokensHeader,omitempty"`
+	OutputTokensHeader     string `json:"outputTokensHeader,omitempty"`
+	EstimatedCostHeader    string `json:"estimatedCostHeader,omitempty"`
+	ReportedChargeHeader   string `json:"reportedChargeHeader,omitempty"`
+	ReportedCurrencyHeader string `json:"reportedCurrencyHeader,omitempty"`
 }
 
 type UsageEvidence struct {

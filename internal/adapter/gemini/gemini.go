@@ -1147,20 +1147,30 @@ func (state geminiUsageState) merge(metadata *geminiUsageMetadata) geminiUsageSt
 	if metadata == nil {
 		return state
 	}
-	if metadata.PromptTokenCount != nil {
-		state.Prompt = copyGeminiCount(metadata.PromptTokenCount)
+	if metadata.PromptTokenCount.Invalid {
+		state.Prompt = nil
+	} else if metadata.PromptTokenCount.Value != nil {
+		state.Prompt = copyGeminiCount(metadata.PromptTokenCount.Value)
 	}
-	if metadata.CandidatesTokenCount != nil {
-		state.Candidates = copyGeminiCount(metadata.CandidatesTokenCount)
+	if metadata.CandidatesTokenCount.Invalid {
+		state.Candidates = nil
+	} else if metadata.CandidatesTokenCount.Value != nil {
+		state.Candidates = copyGeminiCount(metadata.CandidatesTokenCount.Value)
 	}
-	if metadata.TotalTokenCount != nil {
-		state.Total = copyGeminiCount(metadata.TotalTokenCount)
+	if metadata.TotalTokenCount.Invalid {
+		state.Total = nil
+	} else if metadata.TotalTokenCount.Value != nil {
+		state.Total = copyGeminiCount(metadata.TotalTokenCount.Value)
 	}
-	if metadata.CachedContentTokenCount != nil {
-		state.Cached = copyGeminiCount(metadata.CachedContentTokenCount)
+	if metadata.CachedContentTokenCount.Invalid {
+		state.Cached = nil
+	} else if metadata.CachedContentTokenCount.Value != nil {
+		state.Cached = copyGeminiCount(metadata.CachedContentTokenCount.Value)
 	}
-	if metadata.ThoughtsTokenCount != nil {
-		state.Thoughts = copyGeminiCount(metadata.ThoughtsTokenCount)
+	if metadata.ThoughtsTokenCount.Invalid {
+		state.Thoughts = nil
+	} else if metadata.ThoughtsTokenCount.Value != nil {
+		state.Thoughts = copyGeminiCount(metadata.ThoughtsTokenCount.Value)
 	}
 	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: metadata.AccountingIssues}).AccountingIssues
 	return state

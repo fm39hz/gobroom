@@ -154,3 +154,27 @@ func TestAttemptUsageUsesCatalogIdentityAndEnvelopeBoundWithoutExtraNameLimit(t 
 		t.Fatalf("registered, bounded identity rejected by an extra name limit: extensions=%d issues=%v", len(got.Extensions), got.AccountingIssues)
 	}
 }
+
+func TestAttemptUsageRetainedRawJSONFitsEncodedBudget(t *testing.T) {
+	ref := extensions.Ref{Kind: extensions.UsageKind, ID: "fixture.retained", ContractVersion: 1}
+	k := &Kernel{UsageCatalog: fixtureUsageCatalog(t, `{"type":"integer"}`, ref), UsageLimits: UsageLimits{MaxValues: 32, MaxExtensionBytes: 256}}
+	got := k.admitUsage(UsageEvent{Extensions: []extensions.UsageValue{{TypeRef: ref, Value: json.RawMessage(strings.Repeat(" ", 170) + "1")}}})
+	encoded, err := json.Marshal(got.Extensions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained := len(encoded)
+	for _, value := range got.Extensions {
+		canonical, err := json.Marshal(value.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retained += len(value.Value) - len(canonical)
+	}
+	if retained > 256 {
+		t.Fatalf("encoded envelope fit but retained raw buffers exceeded host budget: %d", retained)
+	}
+	if len(got.Extensions) != 1 {
+		t.Fatalf("bounded numeric value lost: %#v", got)
+	}
+}

@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 	"github.com/fm39hz/gobroom/internal/kernel"
@@ -15,6 +16,9 @@ import (
 // the adapter layer; this package only defines stable IDs and composition.
 func NewBuiltinPrimitiveRegistry() (*PrimitiveRegistry, error) {
 	r := NewPrimitiveRegistry()
+	if err := usagewire.RegisterReportedCharge(r.catalog); err != nil {
+		return nil, fmt.Errorf("register reported charge contract: %w", err)
+	}
 	if err := operations.RegisterChatGenerate(r.catalog, r.Operations); err != nil {
 		return nil, fmt.Errorf("register built-in chat operation: %w", err)
 	}

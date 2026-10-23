@@ -114,7 +114,7 @@ func TestOpenAIChatDecoderRendersAnthropicMessagesFromSemanticEvents(t *testing.
 		t.Fatalf("OpenAI adapter type=%T", NewAdapter())
 	}
 	composed.Renderers[normalize.FormatAnthropic] = egress.AnthropicMessages{}
-	body := `{"id":"chatcmpl_semantic","object":"chat.completion","model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":"Checking now.","tool_calls":[{"id":"call_123","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"weather\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}`
+	body := `{"id":"chatcmpl_semantic","object":"chat.completion","model":"upstream","choices":[{"index":0,"message":{"role":"assistant","content":"Checking now.","tool_calls":[{"id":"call_123","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"weather\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}`
 	response := kernel.UpstreamResponse{Status: http.StatusOK, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
 	writer := httptest.NewRecorder()
 	var observed []kernel.ResponseEvent
@@ -152,7 +152,7 @@ func TestOpenAIChatDecoderRendersAnthropicMessagesFromSemanticEvents(t *testing.
 }
 
 func TestKernelRunsAnthropicMessagesThroughOpenAIChatAndBack(t *testing.T) {
-	upstreamBody := `{"id":"chatcmpl_roundtrip","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"Checking now.","tool_calls":[{"id":"call_roundtrip","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"weather\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}`
+	upstreamBody := `{"id":"chatcmpl_roundtrip","object":"chat.completion","model":"upstream-model","choices":[{"index":0,"message":{"role":"assistant","content":"Checking now.","tool_calls":[{"id":"call_roundtrip","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"weather\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}`
 	var dispatched atomic.Int32
 	composed := NewAdapter().(kernel.ComposedAdapter)
 	composed.Transport = kernel.HTTPTransport{Client: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {

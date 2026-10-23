@@ -38,6 +38,25 @@ type UsageValue struct {
 	Value   json.RawMessage `json:"value"`
 }
 
+// OwnedEncoding returns a canonical, independently owned value and its actual
+// JSON envelope size. Compact RawMessage encoding preserves numeric lexemes;
+// retaining the same encoded representation prevents whitespace or escaping
+// from creating a gap between the byte budget and retained buffers.
+func (value UsageValue) OwnedEncoding(maxBytes int64) (UsageValue, int64, error) {
+	if maxBytes <= 0 || int64(len(value.Value)) > maxBytes || int64(len(value.TypeRef.Kind)) > maxBytes || int64(len(value.TypeRef.ID)) > maxBytes {
+		return UsageValue{}, 0, fmt.Errorf("usage value exceeds its encoded byte limit")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > maxBytes {
+		return UsageValue{}, 0, fmt.Errorf("usage value exceeds its encoded byte limit or is invalid JSON")
+	}
+	var owned UsageValue
+	if err := json.Unmarshal(encoded, &owned); err != nil {
+		return UsageValue{}, 0, fmt.Errorf("usage value cannot be bound to its contract")
+	}
+	return owned, int64(len(encoded)), nil
+}
+
 // UsageDescriptorSnapshot is the immutable, non-executable metadata needed to
 // interpret a usage value without exposing a catalog factory or runtime value.
 type UsageDescriptorSnapshot struct {

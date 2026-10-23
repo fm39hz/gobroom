@@ -78,7 +78,9 @@ func usageOptionsSchema() (json.RawMessage, error) {
 "properties":{
   "inputTokensHeader":{"type":"string","minLength":1},
   "outputTokensHeader":{"type":"string","minLength":1},
-  "estimatedCostHeader":{"type":"string","minLength":1}
+  "estimatedCostHeader":{"type":"string","minLength":1},
+  "reportedChargeHeader":{"type":"string","minLength":1},
+  "reportedCurrencyHeader":{"type":"string","minLength":1}
 },
 "additionalProperties":false
 }`))

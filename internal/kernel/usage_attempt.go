@@ -234,20 +234,17 @@ func (k *Kernel) admitUsageWithin(event UsageEvent, limits UsageLimits) UsageEve
 			}
 		}
 		if issue == "" {
-			encoded, err := json.Marshal(value)
-			size := int64(len(encoded))
+			var separator int64
 			if len(event.Extensions) > 0 {
-				size++
+				separator = 1
 			}
+			owned, size, err := value.OwnedEncoding(limits.MaxExtensionBytes - retained - separator)
 			if err != nil {
-				issue = "invalid_usage_value"
-			} else if size > limits.MaxExtensionBytes-retained {
 				issue = "usage_bytes_limit"
 			} else {
-				retained += size
+				retained += size + separator
 				seen[value.TypeRef] = struct{}{}
-				value.Value = append(json.RawMessage(nil), value.Value...)
-				event.Extensions = append(event.Extensions, value)
+				event.Extensions = append(event.Extensions, owned)
 			}
 		}
 		if issue != "" {

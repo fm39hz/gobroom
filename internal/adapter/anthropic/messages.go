@@ -14,6 +14,7 @@ import (
 	"time"
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -488,12 +489,16 @@ func splitAnthropicSSELines(data []byte, atEOF bool) (int, []byte, error) {
 }
 
 type anthropicUsageDTO struct {
-	InputTokens       *int64              `json:"input_tokens"`
-	OutputTokens      *int64              `json:"output_tokens"`
-	CachedReadTokens  *int64              `json:"cache_read_input_tokens"`
-	CachedWriteTokens *int64              `json:"cache_creation_input_tokens"`
-	ReasoningTokens   *int64              `json:"reasoning_tokens"`
-	AccountingIssues  []kernel.UsageIssue `json:"-"`
+	InputTokens         usagewire.Counter             `json:"input_tokens"`
+	OutputTokens        usagewire.Counter             `json:"output_tokens"`
+	CachedReadTokens    usagewire.Counter             `json:"cache_read_input_tokens"`
+	CachedWriteTokens   usagewire.Counter             `json:"cache_creation_input_tokens"`
+	OutputTokensDetails *anthropicOutputTokensDetails `json:"output_tokens_details"`
+	AccountingIssues    []kernel.UsageIssue           `json:"-"`
+}
+
+type anthropicOutputTokensDetails struct {
+	ThinkingTokens usagewire.Counter `json:"thinking_tokens"`
 }
 
 type anthropicUsageFrame struct {
@@ -516,20 +521,32 @@ func (state anthropicUsageState) apply(update *anthropicUsageDTO) anthropicUsage
 	if update == nil {
 		return state
 	}
-	if update.InputTokens != nil {
-		state.InputTokens = copyAnthropicCount(update.InputTokens)
+	if update.InputTokens.Invalid {
+		state.InputTokens = nil
+	} else if update.InputTokens.Value != nil {
+		state.InputTokens = copyAnthropicCount(update.InputTokens.Value)
 	}
-	if update.OutputTokens != nil {
-		state.OutputTokens = copyAnthropicCount(update.OutputTokens)
+	if update.OutputTokens.Invalid {
+		state.OutputTokens = nil
+	} else if update.OutputTokens.Value != nil {
+		state.OutputTokens = copyAnthropicCount(update.OutputTokens.Value)
 	}
-	if update.CachedReadTokens != nil {
-		state.CachedReadTokens = copyAnthropicCount(update.CachedReadTokens)
+	if update.CachedReadTokens.Invalid {
+		state.CachedReadTokens = nil
+	} else if update.CachedReadTokens.Value != nil {
+		state.CachedReadTokens = copyAnthropicCount(update.CachedReadTokens.Value)
 	}
-	if update.CachedWriteTokens != nil {
-		state.CachedWriteTokens = copyAnthropicCount(update.CachedWriteTokens)
+	if update.CachedWriteTokens.Invalid {
+		state.CachedWriteTokens = nil
+	} else if update.CachedWriteTokens.Value != nil {
+		state.CachedWriteTokens = copyAnthropicCount(update.CachedWriteTokens.Value)
 	}
-	if update.ReasoningTokens != nil {
-		state.ReasoningTokens = copyAnthropicCount(update.ReasoningTokens)
+	if update.OutputTokensDetails != nil {
+		if update.OutputTokensDetails.ThinkingTokens.Invalid {
+			state.ReasoningTokens = nil
+		} else if update.OutputTokensDetails.ThinkingTokens.Value != nil {
+			state.ReasoningTokens = copyAnthropicCount(update.OutputTokensDetails.ThinkingTokens.Value)
+		}
 	}
 	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: update.AccountingIssues}).AccountingIssues
 	return state

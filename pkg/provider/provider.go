@@ -9,6 +9,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"net/http"
 	"time"
 
@@ -276,6 +278,14 @@ type UsageRequirements = extensions.UsageRequirements
 type UsageUpdateKind = kernel.UsageUpdateKind
 type UsageIssue = kernel.UsageIssue
 type UsageLimits = kernel.UsageLimits
+type UsageCounter = usagewire.Counter
+type ReportedCharge = usagewire.ReportedCharge
+type ChargeProvenance = usagewire.ChargeProvenance
+
+func ReportedChargeRef() extensions.Ref { return usagewire.ReportedChargeRef() }
+func ReportedChargeValue(amount json.RawMessage, currency *string, provenance ChargeProvenance) (extensions.UsageValue, error) {
+	return usagewire.ChargeValue(amount, currency, provenance.Source, provenance.Field)
+}
 
 const (
 	UsagePartialSnapshot = kernel.UsagePartialSnapshot
