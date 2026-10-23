@@ -109,6 +109,25 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
+Capture/disclosure checkpoint `0bcfe20` / `767bab1` / `9b0e8e9`: bounded
+opt-in raw usage, independently granted detail classes, authenticated HTTP
+control, explicit CLI/TUI detail views and exact local retention are verified.
+Full root/external regression, vet and conformance passed, with scoped review
+fixes and selected three-run race suites. After `make install-all`, installed
+CLI raw/detail, presence, attempt identity, historical reads and reported-charge
+acceptance each passed three race runs. Main status=ok, control=serving=505,
+zero persistence failures; configuration/credential fingerprint unchanged and
+usage rows remained 0/0. Capture and detail grants remain off by default.
+No live provider traffic or additional history loss occurred.
+
+One initial full external run timed out at the existing HTTPS callback test's
+Stop deadline. Its untouched test passed 33 subsequent focused repetitions and
+later full regression/conformance passed. The cause is not established; no
+shutdown fix is claimed. Task 7 public-module inference proof and Task 8
+resource measurements remain open.
+
+Earlier verified protocol/history acceptance:
+
 Protocol/history checkpoint `d2c587c` / `29ebd03`, inference acceptance
 `2e8e5ed`: full root/external regression, vet, selected three-run race suites,
 independent review and scoped fixes passed. Full conformance rerun passed after
@@ -135,8 +154,8 @@ queue rejection and invalidation behavior.
 
 ## Next core work
 
-1. Execute hybrid usage Tasks 6–8: explicit capture/disclosure, complete
-   external-module inference acceptance and resource measurement. Tasks 1–5 are verified;
+1. Execute hybrid usage Tasks 7–8: complete external-module inference acceptance
+   and resource measurement. Tasks 1–6 are verified;
    this is not yet the complete no-kernel-change catch-up proof.
 2. Include the verified typed-jobs artifact/renderer implementation in the
    final combined acceptance/review. Do not revive a text tunnel or introduce
