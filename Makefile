@@ -43,7 +43,7 @@ test-conformance: test-conformance-transform-boundaries test-external-provider-m
 	go test ./cmd/gobroom -run '^Test(ConfigCommands|DecodeConfigInput)' -count=1
 	go test ./internal/runtime/sessionstore -run '^TestCache(Preload|SaveReportsOverflow)' -count=1
 	go test ./internal/controlplane ./internal/daemon -run '^Test(ConfigBundleExcludes|ConfigApplyRejections)' -count=1
-	go test ./internal/usage ./internal/store ./internal/kernel ./internal/api ./internal/daemon -run '^Test(Worker|PreparedUsage|SaveUsageEventCanceled|KernelUsage|DrainUsage|DaemonUsage|DaemonStopDrainsAcceptedUsage|StatusIncludesHealthyUsage|UsagePersistence|UsageDrainTimeout|FallbackCompatibilityPlan)' -count=1
+	go test ./internal/usage ./internal/store ./internal/kernel ./internal/api ./internal/daemon -run '^Test(Worker|PreparedUsage|SaveUsageEventCanceled|KernelUsage|DrainUsage|DaemonUsage|DaemonAccountingQueueFailure|DaemonStopDrainsAcceptedUsage|StatusIncludesHealthyUsage|UsagePersistence|UsageDrainTimeout|FallbackCompatibilityPlan)' -count=1
 	go test ./internal/kernel ./internal/provider ./internal/runtime/sessionstore ./internal/api -run 'Continuity|Invalidate|SessionStoreVersion' -count=1
 	go test ./internal/kernel ./internal/provider ./internal/adapter/openai ./internal/adapter/renderers -run 'ProviderResponse|ResponseContinuity|TerminalError|ProviderErrors|HealthySSE|FailedJSON|Normalize' -count=1
 	go test ./internal/kernel ./internal/api ./internal/adapter/renderers -run 'ClientFailure|TypedClient|ContinuityFailure' -count=1
