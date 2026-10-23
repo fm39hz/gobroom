@@ -5,12 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -244,6 +246,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				}
 				if ok {
 					usageState = usageState.apply(&wire)
+					if hooks.UsageCapture.Enabled {
+						captureOpenAIUsageState(&usageState, []byte(data), hooks, openAIUsageAPI(wireFormat))
+					}
 					if hooks.OnProviderUsage != nil {
 						hooks.OnProviderUsage(usageState.snapshot())
 					}
@@ -261,6 +266,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 				}
 				if exists {
 					usageState = usageState.apply(&wire)
+					if hooks.UsageCapture.Enabled {
+						captureOpenAIUsageState(&usageState, []byte(data), hooks, openAIUsageAPI(wireFormat))
+					}
 					if hooks.OnProviderUsage != nil {
 						hooks.OnProviderUsage(usageState.snapshot())
 					}
@@ -285,6 +293,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 					}
 					if found {
 						usageState = usageState.apply(&wire)
+						if hooks.UsageCapture.Enabled {
+							captureOpenAIUsageState(&usageState, []byte(data), hooks, openAIUsageAPI(wireFormat))
+						}
 						canonical := usageState.snapshot()
 						event.Usage = &canonical
 						usage = canonical.Clone()
@@ -323,7 +334,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 			return fmt.Errorf("decode OpenAI provider error usage: %w", usageErr)
 		}
 		if ok && hooks.OnProviderUsage != nil {
-			hooks.OnProviderUsage((openAIUsageState{}).apply(&wire).snapshot())
+			state := (openAIUsageState{}).apply(&wire)
+			captureOpenAIUsageState(&state, data, hooks, openAIUsageAPI(wireFormat))
+			hooks.OnProviderUsage(state.snapshot())
 		}
 		evidence, err := kernel.NewProviderResponseError(errPayload)
 		if err != nil {
@@ -337,7 +350,9 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 			return fmt.Errorf("decode OpenAI incomplete response usage: %w", usageErr)
 		}
 		if exists && hooks.OnProviderUsage != nil {
-			hooks.OnProviderUsage((openAIUsageState{}).apply(&wire).snapshot())
+			state := (openAIUsageState{}).apply(&wire)
+			captureOpenAIUsageState(&state, data, hooks, openAIUsageAPI(wireFormat))
+			hooks.OnProviderUsage(state.snapshot())
 		}
 		return fmt.Errorf("OpenAI Responses JSON has non-completed status %q", "incomplete")
 	}
@@ -365,6 +380,7 @@ func decodeOpenAIResponse(ctx context.Context, response kernel.UpstreamResponse,
 			}
 			if found {
 				usageState = usageState.apply(&wire)
+				captureOpenAIUsageState(&usageState, data, hooks, openAIUsageAPI(wireFormat))
 				canonical := usageState.snapshot()
 				event.Usage = &canonical
 				usage = canonical.Clone()
@@ -441,6 +457,71 @@ func openAIUsageWireFromPayload(payload map[string]any) (openAIUsageWire, bool, 
 		}
 	}
 	return openAIUsageWire{}, false, nil
+}
+
+type openAIUsageCaptureEnvelope struct {
+	Usage    usagewire.RawSlot `json:"usage"`
+	Response struct {
+		Usage usagewire.RawSlot `json:"usage"`
+		Error struct {
+			Usage usagewire.RawSlot `json:"usage"`
+		} `json:"error"`
+	} `json:"response"`
+	Error struct {
+		Usage usagewire.RawSlot `json:"usage"`
+	} `json:"error"`
+}
+
+func openAIUsageFragmentFromPayload(payload []byte, maxBytes int64) (usagewire.RawSlot, bool, error) {
+	var envelope openAIUsageCaptureEnvelope
+	envelope.Usage.MaxBytes = maxBytes
+	envelope.Response.Usage.MaxBytes = maxBytes
+	envelope.Response.Error.Usage.MaxBytes = maxBytes
+	envelope.Error.Usage.MaxBytes = maxBytes
+	if err := jsonv2.Unmarshal(payload, &envelope); err != nil {
+		return usagewire.RawSlot{}, false, err
+	}
+	for _, slot := range []*usagewire.RawSlot{&envelope.Usage, &envelope.Response.Usage, &envelope.Response.Error.Usage, &envelope.Error.Usage} {
+		if !slot.Present {
+			continue
+		}
+		if slot.Rejected || !bytes.Equal(bytes.TrimSpace(slot.Value), []byte("null")) {
+			return *slot, true, nil
+		}
+	}
+	return usagewire.RawSlot{}, false, nil
+}
+
+func openAIUsageAPI(format normalize.Format) string {
+	if format == normalize.FormatOpenAIResponses {
+		return "openai.responses"
+	}
+	return "openai.chat"
+}
+
+func captureOpenAIUsageState(state *openAIUsageState, payload []byte, hooks kernel.StreamHooks, api string) {
+	if !hooks.UsageCapture.Enabled {
+		return
+	}
+	slot, found, err := openAIUsageFragmentFromPayload(payload, hooks.UsageCapture.MaxBytes)
+	if err != nil {
+		state.rawUsage = nil
+		state.issues = appendIssue(state.issues, usagewire.RawCaptureIssueCode)
+		return
+	}
+	if !found {
+		return
+	}
+	state.rawUsage = nil
+	if slot.Rejected {
+		state.issues = appendIssue(state.issues, usagewire.RawCaptureIssueCode)
+		return
+	}
+	fragment, issues := captureOpenAIRawUsage(slot.Value, hooks, api)
+	state.rawUsage = fragment
+	for _, issue := range issues {
+		state.issues = appendIssue(state.issues, issue.Code)
+	}
 }
 
 func openAIUsageWireFromMap(raw any) (openAIUsageWire, bool, error) {

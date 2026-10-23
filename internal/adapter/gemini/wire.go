@@ -100,12 +100,15 @@ type geminiCandidate struct {
 }
 
 type geminiUsageMetadata struct {
-	PromptTokenCount        usagewire.Counter   `json:"promptTokenCount,omitempty"`
-	CandidatesTokenCount    usagewire.Counter   `json:"candidatesTokenCount,omitempty"`
-	TotalTokenCount         usagewire.Counter   `json:"totalTokenCount,omitempty"`
-	CachedContentTokenCount usagewire.Counter   `json:"cachedContentTokenCount,omitempty"`
-	ThoughtsTokenCount      usagewire.Counter   `json:"thoughtsTokenCount,omitempty"`
-	AccountingIssues        []kernel.UsageIssue `json:"-"`
+	PromptTokenCount        usagewire.Counter        `json:"promptTokenCount,omitempty"`
+	CandidatesTokenCount    usagewire.Counter        `json:"candidatesTokenCount,omitempty"`
+	TotalTokenCount         usagewire.Counter        `json:"totalTokenCount,omitempty"`
+	CachedContentTokenCount usagewire.Counter        `json:"cachedContentTokenCount,omitempty"`
+	ThoughtsTokenCount      usagewire.Counter        `json:"thoughtsTokenCount,omitempty"`
+	AccountingIssues        []kernel.UsageIssue      `json:"-"`
+	RawUsage                *kernel.RawUsageFragment `json:"-"`
+	RawUsageIssues          []kernel.UsageIssue      `json:"-"`
+	RawUsageChecked         bool                     `json:"-"`
 }
 
 type geminiPromptFeedback struct {

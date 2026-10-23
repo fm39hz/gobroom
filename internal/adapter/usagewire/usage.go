@@ -5,12 +5,51 @@ package usagewire
 import (
 	"bytes"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"regexp"
 	"unicode"
 
 	"github.com/fm39hz/gobroom/internal/extensions"
 )
+
+const RawCaptureIssueCode = "invalid_raw_usage"
+
+// DecodeStrict binds one complete JSON value to a decoder-owned typed shape.
+// Duplicate and unknown members and trailing values are rejected.
+func DecodeStrict(raw json.RawMessage, target any) error {
+	return jsonv2.Unmarshal(raw, target, jsonv2.RejectUnknownMembers(true))
+}
+
+// RawSlot owns a selected JSON leaf only when its initialized byte limit allows
+// it. Envelope parsing remains the responsibility of encoding/json.
+type RawSlot struct {
+	MaxBytes int64
+	Value    json.RawMessage
+	Present  bool
+	Rejected bool
+}
+
+func (slot *RawSlot) UnmarshalJSON(data []byte) error {
+	slot.Present = true
+	slot.Value = nil
+	slot.Rejected = slot.MaxBytes <= 0 || int64(len(data)) > slot.MaxBytes
+	if slot.Rejected {
+		return nil
+	}
+	slot.Value = bytes.Clone(data)
+	return nil
+}
+
+// CountersValid reports whether all present typed counters are valid.
+func CountersValid(counters ...Counter) bool {
+	for _, counter := range counters {
+		if counter.Invalid {
+			return false
+		}
+	}
+	return true
+}
 
 type Counter struct {
 	Value   *int64

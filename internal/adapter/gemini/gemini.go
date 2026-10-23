@@ -422,6 +422,9 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
 				return fmt.Errorf("decode Gemini SSE event: %w", err)
 			}
+			if hooks.UsageCapture.Enabled {
+				captureGeminiUsagePayload([]byte(data), &payload, hooks)
+			}
 			if payload.UsageMetadata != nil {
 				nativeUsage = nativeUsage.merge(payload.UsageMetadata)
 				totalUsage = nativeUsage.snapshot()
@@ -488,6 +491,9 @@ func (Gemini) DecodeResponse(ctx context.Context, response kernel.UpstreamRespon
 		var payload geminiGenerateContentResponse
 		if err := json.Unmarshal(data, &payload); err != nil {
 			return fmt.Errorf("decode Gemini response: %w", err)
+		}
+		if hooks.UsageCapture.Enabled {
+			captureGeminiUsagePayload(data, &payload, hooks)
 		}
 		if payload.UsageMetadata != nil {
 			nativeUsage = nativeUsage.merge(payload.UsageMetadata)
@@ -1141,6 +1147,7 @@ type geminiUsageState struct {
 	Cached           *int64
 	Thoughts         *int64
 	AccountingIssues []kernel.UsageIssue
+	RawUsage         *kernel.RawUsageFragment
 }
 
 func (state geminiUsageState) merge(metadata *geminiUsageMetadata) geminiUsageState {
@@ -1172,7 +1179,11 @@ func (state geminiUsageState) merge(metadata *geminiUsageMetadata) geminiUsageSt
 	} else if metadata.ThoughtsTokenCount.Value != nil {
 		state.Thoughts = copyGeminiCount(metadata.ThoughtsTokenCount.Value)
 	}
-	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: metadata.AccountingIssues}).AccountingIssues
+	issues := append(append([]kernel.UsageIssue(nil), metadata.AccountingIssues...), metadata.RawUsageIssues...)
+	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: issues}).AccountingIssues
+	if metadata.RawUsageChecked {
+		state.RawUsage = cloneGeminiRawUsage(metadata.RawUsage)
+	}
 	return state
 }
 
@@ -1194,7 +1205,17 @@ func (state geminiUsageState) snapshot() kernel.UsageEvent {
 	}
 	return kernel.UsageEvent{InputTokens: copyGeminiCount(state.Prompt), OutputTokens: output,
 		CachedReadTokens: copyGeminiCount(state.Cached), ReasoningTokens: copyGeminiCount(state.Thoughts),
-		AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok", UpdateKind: kernel.UsageFullSnapshot}
+		AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), RawUsage: cloneGeminiRawUsage(state.RawUsage),
+		Status: "ok", UpdateKind: kernel.UsageFullSnapshot}
+}
+
+func cloneGeminiRawUsage(raw *kernel.RawUsageFragment) *kernel.RawUsageFragment {
+	if raw == nil {
+		return nil
+	}
+	copy := *raw
+	copy.Value = append(json.RawMessage(nil), raw.Value...)
+	return &copy
 }
 
 func copyGeminiCount(count *int64) *int64 {

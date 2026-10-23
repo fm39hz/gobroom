@@ -375,6 +375,9 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 			if err != nil {
 				return fmt.Errorf("decode Anthropic usage: %w", err)
 			}
+			if hooks.UsageCapture.Enabled {
+				captureAnthropicUsageFrame(&usageFrame, []byte(data), hooks)
+			}
 			if err := emit(kernel.ResponseEvent{At: time.Now(), Kind: kernel.EventRawFrame, WireFormat: normalize.FormatAnthropic, Raw: rawLine}); err != nil {
 				return err
 			}
@@ -423,6 +426,9 @@ func (Messages) DecodeResponse(ctx context.Context, response kernel.UpstreamResp
 	usageFrame, err := decodeAnthropicUsageFrame(data)
 	if err != nil {
 		return fmt.Errorf("decode Anthropic usage: %w", err)
+	}
+	if hooks.UsageCapture.Enabled {
+		captureAnthropicUsageFrame(&usageFrame, data, hooks)
 	}
 	if hooks.OnFirstByte != nil {
 		hooks.OnFirstByte(time.Now())
@@ -495,6 +501,9 @@ type anthropicUsageDTO struct {
 	CachedWriteTokens   usagewire.Counter             `json:"cache_creation_input_tokens"`
 	OutputTokensDetails *anthropicOutputTokensDetails `json:"output_tokens_details"`
 	AccountingIssues    []kernel.UsageIssue           `json:"-"`
+	RawUsage            *kernel.RawUsageFragment      `json:"-"`
+	RawUsageIssues      []kernel.UsageIssue           `json:"-"`
+	RawUsageChecked     bool                          `json:"-"`
 }
 
 type anthropicOutputTokensDetails struct {
@@ -515,6 +524,7 @@ type anthropicUsageState struct {
 	CachedWriteTokens *int64
 	ReasoningTokens   *int64
 	AccountingIssues  []kernel.UsageIssue
+	RawUsage          *kernel.RawUsageFragment
 }
 
 func (state anthropicUsageState) apply(update *anthropicUsageDTO) anthropicUsageState {
@@ -548,7 +558,11 @@ func (state anthropicUsageState) apply(update *anthropicUsageDTO) anthropicUsage
 			state.ReasoningTokens = copyAnthropicCount(update.OutputTokensDetails.ThinkingTokens.Value)
 		}
 	}
-	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: update.AccountingIssues}).AccountingIssues
+	issues := append(append([]kernel.UsageIssue(nil), update.AccountingIssues...), update.RawUsageIssues...)
+	state.AccountingIssues = kernel.MergeProviderUsage(kernel.UsageEvent{AccountingIssues: state.AccountingIssues}, kernel.UsageEvent{AccountingIssues: issues}).AccountingIssues
+	if update.RawUsageChecked {
+		state.RawUsage = cloneAnthropicRawUsage(update.RawUsage)
+	}
 	return state
 }
 
@@ -564,7 +578,17 @@ func (state anthropicUsageState) snapshot() kernel.UsageEvent {
 	}
 	return kernel.UsageEvent{InputTokens: input, OutputTokens: copyAnthropicCount(state.OutputTokens),
 		CachedReadTokens: copyAnthropicCount(state.CachedReadTokens), CachedWriteTokens: copyAnthropicCount(state.CachedWriteTokens),
-		ReasoningTokens: copyAnthropicCount(state.ReasoningTokens), AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...), Status: "ok", UpdateKind: kernel.UsageFullSnapshot}
+		ReasoningTokens: copyAnthropicCount(state.ReasoningTokens), AccountingIssues: append([]kernel.UsageIssue(nil), state.AccountingIssues...),
+		RawUsage: cloneAnthropicRawUsage(state.RawUsage), Status: "ok", UpdateKind: kernel.UsageFullSnapshot}
+}
+
+func cloneAnthropicRawUsage(raw *kernel.RawUsageFragment) *kernel.RawUsageFragment {
+	if raw == nil {
+		return nil
+	}
+	copy := *raw
+	copy.Value = append(json.RawMessage(nil), raw.Value...)
+	return &copy
 }
 
 func copyAnthropicCount(count *int64) *int64 {
