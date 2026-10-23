@@ -232,12 +232,38 @@ this is not recorded as a fixed shutdown bug.
 
 Test assertion form: `if upstreamCalls != 1 || status.UsagePersistence.QueueDropped == 0 { t.Fatal("queue failure hidden or inference retried") }` for the queue-rejection subcase; storage-failure and deadline subcases assert their own exact counters.
 
-- [ ] Add `TestExternalUsageExtensionSurvivesRestartAndModuleRemoval`, `TestDaemonAccountingQueueFailureDoesNotReplayInference`, and `TestInstalledCLIUsagePreservesPresenceAndPrivacy`. Assert original versus client-transformed quantities, coverage, exact metadata and no automatic sum/pricing of search units.
-- [ ] Main runs the focused root and separate-module tests; observe the missing end-to-end behavior before completing the fixtures/wiring.
-- [ ] Test invalid required refs/options at activation, runtime optional schema violations, limits just below/at/above bounds, duplicate identities, module buffer mutation, blocked storage, full queue, cancellation/drain and readonly historical access after removing the module. Reuse existing fault-injection and context coordination patterns.
-- [ ] Run `GOCACHE=/tmp/gobroom-go-cache make test`, `make vet`, `make test-conformance`, then selected root/external tests with `-race -count=3`. Main runs them sequentially, never concurrently with workers editing.
-- [ ] Run `make install-all`; set `GOBROOM_TEST_CLI=/home/fm39hz/go/bin/gobroom` for installed fixtures. Explicitly require the new CLI fixture so optional env-skips cannot masquerade as installed acceptance. Check main daemon status and secret-free config validation without exposing credentials; all feature traffic goes to temporary hosts/fake upstreams.
-- [ ] Commit `test(usage): prove external modules and installed control boundaries`.
+- [x] Add `TestExternalUsageExtensionSurvivesRestartAndModuleRemoval`, `TestDaemonAccountingQueueFailureDoesNotReplayInference`, and `TestInstalledCLIUsagePreservesPresenceAndPrivacy`. Assert original versus client-transformed quantities, coverage, exact metadata and no automatic sum/pricing of search units.
+- [x] Main runs the focused root and separate-module tests; observe the missing end-to-end behavior before completing the fixtures/wiring.
+- [x] Test invalid required refs/options at activation, runtime optional schema violations, limits just below/at/above bounds, duplicate identities, module buffer mutation, blocked storage, full queue, cancellation/drain and readonly historical access after removing the module. Reuse existing fault-injection and context coordination patterns.
+- [x] Run `GOCACHE=/tmp/gobroom-go-cache make test`, `make vet`, `make test-conformance`, then selected root/external tests with `-race -count=3`. Main runs them sequentially; final integrated gates ran after writers stopped.
+- [x] Run `make install-all`; set `GOBROOM_TEST_CLI=/home/fm39hz/go/bin/gobroom` for installed fixtures. Explicitly require the new CLI fixture so optional env-skips cannot masquerade as installed acceptance. Check main daemon status and secret-free config validation without exposing credentials; all feature traffic goes to temporary hosts/fake upstreams.
+- [x] Commit `71e66f4` and installed-gate correction `881f453`.
+
+Task 7 evidence: separate-module non-test build passed; public module inference
+and explicit installed CLI presence/privacy acceptance passed three race runs.
+The module adds typed private search units and a client response transform,
+using only public APIs plus stdlib, with no kernel changes or new dependency.
+Original output 3 survives client projection 103; precise decimal values and
+descriptor/schema identities survive supported active-config teardown and a
+restart without the module. This does not claim an active graph can keep
+serving after its required module is removed.
+
+The queue fixture locks the real SQLite writer, fills the actual bounded event
+channel and proves one inference/one observed accounting drop, then drains all
+accepted records without erasing the loss. Required refs/options, optional
+schema rejection, exact byte/count limits, duplicate identities, mutable buffers
+and cooperative drain/cancellation also retain their named lower-level tests;
+the new integration fixture does not independently re-prove every negative case.
+
+Fresh full root/external regression, root/external vet and conformance passed;
+selected accounting/retention/worker suites passed three race runs. Independent
+review approved after adding `make test-installed-usage`, whose missing,
+relative, non-executable and nonexistent paths fail before Go runs. After
+`make install-all`, that gate passed all five root CLI acceptances (16.379s)
+and the exact external CLI acceptance (3.412s), each three race runs.
+Main status=ok, control=serving=506; config/credential fingerprint unchanged,
+usage rows 0/0. The real secret-free config validation also passed. No live
+provider traffic or additional history loss occurred. Task 8 remains open.
 
 ## Task 8: Performance and whole-product handoff
 
