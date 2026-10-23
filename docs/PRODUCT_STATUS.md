@@ -1,6 +1,6 @@
 # Product progress
 
-Snapshot: 2026-10-22. This is a use-case-level review, not a completion
+Snapshot: 2026-10-23. This is a use-case-level review, not a completion
 percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
@@ -46,8 +46,11 @@ Protocol bindings now preserve documented cache/thinking semantics and private
 reported charges without inventing currency or treating them as estimates.
 Historical extension values retain their immutable data descriptor, exact
 schema documents and dependency pins after module removal. Ordinary lists
-stay payload-free. Raw retention, authorized detail access, complete external
-usage-module acceptance and resource measurement remain later tasks; C1 is not closed.
+stay payload-free. Bounded opt-in raw retention, independently authorized detail
+access and separate public-module inference/history/CLI acceptance are verified.
+Resource measurement and the final combined review remain open; C1 is not closed.
+The [usage acceptance map](USAGE_ACCEPTANCE.md) records the spec's eight items
+and distinguishes deterministic, installed-client and unmeasured boundaries.
 Registered values do not automatically become aggregation, pricing or routing
 inputs. Native passthrough alone is not normalized accounting.
 
@@ -109,6 +112,18 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
+Public usage-module checkpoint `71e66f4` / `881f453`: a separate module adds
+private search units through existing codecs and public registration, persists
+exact data contracts, and reads history after active-config/module removal.
+Provider output 3 remains distinct from client-transformed output 103. Real
+SQLite blocking/full-queue acceptance proves one inference with an explicitly
+observed accounting drop, followed by a complete accepted-record drain.
+Root/external regression, vet, conformance and selected three-run race passed.
+After installation, `make test-installed-usage` passed six named CLI fixtures
+across root/external modules, three race runs each. Main status=ok,
+control=serving=506; config/credential fingerprint unchanged, usage rows 0/0.
+Task 8 and final combined review remain open. No live upstream traffic.
+
 Capture/disclosure checkpoint `0bcfe20` / `767bab1` / `9b0e8e9`: bounded
 opt-in raw usage, independently granted detail classes, authenticated HTTP
 control, explicit CLI/TUI detail views and exact local retention are verified.
@@ -154,8 +169,8 @@ queue rejection and invalidation behavior.
 
 ## Next core work
 
-1. Execute hybrid usage Tasks 7–8: complete external-module inference acceptance
-   and resource measurement. Tasks 1–6 are verified;
+1. Execute hybrid usage Task 8: resource measurement and final combined
+   acceptance/review. Tasks 1–7 are verified;
    this is not yet the complete no-kernel-change catch-up proof.
 2. Include the verified typed-jobs artifact/renderer implementation in the
    final combined acceptance/review. Do not revive a text tunnel or introduce

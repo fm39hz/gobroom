@@ -416,6 +416,68 @@ concurrency, migration and recovery tests.
 
 ## Local performance baseline
 
+The 2026-10-23 hybrid-usage comparison used runtime `d8d63fa` versus
+`881f453`, Go `go1.27.3-X:nodwarf5`, i7-6820HQ, five 1s samples at CPU=1/4.
+Both used the same instrumented harness, whose SHA256 is recorded with the
+[baseline](performance/2026-10-23-usage-baseline.txt) and
+[post-change samples](performance/2026-10-23-usage-post.txt). Proxy cases
+reported zero usage drops and completed accounting drain outside the timer.
+
+Selected medians, combined-process request windows:
+
+| Fixture | Before µs/op | After µs/op | Before B/op | After B/op | Before/after allocs/op |
+|---|---:|---:|---:|---:|---:|
+| JSON serial, CPU1 | 774 | 1329 | 98,779 | 119,157 | 1255 / 1458 |
+| JSON parallel, CPU4 | 596 | 425 | 97,721 | 117,124 | 1250 / 1444 |
+| SSE serial, CPU1 | 929 | 1367 | 136,257 | 153,915 | 1783 / 1931 |
+| SSE parallel, CPU4 | 519 | 498 | 135,850 | 152,721 | 1783 / 1924 |
+
+The extra allocations are measurable: serial JSON +20,378 B/op (+20.6%) and
+SSE +17,658 B/op (+13.0%). Do not describe this as negligible overhead. Timing
+is noisy: direct JSON parallel CPU4 changed 29→59 µs/op, while direct SSE CPU1
+changed 132→85 µs/op despite unchanged upstream code/allocation counts. These
+ambient desktop samples cannot establish a causal latency regression/speedup.
+Asynchronous storage work after the timer is not included in ns/op or timed
+allocation totals; drain checks establish completion/loss, not full lifecycle
+CPU accounting.
+
+The [helper samples](performance/2026-10-23-usage-helpers.txt) separately
+measure selected public APIs, not decoding, the attempt pipeline or SQLite.
+CPU1 medians from five samples:
+
+| Helper workload | µs/op | B/op | allocs/op |
+|---|---:|---:|---:|
+| Clone three known common counters | 0.198 | 24 | 3 |
+| Validate/own/clone small registered extension | 9.318 | 2,432 | 47 |
+| Same, 64 KiB encoded extension ceiling | 696.690 | 460,604 | 42 |
+| Reject oversize extension | 0.341 | 80 | 3 |
+| Raw selection disabled | 0.0057 | 0 | 0 |
+| Raw selection, small object | 0.647 | 176 | 3 |
+| Raw selection, 256 KiB ceiling | 371.892 | 262,285 | 3 |
+| Reject oversize raw fragment | 0.058 | 64 | 1 |
+
+Raw selection is the bounded ownership helper, not a claim that the synthetic
+padding object is accepted by built-in decoder shape validation. Near-ceiling
+extension processing has substantial temporary allocation despite finite
+retained buffers. Helper CPU4 cases are still serial loops, not parallel
+request throughput.
+
+A qualitative [allocation profile](performance/2026-10-23-usage-clone-profile.txt)
+places `UsageEvent.Clone` at 11.08% cumulative allocated space in that diagnostic
+run, mainly compatibility mappings/path ownership copies. This identifies an
+optimization candidate, not proof that it explains the entire measured delta.
+Profiles include startup/calibration and have different request counts; their
+totals are not a normalized before/after cost. Boundary ownership must remain
+intact when reducing repeated internal clones. Full-path CPU attribution,
+extension-bearing proxy load, isolated RSS and sustained tail latency remain
+follow-up measurements, not inferred results.
+
+Reproduce five-sample runs with `make perf BENCHCOUNT=5` and
+`make perf-usage BENCHCOUNT=5`; both accept `BENCHTIME` and `BENCHCPU`.
+
+Earlier measurements below describe their historical checkpoints, not the
+current runtime's resource cost.
+
 Context-aware persistence spot check (`463e47d`, Linux/amd64, CPU=1,
 `make perf BENCHTIME=200ms BENCHCPU=1`): response/completion validation passed
 for serial/parallel direct/proxy JSON/SSE. Serial proxy allocated 98,859 B/op,

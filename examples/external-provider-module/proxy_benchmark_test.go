@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fm39hz/gobroom/pkg/daemon"
 	"github.com/fm39hz/gobroom/pkg/provider"
@@ -231,6 +232,59 @@ func (f *proxyBenchmarkFixture) doRequest(target string, body []byte, stream boo
 	return nil
 }
 
+type benchmarkUsageStatus struct {
+	Received, Persisted, Failed, Abandoned, QueueDropped uint64
+}
+
+func (f *proxyBenchmarkFixture) usageStatus(tb testing.TB) benchmarkUsageStatus {
+	tb.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := daemon.CallIPC(ctx, f.ipcPath, daemon.IPCRequest{Method: "status"})
+	if err != nil || !response.OK {
+		tb.Fatalf("benchmark status: %v / %s", err, response.Error)
+	}
+	encoded, err := json.Marshal(response.Result)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var status struct {
+		Usage benchmarkUsageStatus `json:"usagePersistence"`
+	}
+	if err := json.Unmarshal(encoded, &status); err != nil {
+		tb.Fatal(err)
+	}
+	return status.Usage
+}
+
+// Drain outside the timed section and report admission loss per request. A
+// fast proxy that dropped accounting is not a zero-loss accounting baseline.
+func (f *proxyBenchmarkFixture) reportUsage(b *testing.B, before benchmarkUsageStatus, proxy bool) {
+	b.Helper()
+	if !proxy {
+		return
+	}
+	want := before.Received + before.QueueDropped + uint64(b.N)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		after := f.usageStatus(b)
+		if after.Received+after.QueueDropped > want {
+			b.Fatalf("unexpected accounting producers: %+v want %d outcomes", after, want)
+		}
+		if after.Received+after.QueueDropped == want && after.Persisted+after.Failed+after.Abandoned == after.Received {
+			if after.Failed != before.Failed || after.Abandoned != before.Abandoned {
+				b.Fatalf("benchmark accounting write failed: before=%+v after=%+v", before, after)
+			}
+			b.ReportMetric(float64(after.QueueDropped-before.QueueDropped)/float64(b.N), "usage-drop/op")
+			return
+		}
+		if time.Now().After(deadline) {
+			b.Fatalf("benchmark accounting did not drain: %+v want %d outcomes", after, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func BenchmarkOpenAIChatProxy(b *testing.B) {
 	previousLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -244,13 +298,17 @@ func BenchmarkOpenAIChatProxy(b *testing.B) {
 		for _, target := range []struct{ name, url string }{{"Direct", fixture.upstreamURL}, {"Proxy", fixture.proxyURL}} {
 			b.Run(mode.name+"/"+target.name, func(b *testing.B) {
 				b.ReportAllocs()
+				before := fixture.usageStatus(b)
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					fixture.request(b, target.url, mode.body, mode.stream)
 				}
+				b.StopTimer()
+				fixture.reportUsage(b, before, target.name == "Proxy")
 			})
 			b.Run(mode.name+"/"+target.name+"Parallel", func(b *testing.B) {
 				b.ReportAllocs()
+				before := fixture.usageStatus(b)
 				b.ResetTimer()
 				b.RunParallel(func(pb *testing.PB) {
 					for pb.Next() {
@@ -260,6 +318,8 @@ func BenchmarkOpenAIChatProxy(b *testing.B) {
 						}
 					}
 				})
+				b.StopTimer()
+				fixture.reportUsage(b, before, target.name == "Proxy")
 			})
 		}
 	}

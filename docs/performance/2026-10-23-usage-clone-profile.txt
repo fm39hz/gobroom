@@ -1,0 +1,47 @@
+# Qualitative post-change allocation profile, not normalized per-request delta.
+# 3s serial JSON proxy, CPU1, memory sample rate65536; setup/calibration included.
+# Baseline pprof command overlapped this diagnostic run; profile timing is not comparison evidence.
+# Five-sample numerical results are in the separate baseline/post files.
+
+Total: 192.70MB
+ROUTINE ======================== github.com/fm39hz/gobroom/internal/kernel.UsageEvent.Clone in /home/fm39hz/Workspace/Personal/Tools/AI/gobroom/internal/kernel/usage.go
+       3MB    21.36MB (flat, cum) 11.08% of Total
+         .          .     32:func (event UsageEvent) Clone() UsageEvent {
+         .          .     33:	cloneInt64 := func(value *int64) *int64 {
+         .          .     34:		if value == nil {
+         .          .     35:			return nil
+         .          .     36:		}
+         .          .     37:		return new(*value)
+         .          .     38:	}
+         .          .     39:	cloneFloat64 := func(value *float64) *float64 {
+         .          .     40:		if value == nil {
+         .          .     41:			return nil
+         .          .     42:		}
+         .          .     43:		return new(*value)
+         .          .     44:	}
+         .          .     45:
+         .          .     46:	event.InputTokens = cloneInt64(event.InputTokens)
+         .          .     47:	event.OutputTokens = cloneInt64(event.OutputTokens)
+         .          .     48:	event.CachedReadTokens = cloneInt64(event.CachedReadTokens)
+         .          .     49:	event.CachedWriteTokens = cloneInt64(event.CachedWriteTokens)
+         .          .     50:	event.ReasoningTokens = cloneInt64(event.ReasoningTokens)
+         .          .     51:	event.EstimatedCost = cloneFloat64(event.EstimatedCost)
+         .          .     52:	event.OutputTokensPerSecond = cloneFloat64(event.OutputTokensPerSecond)
+         .          .     53:	if event.RawUsage != nil {
+         .          .     54:		rawUsage := *event.RawUsage
+         .          .     55:		rawUsage.Value = slices.Clone(rawUsage.Value)
+         .          .     56:		event.RawUsage = &rawUsage
+         .          .     57:	}
+         .          .     58:	event.Extensions = cloneUsageValues(event.Extensions)
+         .          .     59:	event.AccountingIssues = slices.Clone(event.AccountingIssues)
+         .          .     60:	event.CompatibilityLosses = cloneLossRecords(event.CompatibilityLosses)
+         .          .     61:	if event.CompatibilityPlan != nil {
+       3MB        3MB     62:		plan := *event.CompatibilityPlan
+         .    15.17MB     63:		plan.Mappings = slices.Clone(plan.Mappings)
+         .          .     64:		for index := range plan.Mappings {
+         .     3.19MB     65:			plan.Mappings[index].Paths = slices.Clone(plan.Mappings[index].Paths)
+         .          .     66:		}
+         .          .     67:		plan.RequestTransformSteps = cloneRequestTransformSteps(plan.RequestTransformSteps)
+         .          .     68:		plan.ResponseTransformSteps = cloneResponseTransformSteps(plan.ResponseTransformSteps)
+         .          .     69:		plan.ArtifactTransfers = slices.Clone(plan.ArtifactTransfers)
+         .          .     70:		plan.ArtifactOutputs = slices.Clone(plan.ArtifactOutputs)

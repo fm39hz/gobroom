@@ -5,7 +5,7 @@ extension contracts required by [solution architecture](SOLUTION_ARCHITECTURE.md
 It specifies implementation obligations; it does not claim that the current
 runtime implements them. Evidence is tracked in [M15 conformance](M15_CONFORMANCE.md).
 
-## Current usage contract — host 12
+## Current usage contract — host 13
 
 `UsageEvent` uses nullable token counters, estimated cost and throughput:
 unknown is distinct from reported zero. Cache-read/cache-write and reasoning
@@ -36,8 +36,10 @@ catalog-bound schemas. Registration is data-only, defaults private, and grants
 no aggregation, pricing, routing or disclosure behavior. This envelope and
 presence-aware common persistence and per-dispatch completion requirements are
 implemented, including historical extension storage and opt-in raw/detail
-access under independent host disclosure grants. Public-module inference
-acceptance and resource measurements remain in the
+access under independent host disclosure grants. A separate module has verified
+unfamiliar private usage through inference, client transformation, persistence,
+module removal and installed CLI reads, without a feature-specific kernel edit.
+Resource measurements and final combined review remain in the
 [approved usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md).
 No legacy numeric usage reader is retained. Earlier host-version notes below
 describe individual historical checkpoints, not the current module version.

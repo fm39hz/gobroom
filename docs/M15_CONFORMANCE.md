@@ -37,8 +37,9 @@ in conversation; its
 [written specification](superpowers/specs/2026-10-22-usage-contract-design.md)
 is approved; the [implementation plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
 and [typed-jobs proof plan](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
-are approved for execution. Test-first work has started; the accounting path
-has not been implemented or declared closed.
+are approved for execution. Follow-ups below record implementation evidence;
+the original audit table is historical, not a claim that its missing usage
+envelope remains absent. The overall semantic closure gate is still open.
 
 ### Source follow-up — typed results and usage models
 
@@ -119,7 +120,36 @@ configuration/credential fingerprint unchanged, no additional history lost.
 The full conformance rerun passed after an unreproduced external-suite failure
 whose initial output omitted the exact failing test. Tasks 6–8 still own raw/
 authorized details, complete external usage-module inference proof and measured
-resource costs. No live upstream call or new dependency was used.
+resource costs at that checkpoint. No live upstream call or new dependency was used.
+
+Tasks 6–7 are now verified (`0bcfe20`, `767bab1`, `9b0e8e9`, `71e66f4`,
+`881f453`). Host 13 exposes typed bounded raw capture and independent detail
+grants; raw capture remains off by default. HTTP control now requires its own
+bearer token, separate from inference authentication. Exact numeric retention
+and read-time expiry protect private/raw history while bounded pruning catches
+up. TUI request epochs/resource identity prevent stale or cross-pane detail
+disclosure; terminal output is escaped and capped.
+
+`TestExternalUsageExtensionSurvivesRestartAndModuleRemoval` exercises a genuine
+separate module, source/header evidence, typed precise private search units,
+client-only usage transformation and historical reads after supported
+active-config/module uninstall. No feature-specific kernel branch or dependency
+was added. `TestDaemonAccountingQueueFailureDoesNotReplayInference` blocks the
+actual SQLite writer and fills the real event queue, observes exactly one
+successful inference/accounting drop, then drains accepted events. Existing
+required-ref/options, schema, identity, bounds, ownership and cooperative-drain
+tests provide the negative-case layer; the new vertical does not independently
+re-prove every negative.
+
+Fresh regression/vet/conformance and selected three-run race suites passed.
+After installation, `make test-installed-usage` explicitly ran five root CLI
+fixtures plus `TestInstalledCLIUsagePreservesPresenceAndPrivacy`, three race
+runs each; invalid CLI paths fail before Go instead of silently skipping.
+Main status=ok, control=serving=506, config/credential fingerprint unchanged,
+usage rows 0/0. Task 8 measurements/final combined review remain open; this
+narrows C1's usage gap without closing C1–C6 or M15. No live providers called.
+The concise [usage acceptance map](USAGE_ACCEPTANCE.md) links the eight spec
+items to named tests and records the remaining measurement/product boundaries.
 
 The read-only follow-up narrows the earlier result claim. Registered inline
 artifact values are validated by the catalog and output contract before the
@@ -130,8 +160,9 @@ The current projector cannot inspect inline values through its metadata-only
 event input. That limits direct payload aggregation, but does not eliminate the
 existing typed client-result path. Arbitrary surrounding JSON emitted by a
 renderer is not automatically validated by the artifact or logical result schema.
-This is source-level feasibility evidence, not an executed replacement of the
-jobs example; that example still needs a module-only conformance fixture.
+That was source-level feasibility evidence, not an executed replacement of the
+jobs example. The later typed-jobs fixture described above supplies the executed
+proof, including its separately identified generic admission prerequisite.
 
 | Local reference | Observed representation | Implication, not a drop-in dependency |
 |---|---|---|

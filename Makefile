@@ -6,8 +6,9 @@ REMOTE   := origin
 BRANCH   := master
 BENCHTIME ?= 1s
 BENCHCPU  ?= 1,4
+BENCHCOUNT ?= 1
 
-.PHONY: help build build-daemon build-all run run-daemon tui test test-installed-usage test-conformance test-conformance-transform-boundaries test-external-provider-module test-model-workflow test-v race bench perf fmt vet install install-all clean reload status
+.PHONY: help build build-daemon build-all run run-daemon tui test test-installed-usage test-conformance test-conformance-transform-boundaries test-external-provider-module test-model-workflow test-v race bench perf perf-usage fmt vet install install-all clean reload status
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}; {printf "  %-16s %s\n", $$1, $$2}'
@@ -192,8 +193,11 @@ race: ## race detector
 bench: ## benchmarks
 	go test ./... -bench=. -benchmem -run=^$$
 
-perf: ## local direct/proxy JSON/SSE baseline (BENCHTIME=1s BENCHCPU=1,4)
-	cd examples/external-provider-module && GOWORK=off go test -run '^$$' -bench '^BenchmarkOpenAIChatProxy$$' -benchmem -benchtime=$(BENCHTIME) -cpu=$(BENCHCPU) ./...
+perf: ## local direct/proxy JSON/SSE baseline (BENCHTIME=1s BENCHCPU=1,4 BENCHCOUNT=1)
+	cd examples/external-provider-module && GOWORK=off go test -run '^$$' -bench '^BenchmarkOpenAIChatProxy$$' -benchmem -benchtime=$(BENCHTIME) -count=$(BENCHCOUNT) -cpu=$(BENCHCPU) ./...
+
+perf-usage: ## selected accounting helpers, not full inference or storage
+	cd examples/external-provider-module && GOWORK=off go test -run '^$$' -bench '^(BenchmarkUsageCommon|BenchmarkUsageExtensions|BenchmarkUsageRawCapture)$$' -benchmem -benchtime=$(BENCHTIME) -count=$(BENCHCOUNT) -cpu=$(BENCHCPU) ./...
 
 fmt: ## gofmt all Go files
 	gofmt -w $$(find . -name '*.go' -not -path './tools/*')

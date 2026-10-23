@@ -1,0 +1,91 @@
+# Source: runtime881f453; usage helper harness from Task8
+# Go: go1.27.3-X:nodwarf5 linux/amd64
+# Command: GOWORK=off go test -run '^$' -bench '^(BenchmarkUsageCommon|BenchmarkUsageExtensions|BenchmarkUsageRawCapture)$' -benchmem -benchtime=1s -count=5 -cpu=1,4 ./...
+# Pure selected helpers and cloning, not full decode/proxy/persistence.
+
+goos: linux
+goarch: amd64
+pkg: example.com/gobroom-external-provider
+cpu: Intel(R) Core(TM) i7-6820HQ CPU @ 2.70GHz
+BenchmarkUsageCommon         	13328701	       110.7 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon         	 7786572	       201.1 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon         	 5328075	       215.9 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon         	 5392928	       197.5 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon         	 6644502	       194.1 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon-4       	 8290093	       188.0 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon-4       	13714629	        92.53 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon-4       	12998883	        84.63 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon-4       	14541721	        87.75 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageCommon-4       	13683273	        84.04 ns/op	      24 B/op	       3 allocs/op
+BenchmarkUsageExtensions/small           	  134817	      8931 ns/op	    2440 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small           	  129717	      9265 ns/op	    2432 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small           	  129081	      9318 ns/op	    2432 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small           	  124536	     10760 ns/op	    2432 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small           	  130376	     11212 ns/op	    2432 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small-4         	  131403	      9069 ns/op	    2440 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small-4         	  136797	      8958 ns/op	    2440 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small-4         	  122508	      9166 ns/op	    2441 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small-4         	  142083	      9402 ns/op	    2440 B/op	      47 allocs/op
+BenchmarkUsageExtensions/small-4         	  128978	     10613 ns/op	    2441 B/op	      47 allocs/op
+BenchmarkUsageExtensions/ceiling         	    1966	    607730 ns/op	  472219 B/op	      45 allocs/op
+BenchmarkUsageExtensions/ceiling         	    1808	    672368 ns/op	  460603 B/op	      42 allocs/op
+BenchmarkUsageExtensions/ceiling         	    1600	    761297 ns/op	  460604 B/op	      42 allocs/op
+BenchmarkUsageExtensions/ceiling         	    1224	    864651 ns/op	  460604 B/op	      42 allocs/op
+BenchmarkUsageExtensions/ceiling         	    1484	    696690 ns/op	  460603 B/op	      42 allocs/op
+BenchmarkUsageExtensions/ceiling-4       	    2094	    629980 ns/op	  471924 B/op	      45 allocs/op
+BenchmarkUsageExtensions/ceiling-4       	    2120	    734791 ns/op	  472369 B/op	      45 allocs/op
+BenchmarkUsageExtensions/ceiling-4       	    2173	   1008152 ns/op	  470636 B/op	      44 allocs/op
+BenchmarkUsageExtensions/ceiling-4       	    1011	   1490517 ns/op	  467166 B/op	      43 allocs/op
+BenchmarkUsageExtensions/ceiling-4       	    1173	   1185992 ns/op	  467729 B/op	      43 allocs/op
+BenchmarkUsageExtensions/rejected_oversize           	 2389520	       426.0 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize           	 3779275	       360.9 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize           	 3801594	       341.0 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize           	 4114846	       306.3 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize           	 4001973	       312.9 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize-4         	 3880522	       307.5 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize-4         	 3911511	       325.2 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize-4         	 3958048	       354.6 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize-4         	 4093047	       336.6 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageExtensions/rejected_oversize-4         	 3892214	       307.1 ns/op	      80 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/disabled                    	225848989	         5.398 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled                    	217703432	         5.512 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled                    	205818412	         5.737 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled                    	193338298	         5.873 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled                    	189382948	         5.958 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled-4                  	213851036	         5.603 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled-4                  	163766581	         6.699 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled-4                  	189505675	         6.029 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled-4                  	205613385	         5.630 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/disabled-4                  	205287450	         6.089 ns/op	       0 B/op	       0 allocs/op
+BenchmarkUsageRawCapture/small                       	 2707693	       486.4 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small                       	 1942924	       623.4 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small                       	 2090202	       681.7 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small                       	 1815530	       667.8 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small                       	 1924460	       646.7 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small-4                     	 2251189	       489.3 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small-4                     	 2696692	       510.9 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small-4                     	 2535217	       455.4 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small-4                     	 2484435	       523.1 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/small-4                     	 2572525	       449.3 ns/op	     176 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling                     	    4384	    409479 ns/op	  262349 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling                     	    4761	    371892 ns/op	  262285 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling                     	    4405	    329658 ns/op	  262285 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling                     	    3844	    313631 ns/op	  262285 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling                     	    2173	    480449 ns/op	  262285 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling-4                   	    2954	    395860 ns/op	  262351 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling-4                   	    3108	    339970 ns/op	  262352 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling-4                   	    3378	    325282 ns/op	  262353 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling-4                   	    3546	    393803 ns/op	  262348 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/ceiling-4                   	    3144	    393325 ns/op	  262351 B/op	       3 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize           	18273822	        56.43 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize           	18627432	        62.18 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize           	19449412	        56.32 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize           	21229678	        58.05 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize           	20041894	        58.97 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize-4         	21522015	        53.25 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize-4         	23408096	        58.90 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize-4         	24893989	        60.03 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize-4         	21954787	        56.17 ns/op	      64 B/op	       1 allocs/op
+BenchmarkUsageRawCapture/rejected_oversize-4         	21092016	        53.67 ns/op	      64 B/op	       1 allocs/op
+PASS
+ok  	example.com/gobroom-external-provider	101.566s

@@ -1,0 +1,92 @@
+# Runtime source: 881f453 (same runtime through 429c3c3)
+# Go: go1.27.3-X:nodwarf5 linux/amd64
+# Shared instrumented harness SHA256: d5d335ce61087426ab42ecd7202a3e88b0c5bb74c196e5ec2bff2d84ebf72859
+# Command: GOWORK=off go test -run '^$' -bench '^BenchmarkOpenAIChatProxy$' -benchmem -benchtime=1s -count=5 -cpu=1,4 ./...
+# Ambient desktop run; not isolated daemon RSS or p99.
+
+goos: linux
+goarch: amd64
+pkg: example.com/gobroom-external-provider
+cpu: Intel(R) Core(TM) i7-6820HQ CPU @ 2.70GHz
+BenchmarkOpenAIChatProxy/JSON/Direct           	   16258	     79382 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct           	   17073	     89995 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct           	   16407	     74344 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct           	   17180	     78780 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct           	   14581	     73502 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct-4         	   10000	    103017 ns/op	    8426 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct-4         	   10000	    115351 ns/op	    8416 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct-4         	    9973	    127428 ns/op	    8400 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct-4         	    8280	    133459 ns/op	    8414 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Direct-4         	    8948	    120075 ns/op	    8403 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel   	   10000	    137678 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel   	    8812	    113954 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel   	   12652	    117103 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel   	   14256	     94360 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel   	   15258	    109901 ns/op	    8378 B/op	      94 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel-4 	   37477	     61278 ns/op	    8400 B/op	      93 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel-4 	   32118	     58959 ns/op	    8406 B/op	      93 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel-4 	   15254	     67737 ns/op	    8405 B/op	      93 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel-4 	   18352	     59052 ns/op	    8404 B/op	      93 allocs/op
+BenchmarkOpenAIChatProxy/JSON/DirectParallel-4 	   34210	     33029 ns/op	    8400 B/op	      93 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy            	    1096	   1067754 ns/op	         0 usage-drop/op	  119157 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy            	     878	   1371345 ns/op	         0 usage-drop/op	  119181 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy            	     890	   1647370 ns/op	         0 usage-drop/op	  119174 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy            	     814	   1328915 ns/op	         0 usage-drop/op	  119108 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy            	     994	   1163717 ns/op	         0 usage-drop/op	  119137 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy-4          	     895	   1120290 ns/op	         0 usage-drop/op	  119512 B/op	    1460 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy-4          	    1084	   1361508 ns/op	         0 usage-drop/op	  119821 B/op	    1464 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy-4          	     818	   1464733 ns/op	         0 usage-drop/op	  119845 B/op	    1461 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy-4          	     738	   1370847 ns/op	         0 usage-drop/op	  119781 B/op	    1461 allocs/op
+BenchmarkOpenAIChatProxy/JSON/Proxy-4          	     970	   1474719 ns/op	         0 usage-drop/op	  119674 B/op	    1461 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel    	    1059	   1437634 ns/op	         0 usage-drop/op	  119193 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel    	     972	   1322263 ns/op	         0 usage-drop/op	  119142 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel    	    1087	   1191926 ns/op	         0 usage-drop/op	  119107 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel    	    1354	    953593 ns/op	         0 usage-drop/op	  119168 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel    	    1316	    873686 ns/op	         0 usage-drop/op	  119116 B/op	    1458 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel-4  	    2965	    442358 ns/op	         0 usage-drop/op	  116952 B/op	    1442 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel-4  	    2673	    424959 ns/op	         0 usage-drop/op	  117235 B/op	    1445 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel-4  	    2394	    422641 ns/op	         0 usage-drop/op	  117124 B/op	    1444 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel-4  	    3153	    382704 ns/op	         0 usage-drop/op	  116552 B/op	    1438 allocs/op
+BenchmarkOpenAIChatProxy/JSON/ProxyParallel-4  	    2521	    456050 ns/op	         0 usage-drop/op	  117347 B/op	    1445 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct            	   14474	     97141 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct            	   13455	     83704 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct            	   14428	     84670 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct            	   14496	     85057 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct            	   10000	    100627 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct-4          	   10000	    119509 ns/op	   10331 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct-4          	    8304	    142094 ns/op	   10329 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct-4          	   10034	    115103 ns/op	   10330 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct-4          	   10000	    113576 ns/op	   10333 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Direct-4          	   10000	    114046 ns/op	   10324 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel    	   14494	     82534 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel    	   12424	     84804 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel    	   14172	     87880 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel    	   13167	     89185 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel    	   10000	    100509 ns/op	   10306 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel-4  	   37797	     31945 ns/op	   10343 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel-4  	   38566	     33262 ns/op	   10340 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel-4  	   30880	     36499 ns/op	   10343 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel-4  	   34926	     34637 ns/op	   10340 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/DirectParallel-4  	   37719	     35281 ns/op	   10342 B/op	     105 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy             	     972	   1367365 ns/op	         0 usage-drop/op	  153945 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy             	     975	   1156261 ns/op	         0 usage-drop/op	  153860 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy             	    1096	   1327729 ns/op	         0 usage-drop/op	  153908 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy             	     909	   1513282 ns/op	         0 usage-drop/op	  153969 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy             	     804	   1511302 ns/op	         0 usage-drop/op	  153915 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy-4           	     718	   1613610 ns/op	         0 usage-drop/op	  155556 B/op	    1944 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy-4           	     788	   1723170 ns/op	         0 usage-drop/op	  154736 B/op	    1939 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy-4           	     735	   1377671 ns/op	         0 usage-drop/op	  154925 B/op	    1939 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy-4           	    1017	   1212531 ns/op	         0 usage-drop/op	  154852 B/op	    1937 allocs/op
+BenchmarkOpenAIChatProxy/SSE/Proxy-4           	    1108	   1192361 ns/op	         0 usage-drop/op	  155113 B/op	    1936 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel     	    1254	   1268401 ns/op	         0 usage-drop/op	  153934 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel     	    1250	    960493 ns/op	         0 usage-drop/op	  153935 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel     	    1261	    944623 ns/op	         0 usage-drop/op	  153932 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel     	    1267	    956591 ns/op	         0 usage-drop/op	  153931 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel     	    1135	    962084 ns/op	         0 usage-drop/op	  153896 B/op	    1931 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel-4   	    2396	    551880 ns/op	         0 usage-drop/op	  152923 B/op	    1926 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel-4   	    2307	    572781 ns/op	         0 usage-drop/op	  152935 B/op	    1926 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel-4   	    2224	    490548 ns/op	         0 usage-drop/op	  152562 B/op	    1923 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel-4   	    2320	    491209 ns/op	         0 usage-drop/op	  152507 B/op	    1922 allocs/op
+BenchmarkOpenAIChatProxy/SSE/ProxyParallel-4   	    2074	    498205 ns/op	         0 usage-drop/op	  152721 B/op	    1924 allocs/op
+PASS
+ok  	example.com/gobroom-external-provider	138.805s

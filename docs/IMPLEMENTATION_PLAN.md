@@ -11,12 +11,13 @@ report only the feature currently being changed or infer product completeness
 from a green architecture subset.
 
 2026-10-23 integrated checkpoint: the approved [hybrid usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
-Tasks 1–5 and [typed-jobs proof](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
-are verified and installed. Host 12 accounting preserves NULL/zero,
+Tasks 1–7 and [typed-jobs proof](superpowers/plans/2026-10-22-typed-job-results-implementation.md)
+are verified and installed. Host 13 accounting preserves NULL/zero,
 cache/reasoning details, partial/full snapshots and daily reporting coverage,
 with per-dispatch identities, failed-attempt evidence, required-usage gates,
-typed protocol/charge normalization and immutable extension history.
-Main daemon status=ok, control=serving=504. Usage Tasks 6–8 remain open;
+typed protocol/charge normalization, immutable extension history, bounded raw
+capture, explicit disclosure and public-module inference/CLI acceptance.
+Main daemon status=ok, control=serving=506. Usage Task 8 remains open;
 M8/M15 and C1–C6 are not closed by this checkpoint. See the
 [product snapshot](PRODUCT_STATUS.md#latest-acceptance) for exact evidence.
 
@@ -181,7 +182,10 @@ The design is fixed in [Semantic extension contracts](EXTENSION_CONTRACTS.md).
 These slices implement that design; they do not reopen the model graph or
 introduce provider-specific core workflows. C1's catalog, exact module pins
 and static-link resolution contract are in place. The 2026-10-22 audit reopens
-the semantic-envelope part of C1: registered usage dimensions are absent.
+the semantic-envelope part of C1. Follow-up usage Tasks 1–7 now verify bounded
+registered dimensions, history/disclosure and a separate public-module inference
+proof. Resource measurement/final combined review and the broader C1 gate remain
+open; this is no longer an absent usage-envelope implementation.
 The jobs example's JSON-in-text transport is a separate implementation/proof
 gap: registered artifacts already carry schema-validated values to renderers,
 and logical result schemas need not equal client wire schemas. Direct projector
@@ -196,7 +200,7 @@ and separate opt-in raw retention. Descriptor registration
 does not automatically grant aggregation, pricing or routing semantics. The
 module-only typed-result proof remains separate.
 
-1. **C1 — catalog complete; semantic envelope not closed:** the local-schema,
+1. **C1 — catalog implemented; full semantic closure open:** the local-schema,
    versioned descriptor/factory catalog freezes with the provider runtime;
    provider, primitive and task refs pin exact contracts. Built-in endpoint,
    usage, classifier and OAuth options are schema-validated. Operation
