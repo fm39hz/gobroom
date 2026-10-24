@@ -401,39 +401,14 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 			candidate.SessionStoreRef = operationBinding.SessionStoreRef
 			candidate.SessionOperationRef = extensions.Ref{Kind: "operation", ID: string(requirements.Operation), ContractVersion: requirements.OperationContractVersion}
 			sessionKey := requestSessionKey(req)
-			var sessionState SessionState
-			var loadedSessionState SessionState
-			sessionStateLoaded := false
+			sessionState, sessionStateLoaded, sessionErr := k.restoreCandidateSession(ctx, candidate, &candidateRequest)
+			if sessionErr != nil {
+				return sessionErr
+			}
+			// Updates replace private slices or append proofs without mutating
+			// the loaded prefix; retain it for version-fenced invalidation.
+			loadedSessionState := sessionState
 			sessionStateChanged := false
-			if sessionKey != "" && candidate.SessionStoreRef.ID != "" {
-				sessionStore := k.SessionStores[candidate.SessionStoreRef]
-				if sessionStore == nil {
-					return ErrSessionStateUnavailable
-				}
-				saved, found, loadErr := sessionStore.Load(ctx, candidate, sessionKey)
-				if loadErr != nil {
-					return ErrSessionStateUnavailable
-				}
-				if found {
-					if saved.StoreVersion == 0 {
-						return ErrSessionStateUnavailable
-					}
-					sessionStateLoaded = true
-					// Updates replace private slices or append proofs without
-					// mutating the prefix; retain the loaded snapshot without a
-					// second provider-data copy on every successful call.
-					loadedSessionState = saved
-					sessionState = saved
-					candidateRequest.Session.ProviderState = append([]byte(nil), saved.ProviderData...)
-					if candidateRequest.Continuity.PreviousResponse == "" {
-						candidateRequest.Continuity.PreviousResponse = saved.ResponseID
-					}
-				}
-			}
-			if requestHasToolSignature(candidateRequest.Messages) {
-				candidateRequest = normalize.CloneRequest(candidateRequest)
-				attestToolCallSignatures(&candidateRequest, sessionState.Signatures, candidate.DefinitionRef)
-			}
 			operationRef := candidate.SessionOperationRef
 			artifactOutputs, _ := k.Operations.ArtifactOutputs(operationRef)
 			if len(artifactOutputs) > 0 && k.ArtifactStore == nil {

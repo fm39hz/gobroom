@@ -46,10 +46,23 @@ func TestClientFormatIsNotInferredFromProviderProtocol(t *testing.T) {
 }
 
 func TestEligibleRejectsTokenBudgetOverflow(t *testing.T) {
-	req := NormalizedRequest{SourceFormat: normalize.FormatOpenAIChat, Raw: map[string]any{"messages": "a", "max_tokens": float64(200)}}
+	output := 200
+	req := NormalizedRequest{SourceFormat: normalize.FormatOpenAIChat, Generation: normalize.GenerationOptions{MaxOutputTokens: &output}, Raw: map[string]any{"messages": "a"}}
 	route := Route{Protocol: ProtocolOpenAIChat, Limits: TokenLimits{MaxOutputTokens: 100, MaxTotalTokens: 1000}}
 	if ok, reason := Eligible(route, CompileRequirements(req)); ok || reason != "output exceeds route limit" {
 		t.Fatalf("expected output limit rejection, ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestOutputReservationUsesCanonicalGenerationNotProviderRawFields(t *testing.T) {
+	budget := 200
+	req := NormalizedRequest{Generation: normalize.GenerationOptions{MaxOutputTokens: &budget}, Raw: map[string]any{"max_tokens": float64(10)}}
+	if got := CompileRequirements(req).ReservedOutputTokens; got != 200 {
+		t.Fatalf("reservation ignored canonical generation: %d", got)
+	}
+	req.Generation.MaxOutputTokens = nil
+	if got := CompileRequirements(req).ReservedOutputTokens; got != 0 {
+		t.Fatalf("kernel interpreted provider-specific raw output field: %d", got)
 	}
 }
 

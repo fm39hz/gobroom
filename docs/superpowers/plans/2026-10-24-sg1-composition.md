@@ -31,6 +31,11 @@ catalog-configured transforms, ordinary Physical/Combo setup and public HTTP.
 
 ## Task 1: Gemini public intersection
 
+Executed implementation deltas: Gemini wire reasoning binding, common numeric
+normalization for JSON-number IPC, and shared read-only candidate session
+restoration in `internal/kernel/candidate_session.go`, used by execute/explain.
+Each has an observed regression before correction; no provider-name branch.
+
 Files: `examples/external-provider-module/sg1_fixture_test.go`, `sg1_gemini_test.go`.
 Interfaces: new `newSG1Host`, `sg1ConfigureModel`, `sg1PublishRole`,
 `sg1PutPrompt`, `sg1PutResponse`; existing public daemon/provider helpers.
@@ -40,6 +45,8 @@ Interfaces: new `newSG1Host`, `sg1ConfigureModel`, `sg1PublishRole`,
   budget2048, active request/response transforms; assert wire and client text.
 - [ ] Wrong session/branch/target and unsupported response-ID continuity reject
   before dispatch; incompatible first fallback member receives no calls.
+- [ ] Signed preflight agrees with execution for the correct session and
+  rejects invalid scopes without dispatch or private state disclosure.
 - [ ] Main executes tests; actual defects get RED→GREEN; commit verified checkpoint.
 
 ## Task 2: Anthropic loss and signed renderer

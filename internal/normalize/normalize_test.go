@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -15,6 +16,78 @@ func TestResponsesNormalizesToSemanticMessages(t *testing.T) {
 	}
 	if result.Request.SourceFormat != FormatOpenAIResponses || len(result.Request.Messages) != 1 || result.Request.Messages[0].Role != "user" {
 		t.Fatalf("unexpected result: %#v", result.Request)
+	}
+}
+
+func TestUseNumberControlsKeepTypedReasoningAndGeneration(t *testing.T) {
+	for _, tc := range []struct{ path, body string }{
+		{"/v1/chat/completions", `{"model":"role","messages":[{"role":"user","content":"hello"}],"reasoning":{"max_output_tokens":2048},"max_tokens":4096,"temperature":0.2,"top_p":0.8}`},
+		{"/v1/messages", `{"model":"role","messages":[{"role":"user","content":"hello"}],"thinking":{"type":"enabled","budget_tokens":2048},"max_tokens":4096,"temperature":0.2,"top_p":0.8}`},
+	} {
+		var body map[string]any
+		decoder := json.NewDecoder(strings.NewReader(tc.body))
+		decoder.UseNumber()
+		if err := decoder.Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		result, err := Map(tc.path, http.Header{}, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Request.Thinking.Mode != "budget" || result.Request.Thinking.BudgetTokens != 2048 || result.Request.Generation.MaxOutputTokens == nil || *result.Request.Generation.MaxOutputTokens != 4096 || len(result.Request.UnsupportedFacets) != 0 {
+			t.Fatalf("control-plane numeric binding lost request intent: %#v", result.Request)
+		}
+		if result.Request.Generation.Temperature == nil || *result.Request.Generation.Temperature != 0.2 || result.Request.Generation.TopP == nil || *result.Request.Generation.TopP != 0.8 || len(result.Request.Generation.Unsupported) != 0 {
+			t.Fatalf("control-plane generation binding lost intent: %#v", result.Request.Generation)
+		}
+	}
+}
+
+func TestReasoningBudgetScalarsDoNotRoundOrOverflow(t *testing.T) {
+	for _, value := range []any{float64(2048.5), json.Number("2048.5"), json.Number("9223372036854775808")} {
+		if got := intValue(value); got != 0 {
+			t.Errorf("invalid integer budget was silently coerced: input=%v got=%d", value, got)
+		}
+	}
+	want := int64(9007199254740993)
+	if int64(int(want)) == want {
+		if got := intValue(json.Number("9007199254740993")); int64(got) != want {
+			t.Fatalf("integer token rounded through float64: got=%d want=%d", got, want)
+		}
+	}
+}
+
+func TestHTTPAndIPCUseOneExactIntegerBudgetPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		number string
+		want   int
+	}{
+		{"2048", 2048}, {"2048.0", 2048}, {"2.048e3", 2048},
+		{"2048.0000000000001", 0}, {"9223372036854775808", 0},
+		{"1e1000000000", 0}, {"1e-1000000000", 0},
+	} {
+		t.Run(tc.number, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"model": "role", "messages": []map[string]string{{"role": "user", "content": "hello"}}, "reasoning": map[string]any{"max_output_tokens": json.RawMessage(tc.number)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			httpResult, httpErr := JSON("/v1/chat/completions", http.Header{}, body)
+			var values map[string]any
+			decoder := json.NewDecoder(strings.NewReader(string(body)))
+			decoder.UseNumber()
+			if err := decoder.Decode(&values); err != nil {
+				t.Fatal(err)
+			}
+			ipcResult, ipcErr := Map("/v1/chat/completions", http.Header{}, values)
+			for name, result := range map[string]Result{"http": httpResult, "ipc": ipcResult} {
+				if result.Request.Thinking.BudgetTokens != tc.want {
+					t.Errorf("%s budget=%d want=%d (httpErr=%v ipcErr=%v)", name, result.Request.Thinking.BudgetTokens, tc.want, httpErr, ipcErr)
+				}
+			}
+			if tc.want > 0 && (httpErr != nil || ipcErr != nil) {
+				t.Fatalf("valid equivalent integer rejected: http=%v ipc=%v", httpErr, ipcErr)
+			}
+		})
 	}
 }
 

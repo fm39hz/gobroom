@@ -115,8 +115,62 @@ func TestConfigCommandsRejectInvalidInputBeforeIPC(t *testing.T) {
 	}
 }
 
-func TestDecodeConfigInputEnforcesIPCSizeLimit(t *testing.T) {
-	if _, err := decodeConfigInput(strings.NewReader("{}" + strings.Repeat(" ", maxConfigInputBytes))); err == nil {
+func TestDecodeJSONInputEnforcesIPCSizeLimit(t *testing.T) {
+	if _, err := decodeJSONInput(strings.NewReader("{}" + strings.Repeat(" ", maxJSONInputBytes))); err == nil {
 		t.Fatal("oversized config input accepted")
+	}
+}
+
+func TestRouteExplainPreservesRequestNumberTokens(t *testing.T) {
+	for _, source := range []string{"stdin", "file"} {
+		t.Run(source, func(t *testing.T) {
+			socket := filepath.Join(t.TempDir(), "daemon.sock")
+			requests := make(chan daemon.IPCRequest, 1)
+			server := daemon.NewIPCServer(socket, func(_ context.Context, r daemon.IPCRequest) daemon.IPCResponse {
+				requests <- r
+				return daemon.IPCResponse{ID: r.ID, OK: true, Result: []any{}}
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if err := server.Start(ctx); err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			priorIPC, priorJSON := ipcPath, outputJSON
+			ipcPath, outputJSON = socket, true
+			defer func() { ipcPath, outputJSON = priorIPC, priorJSON }()
+			const input = `{"model":"role","reasoning":{"max_output_tokens":2048.0000000000001}}`
+			path := "-"
+			if source == "file" {
+				path = filepath.Join(t.TempDir(), "request.json")
+				if err := os.WriteFile(path, []byte(input), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := newRootCommand(socket, func(string, string) error { return nil })
+			cmd.SetArgs([]string{"route-explain", "--model", "role", "--request-file", path})
+			cmd.SetIn(strings.NewReader(input))
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			request := <-requests
+			encoded, err := json.Marshal(request.Params)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var observed struct {
+				Request struct {
+					Reasoning struct {
+						Budget json.Number `json:"max_output_tokens"`
+					} `json:"reasoning"`
+				} `json:"request"`
+			}
+			if err := json.Unmarshal(encoded, &observed); err != nil {
+				t.Fatal(err)
+			}
+			if observed.Request.Reasoning.Budget.String() != "2048.0000000000001" {
+				t.Fatalf("CLI rounded request before IPC: %s", encoded)
+			}
+		})
 	}
 }

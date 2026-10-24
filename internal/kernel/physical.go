@@ -253,10 +253,8 @@ func estimateInputTokens(req NormalizedRequest) int64 {
 }
 
 func requestedOutputTokens(req NormalizedRequest) int64 {
-	for _, key := range []string{"max_output_tokens", "max_tokens"} {
-		if value, ok := req.Raw[key].(float64); ok && value > 0 {
-			return int64(value)
-		}
+	if value := req.Generation.MaxOutputTokens; value != nil && *value > 0 {
+		return int64(*value)
 	}
 	return 0
 }

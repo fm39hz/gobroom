@@ -15,6 +15,7 @@ import (
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/adapter/usagewire"
+	"github.com/fm39hz/gobroom/internal/jsonvalue"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -972,7 +973,7 @@ func applyAnthropicThinking(body map[string]any, intent normalize.ThinkingIntent
 		body[key] = value
 	}
 	if (intent.Mode == "budget" || intent.Mode == "enabled") && intent.BudgetTokens > 0 {
-		if max, ok := body["max_tokens"].(float64); !ok || int(max) <= intent.BudgetTokens {
+		if max, ok := jsonvalue.Integer(body["max_tokens"]); !ok || max <= intent.BudgetTokens {
 			body["max_tokens"] = intent.BudgetTokens + 1024
 		}
 	}

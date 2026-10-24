@@ -235,6 +235,26 @@ func TestKernelAppliesOnlyApprovedAnthropicReasoningBudgetLossToWire(t *testing.
 	allowed.Close()
 }
 
+func TestReasoningBudgetPreservesSufficientExplicitOutputLimit(t *testing.T) {
+	parsed, err := normalize.JSON("/v1/chat/completions", http.Header{}, []byte(`{"model":"role","messages":[{"role":"user","content":"hello"}],"reasoning":{"max_output_tokens":2048},"max_tokens":4096}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := (Messages{}).Prepare(t.Context(), parsed.Request, kernel.Route{ExternalModel: "claude", CredentialPresentation: kernel.CredentialPresentation{Header: "x-api-key"}}, kernel.Credential{Secret: "fixture-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	if err := json.NewDecoder(prepared.Body).Decode(&wire); err != nil {
+		t.Fatal(err)
+	}
+	if wire.MaxTokens != 4096 {
+		t.Fatalf("sufficient explicit limit changed without a named loss: %d", wire.MaxTokens)
+	}
+}
+
 func TestKernelMapsOpenAIResponsesThroughAnthropicMessagesAndBack(t *testing.T) {
 	responseBody := `{"id":"msg_responses_crosswire","type":"message","role":"assistant","model":"claude-physical","content":[{"type":"text","text":"I found it."},{"type":"tool_use","id":"call_anthropic","name":"lookup","input":{"found":true}}],"stop_reason":"tool_use","usage":{"input_tokens":9,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":4}}`
 	var dispatches atomic.Int32

@@ -229,7 +229,8 @@ type openAIChatRequestOptions struct {
 }
 
 type openAIReasoningConfig struct {
-	Effort string `json:"effort"`
+	Effort          string `json:"effort"`
+	MaxOutputTokens *int   `json:"max_output_tokens,omitempty"`
 }
 
 type openAIThinkingConfig struct {

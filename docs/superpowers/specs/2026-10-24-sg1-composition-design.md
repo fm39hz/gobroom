@@ -18,8 +18,9 @@ previous-response IDs must reject, not be discarded or called equivalent.
 Existing provider expiry/reset proofs remain separate. No invented provider
 wire format is needed to force an unsupported positive mapping.
 
-Use a module-owned schema-configured prompt transform with a stable system
-layer, so conversation context is identical on both turns. Appending a hidden
+Use a module-owned schema-configured prompt transform over an existing plain
+system layer, retaining its provenance and role, so conversation context is
+identical on both turns. Appending a hidden
 user turn on every request would legitimately change the signed prefix; do not
 weaken scope checks to admit that. Reuse the existing response-transform module.
 Assert actual wire budget/tool/history/prompt and transformed client text.
@@ -39,3 +40,19 @@ own primitives and attribution. Only main Go/format/test/install/commits;
 workers own disjoint test files. Tests may initially prove existing behavior;
 any production change requires a concrete executed RED first. Fake upstreams
 and temporary configuration only; actual credentials/config remain unchanged.
+
+Executed follow-ups: align the Gemini typed reasoning wire binding with its
+declared budget mapping. Preserve `json.Number` values from management IPC in
+the common typed scalar normalizer, rejecting fractional integer budgets instead
+of silently rounding. Execution and route explanation must share the same
+candidate-specific session restoration/attestation step. Preflight remains
+read-only with respect to inference, response/session publication and health;
+it may read/prune expiring cache entries. Neither opaque state nor raw signature
+bytes become explanation output. Actual execution's invalidation/version/replay
+contracts stay unchanged.
+
+Review correction: HTTP/CLI/IPC preserve number tokens. Equivalent integer
+spellings share an exact machine-integer policy; near-integer fractions never
+round into valid budgets. Stdlib JSON and rational arithmetic provide binding,
+with a 4096-byte integer-token bound. Strict wire validation remains enabled.
+Output reservation consumes typed Generation, not provider-format Raw keys.

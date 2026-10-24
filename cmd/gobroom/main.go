@@ -381,7 +381,7 @@ func configExportCommand() *cobra.Command {
 }
 func configValidateCommand() *cobra.Command {
 	return &cobra.Command{Use: "config-validate", Short: "validate config bundle JSON", RunE: func(cmd *cobra.Command, _ []string) error {
-		raw, err := decodeConfigInput(cmd.InOrStdin())
+		raw, err := decodeJSONInput(cmd.InOrStdin())
 		if err != nil {
 			return err
 		}
@@ -390,7 +390,7 @@ func configValidateCommand() *cobra.Command {
 }
 func configDiffCommand() *cobra.Command {
 	return &cobra.Command{Use: "config-diff", Short: "show config bundle dry-run diff", RunE: func(cmd *cobra.Command, _ []string) error {
-		raw, err := decodeConfigInput(cmd.InOrStdin())
+		raw, err := decodeJSONInput(cmd.InOrStdin())
 		if err != nil {
 			return err
 		}
@@ -399,7 +399,7 @@ func configDiffCommand() *cobra.Command {
 }
 func configApplyCommand() *cobra.Command {
 	return &cobra.Command{Use: "config-apply", Short: "atomically apply a config bundle JSON", RunE: func(cmd *cobra.Command, _ []string) error {
-		raw, err := decodeConfigInput(cmd.InOrStdin())
+		raw, err := decodeJSONInput(cmd.InOrStdin())
 		if err != nil {
 			return err
 		}
@@ -414,12 +414,13 @@ func routeExplainCommand() *cobra.Command {
 			var body map[string]any
 			var err error
 			if requestFile == "-" {
-				err = json.NewDecoder(cmd.InOrStdin()).Decode(&body)
+				body, err = decodeJSONInput(cmd.InOrStdin())
 			} else {
-				var raw []byte
-				raw, err = os.ReadFile(requestFile)
+				var file *os.File
+				file, err = os.Open(requestFile)
 				if err == nil {
-					err = json.Unmarshal(raw, &body)
+					defer file.Close()
+					body, err = decodeJSONInput(file)
 				}
 			}
 			if err != nil {

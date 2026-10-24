@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/fm39hz/gobroom/internal/jsonvalue"
+
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -54,7 +56,7 @@ func geminiResponsesEnvelopeRepresentable(request kernel.NormalizedRequest) bool
 			}
 		}
 		if rawBudget, hasBudget := reasoning["max_output_tokens"]; hasBudget {
-			if value, ok := rawBudget.(float64); !ok || value <= 0 || value != float64(int(value)) {
+			if value, ok := jsonvalue.Integer(rawBudget); !ok || value <= 0 {
 				return false
 			}
 		}

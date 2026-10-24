@@ -2,7 +2,6 @@ package gemini
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 
 	egress "github.com/fm39hz/gobroom/internal/adapter/renderers"
 	"github.com/fm39hz/gobroom/internal/extensions"
+	"github.com/fm39hz/gobroom/internal/jsonvalue"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 )
@@ -337,7 +337,7 @@ func geminiGenerationOptionsRepresentable(raw map[string]any) bool {
 			return false
 		}
 		if key == "n" {
-			if count, ok := value.(float64); ok && count != 1 {
+			if count, ok := jsonvalue.Integer(value); !ok || count != 1 {
 				return false
 			}
 		}
@@ -1020,19 +1020,7 @@ func geminiRole(role string) (string, error) {
 }
 
 func decodeStrictJSON(data []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return fmt.Errorf("unexpected trailing JSON value")
-		}
-		return err
-	}
-	return nil
+	return jsonvalue.UnmarshalStrict(data, target)
 }
 
 func (config *geminiGenerationConfig) hasValues() bool {

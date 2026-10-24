@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/fm39hz/gobroom/internal/jsonvalue"
 )
 
 func JSON(path string, headers http.Header, payload []byte) (Result, error) {
-	var body map[string]any
-	if err := json.Unmarshal(payload, &body); err != nil {
+	body, err := jsonvalue.Object(payload)
+	if err != nil {
 		return Result{}, fmt.Errorf("invalid JSON: %w", err)
 	}
 	return Map(path, headers, body)
@@ -739,18 +742,22 @@ func normalizeGenerationOptions(body map[string]any, format Format) GenerationOp
 
 func floatPointer(value any) (*float64, bool) {
 	number, ok := value.(float64)
-	if !ok {
+	if n, isNumber := value.(json.Number); isNumber {
+		var err error
+		number, err = n.Float64()
+		ok = err == nil
+	}
+	if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
 		return nil, false
 	}
 	return &number, true
 }
 
 func integerPointer(value any) (*int, bool) {
-	number, ok := value.(float64)
-	if !ok || number != float64(int(number)) {
+	integer, ok := jsonvalue.Integer(value)
+	if !ok {
 		return nil, false
 	}
-	integer := int(number)
 	return &integer, true
 }
 
@@ -994,11 +1001,8 @@ func boolValue(v any, fallback bool) bool {
 	return b
 }
 func intValue(v any) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
+	if value, valid := integerPointer(v); valid {
+		return *value
 	}
 	return 0
 }

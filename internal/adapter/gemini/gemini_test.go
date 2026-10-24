@@ -37,6 +37,59 @@ func TestPrepareMapsReasoningToGeminiThinkingConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareAcceptsTheChatBudgetDeclaredByCompatibility(t *testing.T) {
+	input, err := normalize.JSON("/v1/chat/completions", http.Header{}, []byte(`{"model":"role","messages":[{"role":"user","content":"hello"}],"reasoning":{"max_output_tokens":2048},"max_tokens":4096}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter()
+	plan := adapter.PlanCompatibility(kernel.CompatibilityContext{Request: input.Request, Policy: kernel.CompatibilityPolicy{RequiredFacets: kernel.RequiredRequestFacets(input.Request)}})
+	if !plan.Supported {
+		t.Fatalf("budget must be admitted by the declared codec contract: %#v", plan)
+	}
+	prepared, err := adapter.Prepare(t.Context(), input.Request, kernel.Route{BaseURL: "https://gemini.test", ExternalModel: "gemini-3-flash", CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}}, kernel.Credential{Secret: "fixture-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer, ok := prepared.Body.(io.Closer); ok {
+		defer closer.Close()
+	}
+	var body generateContentRequest
+	if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.GenerationConfig == nil || body.GenerationConfig.ThinkingConfig == nil || body.GenerationConfig.ThinkingConfig.ThinkingBudget == nil || *body.GenerationConfig.ThinkingConfig.ThinkingBudget != 2048 {
+		t.Fatalf("admitted explicit budget was not encoded: %#v", body.GenerationConfig)
+	}
+}
+
+func TestPreparePreservesEquivalentBudgetSpellings(t *testing.T) {
+	for _, number := range []string{"2048", "2048.0", "2.048e3"} {
+		payload, err := json.Marshal(map[string]any{"model": "role", "messages": []map[string]string{{"role": "user", "content": "hello"}}, "reasoning": map[string]any{"max_output_tokens": json.RawMessage(number)}, "max_tokens": json.RawMessage("4096.0")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		input, err := normalize.JSON("/v1/chat/completions", http.Header{}, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared, err := NewAdapter().Prepare(t.Context(), input.Request, kernel.Route{BaseURL: "https://gemini.test", ExternalModel: "gemini-3-flash", CredentialPresentation: kernel.CredentialPresentation{Header: "x-goog-api-key"}}, kernel.Credential{Secret: "fixture-key"})
+		if err != nil {
+			t.Fatalf("admitted integer spelling %s failed wire binding: %v", number, err)
+		}
+		var body generateContentRequest
+		if err := json.NewDecoder(prepared.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if closer, ok := prepared.Body.(io.Closer); ok {
+			_ = closer.Close()
+		}
+		if body.GenerationConfig == nil || body.GenerationConfig.MaxOutputTokens == nil || *body.GenerationConfig.MaxOutputTokens != 4096 || body.GenerationConfig.ThinkingConfig == nil || body.GenerationConfig.ThinkingConfig.ThinkingBudget == nil || *body.GenerationConfig.ThinkingConfig.ThinkingBudget != 2048 {
+			t.Fatalf("budget spelling lost wire intent: %#v", body.GenerationConfig)
+		}
+	}
+}
+
 func TestGeminiCompatibilityPlanRejectsUnsupportedRequestFacetsBeforeDispatch(t *testing.T) {
 	cases := []struct {
 		name    string
