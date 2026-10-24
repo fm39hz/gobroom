@@ -11,7 +11,8 @@ request/business IDs, stable session/record identifiers, forced upstream stream,
 task/source/version fields, hoisted system, messages/tools, output parameters,
 model_config and mirrored chat_context metadata. A selected native model config
 is supplied as schema-bound request-codec options for this bounded fixture;
-unknown keys fail closed. This proves independent configurability, not dynamic
+unknown outer option keys fail closed, while native model-config objects retain
+vendor fields alongside their required typed key/output bounds. This proves independent configurability, not dynamic
 catalog/login/media parity. It does not claim which source fields the real
 server would permit omitting or that the provider accepts this code live.
 

@@ -66,6 +66,10 @@ test-installed-sg1: check-installed-cli ## tools/budget/scoped-history and loss/
 test-installed-callback-race: check-installed-cli ## callback completion versus public credential replacement
 	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(PublicCallbackReplacement|InstalledCLICallbackReplacementRace)' -race -count=3
 
+.PHONY: test-installed-qoder-vertical
+test-installed-qoder-vertical: check-installed-cli ## source-backed encoded/signing provider deployment
+	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(QoderNative|QoderEnvelope|QoderFixtureBody|InstalledCLIQoderNative)' -race -count=3
+
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./cmd/gobroom -run '^TestTransform' -count=1
 	go test ./cmd/gobroom -run '^Test(ConfigCommands|DecodeJSONInput|RouteExplainPreservesRequestNumberTokens)' -count=1

@@ -16,7 +16,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,7 +32,6 @@ import (
 // signs only a fixture payload and sends it to httptest; it never contacts Qoder.
 const (
 	qoderFixturePath           = "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
-	qoderFixtureStdAlphabet    = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 	qoderFixtureCustomAlphabet = "_doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!"
 	qoderFixturePublicKey      = `-----BEGIN PUBLIC KEY-----
 MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
@@ -42,6 +40,8 @@ MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDA8iMH5c02LilrsERw9t6Pv5Nc
 XcW+ML9FoCI6AOvOzwIDAQAB
 -----END PUBLIC KEY-----`
 )
+
+var qoderFixtureEncoding = base64.NewEncoding(qoderFixtureCustomAlphabet).WithPadding('$')
 
 type qoderFixtureAuth struct{}
 
@@ -96,13 +96,6 @@ func (qoderFixtureRequestCodec) DescribeCompatibility(provider.CompatibilityCont
 	return []provider.FacetMapping{{Facet: provider.FacetWireRequest, Paths: []string{"qoderFixturePayload"}, Disposition: provider.FacetTranslated}}
 }
 func (qoderFixtureRequestCodec) Prepare(ctx context.Context, request provider.NormalizedRequest, route provider.Route, credential provider.Credential) (provider.UpstreamRequest, error) {
-	if err := credential.ValidateRuntimeContext(); err != nil {
-		return provider.UpstreamRequest{}, err
-	}
-	userID := credential.AuthContext["userId"]
-	if userID == "" || credential.Secret == "" {
-		return provider.UpstreamRequest{}, fmt.Errorf("Qoder fixture requires auth context and access token")
-	}
 	payload, err := json.Marshal(map[string]any{
 		"model":    route.ExternalModel,
 		"messages": request.Raw["messages"],
@@ -111,28 +104,7 @@ func (qoderFixtureRequestCodec) Prepare(ctx context.Context, request provider.No
 	if err != nil {
 		return provider.UpstreamRequest{}, err
 	}
-	encodedBody := qoderFixtureEncodeBody(payload)
-	absoluteURL := strings.TrimRight(route.BaseURL, "/") + qoderFixturePath
-	headers := make(http.Header)
-	headers.Set("Content-Type", "application/json")
-	headers.Set("Accept", "text/event-stream")
-	headers.Set("Cache-Control", "no-cache")
-	headers.Set("Accept-Encoding", "identity")
-	headers.Set("X-Model-Key", route.ExternalModel)
-	headers.Set("X-Model-Source", "system")
-	authorize := func(_ context.Context, headers http.Header, body io.Reader, credential provider.Credential) error {
-		encoded, err := io.ReadAll(body)
-		if err != nil {
-			return err
-		}
-		signed, err := qoderFixtureCOSYHeaders(encoded, absoluteURL, credential)
-		if err != nil {
-			return err
-		}
-		maps.Copy(headers, signed)
-		return nil
-	}
-	return provider.PrepareBytesRequest(ctx, http.MethodPost, qoderFixturePath, headers, encodedBody, credential, authorize, request.Transport.IdempotencyKey != "")
+	return qoderPreparePayload(ctx, request, route, credential, payload)
 }
 
 type qoderFixtureResponseDecoder struct{}
@@ -319,46 +291,58 @@ func TestExternalRequestCodecEncodesThenSignsBodyWithoutKernelChanges(t *testing
 	}
 }
 
-func qoderFixtureEncodeBody(plain []byte) []byte {
-	encoded := base64.StdEncoding.EncodeToString(plain)
-	n := len(encoded)
-	third := n / 3
-	reordered := encoded[n-third:] + encoded[third:n-third] + encoded[:third]
-	custom := make([]byte, len(reordered))
-	for index, value := range []byte(reordered) {
-		if value == '=' {
-			custom[index] = '$'
-			continue
-		}
-		alphabetIndex := strings.IndexByte(qoderFixtureStdAlphabet, value)
-		if alphabetIndex < 0 {
-			custom[index] = value
-			continue
-		}
-		custom[index] = qoderFixtureCustomAlphabet[alphabetIndex]
+func TestQoderFixtureBodyEncodingMatchesLiteralVectors(t *testing.T) {
+	tests := []struct {
+		plain   string
+		encoded string
+	}{
+		{plain: "", encoded: ""},
+		{plain: "f", encoded: "$&$D"},
+		{plain: "fo", encoded: "$OqD"},
+		{plain: "foo", encoded: "bOWD"},
+		{plain: "foobar", encoded: "gYWb#ODO"},
 	}
-	return custom
+	for _, test := range tests {
+		t.Run(test.plain, func(t *testing.T) {
+			got := qoderFixtureEncodeBody([]byte(test.plain))
+			if string(got) != test.encoded {
+				t.Fatalf("encoded %q as %q; want %q", test.plain, got, test.encoded)
+			}
+			decoded, err := qoderFixtureDecodeBody([]byte(test.encoded))
+			if err != nil {
+				t.Fatalf("decode literal vector %q: %v", test.encoded, err)
+			}
+			if !bytes.Equal(decoded, []byte(test.plain)) {
+				t.Fatalf("decoded %q as %q; want %q", test.encoded, decoded, test.plain)
+			}
+		})
+	}
+}
+
+func TestQoderFixtureBodyDecoderRejectsUnknownAlphabetByte(t *testing.T) {
+	if _, err := qoderFixtureDecodeBody([]byte("AA?A")); err == nil {
+		t.Fatal("decode accepted a byte outside the Qoder custom alphabet")
+	}
+}
+
+func qoderFixtureEncodeBody(plain []byte) []byte {
+	encoded := make([]byte, qoderFixtureEncoding.EncodedLen(len(plain)))
+	qoderFixtureEncoding.Encode(encoded, plain)
+	third := len(encoded) / 3
+	reordered := make([]byte, 0, len(encoded))
+	reordered = append(reordered, encoded[len(encoded)-third:]...)
+	reordered = append(reordered, encoded[third:len(encoded)-third]...)
+	reordered = append(reordered, encoded[:third]...)
+	return reordered
 }
 
 func qoderFixtureDecodeBody(encoded []byte) ([]byte, error) {
-	standard := make([]byte, len(encoded))
-	for index, value := range encoded {
-		if value == '$' {
-			standard[index] = '='
-			continue
-		}
-		alphabetIndex := strings.IndexByte(qoderFixtureCustomAlphabet, value)
-		if alphabetIndex < 0 {
-			standard[index] = value
-			continue
-		}
-		standard[index] = qoderFixtureStdAlphabet[alphabetIndex]
-	}
-	reordered := string(standard)
-	n := len(reordered)
-	third := n / 3
-	base64Body := reordered[n-third:] + reordered[third:n-third] + reordered[:third]
-	return base64.StdEncoding.DecodeString(base64Body)
+	third := len(encoded) / 3
+	reordered := make([]byte, 0, len(encoded))
+	reordered = append(reordered, encoded[len(encoded)-third:]...)
+	reordered = append(reordered, encoded[third:len(encoded)-third]...)
+	reordered = append(reordered, encoded[:third]...)
+	return qoderFixtureEncoding.DecodeString(string(reordered))
 }
 
 func qoderFixtureCOSYHeaders(body []byte, requestURL string, credential provider.Credential) (http.Header, error) {

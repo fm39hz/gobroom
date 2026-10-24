@@ -407,6 +407,10 @@ func ComposeCompatibilityPlan(stages [][]FacetMapping, policy CompatibilityPolic
 func RequiredRequestFacets(request NormalizedRequest) []string {
 	return kernel.RequiredRequestFacets(request)
 }
+
+func IsResponseCompatibilityFacet(facet string) bool {
+	return kernel.IsResponseCompatibilityFacet(facet)
+}
 func ResponseEventFacet(event ResponseEventKind) string { return kernel.ResponseEventFacet(event) }
 
 // ApplyCredentialPresentation applies the selected auth mode's safe static
@@ -532,24 +536,42 @@ const (
 	ArtifactPrivate          = extensions.ArtifactPrivate
 	ArtifactSecret           = extensions.ArtifactSecret
 
-	FacetWireRequest       = kernel.FacetWireRequest
-	FacetWireResponse      = kernel.FacetWireResponse
-	EventArtifact          = kernel.EventArtifact
-	FacetReasoningIntent   = kernel.FacetReasoningIntent
-	FacetReasoningBudget   = kernel.FacetReasoningBudget
-	FacetTranslated        = kernel.FacetTranslated
-	FacetPreserved         = kernel.FacetPreserved
-	EventTextDelta         = kernel.EventTextDelta
-	EventResponseComplete  = kernel.EventResponseComplete
-	EventResponseStarted   = kernel.EventResponseStarted
-	EventContentBlockStart = kernel.EventContentBlockStart
-	EventContentBlockEnd   = kernel.EventContentBlockEnd
-	EventThinkingDelta     = kernel.EventThinkingDelta
-	EventThinkingSignature = kernel.EventThinkingSignature
-	EventToolCallDelta     = kernel.EventToolCallDelta
-	EventUsage             = kernel.EventUsage
-	EventResponseError     = kernel.EventResponseError
-	EventRawFrame          = kernel.EventRawFrame
+	FacetWireRequest        = kernel.FacetWireRequest
+	FacetWireResponse       = kernel.FacetWireResponse
+	FacetPromptLayers       = kernel.FacetPromptLayers
+	FacetToolDefinitions    = kernel.FacetToolDefinitions
+	FacetToolHistory        = kernel.FacetToolHistory
+	FacetToolChoice         = kernel.FacetToolChoice
+	FacetReasoningSignature = kernel.FacetReasoningSignature
+	FacetContinuity         = kernel.FacetContinuity
+	FacetOpaqueContent      = kernel.FacetOpaqueContent
+	FacetToolResultStatus   = kernel.FacetToolResultStatus
+	FacetToolBlockOrder     = kernel.FacetToolBlockOrder
+	FacetClientMetadata     = kernel.FacetClientMetadata
+	FacetVisionInput        = kernel.FacetVisionInput
+	FacetAudioInput         = kernel.FacetAudioInput
+	FacetVideoInput         = kernel.FacetVideoInput
+	FacetDocumentInput      = kernel.FacetDocumentInput
+	FacetGenerationOptions  = kernel.FacetGenerationOptions
+	FacetUnsupported        = kernel.FacetUnsupported
+	FacetUnknown            = kernel.FacetUnknown
+	FacetDegraded           = kernel.FacetDegraded
+	EventArtifact           = kernel.EventArtifact
+	FacetReasoningIntent    = kernel.FacetReasoningIntent
+	FacetReasoningBudget    = kernel.FacetReasoningBudget
+	FacetTranslated         = kernel.FacetTranslated
+	FacetPreserved          = kernel.FacetPreserved
+	EventTextDelta          = kernel.EventTextDelta
+	EventResponseComplete   = kernel.EventResponseComplete
+	EventResponseStarted    = kernel.EventResponseStarted
+	EventContentBlockStart  = kernel.EventContentBlockStart
+	EventContentBlockEnd    = kernel.EventContentBlockEnd
+	EventThinkingDelta      = kernel.EventThinkingDelta
+	EventThinkingSignature  = kernel.EventThinkingSignature
+	EventToolCallDelta      = kernel.EventToolCallDelta
+	EventUsage              = kernel.EventUsage
+	EventResponseError      = kernel.EventResponseError
+	EventRawFrame           = kernel.EventRawFrame
 )
 
 func NewRuntimeRegistry() (*RuntimeRegistry, error) { return core.NewRuntimeRegistry() }
