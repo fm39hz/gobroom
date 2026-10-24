@@ -890,8 +890,9 @@ func (d *Daemon) Wait(ctx context.Context) error {
 
 func newDaemonHTTPServer(address string, handler http.Handler, base context.Context) *http.Server {
 	return &http.Server{
-		Addr:    address,
-		Handler: handler,
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 3 * time.Second,
 		BaseContext: func(net.Listener) context.Context {
 			return base
 		},
