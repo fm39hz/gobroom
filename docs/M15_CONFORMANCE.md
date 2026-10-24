@@ -1,5 +1,13 @@
 # M15 architecture conformance evidence
 
+2026-10-24 portability follow-up: `2f94fe8` adds explicit startup bundle import
+before catalog activation and an independent-module fresh-target/restart proof.
+It preserves artifact recipient/exact code pins, rejects invalid runtime config
+before durable apply, and isolates candidate preview from other memory databases.
+The [acceptance map](MODULE_PORTABILITY_ACCEPTANCE.md) names real serving,
+credential preservation, rejection/reopen and installed CLI cases. This closes
+the named export/import/restart delta, not SG1 or complete C6/M15.
+
 2026-10-24 session follow-up: `eeec107` / `7eda7ed` closes ordinary session
 persistence failure visibility, not the entire M15 gate. Safe six-field status,
 constant warning/Stop sentinel, expected typed supersession versus SQL failure,

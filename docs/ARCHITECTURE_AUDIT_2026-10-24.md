@@ -16,7 +16,7 @@ The F1 section below records its subsequent implementation and focused proof.
 | C3 transforms | Configured registration/lifecycle, ownership/effects, bounds/cancellation and committed-output fences have finite SG5 evidence. | More provider wire overlays are implementation/acceptance work, not a newly established generic primitive gap. |
 | C4 auth/leases | Shared code/device/action coordinator, owner/CAS/activation, leases for inference/quota/discovery/probes, CLI/TUI and callback resources have named public proofs. | Carry callback completion versus credential replacement through public IPC and serving; current direct-daemon fault test is narrower. |
 | C5 operations/artifacts/replay | Binary interpretation, recipient leases, typed jobs, issuer-scoped prepared bytes and accepted-effect fences have finite SG3/SG6 proofs. | Real provider idempotency/retention guarantees and additional wire codecs require bounded module acceptance. |
-| C6 change simulation | Independent modules execute ordinary controls and Unix daemon lifecycle/stream-independent IPC has evidence. F1 adds an independently validated failure dialect and export→validate fixture. | One independently linked module export/import/restart execution with exact pins and SG1 intersection. Export→validate is not import/restart proof. No infinite provider-pair matrix. |
+| C6 change simulation | Independent modules execute ordinary controls and Unix daemon lifecycle/stream-independent IPC has evidence. F1 supplies an independent failure dialect. `2f94fe8` adds actual fresh-target import/restart serving and exact-pin rejection, including the missing bootstrap path. | SG1 intersection and the remaining finite public-boundary proofs below; no infinite provider-pair matrix. Export→validate alone is still not import/restart proof. |
 
 ## F1: registered client failure boundary follow-up
 
@@ -39,6 +39,13 @@ gate. This closes the generic F1 implementation gap only; it does not supply
 the remaining C1–C6/public-boundary or live-provider proofs.
 
 ## Next order and limits
+
+The [module portability proof](MODULE_PORTABILITY_ACCEPTANCE.md) executes export
+to a separate database, explicit startup import without copying source manifests,
+file-managed and DB-only restart, ordinary IPC apply, published model listing
+and actual HTTP job/failure responses. It exposed and fixed bootstrap ordering
+and precommit runtime validation, preserving exact pins and artifact recipient
+checks. It does not complete all C6 semantic intersections or M15.
 
 1. Keep the bounded F1 contract/proof as a regression gate; do not reopen it as
    another generic protocol framework.

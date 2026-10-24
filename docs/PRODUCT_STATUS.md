@@ -208,13 +208,12 @@ queue-rejection-only evidence without changing those invalidation guarantees.
 ## Next core work
 
 The [finite C1–C6 audit](ARCHITECTURE_AUDIT_2026-10-24.md) identifies a concrete
-next architectural implementation gap: registered client-specific precommit
-failure projection and safe handling of ordinary ingress error text. It also
-separates the remaining named public-boundary proofs from provider breadth.
+remaining named public-boundary proofs separately from provider breadth. F1's
+registered client-specific precommit failure boundary is implemented and
+verified; it is a regression gate, not next implementation work.
 
-1. Implement the registered client precommit failure boundary and safe ordinary
-   ingress errors identified by the audit; reproduce its concrete counterexample
-   before changing the core. Preserve committed-stream terminal/no-replay rules.
+1. Complete SG1 tools/budget/scoped-continuity composition, public callback-versus-
+   credential-replacement proof and one difficult provider vertical.
 2. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
    serving boundaries. Provider-specific codecs, envelopes and live-harness
    breadth are implementation/product acceptance, not an undefined universal
@@ -222,9 +221,16 @@ separates the remaining named public-boundary proofs from provider breadth.
    a universal no-kernel-change catch-up proof.
 3. Investigate repeated internal compatibility/usage copies while preserving
    ownership fences, then measure isolated RSS and sustained tail latency.
-5. Finish explicit persistence-failure durability and whole-daemon shutdown
+4. Finish explicit persistence-failure durability and whole-daemon shutdown
    obligations. Usage counters/cooperative cancellation are not a durable spool
    or a sandbox for uncooperative module code.
+
+The named fresh-target module portability delta now has an executed
+[acceptance map](MODULE_PORTABILITY_ACCEPTANCE.md): startup bundle activation,
+ordinary apply, file-managed and DB-only restart, authenticated HTTP serving,
+and exact-pin/runtime rejection before configuration writes. This strengthens
+the configure/move/extend journey; it does not widen live provider/harness
+coverage, finish catalog-management UX or establish the resource target.
 
 ## Product-level exit gaps
 

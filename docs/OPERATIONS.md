@@ -22,6 +22,27 @@ Validation remains daemon-owned; invalid refs/options do not change stored or
 serving configuration. Post-commit activation failures follow their explicit
 receipts rather than pretending storage was rolled back.
 
+For a fresh deployment that needs portable definitions before its linked module
+catalog can freeze, supply `gobroomd --config-bundle /absolute/path/config.json`
+(embedders: `Config.ConfigBundlePath`). Startup reads bounded strict JSON,
+registers portable definitions, validates exact code/schema pins and candidate
+runtime configuration, then applies the bundle before serving. Required module
+code must already be linked; external/non-portable definitions still require
+their declared installed manifests. The bundle does not transfer credentials.
+
+This is explicit file-managed desired configuration: it reapplies on every
+Start while the option remains configured. Locally supplied credentials for
+retained connection IDs are preserved. Remove the option after bootstrap to
+use ordinary SQLite/IPC-managed configuration; otherwise later file reapplication
+can overwrite graph changes made interactively. Conflicting exact definitions
+fail rather than silently replacing installed code/config contracts. Parser
+errors do not echo input; semantic validation diagnostics can include configured
+identifiers. Do not put credentials or confidential identifiers in a bundle.
+
+Run `make test-installed-portability GOBROOM_TEST_CLI=/absolute/path/to/gobroom`
+for the separate-module fresh-target/restart and rejection fixtures. It uses
+temporary daemons/fake upstreams, not the configured live provider accounts.
+
 Route selection reads immutable snapshots. Credential issuance and the final
 dispatch revision fence read current SQLite state; the latter selects binding
 metadata without selecting secret material.
