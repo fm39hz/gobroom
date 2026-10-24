@@ -212,8 +212,7 @@ remaining named public-boundary proofs separately from provider breadth. F1's
 registered client-specific precommit failure boundary is implemented and
 verified; it is a regression gate, not next implementation work.
 
-1. Complete public callback-versus-
-   credential-replacement proof and one difficult provider vertical.
+1. Complete the source-backed difficult-provider onboarding/serving vertical.
 2. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
    serving boundaries. Provider-specific codecs, envelopes and live-harness
    breadth are implementation/product acceptance, not an undefined universal
@@ -238,6 +237,13 @@ session-aware route explanation and installed controls. It also makes output
 reservation IR-owned and keeps explicit sufficient Anthropic output limits.
 This strengthens serving and management together; provider/harness breadth,
 catalog UX and measured resource goals remain open.
+
+The [public callback replacement proof](CALLBACK_REPLACEMENT_ACCEPTANCE.md)
+now exercises replacing an account while provider authorization remains held,
+late-result rejection and serving through restart. The existing generic
+coordinator/CAS/activation implementation already satisfies this bounded case;
+no provider-name branch or extra runtime subsystem was needed. Broader live
+auth-provider and harness coverage remains separate product acceptance.
 
 ## Product-level exit gaps
 

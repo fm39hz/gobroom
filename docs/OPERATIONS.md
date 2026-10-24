@@ -3,6 +3,12 @@
 GoBroom is local-first. The daemon owns state; CLI and TUI are replaceable
 clients over the Unix IPC socket.
 
+For the callback/credential replacement regression, run
+`make test-installed-callback-race GOBROOM_TEST_CLI=/absolute/path/to/gobroom`
+after installation. It exercises the installed client's temporary IPC workflow
+while a fake external callback is held, then checks stale rejection, privacy,
+serving and restart. It does not replace credentials on the real daemon.
+
 ## Default paths
 
 | Item | Default |

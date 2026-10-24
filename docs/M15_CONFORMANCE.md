@@ -1,5 +1,14 @@
 # M15 architecture conformance evidence
 
+2026-10-24 C4 public-race follow-up: `53bf5e5` decorates the existing external
+callback driver to hold successful completion while public IPC replaces the
+credential. Actual serving uses the replacement before/after stale callback
+HTTP 400 and after restart; failed setup retains no activation or callback
+capability, and the listener is released. The
+[acceptance map](CALLBACK_REPLACEMENT_ACCEPTANCE.md) records the cases and
+installed gate. This adds public-boundary evidence without changing runtime
+authorization or introducing another cancellation mechanism.
+
 2026-10-24 SG1 follow-up: `5b4c219` executes the named tools/budget/scoped
 signed-history intersection through configured public-module transforms and
 real daemon/IPC/HTTP. It also covers independent Anthropic loss grants and

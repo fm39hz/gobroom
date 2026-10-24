@@ -12,6 +12,13 @@ Unix IPC, typed setup views, provider lease and real HTTP inference.
 
 **Spec:** `docs/superpowers/specs/2026-10-24-callback-replacement-design.md`
 
+Status: complete for this bounded proof at `53bf5e5`. No runtime defect or new
+authorization mechanism was required. Full root/module tests and vet passed
+after review assertion fixes; public race3 passed in 3.538s. Install-all and the
+explicit installed gate passed (race3, 9.730s). Actual daemon healthy at matching
+snapshot 518, bundle validation v9 valid, scoped config/credential hash unchanged.
+Deferred fixture minor: shared restart has no separate timeout. M15 remains open.
+
 ## Global Constraints
 
 - No direct SQL/store access, fake executor, new dependency or cancellation engine.
@@ -32,21 +39,21 @@ Unix IPC, typed setup views, provider lease and real HTTP inference.
 Files: new `examples/external-provider-module/callback_replacement_test.go`;
 small shared schema constant in `authorization_callback_test.go` if needed.
 
-- [ ] Decorate existing external callback flow, hold a valid result, configure
+- [x] Decorate existing external callback flow, hold a valid result, configure
   connection/Physical/Combo through public IPC and begin an actual HTTP callback.
-- [ ] Replace through public `connections.update` while held; real endpoint
+- [x] Replace through public `connections.update` while held; real endpoint
   uses replacement. Release callback, require stale rejection and no live action.
-- [ ] Prove listener rebind/replay rejection and HTTP serving after fresh restart.
-- [ ] Main targeted tests; any product defect gets RED→GREEN; full root/module
+- [x] Prove listener rebind/replay rejection and HTTP serving after fresh restart.
+- [x] Main targeted tests; any product defect gets RED→GREEN; full root/module
   regression/vet and focused race3 before committing.
 
 ## Task 2: Installed controls and evidence
 
 Files: new `callback_replacement_cli_test.go` (worker), Makefile, acceptance/audit/docs.
 
-- [ ] Explicit installed test uses public fixture plus CLI setup/status/activation/
+- [x] Explicit installed test uses public fixture plus CLI setup/status/activation/
   logs through temporary IPC, verifies privacy and healthy serving snapshot.
-- [ ] Dedicated installed gate requires check-installed-cli and race/count3.
-- [ ] Fresh whole-feature review, material fixes with reproductions, install-all,
+- [x] Dedicated installed gate requires check-installed-cli and race/count3.
+- [x] Fresh whole-feature review, material fixes with reproductions, install-all,
   installed gate and live status/config fingerprint read-only checks.
-- [ ] Update product/use-case evidence, record remaining M15 boundaries and commit.
+- [x] Update product/use-case evidence, record remaining M15 boundaries and commit.
