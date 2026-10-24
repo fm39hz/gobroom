@@ -89,6 +89,24 @@ func TestFailureResponseRejectsDispositionTokenWithoutMediaSubtype(t *testing.T)
 	}
 }
 
+func TestClientFailureContextExactEncodedBudget(t *testing.T) {
+	input := validFailureContext()
+	input.OperationRef.ID = ""
+	base, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.OperationRef.ID = strings.Repeat("x", 32768-len(base))
+	encoded, err := json.Marshal(input)
+	if err != nil || len(encoded) != 32768 || !input.Valid() {
+		t.Fatalf("exact context budget rejected: bytes=%d err=%v", len(encoded), err)
+	}
+	input.OperationRef.ID += "x"
+	if input.Valid() {
+		t.Fatal("32769-byte context accepted")
+	}
+}
+
 func TestAnthropicFailureUsesNativeUpstreamErrorType(t *testing.T) {
 	input := validFailureContext()
 	input.Status = 502

@@ -147,6 +147,68 @@ func TestBadClientFailureEncoderFailsClosedBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestPrecommitFailureRestoresHostHeaders(t *testing.T) {
+	for _, mode := range []string{"", "error"} {
+		t.Run("encoder-"+mode, func(t *testing.T) {
+			codec := &boundaryFailureIngress{encodeMode: mode}
+			server := failureBoundaryServer(t, codec)
+			server.SetExecutor(func(_ context.Context, _ normalize.Request, w http.ResponseWriter) error {
+				w.Header().Set("X-Private-Upstream", "private-secret")
+				w.Header().Set("Set-Cookie", "private-secret")
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Content-Length", "99999")
+				w.Header().Set("X-Request-ID", "private-upstream-id")
+				return errors.New("private-decode-failure")
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/client-failure", strings.NewReader(`{}`))
+			request.Header.Set("X-Request-ID", "host-request-42")
+			response := httptest.NewRecorder()
+			server.Handler().ServeHTTP(response, request)
+			for _, name := range []string{"X-Private-Upstream", "Set-Cookie", "Content-Encoding", "Content-Length"} {
+				if response.Header().Get(name) != "" {
+					t.Errorf("staged upstream %s survived: %v", name, response.Header())
+				}
+			}
+			if response.Header().Get("X-Request-ID") != "host-request-42" || strings.Contains(response.Body.String(), "private-") {
+				t.Fatalf("host correlation replaced/private data leaked: headers=%v body=%s", response.Header(), response.Body.String())
+			}
+			if mode == "error" && (response.Code != 500 || response.Body.Len() != 0) {
+				t.Fatalf("invalid encoder did not fail closed: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestHostFailureMetadataBoundsAndContextOverflow(t *testing.T) {
+	for _, model := range []string{"", strings.Repeat("x", 128), strings.Repeat("x", 129), "bad\nmodel", string([]byte{0xff})} {
+		codec := JSONOperationIngress{CodecID: "fixture", IngressContractVersion: 1, Operation: "chat.generate", OperationContractVersion: 1}
+		response := httptest.NewRecorder()
+		server := &Server{}
+		server.renderClientFailure(response, httptest.NewRequest(http.MethodPost, "/", nil), codec, model, 400, kernel.ClientFailure{Code: "invalid_request", Type: "invalid_request_error", Message: "safe"}, nil, kernel.EffectNotDispatched)
+		var wire struct {
+			Error struct {
+				Model string `json:"model"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &wire); err != nil || response.Code != 400 {
+			t.Fatalf("metadata rendering: status=%d err=%v", response.Code, err)
+		}
+		want := model
+		if len(model) > 128 || model == "bad\nmodel" || model == string([]byte{0xff}) {
+			want = ""
+		}
+		if wire.Error.Model != want {
+			t.Fatalf("model was truncated or unsafe: got=%q want=%q", wire.Error.Model, want)
+		}
+	}
+	codec := &boundaryFailureIngress{JSONOperationIngress: JSONOperationIngress{Operation: strings.Repeat("x", 32768), OperationContractVersion: 1}}
+	response := httptest.NewRecorder()
+	(&Server{}).renderClientFailure(response, httptest.NewRequest(http.MethodPost, "/", nil), codec, "", 400, kernel.ClientFailure{Code: "invalid_request", Type: "invalid_request_error", Message: "safe"}, nil, kernel.EffectNotDispatched)
+	if response.Code != 500 || response.Body.Len() != 0 || codec.renders != 0 {
+		t.Fatalf("oversized context reached encoder: status=%d bytes=%d calls=%d", response.Code, response.Body.Len(), codec.renders)
+	}
+}
+
 func TestCommittedExecutionNeverInvokesPrecommitFailureRenderer(t *testing.T) {
 	t.Run("body", func(t *testing.T) {
 		codec := &boundaryFailureIngress{}

@@ -702,8 +702,16 @@ func releaseRequestArtifacts(bodyStore *artifacts.Store, references []extensions
 func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, request normalize.Request, codec OperationIngress) {
 	requestModel := request.Model
 	if s.executor != nil {
+		hostHeaders := w.Header().Clone()
 		tracked := &trackingWriter{ResponseWriter: w}
 		if err := s.executor(r.Context(), request, tracked); err != nil && !tracked.committed {
+			// Begin may stage upstream headers before decoding fails. Restore
+			// only the host's pre-execution headers, including correlation,
+			// before writing either a safe failure or an empty fail-closed 500.
+			clear(w.Header())
+			for name, values := range hostHeaders {
+				w.Header()[name] = values
+			}
 			s.renderClientFailure(w, r, codec, requestModel, executionFailureStatus(err), kernel.ClientFailure{Code: kernel.ClientFailureUpstream, Type: "upstream_error", Message: "upstream request failed"}, err, executionFailureEffect(err))
 		}
 		return

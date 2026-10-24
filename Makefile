@@ -50,6 +50,10 @@ test-installed-usage: check-installed-cli ## installed-client acceptance (requir
 test-installed-session: check-installed-cli ## installed session persistence failure acceptance
 	GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./internal/daemon -run '^TestInstalledCLISessionPersistenceFailureVisibility$$' -race -count=3
 
+.PHONY: test-installed-client-failure
+test-installed-client-failure: check-installed-cli ## installed client catalog/control and independent failure dialect
+	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(InstalledCLIClientFailureCatalogAndControl|IndependentClientFailure)' -race -count=3
+
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./cmd/gobroom -run '^TestTransform' -count=1
 	go test ./cmd/gobroom -run '^Test(ConfigCommands|DecodeConfigInput)' -count=1

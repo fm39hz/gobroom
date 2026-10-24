@@ -1903,7 +1903,7 @@ func (d *Daemon) runtimeForBundle(bundle controlplane.ConfigBundle) (*provider.R
 }
 
 func (d *Daemon) runtimeWithProviderDefinitions(extra []provider.ProviderDefinition) (*provider.RuntimeRegistry, *kernel.StrategyCatalog, error) {
-	runtimeRegistry, err := provider.NewRuntimeRegistry()
+	runtimeRegistry, err := provider.NewRuntimeRegistryWithModules(d.providerModules...)
 	if err != nil {
 		return nil, nil, err
 	}
