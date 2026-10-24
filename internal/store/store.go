@@ -1013,8 +1013,11 @@ func (s *Store) SaveProviderSession(item ProviderSession) error {
 	if err != nil {
 		return fmt.Errorf("invalid provider session namespace")
 	}
-	if item.State.ExpiresAt.IsZero() || !item.State.ExpiresAt.After(time.Now()) {
+	if item.State.ExpiresAt.IsZero() {
 		return fmt.Errorf("provider session expiry must be in the future")
+	}
+	if !item.State.ExpiresAt.After(time.Now()) {
+		return kernel.ErrSessionStateSuperseded
 	}
 	item.ExpiresAt = item.State.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	ctx := context.Background()
@@ -1024,12 +1027,24 @@ func (s *Store) SaveProviderSession(item ProviderSession) error {
 	}
 	defer tx.Rollback()
 	binding, err := readCredentialBinding(ctx, tx, item.ConnectionID)
-	if err != nil || namespace.PrincipalGeneration != binding.OperationalGeneration() || namespace.DefinitionRef != binding.Owner.Definition {
-		return fmt.Errorf("provider session authority is stale")
+	if err != nil {
+		if errors.Is(err, ErrCredentialBindingUnavailable) {
+			return kernel.ErrSessionStateSuperseded
+		}
+		return err
+	}
+	if namespace.PrincipalGeneration != binding.OperationalGeneration() || namespace.DefinitionRef != binding.Owner.Definition {
+		return kernel.ErrSessionStateSuperseded
 	}
 	var endpoint string
-	if err := tx.QueryRowContext(ctx, `SELECT p.base_url FROM connections c JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, item.ConnectionID).Scan(&endpoint); err != nil || endpoint != namespace.Endpoint {
-		return fmt.Errorf("provider session authority is stale")
+	if err := tx.QueryRowContext(ctx, `SELECT p.base_url FROM connections c JOIN provider_nodes p ON p.id=c.provider_node_id WHERE c.id=? AND c.enabled=1`, item.ConnectionID).Scan(&endpoint); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return kernel.ErrSessionStateSuperseded
+		}
+		return err
+	}
+	if endpoint != namespace.Endpoint {
+		return kernel.ErrSessionStateSuperseded
 	}
 	state, err := json.Marshal(item.State)
 	if err != nil {

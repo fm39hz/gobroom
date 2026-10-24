@@ -22,30 +22,32 @@ import (
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
 	"github.com/fm39hz/gobroom/internal/provider"
+	"github.com/fm39hz/gobroom/internal/sessionpersistence"
 	"github.com/fm39hz/gobroom/internal/store"
 	"github.com/fm39hz/gobroom/internal/usage"
 	"github.com/go-chi/chi/v5"
 )
 
 type Server struct {
-	store                    *store.Store
-	artifactStore            *artifacts.Store
-	control                  *controlplane.Manager
-	controlErr               error
-	started                  time.Time
-	executor                 func(context.Context, normalize.Request, http.ResponseWriter) error
-	reloadHook               func(kernel.Snapshot) (kernel.Snapshot, error)
-	reloadMu                 sync.Mutex
-	hasReloadHook            atomic.Bool
-	servingSnapshot          atomic.Pointer[kernel.Snapshot]
-	lastReload               atomic.Pointer[ReloadResult]
-	dataPlaneToken           string
-	ingress                  map[string]OperationIngress
-	providerCatalog          []provider.DefinitionMetadata
-	extensionCatalog         extensions.CatalogView
-	operations               *operations.Snapshot
-	accessLogger             func(AccessLogRecord)
-	usagePersistenceObserver func() usage.Status
+	store                      *store.Store
+	artifactStore              *artifacts.Store
+	control                    *controlplane.Manager
+	controlErr                 error
+	started                    time.Time
+	executor                   func(context.Context, normalize.Request, http.ResponseWriter) error
+	reloadHook                 func(kernel.Snapshot) (kernel.Snapshot, error)
+	reloadMu                   sync.Mutex
+	hasReloadHook              atomic.Bool
+	servingSnapshot            atomic.Pointer[kernel.Snapshot]
+	lastReload                 atomic.Pointer[ReloadResult]
+	dataPlaneToken             string
+	ingress                    map[string]OperationIngress
+	providerCatalog            []provider.DefinitionMetadata
+	extensionCatalog           extensions.CatalogView
+	operations                 *operations.Snapshot
+	accessLogger               func(AccessLogRecord)
+	usagePersistenceObserver   func() usage.Status
+	sessionPersistenceObserver func() sessionpersistence.Status
 }
 
 func (s *Server) SetArtifactStore(bodyStore *artifacts.Store) {
@@ -204,6 +206,13 @@ func (s *Server) SetUsagePersistenceObserver(observer func() usage.Status) {
 	}
 }
 
+// SetSessionPersistenceObserver is initialization-only, like the usage observer.
+func (s *Server) SetSessionPersistenceObserver(observer func() sessionpersistence.Status) {
+	if s != nil {
+		s.sessionPersistenceObserver = observer
+	}
+}
+
 // SetProviderDefinitionCatalog installs the secret-free setup metadata shared
 // by HTTP and IPC control clients.
 func (s *Server) SetProviderDefinitionCatalog(catalog []provider.DefinitionMetadata) {
@@ -256,6 +265,13 @@ func (s *Server) Status() map[string]any {
 		usageStatus := s.usagePersistenceObserver()
 		result["usagePersistence"] = usageStatus
 		if usageStatus.Failed > 0 || usageStatus.Abandoned > 0 || usageStatus.QueueDropped > 0 {
+			result["status"] = "degraded"
+		}
+	}
+	if s.sessionPersistenceObserver != nil {
+		sessionStatus := s.sessionPersistenceObserver()
+		result["sessionPersistence"] = sessionStatus
+		if sessionStatus.Faulted() {
 			result["status"] = "degraded"
 		}
 	}

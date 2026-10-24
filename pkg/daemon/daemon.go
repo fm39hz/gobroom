@@ -24,6 +24,8 @@ type UsagePersistenceStatus = core.UsagePersistenceStatus
 
 var ErrUsagePersistenceIncomplete = core.ErrUsagePersistenceIncomplete
 
+var ErrSessionPersistenceFailureObserved = core.ErrSessionPersistenceFailureObserved
+
 type AuthorizationCallbackIngressConfig = core.AuthorizationCallbackIngressConfig
 type OperationProbeRequest = core.OperationProbeRequest
 type ProbeFileSpec = core.ProbeFileSpec

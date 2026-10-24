@@ -36,22 +36,24 @@ separation, existing GoBroom observers/logs, and stdlib `sync/atomic`/
 ## Contract
 
 `internal/sessionpersistence.Status` is a data-only operational DTO with unsigned
-process-lifetime counters, lower-camel JSON keys:
+daemon-run-lifetime counters (one Start/Stop run), lower-camel JSON keys:
 
 - `received`: queued writes the built-in worker has begun, including tombstones.
 - `persisted`, `failed`: repository write outcomes, including tombstones.
+- `discarded`: built-in writes intentionally fenced by changed authority,
+  endpoint or expiry, identified by `ErrSessionStateSuperseded`, not an I/O fault.
 - `queueDropped`: Save/Invalidate write admissions rejected by the bounded queue.
-- `saveErrors`: kernel SessionStore.Save calls returning a non-nil error,
+- `saveErrors`: kernel SessionStore.Save calls returning an unexpected non-nil error,
   including custom stores and validation/cancellation errors.
 
 These are independently sampled facts, not an atomic transaction snapshot.
-At quiescence, received equals persisted plus failed. A queue rejection can
+At quiescence, received equals persisted plus failed plus discarded. A queue rejection can
 also count as a kernel save error; do not sum these as unique lost records.
 Repository counts describe the built-in writer, not hidden asynchronous work
 inside arbitrary statically linked custom stores.
 
 `Status.Faulted()` is true when failed, queueDropped or saveErrors is nonzero.
-Evidence remains sticky until process restart; later successful writes do not
+Evidence remains sticky until daemon restart; later successful writes do not
 erase earlier observed faults. This does not claim the latest durable state is
 still incomplete: newer writes can supersede older session versions.
 
@@ -62,15 +64,25 @@ error strings, IDs, payloads or retained event history. Replace the old narrow
 `DroppedWrites()` accessor and update its callers; no compatibility wrapper.
 
 Kernel adds initialization-only `OnSessionSaveFailure func()`. Invoke it once
-for each failed post-response Save, passing no private data. Do not alter
+for each unexpected failed post-response Save, passing no private data. Typed
+superseded-state results are normal fences, not failures. Do not alter
 successful response/usage, health feedback, selected route or replay behavior.
 SessionStore's public interface and provider-module host contract stay unchanged.
+
+The repository emits `kernel.ErrSessionStateSuperseded` only for known absent/
+disabled bindings, changed principal/definition/endpoint or expired valid state.
+Missing expiry and malformed state remain errors. SQL/metadata read errors must
+not be relabelled as superseded; binding absence gets a typed store error rather
+than comparing human error text. `pkg/provider` exposes the session sentinel
+for custom stores. Such synchronous expected results do not increment saveErrors;
+discarded counts remain scoped to the built-in writer, not invented custom-store
+asynchronous diagnostics.
 
 Daemon initializes the hook and cache callback before serving, with shared
 `sync.OnceFunc` notification and an atomic save-error counter. A focused helper
 assembles `sessionPersistence` for the existing API/IPC status; existing control
 degradation must remain degraded. CLI/TUI consume that same safe section.
-Callbacks log one constant warning per daemon lifetime, never repository error
+Callbacks log one constant warning per daemon run, never repository error
 text, session IDs, response IDs, opaque payloads or signatures.
 
 After producers stop and the existing session worker joins, Stop/Wait joins a
@@ -89,7 +101,7 @@ state/TTL/versioning, acknowledged invalidation and load-failure fences remain.
 Tests must prove: queue rejection preserves live state; ordinary write failure
 and later recovery are both counted; invalidation acknowledgement is unchanged;
 callbacks are outside locks; a custom Save error produces one callback without
-replay/health poisoning; status contains only five numeric fields and preserves
+replay/health poisoning; status contains only six numeric fields and preserves
 other degradation; real inference with injected SQLite session-write failure
 still succeeds once, exposes safe status/logs and fails shutdown explicitly.
 Installed CLI must exercise that temporary-host fixture with its environment

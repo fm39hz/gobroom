@@ -16,8 +16,9 @@ version fences and durable invalidation acknowledgements.
 ## Global Constraints
 
 - No new dependency or telemetry framework; no provider-specific kernel branch.
-- Status counters are received, persisted, failed, queueDropped, saveErrors.
-- Evidence is process-lifetime and sticky; not a current-disk consistency claim.
+- Status counters are received, persisted, failed, discarded, queueDropped, saveErrors.
+- Expected authority/endpoint/expiry fences use ErrSessionStateSuperseded, not string matching or suppression of infrastructure failures.
+- Evidence is daemon-run-lifetime and sticky; not a current-disk consistency claim.
 - A queue rejection can also count as a kernel save error; do not sum them as unique lost records.
 - No raw error strings, IDs, payloads or signatures in new status/log/error outputs.
 - Preserve response success, live continuity, provider health and replay fences.
@@ -37,9 +38,11 @@ version fences and durable invalidation acknowledgements.
 
 **Files:** new `internal/sessionpersistence/status.go`; modify
 `internal/runtime/sessionstore/cache.go`, `save_admission_test.go`; new
-`internal/runtime/sessionstore/persistence_status_test.go`.
+`internal/runtime/sessionstore/persistence_status_test.go`; typed repository
+classification in `internal/store/store.go`, `credential_binding.go` and
+`session_outcome_test.go`.
 
-**Interfaces:** main supplies Status with the five uint64 JSON fields and
+**Interfaces:** main supplies Status with the six uint64 JSON fields and
 `Faulted() bool`. Cache produces `PersistenceStatus() sessionpersistence.Status`
 and initialization-only `OnFailure func()`; saveErrors remains host-owned zero.
 
@@ -49,6 +52,8 @@ and initialization-only `OnFailure func()`; saveErrors remains host-owned zero.
   real worker/controlled repository; assert exact counts, restored/newer state
   and callback lock safety. Update the removed DroppedWrites caller.
 - [ ] Main observes missing DTO/method/hook RED, then adds the DTO and authorizes production.
+- [ ] Add typed repository/controlled-worker tests separating expected
+  supersession from SQL metadata failures; main observes RED before classification.
 - [ ] Add atomic writer outcomes on normal and drain paths, count queue drops
   for both admissions, keep existing acknowledgements and notify outside locks.
 - [ ] Main focused tests and three-run race; scoped spec/quality review; commit.
@@ -56,7 +61,8 @@ and initialization-only `OnFailure func()`; saveErrors remains host-owned zero.
 ## Task 2: Observe failed kernel saves without semantic side effects
 
 **Files:** modify `internal/kernel/kernel.go`; new
-`internal/kernel/session_save_failure_test.go`.
+`internal/kernel/session_save_failure_test.go`, `session_save.go` for the shared
+sentinel; expose that sentinel through `pkg/provider/provider.go`.
 
 **Interfaces:** `Kernel.OnSessionSaveFailure func()` set before execution; no
 SessionStore interface or module-contract change.
@@ -65,6 +71,7 @@ SessionStore interface or module-contract change.
   using real Execute and a controlled failing Save implementation. Assert one
   upstream execution, one payload-free notification, successful completion,
   unchanged known usage and no failure feedback; retain load-failure behavior.
+  Wrapped ErrSessionStateSuperseded and nil Save results must not notify failure.
 - [ ] Main observes missing hook RED, then authorizes the narrow Save error check.
 - [ ] Implement the hook; main runs kernel regression/three-run race, review and commit.
 
@@ -75,14 +82,15 @@ the user's explicit multi-worker instruction; all Go remains sequential in main.
 
 **Files:** new `internal/daemon/session_persistence.go`,
 `session_persistence_test.go`, `internal/api/session_status_test.go`; modify
-daemon/API initialization and status wiring, pkg/daemon error export, and the
+daemon/API initialization and status wiring, pkg/daemon error export, Makefile
+installed-session gate and readiness path, and the
 TUI status binding only if needed for exact numeric projection.
 
 **Interfaces:** `Server.SetSessionPersistenceObserver(func() sessionpersistence.Status)`;
 daemon helper binds snapshot callbacks before serving and exposes the constant
 `ErrSessionPersistenceFailureObserved`, joined after the session worker exits.
 
-- [ ] Add healthy/faulted/other-degraded API tests with exact five-field projection.
+- [ ] Add healthy/faulted/other-degraded API tests with exact six-field projection.
   Add `TestDaemonSessionPersistenceFailureDoesNotReplayInference` and
   `TestInstalledCLISessionPersistenceFailureVisibility`: actual Responses
   inference with x-session-id, a SQLite trigger rejecting provider_sessions,

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -313,7 +314,9 @@ func makeEntries(method string, raw json.RawMessage, knownProviders []providerNo
 	switch method {
 	case "status":
 		var value map[string]any
-		if err := decode(&value); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
 			return nil, err
 		}
 		return []entry{{key: "daemon", title: "Daemon", summary: fmt.Sprintf("%v", value["status"]), detail: pretty(value), payload: value}}, nil

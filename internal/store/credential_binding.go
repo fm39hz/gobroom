@@ -4,8 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 )
+
+var ErrCredentialBindingUnavailable = errors.New("credential binding unavailable")
 
 // CredentialBinding contains the live metadata that identifies a connection's
 // credential binding. It deliberately excludes secret material.
@@ -40,7 +41,7 @@ func scanCredentialBinding(row *sql.Row) (CredentialBinding, error) {
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return CredentialBinding{}, fmt.Errorf("credential binding unavailable")
+			return CredentialBinding{}, ErrCredentialBindingUnavailable
 		}
 		return CredentialBinding{}, err
 	}

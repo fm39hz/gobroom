@@ -273,6 +273,9 @@ type FacetDisposition = kernel.FacetDisposition
 type ResponseEvent = kernel.ResponseEvent
 type ResponseEventKind = kernel.ResponseEventKind
 type UsageEvent = kernel.UsageEvent
+
+var ErrSessionStateSuperseded = kernel.ErrSessionStateSuperseded
+
 type UsageEvidence = kernel.UsageEvidence
 type UsageRequirements = extensions.UsageRequirements
 type UsageUpdateKind = kernel.UsageUpdateKind

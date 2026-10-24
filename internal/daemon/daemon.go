@@ -55,56 +55,57 @@ type Config struct {
 }
 
 type Daemon struct {
-	usagePolicy          UsagePolicy
-	config               Config
-	providerModules      []provider.RuntimeModule
-	store                *store.Store
-	persistenceSpool     *runtimehealth.DurablePersistenceSpool
-	artifactStore        *artifacts.Store
-	server               *api.Server
-	ipc                  *IPCServer
-	ipcLease             *ipcSocket
-	http                 *http.Server
-	httpControl          *http.Server
-	httpCallback         *http.Server
-	callbackIngress      *authorizationCallbackIngress
-	listeners            httpListeners
-	addresses            atomic.Pointer[ListenerAddresses]
-	kernel               *kernel.Kernel
-	providerBindings     map[string]provider.RuntimeBinding
-	providerRegistry     *provider.RuntimeRegistry
-	providerCatalog      []provider.DefinitionMetadata
-	strategyCatalog      *kernel.StrategyCatalog
-	strategyDefinitions  []kernel.StrategyDefinition
-	extensionCatalog     extensions.CatalogView
-	setupSchemas         *extensions.Snapshot
-	authFlows            map[string]provider.AuthFlow
-	providerAuthModes    map[extensions.Ref]string
-	providerAuthFlowIDs  map[extensions.Ref]map[string]string
-	sessionCache         *sessionruntime.Cache
-	usageWorker          *usageworker.Worker
-	policy               *runtimehealth.PolicyGate
-	quotaPersistence     *runtimehealth.QuotaSnapshotQueue
-	transformBindingsMu  sync.Mutex
-	mu                   sync.Mutex
-	authorizationMu      sync.Mutex
-	authorizations       *authorizationSessions
-	callbackMu           sync.Mutex
-	callbackListeners    map[string]*authorizationCallbackListener
-	callbackBindings     map[authorizationCallbackKey]authorizationCallbackBinding
-	callbackReservations map[authorizationCallbackKey]authorizationCallbackReservation
-	callbacksClosed      bool
-	runCtx               context.Context
-	runCancel            context.CancelFunc
-	authWG               sync.WaitGroup
-	credentialRefreshMu  sync.Mutex
-	credentialRefreshes  map[string]*credentialRefreshLock
-	activationWake       chan struct{}
-	activationDone       chan struct{}
-	logMu                sync.RWMutex
-	logs                 []LogRecord
-	stop                 func(context.Context) error
-	stopErr              error
+	usagePolicy               UsagePolicy
+	config                    Config
+	providerModules           []provider.RuntimeModule
+	store                     *store.Store
+	persistenceSpool          *runtimehealth.DurablePersistenceSpool
+	artifactStore             *artifacts.Store
+	server                    *api.Server
+	ipc                       *IPCServer
+	ipcLease                  *ipcSocket
+	http                      *http.Server
+	httpControl               *http.Server
+	httpCallback              *http.Server
+	callbackIngress           *authorizationCallbackIngress
+	listeners                 httpListeners
+	addresses                 atomic.Pointer[ListenerAddresses]
+	kernel                    *kernel.Kernel
+	providerBindings          map[string]provider.RuntimeBinding
+	providerRegistry          *provider.RuntimeRegistry
+	providerCatalog           []provider.DefinitionMetadata
+	strategyCatalog           *kernel.StrategyCatalog
+	strategyDefinitions       []kernel.StrategyDefinition
+	extensionCatalog          extensions.CatalogView
+	setupSchemas              *extensions.Snapshot
+	authFlows                 map[string]provider.AuthFlow
+	providerAuthModes         map[extensions.Ref]string
+	providerAuthFlowIDs       map[extensions.Ref]map[string]string
+	sessionCache              *sessionruntime.Cache
+	usageWorker               *usageworker.Worker
+	policy                    *runtimehealth.PolicyGate
+	quotaPersistence          *runtimehealth.QuotaSnapshotQueue
+	transformBindingsMu       sync.Mutex
+	mu                        sync.Mutex
+	authorizationMu           sync.Mutex
+	authorizations            *authorizationSessions
+	callbackMu                sync.Mutex
+	callbackListeners         map[string]*authorizationCallbackListener
+	callbackBindings          map[authorizationCallbackKey]authorizationCallbackBinding
+	callbackReservations      map[authorizationCallbackKey]authorizationCallbackReservation
+	callbacksClosed           bool
+	runCtx                    context.Context
+	runCancel                 context.CancelFunc
+	authWG                    sync.WaitGroup
+	credentialRefreshMu       sync.Mutex
+	credentialRefreshes       map[string]*credentialRefreshLock
+	activationWake            chan struct{}
+	activationDone            chan struct{}
+	logMu                     sync.RWMutex
+	logs                      []LogRecord
+	stop                      func(context.Context) error
+	stopErr                   error
+	sessionPersistenceFailure func() error
 }
 
 type LogRecord struct {
@@ -422,6 +423,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.kernel.ErrorClassifiers = runtimeRegistry.ErrorClassifiersForBindings(runtimeBindings)
 	d.kernel.UsageSources = runtimeRegistry.UsageSources()
 	d.kernel.SessionStores = runtimeRegistry.SessionStores()
+	d.bindSessionPersistence()
 	opportunisticQuota := &runtimehealth.OpportunisticQuota{
 		Context:           ctx,
 		Sources:           runtimeRegistry.QuotaSourcesForBindings(runtimeBindings),
@@ -580,7 +582,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 			d.artifactStore = nil
 		}
 		_ = d.store.Close()
-		return usageErr
+		return errors.Join(usageErr, d.sessionPersistenceFailure())
 	}
 
 	d.ipc = NewIPCServer(d.config.IPCPath, d.handleIPC)

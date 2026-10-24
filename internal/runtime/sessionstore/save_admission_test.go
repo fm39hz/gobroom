@@ -27,7 +27,7 @@ func TestCacheSaveReportsOverflowWithoutDiscardingLiveState(t *testing.T) {
 	if err != nil || !found || state.ResponseID != "second" {
 		t.Fatalf("live state lost: %#v found=%v err=%v", state, found, err)
 	}
-	if c.DroppedWrites() != 1 {
-		t.Fatalf("overflow count=%d want1", c.DroppedWrites())
+	if got := c.PersistenceStatus(); got.QueueDropped != 1 {
+		t.Fatalf("queueDropped=%d want1", got.QueueDropped)
 	}
 }

@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fm39hz/gobroom/internal/kernel"
+	"github.com/fm39hz/gobroom/internal/sessionpersistence"
 	"github.com/fm39hz/gobroom/internal/store"
 )
 
@@ -43,14 +45,20 @@ type write struct {
 // asynchronous persistence. SQLite is only touched during preload and from
 // the worker, never while the data plane is choosing or preparing a route.
 type Cache struct {
-	repository Repository
-	mu         sync.Mutex
-	entries    map[key]entry
-	writes     chan write
-	ttl        time.Duration
-	maxEntries int
-	dropped    atomic.Uint64
-	version    uint64 // protected by mu; preload runs before publication
+	repository   Repository
+	mu           sync.Mutex
+	entries      map[key]entry
+	writes       chan write
+	ttl          time.Duration
+	maxEntries   int
+	received     atomic.Uint64
+	persisted    atomic.Uint64
+	failed       atomic.Uint64
+	discarded    atomic.Uint64
+	queueDropped atomic.Uint64
+	// OnFailure is assigned during initialization, before Run or Save is used.
+	OnFailure func()
+	version   uint64 // protected by mu; preload runs before publication
 }
 
 func New(repository Repository) (*Cache, error) {
@@ -128,8 +136,9 @@ func (c *Cache) Save(ctx context.Context, route kernel.Route, sessionID string, 
 	select {
 	case c.writes <- write{record: item}:
 	default:
-		c.dropped.Add(1)
+		c.queueDropped.Add(1)
 		c.mu.Unlock()
+		c.notifyFailure()
 		// The live update remains useful, but failed queue admission is not
 		// an acknowledgement of asynchronous persistence.
 		return fmt.Errorf("session write queue is full")
@@ -181,7 +190,9 @@ func (c *Cache) Invalidate(ctx context.Context, route kernel.Route, sessionID st
 	case c.writes <- write{record: record, done: done, completed: completed}:
 		c.entries[k] = marker
 	default:
+		c.queueDropped.Add(1)
 		c.mu.Unlock()
+		c.notifyFailure()
 		return false, fmt.Errorf("session write queue is full")
 	}
 	c.mu.Unlock()
@@ -200,14 +211,41 @@ func (c *Cache) Run(ctx context.Context) {
 			for {
 				select {
 				case item := <-c.writes:
-					item.ack(c.repository.SaveProviderSession(item.record))
+					c.persist(item)
 				default:
 					return
 				}
 			}
 		case item := <-c.writes:
-			item.ack(c.repository.SaveProviderSession(item.record))
+			c.persist(item)
 		}
+	}
+}
+
+func (c *Cache) persist(item write) {
+	c.received.Add(1)
+	err := c.repository.SaveProviderSession(item.record)
+	superseded := errors.Is(err, kernel.ErrSessionStateSuperseded)
+	if err != nil {
+		if superseded {
+			c.discarded.Add(1)
+		} else {
+			c.failed.Add(1)
+		}
+	} else {
+		c.persisted.Add(1)
+	}
+	// Complete restoration/removal and wake acknowledged invalidations before
+	// notifying observers. The callback is free to query the cache.
+	item.ack(err)
+	if err != nil && !superseded {
+		c.notifyFailure()
+	}
+}
+
+func (c *Cache) notifyFailure() {
+	if c.OnFailure != nil {
+		c.OnFailure()
 	}
 }
 
@@ -220,7 +258,15 @@ func (item write) ack(err error) {
 	}
 }
 
-func (c *Cache) DroppedWrites() uint64 { return c.dropped.Load() }
+func (c *Cache) PersistenceStatus() sessionpersistence.Status {
+	return sessionpersistence.Status{
+		Received:     c.received.Load(),
+		Persisted:    c.persisted.Load(),
+		Failed:       c.failed.Load(),
+		Discarded:    c.discarded.Load(),
+		QueueDropped: c.queueDropped.Load(),
+	}
+}
 
 func (c *Cache) evictLocked(now time.Time) {
 	var oldestKey key

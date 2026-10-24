@@ -39,6 +39,7 @@ type Kernel struct {
 	Operations             *operations.Snapshot
 	ArtifactStore          *artifacts.Store
 	Events                 chan UsageEvent
+	OnSessionSaveFailure   func()
 	AcquireCredential      CredentialLeaseResolver
 	RefreshCredentialLease CredentialLeaseRefresher
 	usageMu                sync.RWMutex
@@ -909,7 +910,9 @@ func (k *Kernel) executeNode(ctx context.Context, snapshot Snapshot, node ModelN
 				releaseCandidate()
 				if sessionKey != "" && candidate.SessionStoreRef.ID != "" && (sessionStateChanged || sessionState.ResponseID != "" || len(sessionState.ProviderData) > 0 || len(sessionState.Signatures) > 0) {
 					if sessionStore := k.SessionStores[candidate.SessionStoreRef]; sessionStore != nil {
-						_ = sessionStore.Save(ctx, candidate, sessionKey, sessionState)
+						if err := sessionStore.Save(ctx, candidate, sessionKey, sessionState); err != nil && !errors.Is(err, ErrSessionStateSuperseded) && k.OnSessionSaveFailure != nil {
+							k.OnSessionSaveFailure()
+						}
 					}
 				}
 				event = event.SanitizeCommon()
