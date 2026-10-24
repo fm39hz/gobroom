@@ -32,20 +32,23 @@ import (
 )
 
 type Config struct {
-	DBPath                    string
-	RuntimeSpoolPath          string
-	RuntimeSpoolMaxBytes      int64
-	RuntimeSpoolMaxRecords    int
-	RuntimeSpoolMaxAttempts   int
-	IPCPath                   string
-	HTTPEnabled               bool
-	HTTPAddr                  string
-	HTTPControl               bool
-	HTTPControlAddr           string
-	HTTPToken                 string
-	HTTPControlToken          string
-	UsagePolicy               *UsagePolicy
-	ProviderManifestDir       string
+	DBPath                  string
+	RuntimeSpoolPath        string
+	RuntimeSpoolMaxBytes    int64
+	RuntimeSpoolMaxRecords  int
+	RuntimeSpoolMaxAttempts int
+	IPCPath                 string
+	HTTPEnabled             bool
+	HTTPAddr                string
+	HTTPControl             bool
+	HTTPControlAddr         string
+	HTTPToken               string
+	HTTPControlToken        string
+	UsagePolicy             *UsagePolicy
+	ProviderManifestDir     string
+	// ConfigBundlePath explicitly reapplies a secret-free desired configuration
+	// at Start, before catalog freeze and serving. Empty means DB-managed state.
+	ConfigBundlePath          string
 	QuotaPolling              bool
 	UsageDrainTimeout         time.Duration
 	ArtifactStoreDir          string
@@ -237,6 +240,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return err
 	}
 	d.store = s
+	startupBundle, err := readStartupBundle(d.config.ConfigBundlePath)
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
 	d.appendLog("info", "daemon starting")
 	if reset := s.UsageResetCounts(); reset.Events > 0 || reset.Daily > 0 {
 		d.appendLog("warn", fmt.Sprintf("replaced incompatible usage history: events=%d daily=%d; provider configuration preserved", reset.Events, reset.Daily))
@@ -279,6 +287,14 @@ func (d *Daemon) Start(ctx context.Context) error {
 		_ = s.Close()
 		return err
 	}
+	if startupBundle != nil {
+		for _, definition := range startupBundle.ProviderDefinitions {
+			if err := runtimeRegistry.RegisterDefinitionIfAbsent(definition); err != nil {
+				_ = s.Close()
+				return fmt.Errorf("register startup provider definition: %w", err)
+			}
+		}
+	}
 	d.providerRegistry = runtimeRegistry
 	d.providerCatalog, err = runtimeRegistry.DefinitionCatalog()
 	if err != nil {
@@ -312,6 +328,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("bind strategy catalog: %w", err)
 	}
 	d.strategyDefinitions = d.strategyCatalog.Definitions()
+	if startupBundle != nil {
+		if err := applyStartupBundle(s, *startupBundle, d.strategyCatalog, extensionSnapshot, runtimeBindings); err != nil {
+			_ = s.Close()
+			return fmt.Errorf("validate startup config bundle: %w", err)
+		}
+	}
 	d.providerBindings = runtimeBindings
 	d.authFlows = runtimeRegistry.AuthFlowsForBindings(runtimeBindings)
 	d.providerAuthModes = runtimeRegistry.DefaultCredentialTypes()
@@ -1896,7 +1918,11 @@ func (d *Daemon) runtimeForBundle(bundle controlplane.ConfigBundle) (*provider.R
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := controlplane.ValidateBundleWithStrategies(bundle, strategies); err != nil {
+	bindings, err := runtimeRegistry.BuildBindings()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := controlplane.ValidateBundleRuntime(bundle, strategies, bindings); err != nil {
 		return nil, nil, err
 	}
 	return runtimeRegistry, strategies, nil

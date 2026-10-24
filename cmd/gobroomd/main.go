@@ -45,6 +45,7 @@ func main() {
 	usagePrivate := flag.Bool("usage-private-details", false, "separately permit private extension detail requests")
 	usageRaw := flag.Bool("usage-raw-details", false, "separately permit raw usage detail requests")
 	providerManifestDir := flag.String("provider-manifests", defaults.ProviderManifestDir, "directory containing provider definition JSON files")
+	configBundlePath := flag.String("config-bundle", "", "secret-free desired config bundle reapplied before serving on every start")
 	quotaPolling := flag.Bool("quota-poll", false, "opt in to periodic provider quota polling")
 	usageDrainTimeout := flag.Duration("usage-drain-timeout", defaults.UsageDrainTimeout, "cooperative usage persistence drain budget (0 uses default)")
 	artifactStoreDir := flag.String("artifact-store", defaults.ArtifactStoreDir, "parent directory for bounded, temporary artifact body spools")
@@ -72,6 +73,7 @@ func main() {
 	}
 	config.UsagePolicy = &daemon.UsagePolicy{MaxValues: *usageMaxValues, MaxExtensionBytes: *usageMaxBytes, CaptureRaw: *usageCaptureRaw, MaxRawBytes: *usageRawBytes, Retention: *usageRetention, AllowManagementDetails: *usageDetails, AllowPrivateDetails: *usagePrivate, AllowRawDetails: *usageRaw}
 	config.ProviderManifestDir = *providerManifestDir
+	config.ConfigBundlePath = *configBundlePath
 	config.QuotaPolling = *quotaPolling
 	config.UsageDrainTimeout = *usageDrainTimeout
 	config.ArtifactStoreDir = *artifactStoreDir

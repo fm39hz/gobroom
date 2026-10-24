@@ -29,6 +29,14 @@ IPC controls and temporary source/target hosts; no second configuration path.
 
 ## Task 1: Public fresh-target proof
 
+Executed amendment: fresh linked job module cannot start before its required
+provider-definition exists. Add `internal/daemon/startup_bundle.go` and tests,
+`Config.ConfigBundlePath`, and `cmd/gobroomd --config-bundle` before final proof.
+Strict JSON v2 max32MiB; definitions precede freeze; exact lock/transform
+validation precedes transactional apply and first serving. File mode reapplies
+on every Start; DB-only restart is also proven with path removed. Negative pins
+reject during Start and leave prior export unchanged. No catalog safety bypass.
+
 Files: new `examples/external-provider-module/module_portability_test.go`.
 Interfaces: existing `newFailureClientFixture`, `JobModule`, failure module,
 public `daemon.NewWithProviderModules` and `daemon.CallIPC`; helpers are test-only.

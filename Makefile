@@ -54,6 +54,10 @@ test-installed-session: check-installed-cli ## installed session persistence fai
 test-installed-client-failure: check-installed-cli ## installed client catalog/control and independent failure dialect
 	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(InstalledCLIClientFailureCatalogAndControl|IndependentClientFailure)' -race -count=3
 
+.PHONY: test-installed-portability
+test-installed-portability: check-installed-cli ## independent module fresh-target import/restart acceptance
+	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(InstalledCLIModuleBundle|IndependentModuleBundle)' -race -count=3
+
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./cmd/gobroom -run '^TestTransform' -count=1
 	go test ./cmd/gobroom -run '^Test(ConfigCommands|DecodeConfigInput)' -count=1

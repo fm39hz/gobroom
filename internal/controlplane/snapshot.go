@@ -71,9 +71,9 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 	for _, row := range routeRows {
 		protocol := kernel.Protocol(row.Protocol)
 		definitionRef := row.DefinitionRef()
-		routeBindings := provider.RuntimeBindingsForProtocol(l.Bindings, definitionRef, protocol)
-		if l.Bindings != nil && len(routeBindings) == 0 {
-			return kernel.Snapshot{}, fmt.Errorf("provider definition %q has no inference operation for protocol %q", row.DefinitionID, protocol)
+		routeBindings, authMode, err := resolveRouteRuntime(l.Bindings, definitionRef, protocol, row.CredentialType)
+		if err != nil {
+			return kernel.Snapshot{}, err
 		}
 		var binding provider.RuntimeBinding
 		operationBindings := make(map[normalize.Operation]kernel.RouteOperationBinding, len(routeBindings))
@@ -105,10 +105,6 @@ func (l Loader) LoadSnapshot(version uint64) (kernel.Snapshot, error) {
 			}
 		}
 		quotaBinding := l.Bindings[provider.RuntimeBindingKey(definitionRef, provider.OperationQuota)]
-		authMode, authModeExists := binding.AuthModes[row.CredentialType]
-		if !authModeExists || authMode.Flow == nil || authMode.FlowID == "" {
-			return kernel.Snapshot{}, fmt.Errorf("provider definition %q does not bind credential type %q", row.DefinitionID, row.CredentialType)
-		}
 		providerGeneration := combineHealthGeneration(row.ProviderGeneration, binding.DefinitionRef.Key(), binding.ErrorClassifierRef.Key(), authMode.FlowID)
 		input.Routes = append(input.Routes, kernel.Route{ID: row.ID, NodeID: row.NodeID, DefinitionID: row.DefinitionID, DefinitionRef: binding.DefinitionRef, AuthFlowID: authMode.FlowID, CredentialPresentation: authMode.Presentation, CredentialRecovery: authMode.Recovery, DisplayPrefix: row.Prefix, ExternalModel: row.ExternalModel, Protocol: protocol, OperationBindings: operationBindings, ErrorClassifierRef: binding.ErrorClassifierRef, QuotaSourceRef: quotaBinding.QuotaSourceRef, QuotaEndpointRef: quotaBinding.EndpointRef, QuotaTransportRef: quotaBinding.TransportRef, QuotaEndpointOptions: quotaBinding.EndpointOptions, QuotaWindowName: quotaBinding.QuotaWindowName, UsageSourceRef: binding.UsageSourceRef, UsageOptions: binding.UsageOptions, SessionStoreRef: binding.SessionStoreRef, Profile: row.Profile, Limits: row.Limits, Enabled: row.Enabled, BaseURL: row.BaseURL, CredentialID: row.CredentialID, CredentialType: row.CredentialType, HealthGeneration: kernel.RouteHealthGeneration{Provider: providerGeneration, Connection: row.ConnectionGeneration, Credential: row.CredentialGeneration, Model: row.ModelGeneration}})
 		baseID := row.ID
