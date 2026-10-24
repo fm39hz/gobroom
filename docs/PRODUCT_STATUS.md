@@ -185,6 +185,11 @@ queue rejection and invalidation behavior.
 
 ## Next core work
 
+The [finite C1–C6 audit](ARCHITECTURE_AUDIT_2026-10-24.md) identifies a concrete
+next architectural implementation gap: registered client-specific precommit
+failure projection and safe handling of ordinary ingress error text. It also
+separates the remaining named public-boundary proofs from provider breadth.
+
 1. Finish ordinary session persistence overflow/failure observability:
    `Cache.Save` now reports queue rejection, but the kernel ignores save errors
    and asynchronous write failures are not surfaced. Do not confuse
