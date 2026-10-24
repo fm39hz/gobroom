@@ -3,6 +3,8 @@
 Status: agent-selected design under the user's standing instruction to decide
 implementation details and continue until a genuinely user-owned choice arises.
 This is not a claim of a new explicit design approval.
+Implementation and the bounded acceptance plan are verified in `eeec107` /
+`7eda7ed`, with final review approval and one recorded nonblocking test minor.
 
 ## Problem and intent
 

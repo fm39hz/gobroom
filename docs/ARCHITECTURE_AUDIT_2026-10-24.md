@@ -4,7 +4,9 @@ This is source/test inspection, not a new execution of every cited test or a
 parity claim. The governing clauses remain in [the roadmap](IMPLEMENTATION_PLAN.md#m15-semantic-closure-delivery)
 and [extension contracts](EXTENSION_CONTRACTS.md). Usage/typed-jobs acceptance
 is recorded separately; session observability is at `eeec107` / `7eda7ed`,
-installed with focused acceptance, awaiting final whole-feature review.
+installed with focused acceptance and final whole-feature review approved (one
+nonblocking queued-drain coverage minor). This does not change the audit's
+source-only classification of F1 or execute the missing public-boundary proofs.
 
 | Clause | Current evidence | Concrete remaining delta |
 |---|---|---|

@@ -74,7 +74,8 @@ no additional history. There is no compatibility reader for replaced formats.
   optional telemetry faults do not retry inference or poison provider health.
 - Operations/privacy: IPC ownership, independent HTTP control auth, detail
   grants, terminal sanitization, retention and explicit queue-loss visibility
-  are implemented. Ordinary session-save failure visibility remains open.
+  are implemented. The separate session-observability checkpoint now exposes
+  ordinary save/write faults and expected discards; it is not usage accounting.
 - Extension portability: unfamiliar usage and typed jobs have independent
   module proofs. Alternate databases, hosted sync and direct remote log sinks
   are not shipped. This is not a claim that every remaining C1–C6 clause is closed.

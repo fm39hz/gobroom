@@ -61,9 +61,11 @@ requirement for non-chat operations. Projectors still consume artifact metadata,
 while renderers receive schema-validated values; no second payload system or
 direct projector access was introduced.
 
-The bounded session fix now returns an error on persistence queue overflow,
-while preserving live memory continuity and the drop counter. Kernel handling
-of that error and asynchronous session-write visibility remain open.
+Session persistence now exposes queue rejection, asynchronous writer faults and
+unexpected kernel Save errors through safe run-local counters and diagnostics,
+preserving live continuity and acknowledged invalidation. Typed expected fences
+are discarded without false degradation. Stop/Wait reports fault history after
+joining the worker; this is not a new durable journal or hard shutdown budget.
 
 Usage persistence now receives context through the existing atomic event/daily
 transaction. It is independent of request cancellation and provider health.
@@ -111,6 +113,20 @@ Historical installation/version records remain in Git and that evidence file;
 this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
+
+Session persistence checkpoint `eeec107` / `7eda7ed`: ordinary write failures,
+queue rejection and unexpected custom Save errors now reach safe status/logs
+and retained Stop/Wait errors without changing accepted inference, provider
+health or replay. Expected authority/endpoint/expiry fences use a shared typed
+result and count as nonfault `discarded`; SQL metadata failures remain faults.
+Counter history is per daemon run, not an assertion of continuing disk mismatch.
+Full regression/vet/conformance and focused three-run race passed. Real SQLite
+shutdown-only failure plus a failing pre-drain snapshot mutation protect the
+owner ordering. Installed-session CLI acceptance passed three race runs (6.894s);
+main status=ok, control=serving=513, config valid and fingerprint unchanged.
+Final review approved with one nonblocking drain-branch coverage minor, recorded
+in the plan. No live provider calls. Root filesystem remains nearly full; only
+owned build copies were moved recoverably to `/tmp`, not user data.
 
 Task 8 checkpoint `fd33fb0` / `1be757f` / `1a642b1` completes both approved
 usage and typed-jobs plans. All eight spec items have named evidence in the
@@ -180,8 +196,8 @@ rows under the pre-release reset policy, preserving configuration/credentials.
 Exact earlier catalog, presence, typed-jobs and session-store acceptance records
 are retained in [M15 conformance](M15_CONFORMANCE.md) and the linked task plans.
 Typed jobs is an extension proof, not a hosted job service in the standard
-daemon. Ordinary session-save failure visibility remains open despite verified
-queue rejection and invalidation behavior.
+daemon. The newer session-observability checkpoint above supersedes the earlier
+queue-rejection-only evidence without changing those invalidation guarantees.
 
 ## Next core work
 
@@ -190,10 +206,9 @@ next architectural implementation gap: registered client-specific precommit
 failure projection and safe handling of ordinary ingress error text. It also
 separates the remaining named public-boundary proofs from provider breadth.
 
-1. Finish ordinary session persistence overflow/failure observability:
-   `Cache.Save` now reports queue rejection, but the kernel ignores save errors
-   and asynchronous write failures are not surfaced. Do not confuse
-   reliable invalidation acknowledgement with ordinary asynchronous saves.
+1. Implement the registered client precommit failure boundary and safe ordinary
+   ingress errors identified by the audit; reproduce its concrete counterexample
+   before changing the core. Preserve committed-stream terminal/no-replay rules.
 2. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
    serving boundaries. Provider-specific codecs, envelopes and live-harness
    breadth are implementation/product acceptance, not an undefined universal

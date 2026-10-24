@@ -1,5 +1,17 @@
 # M15 architecture conformance evidence
 
+2026-10-24 session follow-up: `eeec107` / `7eda7ed` closes ordinary session
+persistence failure visibility, not the entire M15 gate. Safe six-field status,
+constant warning/Stop sentinel, expected typed supersession versus SQL failure,
+live-state preservation and provider-health/replay isolation passed core/host
+race tests and the independent principal/endpoint regression. The first failure
+during shutdown is tested through a real locked SQLite writer; a pre-drain
+snapshot mutation fails. Full regression/vet/conformance and installed CLI
+session gate passed; main healthy 513 and config fingerprint unchanged.
+Final review retains one nonblocking queued-drain-specific coverage minor.
+The [finite audit](ARCHITECTURE_AUDIT_2026-10-24.md) separates the next actual
+client-failure implementation gap from remaining public-boundary acceptance.
+
 Status: composition simulations implemented; full semantic closure gate
 pending. M15 asks whether new behaviors compose through stable contracts.
 The [semantic extension design](EXTENSION_CONTRACTS.md) fixes the remaining
