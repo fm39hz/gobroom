@@ -39,7 +39,7 @@ implemented, including historical extension storage and opt-in raw/detail
 access under independent host disclosure grants. A separate module has verified
 unfamiliar private usage through inference, client transformation, persistence,
 module removal and installed CLI reads, without a feature-specific kernel edit.
-Resource measurements and final combined review remain in the
+Scoped resource measurements and final combined review passed under the
 [approved usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md).
 No legacy numeric usage reader is retained. Earlier host-version notes below
 describe individual historical checkpoints, not the current module version.

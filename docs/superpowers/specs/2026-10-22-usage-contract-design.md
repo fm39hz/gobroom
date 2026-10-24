@@ -1,11 +1,12 @@
 # Hybrid usage accounting contract
 
 Status: direction and written specification approved by the user on 2026-10-22.
-Implementation is in progress: catalog, presence-aware common accounting,
+The approved scope is implemented and verified: catalog, presence-aware common accounting,
 per-dispatch lifecycle, protocol normalization and immutable history are
 verified, including bounded opt-in capture and explicit management disclosure.
 Separate public-module inference/history/installed-client acceptance is verified.
-Resource measurement and final combined review remain open. The
+Scoped resource measurements and final combined review are complete; broader
+C1–C6/M15 and product-performance targets remain open. The
 [usage implementation plan](../plans/2026-10-22-hybrid-usage-implementation.md)
 and [independent typed-jobs plan](../plans/2026-10-22-typed-job-results-implementation.md)
 are approved for execution on 2026-10-22. Supplements

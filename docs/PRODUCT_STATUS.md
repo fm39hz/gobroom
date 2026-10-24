@@ -1,6 +1,6 @@
 # Product progress
 
-Snapshot: 2026-10-23. This is a use-case-level review, not a completion
+Snapshot: 2026-10-24. This is a use-case-level review, not a completion
 percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
@@ -28,7 +28,7 @@ Useful acceptance anchors include
 ## Current integration milestone
 
 The approved [hybrid usage plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md)
-is being implemented against its [specification](superpowers/specs/2026-10-22-usage-contract-design.md).
+is implemented and verified against its [specification](superpowers/specs/2026-10-22-usage-contract-design.md).
 The frozen catalog now supports bounded, private-by-default, exact-schema usage
 values. The common envelope carries nullable input/output/cache/reasoning
 counters, cost and throughput, plus registered values and bounded diagnostics.
@@ -48,7 +48,7 @@ Historical extension values retain their immutable data descriptor, exact
 schema documents and dependency pins after module removal. Ordinary lists
 stay payload-free. Bounded opt-in raw retention, independently authorized detail
 access and separate public-module inference/history/CLI acceptance are verified.
-Resource measurement and the final combined review remain open; C1 is not closed.
+Scoped resource measurement and final combined review passed; C1 is not closed.
 The [usage acceptance map](USAGE_ACCEPTANCE.md) records the spec's eight items
 and distinguishes deterministic, installed-client and unmeasured boundaries.
 Registered values do not automatically become aggregation, pricing or routing
@@ -112,6 +112,22 @@ this overview is current state, not an append-only installation log.
 
 ## Latest acceptance
 
+Task 8 checkpoint `fd33fb0` / `1be757f` / `1a642b1` completes both approved
+usage and typed-jobs plans. All eight spec items have named evidence in the
+[acceptance map](USAGE_ACCEPTANCE.md). Paired actual JSON/SSE extension proxy
+samples now supplement helper costs; a small private extension adds about
+30 KiB and 500 allocations/request in this workload. This is not negligible
+overhead or proof of the ultra-light target. Standard three-second header
+deadlines fix the reproduced idle-connection shutdown mechanism without a
+body/stream deadline; the exact cause of all old intermittent failures is not
+claimed. Full regression, root/external vet, conformance and final installed
+gates passed. The entire external suite with installed CLI and race count 3
+passed in 139.466s, including typed jobs. Final combined/scoped review has no
+remaining findings. Main status=ok, control=serving=512, config validates,
+fingerprint unchanged and usage rows 0/0. No live provider calls.
+
+Earlier integration checkpoints:
+
 Public usage-module checkpoint `71e66f4` / `881f453`: a separate module adds
 private search units through existing codecs and public registration, persists
 exact data contracts, and reads history after active-config/module removal.
@@ -122,7 +138,7 @@ Root/external regression, vet, conformance and selected three-run race passed.
 After installation, `make test-installed-usage` passed six named CLI fixtures
 across root/external modules, three race runs each. Main status=ok,
 control=serving=506; config/credential fingerprint unchanged, usage rows 0/0.
-Task 8 and final combined review remain open. No live upstream traffic.
+Task 8 and final combined review remained open at that checkpoint. No live upstream traffic.
 
 Capture/disclosure checkpoint `0bcfe20` / `767bab1` / `9b0e8e9`: bounded
 opt-in raw usage, independently granted detail classes, authenticated HTTP
@@ -139,7 +155,7 @@ One initial full external run timed out at the existing HTTPS callback test's
 Stop deadline. Its untouched test passed 33 subsequent focused repetitions and
 later full regression/conformance passed. The cause is not established; no
 shutdown fix is claimed. Task 7 public-module inference proof and Task 8
-resource measurements remain open.
+resource measurements remained open at that checkpoint.
 
 Earlier verified protocol/history acceptance:
 
@@ -169,20 +185,17 @@ queue rejection and invalidation behavior.
 
 ## Next core work
 
-1. Execute hybrid usage Task 8: resource measurement and final combined
-   acceptance/review. Tasks 1–7 are verified;
-   this is not yet the complete no-kernel-change catch-up proof.
-2. Include the verified typed-jobs artifact/renderer implementation in the
-   final combined acceptance/review. Do not revive a text tunnel or introduce
-   direct projector access without a separately established requirement.
-3. Finish ordinary session persistence overflow/failure observability:
+1. Finish ordinary session persistence overflow/failure observability:
    `Cache.Save` now reports queue rejection, but the kernel ignores save errors
    and asynchronous write failures are not surfaced. Do not confuse
    reliable invalidation acknowledgement with ordinary asynchronous saves.
-4. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
+2. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
    serving boundaries. Provider-specific codecs, envelopes and live-harness
    breadth are implementation/product acceptance, not an undefined universal
-   core matrix.
+   core matrix. Usage and typed jobs now have finite combined acceptance, not
+   a universal no-kernel-change catch-up proof.
+3. Investigate repeated internal compatibility/usage copies while preserving
+   ownership fences, then measure isolated RSS and sustained tail latency.
 5. Finish explicit persistence-failure durability and whole-daemon shutdown
    obligations. Usage counters/cooperative cancellation are not a durable spool
    or a sandbox for uncooperative module code.

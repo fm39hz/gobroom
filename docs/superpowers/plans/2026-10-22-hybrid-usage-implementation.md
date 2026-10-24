@@ -276,8 +276,30 @@ Bound assertion form: `if retainedBytes > policy.MaxExtensionBytes || admittedOv
 - [x] Add assertions in non-benchmark tests that oversized payloads are rejected before durable admission and that retained state stays within configured bounds. Main runs these first; a benchmark alone does not prove bounded memory.
 - [x] Main captures baseline and post-change samples using the same benchmark source/Go version/settings, `-benchmem -count=5 -cpu=1,4`; compare ordinary proxy paths and extension-bearing paths. Use the existing `make perf BENCHTIME=1s BENCHCPU=1,4` target for the proxy fixture. No fabricated numeric performance threshold; report regressions and investigate them before claiming negligible overhead.
 - [x] Record CPU/allocation results and measurement scope. Do not infer isolated daemon RSS or sustained p99 from combined-process proxy measurements; those product targets remain open unless independently measured.
-- [ ] Run full regression/install/installed acceptance after all work, including the independently reviewed typed-jobs plan. Map every spec acceptance item to named tests and actual commands; record unexecuted/live gaps explicitly.
-- [ ] Report across onboarding/discovery, Physical/Combo management, client consumption, passive routing/accounting, operations/privacy and extension portability. Update C1 narrowly; do not declare C1–C6/M15 closed from usage tests alone. Commit `docs(usage): record acceptance and measured resource costs`.
+- [x] Run full regression/install/installed acceptance after all work, including the independently reviewed typed-jobs plan. Map every spec acceptance item to named tests and actual commands; record unexecuted/live gaps explicitly.
+- [x] Report across onboarding/discovery, Physical/Combo management, client consumption, passive routing/accounting, operations/privacy and extension portability. Update C1 narrowly; do not declare C1–C6/M15 closed from usage tests alone.
+
+Task 8 completed on 2026-10-24 (`fd33fb0`, `1be757f`, `1a642b1`). Final review
+of both approved plans found two completion gaps; paired actual JSON/SSE proxy
+measurements and fresh installed gates closed both. Scoped fix review approved
+with no remaining Critical, Important or Minor finding. Exact samples and
+limitations are linked from [operations](../../OPERATIONS.md#local-performance-baseline);
+the [acceptance map](../../USAGE_ACCEPTANCE.md) covers all eight spec items and
+whole-product boundaries.
+
+Final post-fix `make test`, root/external vet and conformance passed. After
+`make install-all`, installed usage acceptance passed three race runs (root
+17.784s, external 3.746s). The entire separate module suite also passed with
+the installed CLI environment and `-race -count=3` (139.466s), including typed
+jobs and exact client-envelope validation. Main status=ok, control=serving=512,
+config validation version 9 passed, config/credential fingerprint unchanged,
+usage rows 0/0. No live providers called.
+
+The idle-header regression failed against the old constructor; the standard
+three-second header budget fixes that confirmed mechanism without a whole-body
+or streaming deadline. The exact cause of every earlier intermittent external
+shutdown failure was not established. These finite plans are complete; the
+full C1–C6/M15 and product/resource targets remain open.
 
 ## Execution waves and gates
 

@@ -3,8 +3,8 @@
 The approved [spec](superpowers/specs/2026-10-22-usage-contract-design.md) and
 [plan](superpowers/plans/2026-10-22-hybrid-usage-implementation.md) separate
 common accounting, registered provider detail and opt-in raw fragments.
-Tasks 1–7 are verified. Task 8 has retained-bound tests and five-sample scoped
-measurements; final integrated gates and combined review are in progress.
+Tasks 1–8 are verified, including retained-bound tests, five-sample scoped
+measurements and final combined review with the typed-jobs plan.
 This document does not close C1–C6/M15 or claim provider parity.
 
 ## Spec-to-test map
@@ -18,7 +18,7 @@ This document does not close C1–C6/M15 or claim provider parity.
 | 5. Original/client isolation and disclosure | `TestRawUsageStaysOriginalAndNeverReachesClientTransforms`, `TestExternalUsageExtensionSurvivesRestartAndModuleRemoval`, `TestUsageDetailControlAuthAndIndependentPayloadClasses`, `TestUsageDetailReplyIsRejectedAfterSelectionOrPaneChange`, `TestUsageDetailOutputRejectsAllTerminalControls` |
 | 6. Opt-in raw, retention, precision and backpressure | `TestUsageRawCaptureIsOptInBoundedAndPrivate`, `TestUsageRetentionPreservesExactAndNewerNanosecondTimestamps`, `TestUsageDetailNeverServesExpiredRawWhileCleanupLags`, `TestDaemonAccountingQueueFailureDoesNotReplayInference`, `TestWorkerDeadlineAbandonsUnwrittenEventsAndReturnsDeadline`, `TestDaemonStopDrainsAcceptedUsageBeforeClosingStore` |
 | 7. Typed jobs and independent client-envelope validation | `TestExternalJobLifecycleKeepsEffectsAndHandlesScopedAcrossRestart` and the [typed-jobs evidence](superpowers/plans/2026-10-22-typed-job-results-implementation.md) |
-| 8. Retained bounds and scoped resource measurements | `TestAttemptUsageRetainedStateRemainsBoundedAcrossManyFrames`, `TestUsageAccountingBenchmarkBounds`, shared five-sample proxy harness and selected helper benchmarks; see [scope/results](OPERATIONS.md#local-performance-baseline). Final combined review remains pending. |
+| 8. Retained bounds and scoped resource measurements | `TestAttemptUsageRetainedStateRemainsBoundedAcrossManyFrames`, `TestUsageAccountingBenchmarkBounds`, shared and paired extension proxy samples plus selected helper benchmarks; see [scope/results](OPERATIONS.md#local-performance-baseline). Final combined review approved. |
 
 These are representative named anchors, not a claim that the new module
 fixture independently repeats every schema/activation/fault test. Protocol
@@ -33,12 +33,12 @@ uninstall and restart. Removing a required module does not make its active
 provider/transform configuration runnable: the fixture uninstalls those active
 bindings first, leaving historical data untouched.
 
-## Executed gates through Task 7
+## Final executed gates — 2026-10-24
 
 Main ran root/external regression, root/external vet and architectural
 conformance, plus selected three-run race suites. Independent scoped reviews
 and fixes are recorded in Git and the plan. The final whole-change review is
-not yet complete.
+complete, including paired proxy measurements and fresh installed gates.
 
 After `make install-all`, the explicit installed gate was:
 
@@ -51,9 +51,12 @@ It passed five root installed CLI tests and the separate-module
 `TestInstalledCLIUsagePreservesPresenceAndPrivacy`, each three race runs.
 An unset, relative, missing or non-executable binary path fails before Go;
 ordinary `make test` alone does not prove installed acceptance. Main daemon
-status was `ok`, control/serving snapshot 506; configuration and credentials
+status was `ok`, control/serving snapshot 512; configuration and credentials
 had the same pre/post fingerprint, and real usage rows stayed 0/0. All feature
 traffic used temporary hosts and fake upstreams, with no live provider calls.
+The complete separate module suite also passed with the installed CLI environment
+and `-race -count=3` (139.466s), covering the typed-jobs proof and exact client
+envelopes alongside usage. The scoped final fix review has no remaining findings.
 
 The initial nullable-contract cutover discarded 4 ambiguous events and 3 daily
 rows under the approved pre-release reset policy. Later checkpoints discarded

@@ -148,6 +148,15 @@ runs each; invalid CLI paths fail before Go instead of silently skipping.
 Main status=ok, control=serving=506, config/credential fingerprint unchanged,
 usage rows 0/0. Task 8 measurements/final combined review remain open; this
 narrows C1's usage gap without closing C1–C6 or M15. No live providers called.
+Task 8 is now complete (`fd33fb0`, `1be757f`, `1a642b1`): five-sample paired
+actual JSON/SSE proxy measurements close the helper-only gap, with zero usage
+drops but measurable allocation costs. Full post-fix regression/vet/conformance
+and installed acceptance passed, including the entire external module suite
+with installed CLI and race count 3 (139.466s). Final combined/scoped review
+approved both finite plans with no remaining findings. Main status=ok,
+control=serving=512, config/credential fingerprint unchanged, usage rows 0/0.
+This closes the finite usage/typed-results proof, not the broader C1–C6 audit,
+isolated RSS, sustained p99 or provider/harness breadth.
 The concise [usage acceptance map](USAGE_ACCEPTANCE.md) links the eight spec
 items to named tests and records the remaining measurement/product boundaries.
 
