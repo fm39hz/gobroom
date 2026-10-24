@@ -273,9 +273,9 @@ provider traffic or additional history loss occurred. Task 8 remains open.
 
 Bound assertion form: `if retainedBytes > policy.MaxExtensionBytes || admittedOversize { t.Fatal("accounting retention exceeded policy") }`.
 
-- [ ] Add assertions in non-benchmark tests that oversized payloads are rejected before durable admission and that retained state stays within configured bounds. Main runs these first; a benchmark alone does not prove bounded memory.
-- [ ] Main captures baseline and post-change samples using the same benchmark source/Go version/settings, `-benchmem -count=5 -cpu=1,4`; compare ordinary proxy paths and extension-bearing paths. Use the existing `make perf BENCHTIME=1s BENCHCPU=1,4` target for the proxy fixture. No fabricated numeric performance threshold; report regressions and investigate them before claiming negligible overhead.
-- [ ] Record CPU/allocation results and measurement scope. Do not infer isolated daemon RSS or sustained p99 from combined-process proxy measurements; those product targets remain open unless independently measured.
+- [x] Add assertions in non-benchmark tests that oversized payloads are rejected before durable admission and that retained state stays within configured bounds. Main runs these first; a benchmark alone does not prove bounded memory.
+- [x] Main captures baseline and post-change samples using the same benchmark source/Go version/settings, `-benchmem -count=5 -cpu=1,4`; compare ordinary proxy paths and extension-bearing paths. Use the existing `make perf BENCHTIME=1s BENCHCPU=1,4` target for the proxy fixture. No fabricated numeric performance threshold; report regressions and investigate them before claiming negligible overhead.
+- [x] Record CPU/allocation results and measurement scope. Do not infer isolated daemon RSS or sustained p99 from combined-process proxy measurements; those product targets remain open unless independently measured.
 - [ ] Run full regression/install/installed acceptance after all work, including the independently reviewed typed-jobs plan. Map every spec acceptance item to named tests and actual commands; record unexecuted/live gaps explicitly.
 - [ ] Report across onboarding/discovery, Physical/Combo management, client consumption, passive routing/accounting, operations/privacy and extension portability. Update C1 narrowly; do not declare C1–C6/M15 closed from usage tests alone. Commit `docs(usage): record acceptance and measured resource costs`.
 

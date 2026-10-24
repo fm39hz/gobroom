@@ -80,6 +80,9 @@ Five-sample ordinary JSON/SSE and extension/raw-helper measurements now exist,
 with the exact source/harness, zero proxy admission loss, and an allocation
 increase that is not called negligible. The raw samples and qualitative clone
 profile are linked from [operations](OPERATIONS.md#local-performance-baseline).
-These do not establish extension-bearing full-proxy resource costs, isolated
-daemon RSS, sustained p99 or a comparative 9router load result. Those remain
-product-performance work; helper tests are not evidence of a universal target.
+The paired end-to-end extension-bearing JSON/SSE proxy workload is now measured
+separately, with a correctness fixture confirming private values reach SQLite
+only when that source is enabled. It adds about 30 KiB/request in this workload.
+Neither comparison establishes isolated daemon RSS, sustained p99 or comparative
+9router load behavior. Those remain product-performance work; helper tests are
+not evidence of a universal target.

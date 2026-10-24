@@ -1,0 +1,53 @@
+# Runtime: fd33fb0 plus scoped HTTP header-timeout fix; same code in both cases.
+# Both load SearchUsageModule, identical upstream headers/body/graph; only usage-source binding differs.
+# Serial clients at GOMAXPROCS1/4; actual decoding/admission/SQLite persistence, not helper-only.
+# Accounting drain outside timer, zero admission loss; not RSS or p99.
+
+go version go1.27.3-X:nodwarf5 linux/amd64
+cd examples/external-provider-module && GOWORK=off go test -run '^$' -bench '^BenchmarkUsageProxy$' -benchmem -benchtime=1s -count=5 -cpu=1,4 ./...
+goos: linux
+goarch: amd64
+pkg: example.com/gobroom-external-provider
+cpu: Intel(R) Core(TM) i7-6820HQ CPU @ 2.70GHz
+BenchmarkUsageProxy/extension-false/JSON      	    1226	    860735 ns/op	         0 usage-drop/op	  120529 B/op	    1479 allocs/op
+BenchmarkUsageProxy/extension-false/JSON      	    1376	    910175 ns/op	         0 usage-drop/op	  120518 B/op	    1479 allocs/op
+BenchmarkUsageProxy/extension-false/JSON      	    1311	    906861 ns/op	         0 usage-drop/op	  120532 B/op	    1479 allocs/op
+BenchmarkUsageProxy/extension-false/JSON      	    1339	    948962 ns/op	         0 usage-drop/op	  120586 B/op	    1479 allocs/op
+BenchmarkUsageProxy/extension-false/JSON      	    1333	    939097 ns/op	         0 usage-drop/op	  120526 B/op	    1479 allocs/op
+BenchmarkUsageProxy/extension-false/JSON-4    	     949	   1195345 ns/op	         0 usage-drop/op	  121211 B/op	    1484 allocs/op
+BenchmarkUsageProxy/extension-false/JSON-4    	     985	   1032694 ns/op	         0 usage-drop/op	  121287 B/op	    1483 allocs/op
+BenchmarkUsageProxy/extension-false/JSON-4    	    1249	   1106696 ns/op	         0 usage-drop/op	  121281 B/op	    1483 allocs/op
+BenchmarkUsageProxy/extension-false/JSON-4    	    1260	   1605701 ns/op	         0 usage-drop/op	  121247 B/op	    1484 allocs/op
+BenchmarkUsageProxy/extension-false/JSON-4    	     757	   1561392 ns/op	         0 usage-drop/op	  121105 B/op	    1482 allocs/op
+BenchmarkUsageProxy/extension-false/SSE       	     746	   2871248 ns/op	         0 usage-drop/op	  155280 B/op	    1955 allocs/op
+BenchmarkUsageProxy/extension-false/SSE       	     628	   1921925 ns/op	         0 usage-drop/op	  155221 B/op	    1955 allocs/op
+BenchmarkUsageProxy/extension-false/SSE       	     878	   1246432 ns/op	         0 usage-drop/op	  155241 B/op	    1955 allocs/op
+BenchmarkUsageProxy/extension-false/SSE       	    1056	   1232843 ns/op	         0 usage-drop/op	  155271 B/op	    1955 allocs/op
+BenchmarkUsageProxy/extension-false/SSE       	    1008	   2012561 ns/op	         0 usage-drop/op	  155287 B/op	    1955 allocs/op
+BenchmarkUsageProxy/extension-false/SSE-4     	     429	   3137288 ns/op	         0 usage-drop/op	  156515 B/op	    1964 allocs/op
+BenchmarkUsageProxy/extension-false/SSE-4     	     859	   1460308 ns/op	         0 usage-drop/op	  156408 B/op	    1963 allocs/op
+BenchmarkUsageProxy/extension-false/SSE-4     	     915	   1550992 ns/op	         0 usage-drop/op	  156781 B/op	    1965 allocs/op
+BenchmarkUsageProxy/extension-false/SSE-4     	     639	   1810387 ns/op	         0 usage-drop/op	  156555 B/op	    1966 allocs/op
+BenchmarkUsageProxy/extension-false/SSE-4     	     758	   1702399 ns/op	         0 usage-drop/op	  156436 B/op	    1964 allocs/op
+BenchmarkUsageProxy/extension-true/JSON       	     807	   1437918 ns/op	         0 usage-drop/op	  151190 B/op	    1986 allocs/op
+BenchmarkUsageProxy/extension-true/JSON       	    1076	   1125275 ns/op	         0 usage-drop/op	  151265 B/op	    1986 allocs/op
+BenchmarkUsageProxy/extension-true/JSON       	    1090	   1830960 ns/op	         0 usage-drop/op	  151189 B/op	    1986 allocs/op
+BenchmarkUsageProxy/extension-true/JSON       	     997	   1498207 ns/op	         0 usage-drop/op	  151216 B/op	    1986 allocs/op
+BenchmarkUsageProxy/extension-true/JSON       	    1024	   1190973 ns/op	         0 usage-drop/op	  151204 B/op	    1986 allocs/op
+BenchmarkUsageProxy/extension-true/JSON-4     	    1125	    991001 ns/op	         0 usage-drop/op	  150318 B/op	    1972 allocs/op
+BenchmarkUsageProxy/extension-true/JSON-4     	    1153	   1136694 ns/op	         0 usage-drop/op	  150000 B/op	    1970 allocs/op
+BenchmarkUsageProxy/extension-true/JSON-4     	    1142	    996205 ns/op	         0 usage-drop/op	  150497 B/op	    1974 allocs/op
+BenchmarkUsageProxy/extension-true/JSON-4     	    1192	   1330303 ns/op	         0 usage-drop/op	  151415 B/op	    1982 allocs/op
+BenchmarkUsageProxy/extension-true/JSON-4     	    1032	   1032418 ns/op	         0 usage-drop/op	  150188 B/op	    1972 allocs/op
+BenchmarkUsageProxy/extension-true/SSE        	     828	   1417266 ns/op	         0 usage-drop/op	  185889 B/op	    2461 allocs/op
+BenchmarkUsageProxy/extension-true/SSE        	     883	   1614494 ns/op	         0 usage-drop/op	  186000 B/op	    2462 allocs/op
+BenchmarkUsageProxy/extension-true/SSE        	     708	   1903576 ns/op	         0 usage-drop/op	  185978 B/op	    2462 allocs/op
+BenchmarkUsageProxy/extension-true/SSE        	     696	   1669317 ns/op	         0 usage-drop/op	  185865 B/op	    2462 allocs/op
+BenchmarkUsageProxy/extension-true/SSE        	     892	   1676769 ns/op	         0 usage-drop/op	  185906 B/op	    2462 allocs/op
+BenchmarkUsageProxy/extension-true/SSE-4      	     810	   1373541 ns/op	         0 usage-drop/op	  187132 B/op	    2461 allocs/op
+BenchmarkUsageProxy/extension-true/SSE-4      	     930	   1209820 ns/op	         0 usage-drop/op	  185853 B/op	    2454 allocs/op
+BenchmarkUsageProxy/extension-true/SSE-4      	     945	   1244485 ns/op	         0 usage-drop/op	  186589 B/op	    2460 allocs/op
+BenchmarkUsageProxy/extension-true/SSE-4      	     937	   1371623 ns/op	         0 usage-drop/op	  186809 B/op	    2462 allocs/op
+BenchmarkUsageProxy/extension-true/SSE-4      	     967	   1373999 ns/op	         0 usage-drop/op	  186627 B/op	    2462 allocs/op
+PASS
+ok  	example.com/gobroom-external-provider	68.089s

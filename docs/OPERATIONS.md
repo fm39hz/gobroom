@@ -33,6 +33,13 @@ reserved ports. After `Start` succeeds, the enabled listeners are already bound.
 Embedders can request `127.0.0.1:0` and read the allocated ports from
 `Daemon.Addresses()`. Addresses are cleared when the daemon stops.
 
+TCP data/control listeners require request headers within three seconds,
+matching the callback receivers. This uses the standard HTTP header deadline;
+it is not a three-second body, inference or streaming timeout. It also bounds
+connections accepted without any request bytes, which otherwise can occupy
+the standard server's shutdown grace period. Caller shutdown budgets still
+apply; this is not a hard wall-clock guarantee for every cleanup worker.
+
 ## HTTPS auth callbacks behind a local TLS proxy
 
 Callback ingress is disabled by default and is separate from data/admin HTTP.
@@ -469,11 +476,36 @@ optimization candidate, not proof that it explains the entire measured delta.
 Profiles include startup/calibration and have different request counts; their
 totals are not a normalized before/after cost. Boundary ownership must remain
 intact when reducing repeated internal clones. Full-path CPU attribution,
-extension-bearing proxy load, isolated RSS and sustained tail latency remain
-follow-up measurements, not inferred results.
+isolated RSS and sustained tail latency remain follow-up measurements, not
+inferred results.
+
+The [paired end-to-end samples](performance/2026-10-24-usage-paired.txt) add the
+previously missing actual extension-bearing proxy workload: five 1s samples at
+CPU1/4, JSON/SSE through decoding, attempt admission and SQLite. Both cases load
+the same module, graph, upstream headers/body and disclosure settings; only the
+usage-source binding changes. A non-benchmark fixture verifies that both actual
+JSON/SSE attempts persist exactly one precise private value when enabled and
+none when disabled, with no value leaked into client responses.
+
+| Wire / CPU | Common µs/op | Extension µs/op | Common B/op | Extension B/op | Common/extension allocs/op |
+|---|---:|---:|---:|---:|---:|
+| JSON / 1 | 910 | 1438 | 120,529 | 151,204 | 1479 / 1986 |
+| JSON / 4 | 1195 | 1032 | 121,247 | 150,318 | 1483 / 1972 |
+| SSE / 1 | 1922 | 1669 | 155,271 | 185,906 | 1955 / 2462 |
+| SSE / 4 | 1702 | 1372 | 156,515 | 186,627 | 1964 / 2461 |
+
+All paired samples reported zero admission drops and drained accepted accounting
+outside the timer. Small private extension processing adds about 30 KiB and
+roughly 500 allocations per request in this workload, not merely the helper's
+2.4 KiB. CPU4 cases here still have serial clients plus asynchronous daemon
+workers, unlike the earlier `RunParallel` cases. Ambient timing remains noisy;
+do not interpret an extension case's lower median as a speedup. The earlier
+before/after comparison used the pre-header-budget runtime checkpoint; this
+paired comparison includes the three-second HTTP header budget in both cases.
 
 Reproduce five-sample runs with `make perf BENCHCOUNT=5` and
-`make perf-usage BENCHCOUNT=5`; both accept `BENCHTIME` and `BENCHCPU`.
+`make perf-usage BENCHCOUNT=5`; use `make perf-usage-proxy BENCHCOUNT=5` for the
+paired end-to-end workload. All accept `BENCHTIME` and `BENCHCPU`.
 
 Earlier measurements below describe their historical checkpoints, not the
 current runtime's resource cost.
