@@ -29,6 +29,8 @@ const (
 
 var callbackInputSchemaRef = provider.Ref{Kind: provider.SchemaKind, ID: "example.external-callback.input", ContractVersion: 1}
 
+const callbackInputSchemaDocument = `{"type":"object","properties":{"url":{"type":"string","minLength":1}},"required":["url"],"additionalProperties":false}`
+
 type callbackFixtureModule struct {
 	port        int
 	correlation *atomic.Value
@@ -39,7 +41,7 @@ func (callbackFixtureModule) ModuleDescriptor() provider.ModuleRef {
 }
 
 func (m callbackFixtureModule) Register(runtime *provider.RuntimeRegistry) error {
-	if err := runtime.RegisterSchemaDocument(callbackInputSchemaRef, json.RawMessage(`{"type":"object","properties":{"url":{"type":"string","minLength":1}},"required":["url"],"additionalProperties":false}`)); err != nil {
+	if err := runtime.RegisterSchemaDocument(callbackInputSchemaRef, json.RawMessage(callbackInputSchemaDocument)); err != nil {
 		return err
 	}
 	return runtime.RegisterAuthFactory(callbackAuthID, func(provider.AuthOptions) (provider.AuthFlow, error) {

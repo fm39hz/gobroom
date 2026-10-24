@@ -62,6 +62,10 @@ test-installed-portability: check-installed-cli ## independent module fresh-targ
 test-installed-sg1: check-installed-cli ## tools/budget/scoped-history and loss/renderer composition
 	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(SG1|InstalledCLISG1)' -race -count=3
 
+.PHONY: test-installed-callback-race
+test-installed-callback-race: check-installed-cli ## callback completion versus public credential replacement
+	cd examples/external-provider-module && GOWORK=off GOBROOM_TEST_CLI="$(GOBROOM_TEST_CLI)" go test ./... -run '^Test(PublicCallbackReplacement|InstalledCLICallbackReplacementRace)' -race -count=3
+
 test-conformance: test-conformance-transform-boundaries test-external-provider-module ## architectural extension change simulations (M15)
 	go test ./cmd/gobroom -run '^TestTransform' -count=1
 	go test ./cmd/gobroom -run '^Test(ConfigCommands|DecodeJSONInput|RouteExplainPreservesRequestNumberTokens)' -count=1
