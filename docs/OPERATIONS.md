@@ -289,6 +289,41 @@ prove installed-binary acceptance when the CLI environment variable is unset.
 
 ## Service and logs
 
+Status also exposes `sessionPersistence`, separately from usage accounting:
+`received`, `persisted`, `failed`, `discarded`, `queueDropped`, `saveErrors`.
+Writer counters cover the built-in session cache, including acknowledged
+tombstones. `saveErrors` covers unexpected kernel Save errors, including custom
+stores; it does not invent diagnostics for their hidden asynchronous workers.
+
+Changed principal/definition/endpoint, removed/disabled authority and expired
+queued state are deliberate safety fences. They use typed
+`ErrSessionStateSuperseded` and count as `discarded`, not storage failure.
+SQL/metadata read failures remain genuine faults. Custom stores can use the
+public provider sentinel for the same expected result; no error-string matching
+or provider-specific branch supplies that classification.
+
+Failed writes, queue rejection and unexpected Save errors degrade daemon status
+and produce one sanitized warning per daemon run. These counters retain fault
+history until the next Start/Stop run; a later successful write does not erase
+it. They do not assert that newer durable state is still inconsistent. A queue
+drop can also be a kernel Save error: do not add the counters as unique losses.
+At quiescence, received equals persisted plus failed plus discarded; live fields
+are sampled independently. No session ID, response ID, opaque state, signature
+or raw repository error is included in these new operational outputs.
+
+Live continuity remains in RAM after rejected persistence. Current inference
+success, provider health and accepted-effect replay fences stay unchanged.
+There is no new retry, journal, per-key metric or route-selection SQLite read.
+After joining the session worker, Stop/Wait returns the constant public daemon
+`ErrSessionPersistenceFailureObserved` if fault history exists. Repeated Stop
+retains that result. IPC shutdown still acknowledges scheduling, not successful
+later drain. This adds no hard deadline for an uncooperative repository/logger.
+
+Run `make test-installed-session GOBROOM_TEST_CLI=/absolute/path/to/gobroom`
+after installation. This explicit gate validates the binary path and exercises
+temporary hosts with injected SQLite failures and custom Save errors; ordinary
+source tests may skip the installed-only fixture when its environment is unset.
+
 Usage persistence runs independently of requests and provider health. Status
 over IPC and HTTP includes `usagePersistence` counters: `received`, `persisted`,
 `failed`, `abandoned`, and `queueDropped`. These are process-lifetime counters,
