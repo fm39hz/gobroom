@@ -5,6 +5,12 @@ percentage or a parity claim. The [roadmap](IMPLEMENTATION_PLAN.md) owns
 milestone status, [use cases](USE_CASES.md) own product acceptance, and
 [M15 conformance](M15_CONFORMANCE.md) records architecture evidence.
 
+Registered operation errors now have a required safe precommit client boundary
+(provider host contract 14), independently exercised with a non-stock wire
+schema and reused job primitives. Ordinary error text and staged upstream
+headers do not become public failure output. This is a bounded architecture
+follow-up, not broad provider parity; see [F1 acceptance](CLIENT_FAILURE_ACCEPTANCE.md).
+
 ## Current product shape
 
 | User journey | What is demonstrated | What is not yet closed |

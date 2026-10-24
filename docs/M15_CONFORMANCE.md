@@ -9,8 +9,12 @@ during shutdown is tested through a real locked SQLite writer; a pre-drain
 snapshot mutation fails. Full regression/vet/conformance and installed CLI
 session gate passed; main healthy 513 and config fingerprint unchanged.
 Final review retains one nonblocking queued-drain-specific coverage minor.
-The [finite audit](ARCHITECTURE_AUDIT_2026-10-24.md) separates the next actual
-client-failure implementation gap from remaining public-boundary acceptance.
+The [finite audit](ARCHITECTURE_AUDIT_2026-10-24.md) separates the subsequent
+client-failure implementation/proof from remaining public-boundary acceptance.
+The [F1 acceptance map](CLIENT_FAILURE_ACCEPTANCE.md) covers safe registered
+precommit encoding, independent wire schemas, dispatch/replay and commitment
+fences, staged-header privacy and the dedicated installed CLI gate. It closes
+that bounded implementation gap, not SG1 or complete M15.
 
 Status: composition simulations implemented; full semantic closure gate
 pending. M15 asks whether new behaviors compose through stable contracts.

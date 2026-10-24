@@ -13,6 +13,16 @@ immutable bounded body/media data; HTTP status and execution authority stay host
 
 **Spec:** `docs/superpowers/specs/2026-10-24-client-failure-design.md`
 
+Status: complete for this bounded F1 plan. Core `8269f21`; independent proof,
+header privacy and validation composition `19555f6`. Final source root/external
+tests and vet passed; focused root race3 and installed external gate race3
+passed. Full conformance passed before the final header-isolation fix; related
+API commitment/privacy regression and full root/module tests passed afterward.
+Install-all initially timed out waiting for IPC although service was healthy;
+retry succeeded. Actual daemon snapshot 515 is healthy, export→validate returns
+version 9, and scoped config/credential fingerprint is unchanged. See the
+[acceptance map](../../CLIENT_FAILURE_ACCEPTANCE.md). This does not complete M15.
+
 ## Global Constraints
 
 - No new dependency/parser/framework/provider-name branch or database migration.
@@ -46,13 +56,13 @@ ClientFailureForErrorWithFallback(error, ClientFailure) ClientFailure. Carrier m
 the same name opts in, validates and owns data. Existing ClientFailure stays
 three fields; explicit carriers/cause identity and known sentinel mappings remain.
 
-- [ ] Preserve executed RED `TestOrdinaryClientFailureUsesSafeMessageWithoutChangingIdentity`.
+- [x] Preserve executed RED `TestOrdinaryClientFailureUsesSafeMessageWithoutChangingIdentity`.
   Add unknown-error Error-not-called, private InputError, invalid diagnostics,
   exact byte/count limits and module buffer mutation cases with literal expectations.
-- [ ] Main runs RED before worker production permission.
-- [ ] Replace unknown/InputError message text with constants; add bounded owned
+- [x] Main runs RED before worker production permission.
+- [x] Replace unknown/InputError message text with constants; add bounded owned
   diagnostic projection, never generic raw error extraction.
-- [ ] Main focused/kernel regression and race3; scoped review; commit checkpoint.
+- [x] Main focused/kernel regression and race3; scoped review; commit checkpoint.
 
 ## Task 2: Required client-boundary encoding contract and strategies
 
@@ -71,14 +81,14 @@ delegate through `FailureEncoding FailureEncoder`
 with stock JSON as natural default. AnthropicFailureEncoder is explicitly bound
 for the built-in Messages ingress at composition time.
 
-- [ ] Add context validity/ownership/encoded-bound tests and actual stock JSON/
+- [x] Add context validity/ownership/encoded-bound tests and actual stock JSON/
   Anthropic envelope tests, plus custom encoder delegation; main observes RED.
-- [ ] Implement typed context/body validation and stock encoders with stdlib
+- [x] Implement typed context/body validation and stock encoders with stdlib
   JSON/mime. No ResponseWriter exposed to modules; no arbitrary headers/status.
-- [ ] Main adds required ClientIngress method after test RED, updates API/provider
+- [x] Main adds required ClientIngress method after test RED, updates API/provider
   aliases, RuntimeModuleHostContractVersion14 and exact module locks atomically.
   Manual custom ingress types gain explicit method; embedded helpers inherit it.
-- [ ] Main focused tests/registry and independent module build; scoped review.
+- [x] Main focused tests/registry and independent module build; scoped review.
 
 Tasks 1/2 may use disjoint workers after shared interface names are frozen;
 main alone coordinates every Go invocation after writers stop.
@@ -93,18 +103,18 @@ response before writes. executeNormalized receives the selected codec, including
 preparation/dispatch failures; authentication on operation routes uses it too.
 The fixed /v1/models route retains its stock safe JSON authorization envelope.
 
-- [ ] Preserve executed ingress-private-error RED36175. Add actual custom failure
+- [x] Preserve executed ingress-private-error RED36175. Add actual custom failure
   envelope tests for auth, decode, operation mismatch, schema/no-route, executor
   error, accepted ReplaySuppressedError effect, and already committed output.
-- [ ] Add bad encoder error/oversize/media controls/context overflow tests that
+- [x] Add bad encoder error/oversize/media controls/context overflow tests that
   require HTTP500 empty body and no second render; main observes RED.
-- [ ] Implement metadata-only host projection: safe code/message and owned
+- [x] Implement metadata-only host projection: safe code/message and owned
   diagnostics, codec operation ref, safe logged request ID, bounded model.
   Decode/auth/mismatch EffectNotDispatched; execution EffectUnknown unless
   ReplaySuppressedError provides effect; RetryNever is not a replay grant.
-- [ ] Remove fixed operation error branches and ordinary raw-error echo; preserve
+- [x] Remove fixed operation error branches and ordinary raw-error echo; preserve
   status categories and trusted explicit safe carriers without provider switches.
-- [ ] Main full root/external regression/vet/conformance and selected race3;
+- [x] Main full root/external regression/vet/conformance and selected race3;
   scoped review/commit, no intermediate broken-contract installation.
 
 ## Task 4: Independent client dialect and installed acceptance
@@ -116,13 +126,13 @@ Makefile installed gate; operations/status/M15/audit documentation.
 failure schema registered in the existing catalog and validated independently.
 Wire error encoding contributes through ingress, not kernel/HTTP format branches.
 
-- [ ] Main first runs missing public-hook/module RED; worker implements a real
+- [x] Main first runs missing public-hook/module RED; worker implements a real
   temporary-daemon client dialect covering decode/input-schema/no eligible route,
   auth, and accepted-provider pre-first-byte failure with exact status/effect,
   private marker absence, one dispatch/no replay and correct request correlation.
-- [ ] Assert rendered wire schema separately from safe context; reuse existing
+- [x] Assert rendered wire schema separately from safe context; reuse existing
   stream terminal/replay tests rather than widening into every protocol pair.
-- [ ] Main full tests/vet/conformance, root/external race3; install-all and explicit
+- [x] Main full tests/vet/conformance, root/external race3; install-all and explicit
   installed CLI catalog/control acceptance without env-skips; preserve real setup.
-- [ ] Final whole-feature review, clause-to-test update and regular commits.
+- [x] Final whole-feature review, clause-to-test update and regular commits.
   Close F1 narrowly, not C1–C6/provider breadth/RSS/p99 by implication.

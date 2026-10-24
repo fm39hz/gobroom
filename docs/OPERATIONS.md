@@ -287,6 +287,28 @@ fixtures three times with the race detector. These use temporary daemons and
 fake upstreams, not configured live providers. Ordinary `make test` does not
 prove installed-binary acceptance when the CLI environment variable is unset.
 
+## Client operation failures
+
+Registered operation routes use their ingress's failure encoder for auth,
+decode, preparation and execution errors before response commitment. Ordinary
+Go error text and upstream bodies are private. Only explicitly supplied bounded
+public failure metadata and diagnostics reach the encoder. HTTP status and
+dispatch effect remain host-owned; error encoding never grants automatic replay.
+Invalid/failed encoders return an empty HTTP 500. Once committed, the existing
+terminal-stream behavior applies instead. `/v1/models` retains its stock auth
+response. Public provider modules must use host contract 14.
+
+After installation, run:
+
+```sh
+make test-installed-client-failure GOBROOM_TEST_CLI=/absolute/path/to/gobroom
+```
+
+The gate requires an executable absolute CLI path and runs the independent
+client-dialect and installed catalog/control fixtures three times under the
+race detector. Fixtures use temporary databases, Unix sockets and fake HTTP
+upstreams, not configured live providers.
+
 ## Service and logs
 
 Status also exposes `sessionPersistence`, separately from usage accounting:
