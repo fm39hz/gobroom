@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ type ClientIngress interface {
 	OperationRef() extensions.Ref
 	Routes() []ClientIngressRoute
 	Decode(*http.Request) (normalize.Request, error)
+	RenderFailure(context.Context, ClientFailureContext) (ClientFailureResponse, error)
 }
 
 type ClientIngressRoute struct {
@@ -75,6 +77,7 @@ type JSONOperationIngress struct {
 	Operation                string
 	OperationContractVersion uint64
 	Endpoints                []ClientIngressRoute
+	FailureEncoding          FailureEncoder
 }
 
 func (c JSONOperationIngress) ID() string { return c.CodecID }
@@ -86,6 +89,9 @@ func (c JSONOperationIngress) OperationRef() extensions.Ref {
 }
 func (c JSONOperationIngress) Routes() []ClientIngressRoute {
 	return append([]ClientIngressRoute(nil), c.Endpoints...)
+}
+func (c JSONOperationIngress) RenderFailure(ctx context.Context, failure ClientFailureContext) (ClientFailureResponse, error) {
+	return renderWithFailureEncoder(ctx, c.FailureEncoding, failure)
 }
 func (c JSONOperationIngress) Decode(request *http.Request) (normalize.Request, error) {
 	if request == nil || request.Body == nil {
@@ -148,6 +154,7 @@ type MultipartOperationIngress struct {
 	Endpoints                []ClientIngressRoute
 	Bindings                 []MultipartArtifactBinding
 	RequestField             string
+	FailureEncoding          FailureEncoder
 }
 
 func (c MultipartOperationIngress) ID() string { return c.CodecID }
@@ -159,6 +166,9 @@ func (c MultipartOperationIngress) OperationRef() extensions.Ref {
 }
 func (c MultipartOperationIngress) Routes() []ClientIngressRoute {
 	return append([]ClientIngressRoute(nil), c.Endpoints...)
+}
+func (c MultipartOperationIngress) RenderFailure(ctx context.Context, failure ClientFailureContext) (ClientFailureResponse, error) {
+	return renderWithFailureEncoder(ctx, c.FailureEncoding, failure)
 }
 func (c MultipartOperationIngress) requestField() string {
 	if strings.TrimSpace(c.RequestField) == "" {

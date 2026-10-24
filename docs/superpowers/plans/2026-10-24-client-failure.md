@@ -41,7 +41,8 @@ immutable bounded body/media data; HTTP status and execution authority stay host
 diagnostics tests. Existing committed-event contracts stay comparable/unchanged.
 
 **Interfaces:** ClientFailureDiagnostics {Paths []string; Reasons []string},
-Clone(), Valid(), ClientFailureDiagnosticsForError(error). Carrier method of
+Clone(), Valid(), ClientFailureDiagnosticsForError(error) and
+ClientFailureForErrorWithFallback(error, ClientFailure) ClientFailure. Carrier method of
 the same name opts in, validates and owns data. Existing ClientFailure stays
 three fields; explicit carriers/cause identity and known sentinel mappings remain.
 
@@ -61,7 +62,12 @@ Main owns host/public aliases/contract and migration of external fixtures.
 **Interfaces:** ClientFailureContext carries Failure, Diagnostics, OperationRef,
 RequestID, Model, Status, Effect, Retry. ClientFailureResponse {ContentType,
 Body string}. FailureEncoder uses the required RenderFailure signature;
-JSONOperationIngress/MultipartOperationIngress delegate to configurable encoder
+Context provides `Valid() bool` and `Clone() ClientFailureContext`; response
+provides `Valid() bool`. Context field names are Failure, Diagnostics,
+OperationRef, RequestID, Model, Status, Effect, Retry. FailureEncoder has the
+same RenderFailure method. JSONFailureEncoder/AnthropicFailureEncoder are the
+stock concrete strategies. JSONOperationIngress/MultipartOperationIngress
+delegate through `FailureEncoding FailureEncoder`
 with stock JSON as natural default. AnthropicFailureEncoder is explicitly bound
 for the built-in Messages ingress at composition time.
 

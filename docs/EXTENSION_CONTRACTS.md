@@ -587,9 +587,15 @@ the planner does not modify durable user order.
 
 Generic rejections carry operation, request ID, code, semantic paths, reasons
 and retry/effect information. The ingress/client boundary renders these into
-its wire error schema with secrets redacted. A new client dialect registers
-its error renderer alongside its normal renderer; it does not add provider
-error branches to HTTP handlers.
+its wire error schema. Before commitment, the required ClientIngress.RenderFailure
+method receives only bounded safe metadata; ordinary error text is private,
+and optional paths/reasons require an explicit public carrier. Reusable failure
+encoder strategies are composed on the ingress, whose exact reference pins
+decoding and failure encoding together (provider host contract 14). A new client
+dialect does not add provider error branches to HTTP handlers. The host owns
+status, dispatch effect and commitment; invalid encoder output fails closed
+with an empty HTTP 500. After commitment, the existing terminal-event contract
+applies instead. See the [failure boundary design](superpowers/specs/2026-10-24-client-failure-design.md).
 
 Native passthrough requires matching wire/framing contracts, a decoder that
 can provide bounded semantic observations, and no active response mutation.

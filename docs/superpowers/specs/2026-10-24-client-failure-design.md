@@ -61,9 +61,10 @@ Request ID/model are bounded by 128 bytes; oversized/invalid values are omitted,
 not partially sliced. Context encoded size must fit 32768 bytes; fail closed
 if required exact refs/metadata cannot fit rather than inventing a shortened ref.
 
-Decode/auth/operation-contract rejection is EffectNotDispatched. Execution
-failure defaults to EffectUnknown; ReplaySuppressedError supplies its actual
-effect when present. Never infer that ErrNoRoute implies no dispatch: candidates
+Decode/auth/operation-contract rejection is EffectNotDispatched, including
+InputError from operation preparation. Other execution failures default to
+EffectUnknown; ReplaySuppressedError takes precedence and supplies its actual
+effect when present, including unknown. Never infer that ErrNoRoute implies no dispatch: candidates
 may already have rejected attempts. RetryNever is conservative presentation,
 not a new replay grant. Unknown paths/reasons stay empty rather than fabricated.
 
@@ -76,7 +77,7 @@ media type at most 256 bytes without control runes. Strings avoid a retained
 mutable module-owned byte buffer. Trusted static Go code is not sandboxed.
 
 JSONOperationIngress and MultipartOperationIngress delegate to an optional
-FailureEncoder strategy; nil means their natural reusable JSON error encoder,
+`FailureEncoding FailureEncoder` strategy; nil means their natural reusable JSON error encoder,
 not a fallback to an old ClientIngress interface. Supply standard JSON and
 Anthropic envelope strategies; the built-in Messages ingress selects Anthropic
 at composition time. A custom ingress overrides RenderFailure or configures a
@@ -84,7 +85,9 @@ different encoder. No format/provider switch in the handler.
 
 The generic JSON response keeps code/type/message/model and includes operation,
 requestId, paths, reasons, effect and retry. Anthropic uses its declared error
-envelope. No arbitrary upstream JSON or error-derived header is forwarded.
+envelope, including optional request_id and native error.type selected from the
+host HTTP status, per the [official errors contract](https://platform.claude.com/docs/en/api/errors).
+No arbitrary upstream JSON or error-derived header is forwarded.
 
 Host encodes/validates before WriteHeader; an encoder error, invalid metadata,
 media type or oversized body produces HTTP500 with an empty body and no error

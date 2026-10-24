@@ -15,6 +15,7 @@ import (
 
 	"github.com/fm39hz/gobroom/internal/artifacts"
 	"github.com/fm39hz/gobroom/internal/extensions"
+	"github.com/fm39hz/gobroom/internal/ingress"
 	"github.com/fm39hz/gobroom/internal/kernel"
 	"github.com/fm39hz/gobroom/internal/normalize"
 	"github.com/fm39hz/gobroom/internal/operations"
@@ -22,6 +23,10 @@ import (
 )
 
 type mismatchedClientIngress struct{}
+
+func (mismatchedClientIngress) RenderFailure(ctx context.Context, failure ingress.ClientFailureContext) (ingress.ClientFailureResponse, error) {
+	return (ingress.JSONFailureEncoder{}).RenderFailure(ctx, failure)
+}
 
 func (mismatchedClientIngress) ID() string { return "fixture-mismatch" }
 func (mismatchedClientIngress) IngressRef() extensions.Ref {

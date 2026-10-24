@@ -28,6 +28,11 @@ type RuntimeModuleFunc = core.RuntimeModuleFunc
 type ClientIngress = core.ClientIngress
 type ClientIngressRoute = core.ClientIngressRoute
 type JSONOperationIngress = core.JSONOperationIngress
+type ClientFailureContext = core.ClientFailureContext
+type ClientFailureResponse = core.ClientFailureResponse
+type FailureEncoder = core.FailureEncoder
+type JSONFailureEncoder = core.JSONFailureEncoder
+type AnthropicFailureEncoder = core.AnthropicFailureEncoder
 type MultipartArtifactBinding = core.MultipartArtifactBinding
 type MultipartOperationIngress = core.MultipartOperationIngress
 type ModuleRef = extensions.ModuleRef
@@ -323,6 +328,7 @@ type ErrorClass = kernel.ErrorClass
 type ClassifiedOutcome = kernel.ClassifiedOutcome
 type ClientFailure = kernel.ClientFailure
 type ClientFailureCode = kernel.ClientFailureCode
+type ClientFailureDiagnostics = kernel.ClientFailureDiagnostics
 
 const (
 	ClientFailureUpstream          = kernel.ClientFailureUpstream
@@ -335,6 +341,12 @@ const (
 var ErrContinuityRestartRequired = kernel.ErrContinuityRestartRequired
 
 func ClientFailureForError(err error) ClientFailure { return kernel.ClientFailureForError(err) }
+func ClientFailureForErrorWithFallback(err error, fallback ClientFailure) ClientFailure {
+	return kernel.ClientFailureForErrorWithFallback(err, fallback)
+}
+func ClientFailureDiagnosticsForError(err error) ClientFailureDiagnostics {
+	return kernel.ClientFailureDiagnosticsForError(err)
+}
 func NewClientFailureError(detail ClientFailure, cause error) error {
 	return kernel.NewClientFailureError(detail, cause)
 }

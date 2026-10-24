@@ -24,7 +24,7 @@ func TestContinuityRestartErrorIsSafeAndDoesNotOverwriteCommittedResponse(t *tes
 			}}
 			writer := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-			server.executeNormalized(writer, request, normalize.Request{Model: "junior"})
+			server.executeNormalized(writer, request, normalize.Request{Model: "junior"}, continuityFailureIngress())
 			if committed {
 				if writer.Code != http.StatusOK || writer.Body.String() != "already committed" {
 					t.Fatalf("committed response rewritten: %d %s", writer.Code, writer.Body.String())
@@ -56,7 +56,7 @@ func TestTypedClientFailureIsProjectedSafely(t *testing.T) {
 	}}
 	writer := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	server.executeNormalized(writer, request, normalize.Request{Model: "junior"})
+	server.executeNormalized(writer, request, normalize.Request{Model: "junior"}, continuityFailureIngress())
 	var body struct {
 		Error struct {
 			Code    string `json:"code"`
@@ -71,4 +71,8 @@ func TestTypedClientFailureIsProjectedSafely(t *testing.T) {
 	if writer.Code != http.StatusBadGateway || body.Error.Code != string(detail.Code) || body.Error.Type != detail.Type || body.Error.Message != detail.Message || body.Error.Model != "junior" || strings.Contains(writer.Body.String(), "private upstream detail") {
 		t.Fatalf("typed failure response was not projected safely: %d %s", writer.Code, writer.Body.String())
 	}
+}
+
+func continuityFailureIngress() JSONOperationIngress {
+	return JSONOperationIngress{CodecID: "fixture-continuity", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1}
 }

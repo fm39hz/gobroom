@@ -713,7 +713,7 @@ type RuntimeModule interface {
 	Register(*RuntimeRegistry) error
 }
 
-const RuntimeModuleHostContractVersion uint64 = 13
+const RuntimeModuleHostContractVersion uint64 = 14
 
 type RuntimeModuleFunc struct {
 	Name                string
@@ -854,7 +854,7 @@ func (r *RuntimeRegistry) RegisterClientIngress(codec ClientIngress) error {
 	descriptor := extensions.Descriptor{
 		Ref: ref, ImplementationVersion: fmt.Sprint(ref.ContractVersion), DisplayName: codec.ID(),
 		Description: "Client wire decoder producing a versioned semantic operation.", Dependencies: []extensions.Ref{operationRef},
-		LifecycleCapabilities: []string{"client.ingress"},
+		LifecycleCapabilities: []string{"client.ingress", "client.failure"},
 	}
 	if err := r.Primitives.catalog.Register(descriptor, func(json.RawMessage) (any, error) { return codec, nil }); err != nil {
 		return err

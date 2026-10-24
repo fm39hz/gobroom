@@ -100,7 +100,7 @@ func NewServerWithRuntimeBindings(s *store.Store, bindings map[string]provider.R
 	}
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-chat-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/chat/completions"}}})
 	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "openai-responses-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/responses"}}})
-	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}})
+	_ = server.RegisterOperationIngress(JSONOperationIngress{CodecID: "anthropic-messages-ingress", IngressContractVersion: 1, Operation: string(normalize.OperationChatGenerate), OperationContractVersion: 1, Endpoints: []IngressRoute{{Method: http.MethodPost, Path: "/v1/messages"}}, FailureEncoding: ingress.AnthropicFailureEncoder{}})
 	return server
 }
 
@@ -176,7 +176,7 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 		r.HandleFunc("/api/custom-models", s.customModels)
 	}
 	if options.DataPlane {
-		r.Get("/v1/models", s.dataPlane(s.models))
+		r.Get("/v1/models", s.dataPlane(s.models, nil))
 		routes := make([]string, 0, len(s.ingress))
 		for route := range s.ingress {
 			routes = append(routes, route)
@@ -185,7 +185,7 @@ func (s *Server) HandlerWithOptions(options HandlerOptions) http.Handler {
 		for _, route := range routes {
 			parts := strings.SplitN(route, " ", 2)
 			method, path, codec := parts[0], parts[1], s.ingress[route]
-			r.Method(method, path, s.dataPlane(s.operationHandler(codec)))
+			r.Method(method, path, s.dataPlane(s.operationHandler(codec), codec))
 		}
 	}
 	return logging(r, s.accessLogger)
@@ -237,10 +237,14 @@ func (s *Server) extensions(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) SetDataPlaneToken(token string) { s.dataPlaneToken = token }
-func (s *Server) dataPlane(next http.HandlerFunc) http.HandlerFunc {
+func (s *Server) dataPlane(next http.HandlerFunc, codec OperationIngress) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.dataPlaneToken != "" && r.Header.Get("Authorization") != "Bearer "+s.dataPlaneToken {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "data plane authentication required"}})
+			if codec == nil {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "data plane authentication required"}})
+			} else {
+				s.renderClientFailure(w, r, codec, "", http.StatusUnauthorized, kernel.ClientFailure{Code: "authentication_required", Type: "authentication_error", Message: "data plane authentication required"}, nil, kernel.EffectNotDispatched)
+			}
 			return
 		}
 		next(w, r)
@@ -656,16 +660,23 @@ func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
 			} else if errors.Is(err, ErrArtifactIngressUnavailable) || errors.Is(err, artifacts.ErrStoreFull) || errors.Is(err, artifacts.ErrClosed) {
 				status = http.StatusServiceUnavailable
 			}
-			writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error()}})
+			fallback := kernel.ClientFailure{Code: kernel.ClientFailureInvalidRequest, Type: "invalid_request_error", Message: "request could not be decoded"}
+			if status == http.StatusRequestEntityTooLarge {
+				fallback.Message = "request body exceeds the allowed limit"
+			}
+			if status == http.StatusServiceUnavailable {
+				fallback = kernel.ClientFailure{Code: "service_unavailable", Type: "server_error", Message: "request input resources are unavailable"}
+			}
+			s.renderClientFailure(w, r, codec, "", status, fallback, err, kernel.EffectNotDispatched)
 			return
 		}
 		if request.Operation == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "ingress codec returned no semantic operation"}})
+			s.renderClientFailure(w, r, codec, "", http.StatusBadRequest, kernel.ClientFailure{Code: kernel.ClientFailureInvalidRequest, Type: "invalid_request_error", Message: "ingress codec returned no semantic operation"}, nil, kernel.EffectNotDispatched)
 			return
 		}
 		operationRef := codec.OperationRef()
 		if string(request.Operation) != operationRef.ID || request.OperationContractVersion != operationRef.ContractVersion {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "ingress codec returned a different operation contract than declared"}})
+			s.renderClientFailure(w, r, codec, "", http.StatusBadRequest, kernel.ClientFailure{Code: kernel.ClientFailureInvalidRequest, Type: "invalid_request_error", Message: "ingress codec returned a different operation contract than declared"}, nil, kernel.EffectNotDispatched)
 			return
 		}
 		if state, ok := r.Context().Value(accessLogContextKey{}).(*accessLogState); ok {
@@ -673,7 +684,7 @@ func (s *Server) operationHandler(codec OperationIngress) http.HandlerFunc {
 			state.operation = request.Operation
 		}
 		defer releaseRequestArtifacts(s.artifactStore, request.Artifacts)
-		s.executeNormalized(w, r, request)
+		s.executeNormalized(w, r, request, codec)
 	}
 }
 
@@ -688,50 +699,22 @@ func releaseRequestArtifacts(bodyStore *artifacts.Store, references []extensions
 	}
 }
 
-func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, request normalize.Request) {
+func (s *Server) executeNormalized(w http.ResponseWriter, r *http.Request, request normalize.Request, codec OperationIngress) {
 	requestModel := request.Model
 	if s.executor != nil {
 		tracked := &trackingWriter{ResponseWriter: w}
 		if err := s.executor(r.Context(), request, tracked); err != nil && !tracked.committed {
-			failure := kernel.ClientFailureForError(err)
-			status := http.StatusBadGateway
-			var operationInput *operations.InputError
-			if errors.As(err, &operationInput) {
-				status = http.StatusBadRequest
-			}
-			if errors.Is(err, kernel.ErrModelNotPublished) {
-				status = http.StatusNotFound
-			}
-			if errors.Is(err, kernel.ErrNoRoute) {
-				status = http.StatusServiceUnavailable
-			}
-			if errors.Is(err, kernel.ErrContinuityRestartRequired) {
-				status = http.StatusConflict
-			}
-			writeJSON(w, status, normalizedExecutionErrorResponse{Error: normalizedExecutionError{
-				Code: failure.Code, Type: failure.Type, Message: failure.Message, Model: requestModel,
-			}})
+			s.renderClientFailure(w, r, codec, requestModel, executionFailureStatus(err), kernel.ClientFailure{Code: kernel.ClientFailureUpstream, Type: "upstream_error", Message: "upstream request failed"}, err, executionFailureEffect(err))
 		}
 		return
 	}
 	if s.control != nil {
 		if item, ok := s.dataPlaneSnapshot().PublicModels[requestModel]; ok {
-			writeJSON(w, http.StatusNotImplemented, map[string]any{"error": map[string]string{"message": "model is exposed; provider execution is not configured", "model": item.Name, "target": item.TargetRef}})
+			s.renderClientFailure(w, r, codec, item.Name, http.StatusNotImplemented, kernel.ClientFailure{Code: kernel.ClientFailureUpstream, Type: "server_error", Message: "model is exposed; provider execution is not configured"}, nil, kernel.EffectNotDispatched)
 			return
 		}
 	}
-	writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]string{"message": "model is not published", "model": requestModel}})
-}
-
-type normalizedExecutionErrorResponse struct {
-	Error normalizedExecutionError `json:"error"`
-}
-
-type normalizedExecutionError struct {
-	Code    kernel.ClientFailureCode `json:"code"`
-	Type    string                   `json:"type"`
-	Message string                   `json:"message"`
-	Model   string                   `json:"model"`
+	s.renderClientFailure(w, r, codec, requestModel, http.StatusNotFound, kernel.ClientFailure{Code: kernel.ClientFailureModelUnavailable, Type: "invalid_request_error", Message: "model is not published"}, nil, kernel.EffectNotDispatched)
 }
 
 type trackingWriter struct {
