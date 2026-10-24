@@ -13,6 +13,12 @@ follow-up, not broad provider parity; see [F1 acceptance](CLIENT_FAILURE_ACCEPTA
 
 ## Current product shape
 
+The [source-backed signing-provider fixture](QODER_VERTICAL_ACCEPTANCE.md)
+demonstrates configured native model payloads through normal setup/model graph,
+public JSON/SSE and restart, reusing existing signing and response primitives.
+It is test evidence, not a shipped/live Qoder integration or dynamic catalog
+acceptance; resource and provider breadth obligations remain open.
+
 | User journey | What is demonstrated | What is not yet closed |
 |---|---|---|
 | Set up provider/accounts and obtain models | API-key onboarding, selected-connection endpoint tests, discovery/import review, custom assignments and entitlement fences through TUI/IPC/SQLite/API fixtures. Code/device setup shares the action coordinator; CLI and TUI can submit registered schema actions. Inference, quota, discovery and probes share scoped leases. Discovery import atomically fences catalog/evidence/health writes. | Broad live-provider auth acceptance, complete lifecycle/fault composition and polished acceptance across all provider schemas. |

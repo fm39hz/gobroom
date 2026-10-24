@@ -666,7 +666,12 @@ module-only typed-result proof remains separate.
    also binds a custom AuthFactory, passes
    bounded credential AuthContext to an external request codec, and includes a
    source-derived Qoder COSY fixture that encodes then signs its body bytes and
-   unwraps an SSE envelope through the shared runtime. This leaves kernel graph
+   unwraps an SSE envelope through the shared runtime. The subsequent
+   [source-backed vertical](QODER_VERTICAL_ACCEPTANCE.md) exercises a typed native
+   text payload through public setup/custom-model/Physical/Combo, JSON/SSE and
+   restart, with installed-client graph mutation. Native model config is explicit
+   options; dynamic metadata/login/media and live acceptance remain separate.
+   This leaves kernel graph
    types, core schema and generic frontend workflow unchanged. Host lifecycle
    fixtures additionally prove synchronous HTTP port reservation, rollback on
    data/control/IPC startup failure, immediate use of allocated port-zero

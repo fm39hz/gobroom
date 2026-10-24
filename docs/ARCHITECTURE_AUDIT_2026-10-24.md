@@ -51,9 +51,11 @@ checks. It does not complete all C6 semantic intersections or M15.
    another generic protocol framework.
 2. Add only the named public-boundary acceptance deltas above, reusing accepted
    SG5/SG6/SG7 proofs rather than redoing every negative case per provider.
-3. Extend one difficult source-backed provider vertical through normal setup,
-   connection, Physical/Combo and public serving/restart; existing COSY signing
-   tests currently stop at the binding/adapter boundary.
+3. The [source-backed encoded/signing vertical](QODER_VERTICAL_ACCEPTANCE.md)
+   now extends the older COSY mechanics fixture through normal credential/custom
+   model setup, Physical/Combo and public JSON/SSE serving/restart. Its native
+   model config is explicitly schema-configured: dynamic acquisition/persistence,
+   live login/media and remote acceptance remain separate, unproved boundaries.
 
 Onboarding/Physical UX breadth, real provider/harness compatibility, isolated
 RSS and sustained tail latency remain product obligations. None is silently

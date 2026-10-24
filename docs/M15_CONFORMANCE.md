@@ -1,5 +1,14 @@
 # M15 architecture conformance evidence
 
+2026-10-24 source-backed provider follow-up: the
+[encoded/signing vertical](QODER_VERTICAL_ACCEPTANCE.md) uses an independent
+module, configured native payload, shared byte signer and delegated OpenAI
+events through real public setup/serving/restart. Its regression cases cover
+honest text-subset admission, nested finish reasons, signing endpoint scope and
+accepted envelope failures. Installed-client graph mutation is separate from
+the in-process independently linked test daemon. Dynamic model-data acquisition
+and real-provider acceptance are not inferred from this bounded fixture.
+
 2026-10-24 C4 public-race follow-up: `53bf5e5` decorates the existing external
 callback driver to hold successful completion while public IPC replaces the
 credential. Actual serving uses the replacement before/after stale callback
