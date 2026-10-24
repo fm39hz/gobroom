@@ -1,5 +1,14 @@
 # M15 architecture conformance evidence
 
+2026-10-24 SG1 follow-up: `5b4c219` executes the named tools/budget/scoped
+signed-history intersection through configured public-module transforms and
+real daemon/IPC/HTTP. It also covers independent Anthropic loss grants and
+signed-renderer mutation boundaries. Regression exposed and corrected typed
+Gemini wire mismatch, numeric HTTP/CLI/IPC disagreement, canonical output
+reservation and session-aware preflight. The
+[acceptance map](SG1_COMPOSITION_ACCEPTANCE.md) records verified/installed cases
+and deferred coverage minors. This is not universal provider/harness parity.
+
 2026-10-24 portability follow-up: `2f94fe8` adds explicit startup bundle import
 before catalog activation and an independent-module fresh-target/restart proof.
 It preserves artifact recipient/exact code pins, rejects invalid runtime config

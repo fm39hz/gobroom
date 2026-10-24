@@ -212,7 +212,7 @@ remaining named public-boundary proofs separately from provider breadth. F1's
 registered client-specific precommit failure boundary is implemented and
 verified; it is a regression gate, not next implementation work.
 
-1. Complete SG1 tools/budget/scoped-continuity composition, public callback-versus-
+1. Complete public callback-versus-
    credential-replacement proof and one difficult provider vertical.
 2. Complete a clause-by-clause C1–C6 audit against ordinary public-module/control/
    serving boundaries. Provider-specific codecs, envelopes and live-harness
@@ -231,6 +231,13 @@ ordinary apply, file-managed and DB-only restart, authenticated HTTP serving,
 and exact-pin/runtime rejection before configuration writes. This strengthens
 the configure/move/extend journey; it does not widen live provider/harness
 coverage, finish catalog-management UX or establish the resource target.
+
+The [SG1 composition proof](SG1_COMPOSITION_ACCEPTANCE.md) now joins real
+tools/budget/signed-history inference with configured transforms, consistent
+session-aware route explanation and installed controls. It also makes output
+reservation IR-owned and keeps explicit sufficient Anthropic output limits.
+This strengthens serving and management together; provider/harness breadth,
+catalog UX and measured resource goals remain open.
 
 ## Product-level exit gaps
 

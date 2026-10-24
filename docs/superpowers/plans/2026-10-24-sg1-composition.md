@@ -12,6 +12,16 @@ catalog-configured transforms, ordinary Physical/Combo setup and public HTTP.
 
 **Spec:** `docs/superpowers/specs/2026-10-24-sg1-composition-design.md`
 
+Status: complete for this bounded public-module intersection. Implementation
+checkpoint `5b4c219`; full root/module tests and vet passed after review fixes,
+and again after the installed fixture correction. Focused root/module race3
+passed; installed gate race3 passed in 17.878s after correcting the fixture's
+unsupported usage flag. Install-all succeeded. Actual daemon healthy at matching
+snapshot 517, bundle validation v9 valid, scoped config/credential hash unchanged.
+Deferred coverage: facet-specific negative reasons and a dedicated read-only
+preflight load-failure/zero-version/cancellation spy matrix. See the
+[acceptance map](../../SG1_COMPOSITION_ACCEPTANCE.md); broader M15 remains open.
+
 ## Global Constraints
 
 - No preseeded signature proof, synthetic kernel execution, new dependency,
@@ -40,33 +50,33 @@ Files: `examples/external-provider-module/sg1_fixture_test.go`, `sg1_gemini_test
 Interfaces: new `newSG1Host`, `sg1ConfigureModel`, `sg1PublishRole`,
 `sg1PutPrompt`, `sg1PutResponse`; existing public daemon/provider helpers.
 
-- [ ] Register a schema-bound stable prompt transform; ordinary public setup.
-- [ ] Real signed tool response then same-session follow-up with tools and
+- [x] Register a schema-bound stable prompt transform; ordinary public setup.
+- [x] Real signed tool response then same-session follow-up with tools and
   budget2048, active request/response transforms; assert wire and client text.
-- [ ] Wrong session/branch/target and unsupported response-ID continuity reject
+- [x] Wrong session/branch/target and unsupported response-ID continuity reject
   before dispatch; incompatible first fallback member receives no calls.
-- [ ] Signed preflight agrees with execution for the correct session and
+- [x] Signed preflight agrees with execution for the correct session and
   rejects invalid scopes without dispatch or private state disclosure.
-- [ ] Main executes tests; actual defects get RED→GREEN; commit verified checkpoint.
+- [x] Main executes tests; actual defects get RED→GREEN; commit verified checkpoint.
 
 ## Task 2: Anthropic loss and signed renderer
 
 Files: `examples/external-provider-module/sg1_anthropic_test.go` (worker only).
 Consumes shared Task1 fixture interfaces; no writes to other files.
 
-- [ ] Tools/budget/max-output denial then explicit named-loss grant, actual wire
+- [x] Tools/budget/max-output denial then explicit named-loss grant, actual wire
   and bounded usage evidence through ordinary controls.
-- [ ] Anthropic signed-thinking/tool output preserves issuer semantics with
+- [x] Anthropic signed-thinking/tool output preserves issuer semantics with
   request transform; active semantic response mutation rejects before dispatch.
-- [ ] Worker stops for main execution, no Go or production edits. Main full
+- [x] Worker stops for main execution, no Go or production edits. Main full
   root/module tests/vet, focused race3, fresh whole-feature review and fixes.
 
 ## Task 3: Installed acceptance and documentation
 
 Files: Makefile, SG1 acceptance map, audit/M15/product status.
 
-- [ ] Dedicated installed SG1 gate requires check-installed-cli and race/count3;
+- [x] Dedicated installed SG1 gate requires check-installed-cli and race/count3;
   installed status/catalog/usage address temporary IPC only.
-- [ ] make install-all, explicit installed gate, actual status/hash read-only checks.
-- [ ] Record exactly which SG1 intersection is proven and remaining provider/
+- [x] make install-all, explicit installed gate, actual status/hash read-only checks.
+- [x] Record exactly which SG1 intersection is proven and remaining provider/
   expiry/reset/cross-codec breadth; commit without declaring all M15 complete.

@@ -292,7 +292,7 @@ func TestInstalledCLISG1Composition(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		raw := portabilityCLI(t, cli, f.host.config.IPCPath, nil, "usage", "--limit", "10")
+		raw := portabilityCLI(t, cli, f.host.config.IPCPath, nil, "usage")
 		if strings.Contains(string(raw), "private-sg1-signature-7") || strings.Contains(string(raw), "sg1-fixture-key") {
 			t.Fatal("ordinary usage disclosed private signature/credential")
 		}

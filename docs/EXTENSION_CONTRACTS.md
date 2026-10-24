@@ -330,6 +330,14 @@ never persisted; a different provider, connection, model, operation, client
 session, conversation branch or tool call cannot attest it. Provider and
 operation contract versions are part of that isolation boundary.
 
+Execution and route explanation use the same scoped candidate restoration and
+signature attestation step. Preflight can read continuation evidence but does
+not publish a response/session or dispatch inference. Opaque provider state and
+signature bytes are not explanation output. The
+[SG1 composition proof](SG1_COMPOSITION_ACCEPTANCE.md) also checks exact numeric
+intent through HTTP/CLI/IPC and actual wire preparation; scalar parsing must not
+silently round a fractional budget or make controls disagree with consumption.
+
 Session-store implementations must derive their namespace with
 `provider.SessionStoreKeyFor` (or the kernel equivalent). The exact isolation
 key includes connection ID, stable principal generation, provider-definition

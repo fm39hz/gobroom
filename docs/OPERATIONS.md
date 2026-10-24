@@ -22,6 +22,13 @@ Validation remains daemon-owned; invalid refs/options do not change stored or
 serving configuration. Post-commit activation failures follow their explicit
 receipts rather than pretending storage was rolled back.
 
+`route-explain --request-file FILE` (or `-` for stdin) uses the same bounded,
+number-preserving JSON reader. Exact integer budget spellings agree between
+HTTP and controls; fractional values are not rounded into integers. Preflight
+restores scoped continuation evidence like actual execution, without dispatching
+inference or exposing opaque state. Run `make test-installed-sg1
+GOBROOM_TEST_CLI=/absolute/path/to/gobroom` for the dedicated composition gate.
+
 For a fresh deployment that needs portable definitions before its linked module
 catalog can freeze, supply `gobroomd --config-bundle /absolute/path/config.json`
 (embedders: `Config.ConfigBundlePath`). Startup reads bounded strict JSON,
